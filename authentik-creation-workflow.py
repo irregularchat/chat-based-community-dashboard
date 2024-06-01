@@ -53,7 +53,6 @@ def create_user(api_url, headers, username, password):
     return response.json()
 
 # API settings
-api_url = "https://authentik.company/api/v3"
 token = os.getenv("AUTHENTIK_API_TOKEN")
 headers = {
     "Authorization": f"Bearer {token}",

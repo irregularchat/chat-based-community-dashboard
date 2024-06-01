@@ -28,17 +28,28 @@ This script automates the creation of user accounts on an Authentik instance. It
    ```
 
 4. **Set Up Environment Variables**
-   - Create a `.env` file in the project directory and add the following:
+   - Copy the .env template, gitignore it so that it doesn't sync and edit
+   ```bash
+   cp .env-template .env
+   echo ".env" >> .gitignore
+   nano .env
+   ```
+   - Or create a `.env` file in the project directory and add the following:
      ```env
      AUTHENTIK_API_TOKEN=your_api_token_here
      base_password=base-pass-here
      ```
+     - add to gitignore
+
+    ```bash
+    echo ".env" >> .gitignore
+    ```
 
 ## Usage
 
 Run the script to create a new user account:
 ```bash
-python create_user.py
+python create_user.py {username}
 ```
 
 ### Example Output

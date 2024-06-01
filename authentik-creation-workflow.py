@@ -4,6 +4,8 @@ import string
 import requests
 from dotenv import load_dotenv
 import os
+import sys
+
 
 # Load from .env file- authentik api key, base_username
 load_dotenv()

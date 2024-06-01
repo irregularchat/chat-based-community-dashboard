@@ -1,4 +1,3 @@
-#authentik-creation-workflow.py
 import random
 import string
 import requests
@@ -6,15 +5,15 @@ from dotenv import load_dotenv
 import os
 import sys
 
-
-# Load from .env file- authentik api key, base_username
+# Load from .env file - authentik api key, base_password
 load_dotenv()
 
 # Function to generate a strong password
-def generate_password(length=):
+def generate_password():
+    base_password = os.getenv("base_password")
     # Ensure the total length accounts for "TempPassword"
     random_length = 5
-        
+    
     # Characters to be used in the random part of the password
     characters = string.ascii_letters + string.digits + string.punctuation
     
@@ -66,6 +65,13 @@ if len(sys.argv) > 1:
     base_username = sys.argv[1]
 else:
     raise ValueError("A base username must be provided as a command-line argument.")
+
+# Check if the API URL can be resolved
+try:
+    requests.get(api_url, headers=headers).raise_for_status()
+except requests.exceptions.RequestException as e:
+    print(f"Error: Unable to connect to the API at {api_url}. Please check the URL and your network connection.")
+    sys.exit(1)
 
 # Get existing usernames
 existing_usernames = get_existing_usernames(api_url, headers)

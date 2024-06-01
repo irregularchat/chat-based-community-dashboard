@@ -8,6 +8,7 @@ import sys
 
 # Load environment variables from .env file
 load_dotenv()
+api_url = "https://sso.irregularchat.com/api/v3/"
 
 # Function to generate a strong password
 def generate_password():
@@ -39,8 +40,9 @@ def create_unique_username(base_username, existing_usernames):
     return username
 
 # Function to get existing usernames
+#FIXME: This function is not working properly. have tried the url with /users, users/, and identity/users/ but still not working
 def get_existing_usernames(api_url, headers):
-    response = requests.get(f"{api_url}/users/", headers=headers)
+    response = requests.get(f"{api_url}identity/users/", headers=headers)
     response.raise_for_status()
     users = response.json()
     return {user['username'] for user in users}
@@ -52,7 +54,7 @@ def create_user(api_url, headers, username, password):
         "password": password,
         "is_active": True
     }
-    response = requests.post(f"{api_url}/users/", headers=headers, json=data)
+    response = requests.post(f"{api_url}identity/users/", headers=headers, json=data)
     response.raise_for_status()
     return response.json()
 

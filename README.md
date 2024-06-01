@@ -34,6 +34,8 @@ This script automates the creation of user accounts on an Authentik instance. It
    ```bash
    cp .env-template .env
    echo ".env" >> .gitignore
+   echo "venv" >> .gitignore
+
    nano .env
    ```
    - Or create a `.env` file in the project directory and add the following:

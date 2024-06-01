@@ -61,8 +61,11 @@ headers = {
     "Content-Type": "application/json"
 }
 
-# Base username input
-base_username = "user"
+# Get the base username from the command-line argument or raise an error if not provided
+if len(sys.argv) > 1:
+    base_username = sys.argv[1]
+else:
+    raise ValueError("A base username must be provided as a command-line argument.")
 
 # Get existing usernames
 existing_usernames = get_existing_usernames(api_url, headers)

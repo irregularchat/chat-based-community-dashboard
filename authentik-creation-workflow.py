@@ -41,24 +41,35 @@ def create_unique_username(base_username, existing_usernames):
 # Function to get existing usernames
 #FIXME: This function is not working properly. have tried the url with /users, users/, and identity/users/ but still not working
 def get_existing_usernames(api_url, headers):
-    response = requests.get(f"{api_url}identity/users/", headers=headers)
+    response = requests.get(f"{api_url}core/users/", headers=headers)
     response.raise_for_status()
     users = response.json()
     return {user['username'] for user in users}
+# Function to retrieve a user by ID
+def retrieve_user(api_url, headers, user_id):
+    response = requests.get(f"{api_url}/core/users/{user_id}/", headers=headers)
+    response.raise_for_status()
+    return response.json()
 
 # Function to create a new user
 def create_user(api_url, headers, username, password):
     data = {
         "username": username,
         "password": password,
+        "email": username + "@irregularchat.com",
+        "is_superuser": False,
+        "type": "internal",
         "is_active": True
     }
-    response = requests.post(f"{api_url}identity/users/", headers=headers, json=data)
+    response = requests.post(f"{api_url}core/users/", headers=headers, json=data)
     response.raise_for_status()
     return response.json()
 
 # Load API settings from environment variables
+# Load API settings from environment variables
 api_url = os.getenv("API_URL")
+if not api_url.endswith('/'):
+    api_url = api_url + '/'
 if not api_url:
     raise ValueError("The API_URL environment variable is not set.")
 

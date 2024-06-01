@@ -10,7 +10,6 @@ load_dotenv()
 # Function to generate a strong password
 def generate_password(length=):
     # Ensure the total length accounts for "TempPassword"
-    base_password = "Temp-usePasswordManager-" #Looking to remind the user so they aren't using this later on
     random_length = 5
         
     # Characters to be used in the random part of the password

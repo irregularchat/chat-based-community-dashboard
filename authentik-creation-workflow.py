@@ -8,7 +8,6 @@ import sys
 
 # Load environment variables from .env file
 load_dotenv()
-api_url = "https://sso.irregularchat.com/api/v3/"
 
 # Function to generate a strong password
 def generate_password():

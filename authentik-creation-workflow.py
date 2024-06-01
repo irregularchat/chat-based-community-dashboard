@@ -4,7 +4,7 @@ import requests
 from dotenv import load_dotenv
 import os
 
-# Load api key from .env file
+# Load from .env file- authentik api key, base_username
 load_dotenv()
 
 # Function to generate a strong password

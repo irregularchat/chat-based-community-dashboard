@@ -5,13 +5,16 @@ from dotenv import load_dotenv
 import os
 import sys
 
-# Load from .env file - authentik api key, base_password
+# Load environment variables from .env file
 load_dotenv()
 
 # Function to generate a strong password
 def generate_password():
     base_password = os.getenv("base_password")
-    # Ensure the total length accounts for "TempPassword"
+    if not base_password:
+        raise ValueError("The base_password environment variable is not set.")
+    
+    # Ensure the total length accounts for the base password
     random_length = 5
     
     # Characters to be used in the random part of the password
@@ -52,8 +55,15 @@ def create_user(api_url, headers, username, password):
     response.raise_for_status()
     return response.json()
 
-# API settings
+# Load API settings from environment variables
+api_url = os.getenv("API_URL")
+if not api_url:
+    raise ValueError("The API_URL environment variable is not set.")
+
 token = os.getenv("AUTHENTIK_API_TOKEN")
+if not token:
+    raise ValueError("The AUTHENTIK_API_TOKEN environment variable is not set.")
+
 headers = {
     "Authorization": f"Bearer {token}",
     "Content-Type": "application/json"
@@ -67,7 +77,8 @@ else:
 
 # Check if the API URL can be resolved
 try:
-    requests.get(api_url, headers=headers).raise_for_status()
+    response = requests.get(api_url, headers=headers)
+    response.raise_for_status()
 except requests.exceptions.RequestException as e:
     print(f"Error: Unable to connect to the API at {api_url}. Please check the URL and your network connection.")
     sys.exit(1)

@@ -14,10 +14,10 @@ base_domain = "irregularchat.com" #update this to your domain
 
 API_URL = f"https://sso.{base_domain}/api/v3"  # Correct construction of API_URL
 # debugging
-# Debugging to ensure environment variables are loaded
-print(f"MAIN_GROUP_ID: {os.getenv('MAIN_GROUP_ID')}")
-print(f"AUTHENTIK_API_TOKEN: {os.getenv('AUTHENTIK_API_TOKEN')}")
-print(f"base_password: {os.getenv('base_password')}")
+# # Debugging to ensure environment variables are loaded
+# print(f"MAIN_GROUP_ID: {os.getenv('MAIN_GROUP_ID')}")
+# print(f"AUTHENTIK_API_TOKEN: {os.getenv('AUTHENTIK_API_TOKEN')}")
+# print(f"base_password: {os.getenv('base_password')}")
 
 # Function to generate a strong password
 def generate_password():

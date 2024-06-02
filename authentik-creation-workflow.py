@@ -8,7 +8,7 @@ import sys
 import json
 
 # Load environment variables from .env file
-# API_URL, authentik_api_token, base_password, MAIN_GROUP_ID
+#authentik_api_token, base_password, MAIN_GROUP_ID
 load_dotenv()
 base_domain = "irregularchat.com" #update this to your domain
 token = os.getenv("AUTHENTIK_API_TOKEN")
@@ -17,17 +17,17 @@ if not token:
 main_group_id = os.getenv("MAIN_GROUP_ID")
 if not main_group_id:
     raise ValueError("The MAIN_GROUP_ID environment variable is not set.")
+API_URL = f"https://sso.{base_domain}/api/v3"  # Correct construction of API_URL
+if not API_URL.endswith("/"):
+    API_URL += "/"
 headers = {
     "Authorization": f"Bearer {token}",
     "Content-Type": "application/json"
 }
-
-API_URL = f"https://sso.{base_domain}/api/v3"  # Correct construction of API_URL
-# debugging
-# # Debugging to ensure environment variables are loaded
-# print(f"MAIN_GROUP_ID: {os.getenv('MAIN_GROUP_ID')}")
-# print(f"AUTHENTIK_API_TOKEN: {os.getenv('AUTHENTIK_API_TOKEN')}")
-# print(f"base_password: {os.getenv('base_password')}")
+# Debugging to ensure environment variables are loaded
+print(f"MAIN_GROUP_ID: {os.getenv('MAIN_GROUP_ID')}")
+print(f"AUTHENTIK_API_TOKEN: {os.getenv('AUTHENTIK_API_TOKEN')}")
+print(f"base_password: {os.getenv('base_password')}")
 
 # Function to get user ID by username
 def get_user_id_by_username(API_URL, headers, username):
@@ -78,9 +78,13 @@ def reset_user_password(API_URL, headers, username):
 def create_unique_username(base_username, existing_usernames):
     username = base_username
     counter = 1
+    # Debugging print statement to trace execution
+    print(f"Trying base username: {username}")
     while username in existing_usernames:
         username = f"{base_username}{counter}"
+        print(f"Username {username} already taken, trying {username}")
         counter += 1
+    print(f"Unique username found: {username}")
     return username
 
 # Function to get existing usernames
@@ -107,9 +111,7 @@ def create_user(API_URL, headers, username, password):
         "name": username,
         "is_active": True,
         "email": f"{username}@{base_domain}",
-        "groups": [
-            main_group_id  # Now using the environment variable
-        ],
+        "groups": [main_group_id],
         "attributes": {},
         "path": "users",
         "type": "internal"
@@ -134,10 +136,11 @@ if operation not in ['create', 'reset']:
 
 # Check if the API URL can be resolved
 try:
-    response = requests.get(API_URL, headers=headers)
+    response = requests.get(API_URL + "core/users/", headers=headers)
     response.raise_for_status()
 except requests.exceptions.RequestException as e:
-    print(f"Error: Unable to connect to the API at {API_URL}. Please check the URL and your network connection.")
+    print(f"Error: Unable to connect to the API at {API_URL}core/users/. Please check the URL and your network connection.")
+    print(f"Exception: {e}")
     sys.exit(1)
 
 # Main logic based on operation
@@ -148,7 +151,7 @@ if operation == 'create':
     new_user = create_user(API_URL, headers, new_username, new_password)
 
     print(f"""
-    Temp PASSWORD: {password}
+    Temp PASSWORD: {new_password}
     Username: {new_username}
 
     🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
@@ -172,13 +175,6 @@ elif operation == 'reset':
     PASSWORD: {new_password}
     Username: {username}
 
-    🌟 Your password has been reset for the IrregularChat Community of Interest (CoI)! 🌟
-    Here's what you need to know to get started and a guide to join the wiki and other services:
-
-    ---
-    Step 1:
-    Use the password and username above to obtain your Irregular Chat Login, giving you access to the wiki and other services: https://sso.irregularchat.com/ 
-    Step 2: Then change your password AND email here: https://sso.irregularchat.com/if/user/#/settings;%7B%22page%22%3A%22page-details%22%7D
-    Step 3:
-    Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/links/
+    🌟 Your password has been reset 
+    Use the password and username above to obtain Login: https://sso.irregularchat.com/ 
     """)

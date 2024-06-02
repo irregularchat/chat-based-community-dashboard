@@ -2,4 +2,3 @@ requests
 python-dotenv
 nltk
 pyperclip
-dotenv

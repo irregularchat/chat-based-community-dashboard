@@ -5,9 +5,16 @@ import requests
 from dotenv import load_dotenv
 import os
 import sys
+import json
 
 # Load environment variables from .env file
+# api_url, authentik_api_token, base_password, main_group_id
 load_dotenv()
+# debugging
+# Debugging to ensure environment variables are loaded
+print(f"API_URL: {os.getenv('API_URL')}")
+print(f"AUTHENTIK_API_TOKEN: {os.getenv('AUTHENTIK_API_TOKEN')}")
+print(f"base_password: {os.getenv('base_password')}")
 
 # Function to generate a strong password
 def generate_password():
@@ -39,29 +46,35 @@ def create_unique_username(base_username, existing_usernames):
     return username
 
 # Function to get existing usernames
-#FIXME: This function is not working properly. have tried the url with /users, users/, and identity/users/ but still not working
+# documentation https://docs.goauthentik.io/developer-docs/api/reference/core-users-list
 def get_existing_usernames(api_url, headers):
-    response = requests.get(f"{api_url}core/users/", headers=headers)
+    url = f"{api_url}/core/users/?is_active=true"
+    response = requests.get(url, headers=headers)  # Ensure URL is properly constructed
+    if response.status_code == 403:
+        print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
     response.raise_for_status()
-    users = response.json()
+    users = response.json()['results']  # Assuming the API returns paginated results
     return {user['username'] for user in users}
-# Function to retrieve a user by ID
-def retrieve_user(api_url, headers, user_id):
-    response = requests.get(f"{api_url}/core/users/{user_id}/", headers=headers)
-    response.raise_for_status()
-    return response.json()
+
 
 # Function to create a new user
 def create_user(api_url, headers, username, password):
-    data = {
+    data = json.dumps({
         "username": username,
-        "password": password,
-        "email": username + "@irregularchat.com",
-        "is_superuser": False,
-        "type": "internal",
-        "is_active": True
-    }
-    response = requests.post(f"{api_url}core/users/", headers=headers, json=data)
+        "name": username,
+        "is_active": True,
+        "email": f"{username}@irregularchat.com",
+        "groups": [
+            main_group_id
+        ],
+        "attributes": {},
+        "path": "string",
+        "type": "internal"
+    })
+    url = f"{api_url}/core/users/"
+    response = requests.post(url, headers=headers, data=data)  # Ensure URL is properly constructed
+    if response.status_code == 403:
+        print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
     response.raise_for_status()
     return response.json()
 

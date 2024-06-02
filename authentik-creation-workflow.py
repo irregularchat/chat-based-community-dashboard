@@ -162,6 +162,7 @@ if operation == 'create':
     existing_usernames = get_existing_usernames(API_URL, headers)
     new_username = create_unique_username(username, existing_usernames)
     new_password = generate_password()
+    email = f"{new_username}@{base_domain}"
     user_id = create_user(API_URL, headers, new_username, email, main_group_id)  # Get the user ID
     set_user_password(API_URL, headers, user_id, new_password)
     # instead of just printing, this should also copy to clipboard

@@ -29,6 +29,16 @@ API_URL = f"https://sso.{base_domain}/api/v3"  # Correct construction of API_URL
 # print(f"AUTHENTIK_API_TOKEN: {os.getenv('AUTHENTIK_API_TOKEN')}")
 # print(f"base_password: {os.getenv('base_password')}")
 
+# Function to get user ID by username
+def get_user_id_by_username(API_URL, headers, username):
+    url = f"{API_URL}/core/users/?search={username}"
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    users = response.json()['results']
+    if not users:
+        raise ValueError(f"User with username {username} not found.")
+    return users[0]['pk']
+
 # Function to generate a strong password
 def generate_password():
     base_password = os.getenv("base_password")

@@ -46,10 +46,10 @@ def generate_password():
         raise ValueError("The base_password environment variable is not set.")
     
     # Ensure the total length accounts for the base password
-    random_length = 5
+    random_length = 3
     
     # Characters to be used in the random part of the password
-    characters = string.ascii_letters + string.digits + string.punctuation
+    characters = string.ascii_letters + string.digits 
     
     # Generate the random part of the password
     random_part = ''.join(random.choice(characters) for i in range(random_length))

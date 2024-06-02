@@ -25,9 +25,9 @@ headers = {
     "Content-Type": "application/json"
 }
 # Debugging to ensure environment variables are loaded
-print(f"MAIN_GROUP_ID: {os.getenv('MAIN_GROUP_ID')}")
-print(f"AUTHENTIK_API_TOKEN: {os.getenv('AUTHENTIK_API_TOKEN')}")
-print(f"base_password: {os.getenv('base_password')}")
+# print(f"MAIN_GROUP_ID: {os.getenv('MAIN_GROUP_ID')}")
+# print(f"AUTHENTIK_API_TOKEN: {os.getenv('AUTHENTIK_API_TOKEN')}")
+# print(f"base_password: {os.getenv('base_password')}")
 
 # Function to get user ID by username
 def get_user_id_by_username(API_URL, headers, username):

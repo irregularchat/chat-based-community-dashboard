@@ -8,13 +8,14 @@ import sys
 import json
 
 # Load environment variables from .env file
-# api_url, authentik_api_token, base_password, MAIN_GROUP_ID
+# API_URL, authentik_api_token, base_password, MAIN_GROUP_ID
 load_dotenv()
-API_URL = {BASE_DOMAIN}/api/v3 # The base URL of the Authentik API from the environment variable
+base_domain = "irregularchat.com" #update this to your domain
 
+API_URL = f"https://sso.{base_domain}/api/v3"  # Correct construction of API_URL
 # debugging
 # Debugging to ensure environment variables are loaded
-print(f"API_URL: {os.getenv('API_URL')}")
+print(f"MAIN_GROUP_ID: {os.getenv('MAIN_GROUP_ID')}")
 print(f"AUTHENTIK_API_TOKEN: {os.getenv('AUTHENTIK_API_TOKEN')}")
 print(f"base_password: {os.getenv('base_password')}")
 
@@ -49,8 +50,8 @@ def create_unique_username(base_username, existing_usernames):
 
 # Function to get existing usernames
 # documentation https://docs.goauthentik.io/developer-docs/api/reference/core-users-list
-def get_existing_usernames(api_url, headers):
-    url = f"{api_url}/core/users/?is_active=true"
+def get_existing_usernames(API_URL, headers):
+    url = f"{API_URL}/core/users/?is_active=true"
     response = requests.get(url, headers=headers)  # Ensure URL is properly constructed
     if response.status_code == 403:
         print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
@@ -60,18 +61,25 @@ def get_existing_usernames(api_url, headers):
 
 
 # Function to create a new user
-def create_user(api_url, headers, username, password):
+# Function to create a new user
+def create_user(API_URL, headers, username, password):
+    main_group_id = os.getenv("MAIN_GROUP_ID")  # Load from environment variable
+    if not main_group_id:
+        raise ValueError("The MAIN_GROUP_ID environment variable is not set.")
+    
     data = json.dumps({
         "username": username,
         "name": username,
         "is_active": True,
-        "email": f"{username}@BASE_DOMAIN",
-        "groups": [MAIN_GROUP_ID],
+        "email": f"{username}@{base_domain}",
+        "groups": [
+            main_group_id  # Now using the environment variable
+        ],
         "attributes": {},
-        "path": "string",
+        "path": "users",
         "type": "internal"
     })
-    url = f"{api_url}/core/users/"
+    url = f"{API_URL}/core/users/"
     response = requests.post(url, headers=headers, data=data)  # Ensure URL is properly constructed
     if response.status_code == 403:
         print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
@@ -80,10 +88,10 @@ def create_user(api_url, headers, username, password):
 
 # Load API settings from environment variables
 # Load API settings from environment variables
-api_url = os.getenv("API_URL")
-if not api_url.endswith('/'):
-    api_url = api_url + '/'
-if not api_url:
+API_URL = os.getenv("API_URL")
+if not API_URL.endswith('/'):
+    API_URL = API_URL + '/'
+if not API_URL:
     raise ValueError("The API_URL environment variable is not set.")
 
 token = os.getenv("AUTHENTIK_API_TOKEN")
@@ -103,21 +111,21 @@ else:
 
 # Check if the API URL can be resolved
 try:
-    response = requests.get(api_url, headers=headers)
+    response = requests.get(API_URL, headers=headers)
     response.raise_for_status()
 except requests.exceptions.RequestException as e:
-    print(f"Error: Unable to connect to the API at {api_url}. Please check the URL and your network connection.")
+    print(f"Error: Unable to connect to the API at {API_URL}. Please check the URL and your network connection.")
     sys.exit(1)
 
 # Get existing usernames
-existing_usernames = get_existing_usernames(api_url, headers)
+existing_usernames = get_existing_usernames(API_URL, headers)
 
 # Generate unique username and strong password
 new_username = create_unique_username(base_username, existing_usernames)
 new_password = generate_password()
 
 # Create new user account
-new_user = create_user(api_url, headers, new_username, new_password)
+new_user = create_user(API_URL, headers, new_username, new_password)
 
 print(f"New Username: {new_username}")
 print(f"New Password: {new_password}")

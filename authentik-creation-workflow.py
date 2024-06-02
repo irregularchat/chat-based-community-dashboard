@@ -10,6 +10,8 @@ import json
 # Load environment variables from .env file
 # api_url, authentik_api_token, base_password, MAIN_GROUP_ID
 load_dotenv()
+API_URL = {BASE_DOMAIN}/api/v3 # The base URL of the Authentik API from the environment variable
+
 # debugging
 # Debugging to ensure environment variables are loaded
 print(f"API_URL: {os.getenv('API_URL')}")

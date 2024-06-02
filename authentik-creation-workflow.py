@@ -51,7 +51,7 @@ def create_unique_username(base_username, existing_usernames):
 # Function to get existing usernames
 # documentation https://docs.goauthentik.io/developer-docs/api/reference/core-users-list
 def get_existing_usernames(API_URL, headers):
-    url = f"{API_URL}/core/users/?is_active=true"
+    url = f"{API_URL}/core/users/"
     response = requests.get(url, headers=headers)  # Ensure URL is properly constructed
     if response.status_code == 403:
         print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
@@ -127,6 +127,20 @@ new_password = generate_password()
 # Create new user account
 new_user = create_user(API_URL, headers, new_username, new_password)
 
-print(f"New Username: {new_username}")
-print(f"New Password: {new_password}")
-print("User created successfully:", new_user)
+print(f"""
+PASSWORD: {new_password}
+Username: {new_username}
+
+🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
+You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
+
+    ---
+    Step 1:
+    Use the password and username above to obtain your Irregular Chat Login, giving you access to the wiki and other services: https://sso.irregularchat.com/ 
+    Step 2: Then change your password AND email here: https://sso.irregularchat.com/if/user/#/settings;%7B%22page%22%3A%22page-details%22%7D
+    Step 3:
+    Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/links/
+
+
+    ------
+""")

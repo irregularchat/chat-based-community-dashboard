@@ -75,6 +75,7 @@ def reset_user_password(API_URL, headers, username):
     return new_password
 
 # Function to create a unique username
+#TODO: if username is already taken, add a number to the end of the username instead of failing
 def create_unique_username(base_username, existing_usernames):
     username = base_username
     counter = 1

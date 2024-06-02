@@ -60,18 +60,19 @@ def generate_password():
     return password
 
 # Function to reset a user's password
+# Function to reset a user's password
 def reset_user_password(API_URL, headers, username):
     user_id = get_user_id_by_username(API_URL, headers, username)  # Get user ID by username
-    password = generate_password()
+    new_password = generate_password()
     data = json.dumps({
-        "password": password
+        "password": new_password
     })
     url = f"{API_URL}/core/users/{user_id}/set_password/"
     response = requests.post(url, headers=headers, data=data)
     if response.status_code == 403:
         print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
     response.raise_for_status()
-    return password
+    return new_password
 
 # Function to create a unique username
 def create_unique_username(base_username, existing_usernames):

@@ -19,9 +19,8 @@ This script automates the creation of user accounts on an Authentik instance. It
 
 2. **Create a Virtual Environment**
    ```bash
-   python -m venv venv
-      python3 -m venv venv
-      source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+   python3 -m venv venv
+   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
    ```
 
 3. **Install Dependencies**

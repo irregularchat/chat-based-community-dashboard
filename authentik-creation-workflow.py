@@ -165,9 +165,7 @@ if operation == 'create':
     ---
     Step 1:
     - Use the password and username above to obtain your Irregular Chat Login, giving you access to the wiki and other services: https://sso.irregularchat.com/ 
-    Step 2: 
-    - Then change your password AND email here: https://sso.irregularchat.com/if/user/#/settings;%7B%22page%22%3A%22page-details%22%7D
-    Step 3:
+    Step 2:
     - Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome
 
 

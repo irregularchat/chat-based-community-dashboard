@@ -128,7 +128,7 @@ new_password = generate_password()
 new_user = create_user(API_URL, headers, new_username, new_password)
 
 print(f"""
-PASSWORD: {new_password}
+Temp PASSWORD: {new_password}
 Username: {new_username}
 
 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟

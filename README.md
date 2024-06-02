@@ -53,7 +53,12 @@ This script automates the creation of user accounts on an Authentik instance. It
 
 Run the script to create a new user account:
 ```bash
-python create_user.py {username}
+python create_user.py create {username}
+```
+
+Run the script to reset the password for a user account:
+```bash
+python create_user.py reset {username}
 ```
 
 ### Example Output

@@ -81,6 +81,7 @@ New Password: TempPassword@2gh#k
 - **create_unique_username(base_username, existing_usernames)**: Ensures the generated username is unique by appending a counter if necessary.
 - **get_existing_usernames(api_url, headers)**: Retrieves the list of existing usernames from the Authentik API.
 - **create_user(api_url, headers, username, password)**: Creates a new user on the Authentik instance with the provided username and password.
+- **reset_password(api_url, headers, username, password)**: Resets the password for an existing user on the Authentik instance.
 
 ## Best Practices for Setting Up the Environment
 

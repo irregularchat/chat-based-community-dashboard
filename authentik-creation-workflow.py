@@ -6,10 +6,12 @@ from dotenv import load_dotenv
 import os
 import sys
 import json
+import pyperclip
 
 # Load environment variables from .env file
 #authentik_api_token, base_password, MAIN_GROUP_ID
 load_dotenv()
+########## define the vars comming from the .env file ##########
 base_domain = "irregularchat.com" #update this to your domain
 token = os.getenv("AUTHENTIK_API_TOKEN")
 if not token:
@@ -28,7 +30,35 @@ headers = {
 # print(f"MAIN_GROUP_ID: {os.getenv('MAIN_GROUP_ID')}")
 # print(f"AUTHENTIK_API_TOKEN: {os.getenv('AUTHENTIK_API_TOKEN')}")
 # print(f"base_password: {os.getenv('base_password')}")
+####### Print Messages ########
+welcome_message = f"""
+Temp PASSWORD: {new_password}
+Username: {new_username}
 
+🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
+You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
+
+---
+Step 1:
+- Use the password and username above to obtain your Irregular Chat Login, giving you access to the wiki and other services: https://sso.irregularchat.com/ 
+Step 2: 
+- Then change your password AND email here: https://sso.irregularchat.com/if/user/#/settings;%7B%22page%22%3A%22page-details%22%7D
+Step 3:
+- Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome
+
+
+------
+"""
+
+reset_message = f"""
+PASSWORD: {new_password}
+Username: {username}
+
+🌟 Your password has been reset 
+Use the password and username above to obtain Login: https://sso.irregularchat.com/ 
+"""
+
+########## Functions ##########
 # Function to get user ID by username
 def get_user_id_by_username(API_URL, headers, username):
     url = f"{API_URL}/core/users/?search={username}"
@@ -150,32 +180,13 @@ if operation == 'create':
     new_username = create_unique_username(username, existing_usernames)
     new_password = generate_password()
     new_user = create_user(API_URL, headers, new_username, new_password)
+    # instead of just printing, this should also copy to clipboard
+    print(welcome_message)
+    pyperclip.copy(welcome_message)
+    print("The above message has been copied to the clipboard.")
 
-    print(f"""
-    Temp PASSWORD: {new_password}
-    Username: {new_username}
-
-    🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
-    You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
-
-    ---
-    Step 1:
-    - Use the password and username above to obtain your Irregular Chat Login, giving you access to the wiki and other services: https://sso.irregularchat.com/ 
-    Step 2: 
-    - Then change your password AND email here: https://sso.irregularchat.com/if/user/#/settings;%7B%22page%22%3A%22page-details%22%7D
-    Step 3:
-    - Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome
-
-
-    ------
-    """)
 elif operation == 'reset':
     new_password = reset_user_password(API_URL, headers, username)
-
-    print(f"""
-    PASSWORD: {new_password}
-    Username: {username}
-
-    🌟 Your password has been reset 
-    Use the password and username above to obtain Login: https://sso.irregularchat.com/ 
-    """)
+    print(reset_message)
+    pyperclip.copy(reset_message)
+    print("The above message has been copied to the clipboard.")

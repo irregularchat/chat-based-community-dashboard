@@ -8,7 +8,7 @@ import sys
 import json
 
 # Load environment variables from .env file
-# api_url, authentik_api_token, base_password, main_group_id
+# api_url, authentik_api_token, base_password, MAIN_GROUP_ID
 load_dotenv()
 # debugging
 # Debugging to ensure environment variables are loaded
@@ -63,10 +63,8 @@ def create_user(api_url, headers, username, password):
         "username": username,
         "name": username,
         "is_active": True,
-        "email": f"{username}@irregularchat.com",
-        "groups": [
-            main_group_id
-        ],
+        "email": f"{username}@BASE_DOMAIN",
+        "groups": [MAIN_GROUP_ID],
         "attributes": {},
         "path": "string",
         "type": "internal"

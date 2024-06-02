@@ -125,7 +125,17 @@ def create_user(API_URL, headers, username, password):
     if response.status_code == 403:
         print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
     response.raise_for_status()
-    return response.json()
+    return response.json()['pk']
+
+def set_user_password(API_URL, headers, user_id, password):
+    data = json.dumps({
+        "password": password
+    })
+    url = f"{API_URL}/core/users/{user_id}/set_password/"
+    response = requests.post(url, headers=headers, data=data)
+    if response.status_code == 403:
+        print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
+    response.raise_for_status()
 
 
 # Determine operation (create user or reset password) from command-line arguments
@@ -152,7 +162,8 @@ if operation == 'create':
     existing_usernames = get_existing_usernames(API_URL, headers)
     new_username = create_unique_username(username, existing_usernames)
     new_password = generate_password()
-    new_user = create_user(API_URL, headers, new_username, new_password)
+    user_id = create_user(API_URL, headers, new_username, email, main_group_id)  # Get the user ID
+    set_user_password(API_URL, headers, user_id, new_password)
     # instead of just printing, this should also copy to clipboard
     ####### Print Messages ########
     welcome_message = f"""

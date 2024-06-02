@@ -39,9 +39,10 @@ This script automates the creation of user accounts on an Authentik instance. It
    ```
    - Or create a `.env` file in the project directory and add the following:
      ```env
-     AUTHENTIK_API_TOKEN=your_api_token_here
-     base_password=base-pass-here
-     ```
+      AUTHENTIK_API_TOKEN=your_api_token_here
+      base_password = "usePasswordManager-" #Looking to remind the user 
+      MAIN_GROUP_ID = GROUP_ID #The group id you want to add the user to    
+      ```
      - add to gitignore
 
     ```bash

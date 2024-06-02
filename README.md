@@ -65,7 +65,7 @@ python create_user.py reset {username}
 ```plaintext
 New Username: user1
 New Password: TempPassword@2gh#k
-User created successfully: {user details JSON response}
+[Community Message]
 ```
 
 ## Script Overview

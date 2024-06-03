@@ -20,8 +20,8 @@ main_group_id = os.getenv("MAIN_GROUP_ID")
 if not main_group_id:
     raise ValueError("The MAIN_GROUP_ID environment variable is not set.")
 API_URL = f"https://sso.{base_domain}/api/v3"  # Correct construction of API_URL
-if not API_URL.endswith("/"):
-    API_URL += "/"
+# if not API_URL.endswith("/"):
+#     API_URL += "/"
 headers = {
     "Authorization": f"Bearer {token}",
     "Content-Type": "application/json"
@@ -94,7 +94,7 @@ def create_unique_username(base_username, existing_usernames):
 # Function to get existing usernames
 # documentation https://docs.goauthentik.io/developer-docs/api/reference/core-users-list
 def get_existing_usernames(API_URL, headers):
-    url = f"{API_URL}/core/users/"
+    url = f"{API_URL}/core/users"
     response = requests.get(url, headers=headers)  # Ensure URL is properly constructed
     if response.status_code == 403:
         print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
@@ -125,7 +125,8 @@ def create_user(API_URL, headers, username, password):
     if response.status_code == 403:
         print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
     response.raise_for_status()
-    return response.json()
+    return response.json()['pk']
+
 
 
 # Determine operation (create user or reset password) from command-line arguments
@@ -140,12 +141,13 @@ if operation not in ['create', 'reset']:
 
 # Check if the API URL can be resolved
 try:
-    response = requests.get(API_URL + "core/users/", headers=headers)
+    response = requests.get(f"{API_URL}/core/users", headers=headers)
     response.raise_for_status()
 except requests.exceptions.RequestException as e:
-    print(f"Error: Unable to connect to the API at {API_URL}core/users/. Please check the URL and your network connection.")
+    print(f"Error: Unable to connect to the API at {API_URL}/core/users. Please check the URL and your network connection.")
     print(f"Exception: {e}")
     sys.exit(1)
+
 
 # Main logic based on operation
 if operation == 'create':

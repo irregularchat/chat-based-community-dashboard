@@ -189,8 +189,9 @@ if operation == 'create':
     welcome_message = f"""
     Temp PASSWORD: {new_password}
     Username: {new_username}
-    --- I'm making sure that the welcome message is up to date. ---
-    🌟 IrregularChat Community Login 🌟
+    
+    🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
+    You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
 
     ---
     Step 1:

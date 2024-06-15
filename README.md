@@ -80,7 +80,7 @@ python authentik-creation-workflow.py invite {username|group|event|person}
 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
 You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans.  Here's what you need to know to get started and a guide to join the wiki and other services:
 
-IrregularChat Temp Invite: https://sso.irregularchat.com/if/flow/simple-enrollment-flow/?itoken=4153bc66-557b-40bb-bf9e-13de75dbf945
+IrregularChat Temp Invite: https://sso.irregularchat.com/if/flow/simple-enrollment-flow/?itoken=goes_here_123
 Invite Expires: 2 hours from now
 
 🌟 After you login you'll see options for the wiki, matrix "element messenger", and other self-hosted services.

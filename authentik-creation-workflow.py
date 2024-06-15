@@ -7,7 +7,7 @@ import os
 import sys
 import json
 import pyperclip
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 ########## Configuration ##########
 # Load environment variables from .env file

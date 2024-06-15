@@ -42,14 +42,14 @@ def get_user_id_by_username(API_URL, headers, username):
 
 # Function to create an invite code
 def create_invite(API_URL, headers, name, expires=None):
-    current_time_str = datetime.utcnow().strftime('%Y-%m-%dT%H-%M-%S')
+    current_time_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')
     if not name:
         name = current_time_str
     else:
         name = f"{name}-{current_time_str}"
     
     if expires is None:
-        expires = (datetime.utcnow() + timedelta(hours=2)).isoformat() + "Z"
+        expires = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
     
     data = {
         "name": name,

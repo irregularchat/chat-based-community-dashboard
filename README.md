@@ -51,21 +51,45 @@ This script automates the creation of user accounts on an Authentik instance. It
 
 ## Usage
 
+### Create User Account
+#### Syntax
+
 Run the script to create a new user account:
 ```bash
-python create_user.py create {username}
+python authentik-creation-workflow.py create {username}
 ```
 
 Run the script to reset the password for a user account:
 ```bash
-python create_user.py reset {username}
+python authentik-creation-workflow.py reset {username}
 ```
-
-### Example Output
+#### Example Output
 ```plaintext
 New Username: user1
 New Password: TempPassword@2gh#k
 [Community Message]
+```
+### Create Temporary Invite Link
+#### Syntax
+```bash
+python authentik-creation-workflow.py invite {username|group|event|person}
+```
+
+#### Example Output
+```plaintext
+🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
+You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans.  Here's what you need to know to get started and a guide to join the wiki and other services:
+
+IrregularChat Temp Invite: https://sso.irregularchat.com/if/flow/simple-enrollment-flow/?itoken=4153bc66-557b-40bb-bf9e-13de75dbf945
+Invite Expires: 2 hours from now
+
+🌟 After you login you'll see options for the wiki, matrix "element messenger", and other self-hosted services.
+Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/links/
+```
+### Reset Password
+#### Syntax
+```bash
+python authentik-creation-workflow.py reset {username}
 ```
 
 ## Script Overview

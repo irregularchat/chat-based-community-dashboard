@@ -39,6 +39,24 @@ def get_user_id_by_username(API_URL, headers, username):
         raise ValueError(f"User with username {username} not found.")
     return users[0]['pk']
 
+# Function to create an invite
+def create_invite(API_URL, headers, name, expires=None):
+    if expires is None:
+        expires = (datetime.utcnow() + timedelta(hours=2)).isoformat() + "Z"
+    data = {
+        "name": name,
+        "expires": expires,
+        "fixed_data": {},
+        "single_use": True,
+        "flow": "simple-enrollment-flow"  # Replace with the actual flow ID if needed
+    }
+    url = f"{API_URL}core/invites/"
+    response = requests.post(url, headers=headers, json=data)
+    if response.status_code == 403:
+        print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
+    response.raise_for_status()
+    return response.json()['pk']
+
 # Function to generate a strong password
 def generate_password():
     base_password = os.getenv("base_password")
@@ -132,15 +150,16 @@ def create_user(API_URL, headers, username, password):
     set_user_password(API_URL, headers, user_id, password)
     return user_id
 
-# Determine operation (create user or reset password) from command-line arguments
+# Determine operation (create user, reset password, or create invite) from command-line arguments
 if len(sys.argv) < 3:
-    raise ValueError("Usage: script.py [create|reset] username")
+    raise ValueError("Usage: script.py [create|reset|invite] [username|invite_name] [expires(optional)]")
 
 operation = sys.argv[1]
-username = sys.argv[2]
+entity_name = sys.argv[2]
+expires = sys.argv[3] if len(sys.argv) > 3 else None
 
-if operation not in ['create', 'reset']:
-    raise ValueError("Invalid operation. Use 'create' to create a user or 'reset' to reset a password.")
+if operation not in ['create', 'reset', 'invite']:
+    raise ValueError("Invalid operation. Use 'create' to create a user, 'reset' to reset a password, or 'invite' to create an invite.")
 
 # Check if the API URL can be resolved
 try:
@@ -154,7 +173,7 @@ except requests.exceptions.RequestException as e:
 # Main logic based on operation
 if operation == 'create':
     existing_usernames = get_existing_usernames(API_URL, headers)
-    new_username = create_unique_username(username, existing_usernames)
+    new_username = create_unique_username(entity_name, existing_usernames)
     new_password = generate_password()
     new_user = create_user(API_URL, headers, new_username, new_password)
     
@@ -162,17 +181,17 @@ if operation == 'create':
         print(f"DEBUG: Username {new_username} was taken, attempting to handle it.")
         action = input(f"The username '{new_username}' is already taken. Do you want to (1) create another user with a modified username or (2) reset the password? Enter 1 or 2: ")
         if action == '1':
-            new_username = create_unique_username(username, existing_usernames)
+            new_username = create_unique_username(entity_name, existing_usernames)
             print(f"DEBUG: Trying with new modified username: {new_username}")
             new_user = create_user(API_URL, headers, new_username, new_password)
             if new_user is None:
                 print("Failed to create a new user. Please try again.")
                 sys.exit(1)
         elif action == '2':
-            new_password = reset_user_password(API_URL, headers, username)
+            new_password = reset_user_password(API_URL, headers, entity_name)
             reset_message = f"""
             PASSWORD: {new_password}
-            Username: {username}
+            Username: {entity_name}
 
             🌟 Your password has been reset 
             Use the password and username above to obtain Login: https://sso.irregularchat.com/ 
@@ -207,10 +226,10 @@ if operation == 'create':
     print("The above message has been copied to the clipboard.")
 
 elif operation == 'reset':
-    new_password = reset_user_password(API_URL, headers, username)
+    new_password = reset_user_password(API_URL, headers, entity_name)
     reset_message = f"""
     PASSWORD: {new_password}
-    Username: {username}
+    Username: {entity_name}
 
     🌟 Your password has been reset 
     Use the password and username above to obtain Login: https://sso.irregularchat.com/ 
@@ -218,4 +237,18 @@ elif operation == 'reset':
 
     print(reset_message)
     pyperclip.copy(reset_message)
+    print("The above message has been copied to the clipboard.")
+
+elif operation == 'invite':
+    invite_id = create_invite(API_URL, headers, entity_name, expires)
+    invite_message = f"""
+    Invite created successfully!
+    Invite ID: {invite_id}
+    Name: {entity_name}
+    Expires: {expires if expires else '2 hours from now'}
+
+    🌟 Use the invite ID to proceed with the enrollment.
+    """
+    print(invite_message)
+    pyperclip.copy(invite_message)
     print("The above message has been copied to the clipboard.")

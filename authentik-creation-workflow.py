@@ -56,10 +56,10 @@ def create_invite(API_URL, headers, name, expires=None):
         "expires": expires,
         "fixed_data": {},
         "single_use": True,
-        "flow": "simple-enrollment-flow"  # Replace with the actual flow ID if needed
+        "flow": "41a44b0e-1d06-4551-9ec1-41bd793b6f27"  # Replace with the actual flow ID if needed
     }
     
-    url = f"{API_URL}core/invites/"
+    url = f"{API_URL}/stages/invitation/invitations/"
     response = requests.post(url, headers=headers, json=data)
     if response.status_code == 403:
         print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
@@ -160,15 +160,22 @@ def create_user(API_URL, headers, username, password):
     return user_id
 
 # Determine operation (create user, reset password, or create invite) from command-line arguments
-if len(sys.argv) < 3:
+if len(sys.argv) < 2:
+    raise ValueError("Usage: script.py [create|reset|invite] [username|invite_name] [expires(optional)]")
+operation = sys.argv[1]
+entity_name = sys.argv[2] if len(sys.argv) > 2 else None
+expires = sys.argv[3] if len(sys.argv) > 3 else None
+
+if len(sys.argv) < 2:
     raise ValueError("Usage: script.py [create|reset|invite] [username|invite_name] [expires(optional)]")
 
 operation = sys.argv[1]
 entity_name = sys.argv[2] if len(sys.argv) > 2 else None
 expires = sys.argv[3] if len(sys.argv) > 3 else None
 
-if operation not in ['create', 'reset', 'invite']:
-    raise ValueError("Invalid operation. Use 'create' to create a user, 'reset' to reset a password, or 'invite' to create an invite.")
+if not entity_name and operation == 'invite':
+    current_time_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')
+    entity_name = current_time_str
 
 # Check if the API URL can be resolved
 try:
@@ -251,12 +258,13 @@ elif operation == 'reset':
 elif operation == 'invite':
     invite_id = create_invite(API_URL, headers, entity_name, expires)
     invite_message = f"""
-    Invite created successfully!
-    Invite ID: {invite_id}
-    Name: {entity_name}
-    Expires: {expires if expires else '2 hours from now'}
+    🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
+You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans.  Here's what you need to know to get started and a guide to join the wiki and other services:
+    IrregularChat Temp Invite: https://sso.irregularchat.com/if/flow/simple-enrollment-flow/?itoken={invite_id}
+    Invite Expires: {expires if expires else '2 hours from now'}
 
-    🌟 Use the invite ID to proceed with the enrollment.
+    🌟 After you login you'll see options for the wiki, matrix "element messenger", and other self-hosted services. 
+    Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/links/
     """
     print(invite_message)
     pyperclip.copy(invite_message)

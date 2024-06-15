@@ -38,11 +38,11 @@ This script automates the creation of user accounts on an Authentik instance. It
    nano .env
    ```
    - Or create a `.env` file in the project directory and add the following:
-     ```env
-      AUTHENTIK_API_TOKEN=your_api_token_here
-      base_password = "usePasswordManager-" #Looking to remind the user 
-      MAIN_GROUP_ID = GROUP_ID #The group id you want to add the user to    
-      ```
+   ```env
+   AUTHENTIK_API_TOKEN=your_api_token_here
+   base_password = "usePasswordManager-" #Looking to remind the user 
+   MAIN_GROUP_ID = GROUP_ID #The group id you want to add the user to    
+   ```
      - add to gitignore
 
     ```bash
@@ -65,8 +65,8 @@ python authentik-creation-workflow.py reset {username}
 ```
 #### Example Output
 > New Username: user1
-New Password: TempPassword@2gh#k
-[Community Message]
+> New Password: TempPassword@2gh#k
+> [Community Message]
 
 ### Create Temporary Invite Link
 #### Syntax
@@ -75,14 +75,12 @@ python authentik-creation-workflow.py invite {username|group|event|person}
 ```
 
 #### Example Output
-> 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
-You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans.  Here's what you need to know to get started and a guide to join the wiki and other services:
+> [Community Message]
 > 
 > IrregularChat Temp Invite: https://sso.irregularchat.com/if/flow/simple-enrollment-flow/?itoken=goes_here_123
 Invite Expires: 2 hours from now
 > 
-> 🌟 After you login you'll see options for the wiki, matrix "element messenger", and other self-hosted services.
-Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/links/
+> [Community Message]
 
 ### Reset Password
 #### Syntax

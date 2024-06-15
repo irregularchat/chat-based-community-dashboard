@@ -64,11 +64,10 @@ Run the script to reset the password for a user account:
 python authentik-creation-workflow.py reset {username}
 ```
 #### Example Output
-```plaintext
-New Username: user1
+> New Username: user1
 New Password: TempPassword@2gh#k
 [Community Message]
-```
+
 ### Create Temporary Invite Link
 #### Syntax
 ```bash

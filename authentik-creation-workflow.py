@@ -39,10 +39,17 @@ def get_user_id_by_username(API_URL, headers, username):
         raise ValueError(f"User with username {username} not found.")
     return users[0]['pk']
 
-# Function to create an invite
+# Function to create an invite code
 def create_invite(API_URL, headers, name, expires=None):
+    current_time_str = datetime.utcnow().strftime('%Y-%m-%dT%H-%M-%S')
+    if not name:
+        name = current_time_str
+    else:
+        name = f"{name}-{current_time_str}"
+    
     if expires is None:
         expires = (datetime.utcnow() + timedelta(hours=2)).isoformat() + "Z"
+    
     data = {
         "name": name,
         "expires": expires,
@@ -50,6 +57,7 @@ def create_invite(API_URL, headers, name, expires=None):
         "single_use": True,
         "flow": "simple-enrollment-flow"  # Replace with the actual flow ID if needed
     }
+    
     url = f"{API_URL}core/invites/"
     response = requests.post(url, headers=headers, json=data)
     if response.status_code == 403:
@@ -155,7 +163,7 @@ if len(sys.argv) < 3:
     raise ValueError("Usage: script.py [create|reset|invite] [username|invite_name] [expires(optional)]")
 
 operation = sys.argv[1]
-entity_name = sys.argv[2]
+entity_name = sys.argv[2] if len(sys.argv) > 2 else None
 expires = sys.argv[3] if len(sys.argv) > 3 else None
 
 if operation not in ['create', 'reset', 'invite']:

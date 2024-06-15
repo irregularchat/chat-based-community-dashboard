@@ -8,7 +8,7 @@ This script automates the creation of user accounts on an Authentik instance. It
 - `requests` library
 - `python-dotenv` library
 - Access to the Authentik API
-
+   - If you are an admin, you can generate an API token from the Authentik web interface: https://sso.irregularchat.com/if/admin/#/core/tokens
 ## Installation
 
 1. **Clone the Repository**

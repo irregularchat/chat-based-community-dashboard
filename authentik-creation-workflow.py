@@ -65,8 +65,9 @@ def create_invite(API_URL, headers, name, expires=None):
         print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
     response.raise_for_status()
     return response.json()['pk']
-# create password reset link
-# documentation : https://docs.goauthentik.io/developer-docs/api/reference/core-users-recovery-create
+
+# Function to generate a recovery link
+# # documentation : https://docs.goauthentik.io/developer-docs/api/reference/core-users-recovery-create
 def generate_recovery_link(API_URL, headers, username):
     user_id = get_user_id_by_username(API_URL, headers, username)
     
@@ -81,50 +82,6 @@ def generate_recovery_link(API_URL, headers, username):
         raise ValueError("Failed to generate recovery link.")
     
     return recovery_link
-# Function to generate a strong password
-def generate_password():
-    base_password = os.getenv("base_password")
-    if not base_password:
-        raise ValueError("The base_password environment variable is not set.")
-
-    # Ensure the total length accounts for the base password
-    random_length = 3
-
-    # Characters to be used in the random part of the password
-    characters = string.ascii_letters + string.digits 
-
-    # Generate the random part of the password
-    random_part = ''.join(random.choice(characters) for i in range(random_length))
-    
-    # Combine the base password with the random part
-    password = base_password + random_part
-    return password
-
-# Function to reset a user's password
-def reset_user_password(API_URL, headers, username):
-    user_id = get_user_id_by_username(API_URL, headers, username)  # Get user ID by username
-    new_password = generate_password()
-    data = json.dumps({
-        "password": new_password
-    })
-    url = f"{API_URL}core/users/{user_id}/set_password/"
-    response = requests.post(url, headers=headers, data=data)
-    if response.status_code == 403:
-        print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
-    response.raise_for_status()
-    return new_password
-
-# Function to set a user's password
-def set_user_password(API_URL, headers, user_id, password):
-    data = json.dumps({
-        "password": password
-    })
-    url = f"{API_URL}core/users/{user_id}/set_password/"
-    response = requests.post(url, headers=headers, data=data)
-    if response.status_code == 403:
-        print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
-    response.raise_for_status()
-    return password
 
 # Function to create a unique username
 def create_unique_username(base_username, existing_usernames):
@@ -147,7 +104,7 @@ def get_existing_usernames(API_URL, headers):
     return {user['username'] for user in users}
 
 # Function to create a new user
-def create_user(API_URL, headers, username, password):
+def create_user(API_URL, headers, username):
     main_group_id = os.getenv("MAIN_GROUP_ID")
     if not main_group_id:
         raise ValueError("The MAIN_GROUP_ID environment variable is not set.")
@@ -170,19 +127,17 @@ def create_user(API_URL, headers, username, password):
         return None  # Signal that the username is taken
     response.raise_for_status()
     user_id = response.json()['pk']
-    # Set the password for the new user
-    set_user_password(API_URL, headers, user_id, password)
     return user_id
 
-# Determine operation (create user, reset password, or create invite) from command-line arguments
+# Determine operation (create user, create recovery link, or create invite) from command-line arguments
 if len(sys.argv) < 2:
-    raise ValueError("Usage: script.py [create|reset|invite] [username|invite_name] [expires(optional)]")
+    raise ValueError("Usage: script.py [create|recover|invite] [username|invite_name] [expires(optional)]")
 operation = sys.argv[1]
 entity_name = sys.argv[2] if len(sys.argv) > 2 else None
 expires = sys.argv[3] if len(sys.argv) > 3 else None
 
 if len(sys.argv) < 2:
-    raise ValueError("Usage: script.py [create|reset|invite] [username|invite_name] [expires(optional)]")
+    raise ValueError("Usage: script.py [create|recover|invite] [username|invite_name] [expires(optional)]")
 
 operation = sys.argv[1]
 entity_name = sys.argv[2] if len(sys.argv) > 2 else None
@@ -205,69 +160,61 @@ except requests.exceptions.RequestException as e:
 if operation == 'create':
     existing_usernames = get_existing_usernames(API_URL, headers)
     new_username = create_unique_username(entity_name, existing_usernames)
-    new_password = generate_password()
-    new_user = create_user(API_URL, headers, new_username, new_password)
+    new_user = create_user(API_URL, headers, new_username)
     
     while new_user is None:  # Username is taken
         print(f"DEBUG: Username {new_username} was taken, attempting to handle it.")
-        action = input(f"The username '{new_username}' is already taken. Do you want to (1) create another user with a modified username or (2) reset the password? Enter 1 or 2: ")
+        action = input(f"The username '{new_username}' is already taken. Do you want to (1) create another user with a modified username or (2) generate a recovery link? Enter 1 or 2: ")
         if action == '1':
             new_username = create_unique_username(entity_name, existing_usernames)
             print(f"DEBUG: Trying with new modified username: {new_username}")
-            new_user = create_user(API_URL, headers, new_username, new_password)
+            new_user = create_user(API_URL, headers, new_username)
             if new_user is None:
                 print("Failed to create a new user. Please try again.")
                 sys.exit(1)
         elif action == '2':
-            new_password = reset_user_password(API_URL, headers, entity_name)
-            reset_message = f"""
-            PASSWORD: {new_password}
+            recovery_link = generate_recovery_link(API_URL, headers, entity_name)
+            recovery_message = f"""
+            🌟 Your account recovery link 🌟
             Username: {entity_name}
+            Recovery Link: {recovery_link}
 
-            🌟 Your password has been reset 
-            Use the password and username above to obtain Login: https://sso.irregularchat.com/ 
+            Use the link above to recover your account.
             """
-            print(reset_message)
-            pyperclip.copy(reset_message)
+            print(recovery_message)
+            pyperclip.copy(recovery_message)
             print("The above message has been copied to the clipboard.")
             sys.exit(0)
         else:
             print("Invalid action. Exiting script.")
             sys.exit(1)
     
-    # Instead of just printing, this should also copy to clipboard
-    welcome_message = f"""
-    Temp PASSWORD: {new_password}
-    Username: {new_username}
-    
+    welcome_message = f"""    
     🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
     You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
 
     ---
     Step 1:
-    - Use the password and username above to obtain your Irregular Chat Login, giving you access to the wiki and other services: https://sso.irregularchat.com/ 
+    - Your Irregular Chat Login is {new_username}, giving you access to the wiki and other services. Activate your account here: {recovery_link}
     Step 2:
     - Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome
 
-
-    ------
     """
     print(welcome_message)
     pyperclip.copy(welcome_message)
     print("The above message has been copied to the clipboard.")
 
-elif operation == 'reset':
-    new_password = reset_user_password(API_URL, headers, entity_name)
-    reset_message = f"""
-    PASSWORD: {new_password}
+elif operation == 'recover':
+    recovery_link = generate_recovery_link(API_URL, headers, entity_name)
+    recovery_message = f"""
+    🌟 Your account recovery link 🌟
     Username: {entity_name}
+    Recovery Link: {recovery_link}
 
-    🌟 Your password has been reset 
-    Use the password and username above to obtain Login: https://sso.irregularchat.com/ 
+    Use the link above to recover your account.
     """
-
-    print(reset_message)
-    pyperclip.copy(reset_message)
+    print(recovery_message)
+    pyperclip.copy(recovery_message)
     print("The above message has been copied to the clipboard.")
 
 elif operation == 'invite':

@@ -65,7 +65,22 @@ def create_invite(API_URL, headers, name, expires=None):
         print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
     response.raise_for_status()
     return response.json()['pk']
-
+# create password reset link
+# documentation : https://docs.goauthentik.io/developer-docs/api/reference/core-users-recovery-create
+def generate_recovery_link(API_URL, headers, username):
+    user_id = get_user_id_by_username(API_URL, headers, username)
+    
+    url = f"{API_URL}core/users/{user_id}/recovery/"
+    response = requests.post(url, headers=headers)
+    if response.status_code == 403:
+        print(f"403 Forbidden Error: Check if the API token has the necessary permissions to access {url}")
+    response.raise_for_status()
+    
+    recovery_link = response.json().get('link')
+    if not recovery_link:
+        raise ValueError("Failed to generate recovery link.")
+    
+    return recovery_link
 # Function to generate a strong password
 def generate_password():
     base_password = os.getenv("base_password")

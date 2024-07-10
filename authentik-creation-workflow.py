@@ -188,14 +188,14 @@ if operation == 'create':
         else:
             print("Invalid action. Exiting script.")
             sys.exit(1)
-    
+    recovery_link = generate_recovery_link(API_URL, headers, entity_name)
     welcome_message = f"""    
     🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
     You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
-
+    Username: {new_username}
     ---
     Step 1:
-    - Your Irregular Chat Login is {new_username}, giving you access to the wiki and other services. Activate your account here: {recovery_link}
+    - Activate your IrregularChat Login with your username ({new_username}) here: {recovery_link}
     Step 2:
     - Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome
 

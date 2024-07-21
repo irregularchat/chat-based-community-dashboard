@@ -1,6 +1,7 @@
 # Authentik User Creation Script
 
 This script automates the creation of user accounts on an Authentik instance. It generates a strong password and ensures unique usernames. The script uses environment variables for secure handling of sensitive information.
+.
 
 ## Prerequisites
 

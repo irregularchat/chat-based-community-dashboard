@@ -1,0 +1,14 @@
+services:
+  streamlit-app:
+    build: .
+    ports:
+      - "${PORT}:${PORT}"
+    environment:
+      - AUTHENTIK_API_TOKEN=${AUTHENTIK_API_TOKEN}
+      - MAIN_GROUP_ID=${MAIN_GROUP_ID}
+      - BASE_DOMAIN=${BASE_DOMAIN}
+      - PORT=${PORT}
+    volumes:
+      - .:/app
+    env_file:
+      - .env

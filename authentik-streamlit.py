@@ -1,6 +1,9 @@
 import streamlit as st
 import requests
 from datetime import datetime, timedelta, timezone
+from dotenv import load_dotenv
+import os
+load_dotenv()
 
 ########## Configuration ##########
 # Define the vars for the app

@@ -66,8 +66,6 @@ python authentik-creation-workflow.py reset {username}
 #### Example Output
 > New Username: user1
 > 
-> New Password: !!Temp_Password@2gh#k1872
-> 
 > [Community Message]
 
 ### Create Temporary Invite Link

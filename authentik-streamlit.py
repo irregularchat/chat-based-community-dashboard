@@ -3,23 +3,28 @@ import requests
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import os
+
 load_dotenv()
 
 ########## Configuration ##########
 # Define the vars for the app
 st.title("IrregularChat Authentik Management")
+st.markdown("[See the wiki about creating a user](https://wiki.irregularchat.com/en/community/chat/admin/create-user)")
 
-base_domain = "irregularchat.com"  # Update this to your domain
-token = st.text_input("Enter your AUTHENTIK API TOKEN", type="password")
-main_group_id = st.text_input("Enter the MAIN GROUP ID")
+AUTHENTIK_API_TOKEN = os.getenv("AUTHENTIK_API_TOKEN")
+MAIN_GROUP_ID = os.getenv("MAIN_GROUP_ID")
+base_domain = os.getenv("BASE_DOMAIN")
 
-if not token or not main_group_id:
+# If AUTHENTIK_API_TOKEN or MAIN_GROUP_ID are blank, ask the user to input the values
+if not AUTHENTIK_API_TOKEN or not MAIN_GROUP_ID:
     st.warning("Please enter both the API token and the main group ID to proceed.")
+    AUTHENTIK_API_TOKEN = st.text_input("Enter your AUTHENTIK API TOKEN", type="password")
+    MAIN_GROUP_ID = st.text_input("Enter the MAIN GROUP ID")
     st.stop()
 
 API_URL = f"https://sso.{base_domain}/api/v3/"
 headers = {
-    "Authorization": f"Bearer {token}",
+    "Authorization": f"Bearer {AUTHENTIK_API_TOKEN}",
     "Content-Type": "application/json"
 }
 
@@ -54,7 +59,7 @@ def create_invite(API_URL, headers, name, expires=None):
     url = f"{API_URL}/stages/invitation/invitations/"
     response = requests.post(url, headers=headers, json=data)
     response.raise_for_status()
-    return response.json()['pk']
+    return response.json()['pk'], expires
 
 def generate_recovery_link(API_URL, headers, username):
     user_id = get_user_id_by_username(API_URL, headers, username)
@@ -90,7 +95,7 @@ def create_user(API_URL, headers, username):
         "name": username,
         "is_active": True,
         "email": f"{username}@{base_domain}",
-        "groups": [main_group_id],
+        "groups": [MAIN_GROUP_ID],
         "attributes": {},
         "path": "users",
         "type": "internal"
@@ -106,7 +111,14 @@ def create_user(API_URL, headers, username):
 operation = st.selectbox("Select Operation", ["Create User", "Generate Recovery Link", "Create Invite"])
 
 entity_name = st.text_input("Enter Username or Invite Name")
-expires = st.text_input("Enter Expiration Time (optional, format: YYYY-MM-DDTHH:MM:SS)")
+
+# Show date and time inputs only for specific operations
+if operation in ["Generate Recovery Link", "Create Invite"]:
+    expires_default = datetime.now() + timedelta(hours=2)
+    expires_date = st.date_input("Enter Expiration Date (optional)", value=expires_default.date())
+    expires_time = st.time_input("Enter Expiration Time (optional)", value=expires_default.time())
+else:
+    expires_date, expires_time = None, None
 
 if st.button("Submit"):
     try:
@@ -144,16 +156,27 @@ if st.button("Submit"):
             st.success(recovery_message)
         
         elif operation == "Create Invite":
-            invite_id = create_invite(API_URL, headers, entity_name, expires)
+            if expires_date and expires_time:
+                local_expires = datetime.combine(expires_date, expires_time)
+                expires = local_expires.astimezone(timezone.utc).isoformat()
+            else:
+                expires = None
+            
+            invite_id, invite_expires = create_invite(API_URL, headers, entity_name, expires)
+            invite_expires_time = datetime.fromisoformat(invite_expires).astimezone(timezone.utc) - datetime.now(timezone.utc)
+            hours, remainder = divmod(invite_expires_time.total_seconds(), 3600)
+            minutes, _ = divmod(remainder, 60)
             invite_message = f"""
             🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
             You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
             IrregularChat Temp Invite: https://sso.irregularchat.com/if/flow/simple-enrollment-flow/?itoken={invite_id}
-            Invite Expires: {expires if expires else '2 hours from now'}
+            Invite Expires: {int(hours)} hours and {int(minutes)} minutes from now
 
-            🌟 After you login you'll see options for the wiki, matrix "element messenger", and other self-hosted services. 
+            🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
             Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/links/
             """
+            if st.button("Copy"):
+                st.experimental_set_query_params(text=invite_message)
             st.success(invite_message)
 
     except Exception as e:

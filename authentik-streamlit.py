@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import pandas as pd
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import os
@@ -107,10 +108,45 @@ def create_user(API_URL, headers, username):
     response.raise_for_status()
     return response.json()['pk']
 
-########## Streamlit Interface ##########
-operation = st.selectbox("Select Operation", ["Create User", "Generate Recovery Link", "Create Invite"])
+def list_users(API_URL, headers, search_term=None):
+    if search_term:
+        url = f"{API_URL}core/users/?search={search_term}"
+    else:
+        url = f"{API_URL}core/users/"
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    users = response.json()['results']
+    return users
 
-entity_name = st.text_input("Enter Username or Invite Name")
+def update_user_status(API_URL, headers, user_id, is_active):
+    url = f"{API_URL}core/users/{user_id}/"
+    data = {"is_active": is_active}
+    response = requests.patch(url, headers=headers, json=data)
+    response.raise_for_status()
+    return response.json()
+
+def delete_user(API_URL, headers, user_id):
+    url = f"{API_URL}core/users/{user_id}/"
+    response = requests.delete(url, headers=headers)
+    response.raise_for_status()
+    return response.status_code == 204
+
+def reset_user_password(API_URL, headers, user_id, new_password):
+    url = f"{API_URL}core/users/{user_id}/set_password/"
+    data = {"password": new_password}
+    response = requests.post(url, headers=headers, json=data)
+    response.raise_for_status()
+    return response.json()
+
+########## Streamlit Interface ##########
+operation = st.selectbox("Select Operation", [
+    "Create User", 
+    "Generate Recovery Link", 
+    "Create Invite",
+    "List Users"
+])
+
+entity_name = st.text_input("Enter Username or Invite Name (if applicable)")
 
 # Show date and time inputs only for specific operations
 if operation in ["Generate Recovery Link", "Create Invite"]:
@@ -144,6 +180,7 @@ You've just joined a community focused on breaking down silos, fostering innovat
 - Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome
 """
             st.session_state['message'] = welcome_message
+            st.session_state['user_list'] = None  # Clear user list if there was any
             st.success("User created successfully!")
         
         elif operation == "Generate Recovery Link":
@@ -156,6 +193,7 @@ You've just joined a community focused on breaking down silos, fostering innovat
 Use the link above to recover your account.
 """
             st.session_state['message'] = recovery_message
+            st.session_state['user_list'] = None  # Clear user list if there was any
             st.success("Recovery link generated successfully!")
         
         elif operation == "Create Invite":
@@ -179,11 +217,63 @@ You've just joined a community focused on breaking down silos, fostering innovat
 Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/links/
 """
             st.session_state['message'] = invite_message
+            st.session_state['user_list'] = None  # Clear user list if there was any
             st.success("Invite created successfully!")
+        
+        elif operation == "List Users":
+            users = list_users(API_URL, headers, entity_name if entity_name else None)
+            st.session_state['user_list'] = users
+            st.session_state['message'] = "Users listed successfully!"
 
     except Exception as e:
         st.error(f"An error occurred: {e}")
 
 if 'message' in st.session_state:
-    st.code(st.session_state['message'].strip(), language='markdown')
+    st.success(st.session_state['message'])
+
+if 'user_list' in st.session_state and st.session_state['user_list']:
+    df = pd.DataFrame(st.session_state['user_list'])
+
+    # Sorting options
+    sort_by = st.selectbox("Sort by", options=["username", "email", "is_active"], index=0)
+    sort_ascending = st.radio("Sort order", ("Ascending", "Descending"))
+    df = df.sort_values(by=sort_by, ascending=(sort_ascending == "Ascending"))
+
+    selected_users = []
+    for idx, row in df.iterrows():
+        if st.checkbox(f"**Username**: {row['username']}, **Email**: {row['email']}, **Active**: {row['is_active']}", key=row['username']):
+            selected_users.append(row)
+
+    st.write(f"Selected Users: {len(selected_users)}")
+
+    if selected_users:
+        st.write("**Actions for Selected Users**")
+        action = st.selectbox("Select Action", ["Activate", "Deactivate", "Reset Password", "Delete"])
+
+        if action == "Reset Password":
+            new_password = st.text_input("Enter new password", type="password")
+
+        if st.button("Apply"):
+            try:
+                for user in selected_users:
+                    user_id = user['pk']
+                    if action == "Activate":
+                        update_user_status(API_URL, headers, user_id, True)
+                    elif action == "Deactivate":
+                        update_user_status(API_URL, headers, user_id, False)
+                    elif action == "Reset Password":
+                        if new_password:
+                            reset_user_password(API_URL, headers, user_id, new_password)
+                        else:
+                            st.warning("Please enter a new password")
+                            break
+                    elif action == "Delete":
+                        delete_user(API_URL, headers, user_id)
+                st.success(f"{action} action applied successfully to selected users.")
+            except Exception as e:
+                st.error(f"An error occurred while applying {action} action: {e}")
+
+    st.dataframe(df)
+
+if 'message' in st.session_state:
     del st.session_state['message']

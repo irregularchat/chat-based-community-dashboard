@@ -3,6 +3,7 @@ python-dotenv
 nltk
 pyperclip
 streamlit
+pandas
 streamlit-copy-to-clipboard
 # streamlit-annotated-text
 # streamlit-easy-button

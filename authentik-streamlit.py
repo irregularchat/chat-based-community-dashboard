@@ -133,27 +133,30 @@ if st.button("Submit"):
             
             recovery_link = generate_recovery_link(API_URL, headers, new_username)
             welcome_message = f"""
-            🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
-            You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
-            Username: {new_username}
-            ---
-            Step 1:
-            - Activate your IrregularChat Login with your username ({new_username}) here: {recovery_link}
-            Step 2:
-            - Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome
-            """
-            st.success(welcome_message)
+🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
+You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
+**Username**: {new_username}
+
+**Step 1**:
+- Activate your IrregularChat Login with your username ({new_username}) here: {recovery_link}
+
+**Step 2**:
+- Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome
+"""
+            st.session_state['message'] = welcome_message
+            st.success("User created successfully!")
         
         elif operation == "Generate Recovery Link":
             recovery_link = generate_recovery_link(API_URL, headers, entity_name)
             recovery_message = f"""
-            🌟 Your account recovery link 🌟
-            Username: {entity_name}
-            Recovery Link: {recovery_link}
+🌟 Your account recovery link 🌟
+**Username**: {entity_name}
+**Recovery Link**: {recovery_link}
 
-            Use the link above to recover your account.
-            """
-            st.success(recovery_message)
+Use the link above to recover your account.
+"""
+            st.session_state['message'] = recovery_message
+            st.success("Recovery link generated successfully!")
         
         elif operation == "Create Invite":
             if expires_date and expires_time:
@@ -167,17 +170,20 @@ if st.button("Submit"):
             hours, remainder = divmod(invite_expires_time.total_seconds(), 3600)
             minutes, _ = divmod(remainder, 60)
             invite_message = f"""
-            🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
-            You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
-            IrregularChat Temp Invite: https://sso.irregularchat.com/if/flow/simple-enrollment-flow/?itoken={invite_id}
-            Invite Expires: {int(hours)} hours and {int(minutes)} minutes from now
+🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
+You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
+**IrregularChat Temp Invite**: [Link](https://sso.irregularchat.com/if/flow/simple-enrollment-flow/?itoken={invite_id})
+**Invite Expires**: {int(hours)} hours and {int(minutes)} minutes from now
 
-            🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
-            Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/links/
-            """
-            if st.button("Copy"):
-                st.experimental_set_query_params(text=invite_message)
-            st.success(invite_message)
+🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
+Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/links/
+"""
+            st.session_state['message'] = invite_message
+            st.success("Invite created successfully!")
 
     except Exception as e:
         st.error(f"An error occurred: {e}")
+
+if 'message' in st.session_state:
+    st.code(st.session_state['message'].strip(), language='markdown')
+    del st.session_state['message']

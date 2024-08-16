@@ -1,7 +1,6 @@
 requests
 python-dotenv
 nltk
-pyperclip
 streamlit
 pandas
 streamlit-copy-to-clipboard

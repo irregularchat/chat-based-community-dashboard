@@ -179,6 +179,7 @@ You've just joined a community focused on breaking down silos, fostering innovat
 **Step 2**:
 - Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome
 """
+            st.code(welcome_message, language='markdown')
             st.session_state['message'] = welcome_message
             st.session_state['user_list'] = None  # Clear user list if there was any
             st.success("User created successfully!")
@@ -208,14 +209,16 @@ Use the link above to recover your account.
             hours, remainder = divmod(invite_expires_time.total_seconds(), 3600)
             minutes, _ = divmod(remainder, 60)
             invite_message = f"""
-🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
-You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
-**IrregularChat Temp Invite**: [Link](https://sso.irregularchat.com/if/flow/simple-enrollment-flow/?itoken={invite_id})
-**Invite Expires**: {int(hours)} hours and {int(minutes)} minutes from now
-
-🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
-Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/links/
-"""
+            🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
+            You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
+            **IrregularChat Temp Invite**: https://sso.irregularchat.com/if/flow/simple-enrollment-flow/?itoken={invite_id}
+            **Invite Expires**: {int(hours)} hours and {int(minutes)} minutes from now
+            
+            🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
+            Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/links/
+            """
+            
+            st.code(invite_message, language='markdown')
             st.session_state['message'] = invite_message
             st.session_state['user_list'] = None  # Clear user list if there was any
             st.success("Invite created successfully!")

@@ -192,7 +192,7 @@ You've just joined a community focused on breaking down silos, fostering innovat
 **Recovery Link**: {recovery_link}
 
 Use the link above to recover your account.
-"""
+"""         st.code(recovery_message, language='markdown')
             st.session_state['message'] = recovery_message
             st.session_state['user_list'] = None  # Clear user list if there was any
             st.success("Recovery link generated successfully!")
@@ -218,10 +218,12 @@ Use the link above to recover your account.
             Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/links/
             """
             
-            st.code(invite_message, language='markdown')
-            st.session_state['message'] = invite_message
+            
             st.session_state['user_list'] = None  # Clear user list if there was any
             st.success("Invite created successfully!")
+            #create code block with invite message make sure that the copy button works and shows click when clicked
+            st.code(invite_message, language='markdown')
+            st.session_state['message'] = invite_message
         
         elif operation == "List Users":
             users = list_users(API_URL, headers, entity_name if entity_name else None)

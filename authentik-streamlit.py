@@ -8,10 +8,18 @@ import os
 load_dotenv()
 
 ########## Configuration ##########
+# Site Static Content
+favicon_url = "https://filedn.com/lDsr08WnANmQTUJg2h6Jg2Q/Logos/Irregular%20Chat-Tech.png"
+st.set_page_config(page_title="IrregularChat User Management", page_icon=favicon_url)
+st.title("IrregularChat User Management")
+# Adding the list of links under the title
+st.markdown("""
+- [Login to the IrregularChat SSO](https://sso.irregularchat.com)
+- [Use the Signal CopyPasta for Welcome Messages](https://wiki.irregularchat.com/en/community/chat/admin/signal-prompts)
+- [Admin Prompts for Common Situations](https://wiki.irregularchat.com/community/chat/admin.md)
+- [Links to All the Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
+""")
 # Define the vars for the app
-st.title("IrregularChat Authentik Management")
-st.markdown("[See the wiki about creating a user](https://wiki.irregularchat.com/en/community/chat/admin/create-user)")
-
 AUTHENTIK_API_TOKEN = os.getenv("AUTHENTIK_API_TOKEN")
 MAIN_GROUP_ID = os.getenv("MAIN_GROUP_ID")
 base_domain = os.getenv("BASE_DOMAIN")

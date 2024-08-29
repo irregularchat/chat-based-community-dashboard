@@ -186,9 +186,12 @@ if st.button("Submit"):
 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
 You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
 ---
-Username: {new_username}
+Username: 
+vvvvvvvvv See Below for username vvvvvvvvv
 
-^^^^^^^^ See Above for User Name ^^^^^^^^^^^
+{new_username}
+
+^^^^^^^^ See Above for username ^^^^^^^^^^^
 
 **Step 1**:
 - Activate your IrregularChat Login with your username ({new_username}) here: {recovery_link}
@@ -229,13 +232,13 @@ Use the link above to recover your account.
             hours, remainder = divmod(invite_expires_time.total_seconds(), 3600)
             minutes, _ = divmod(remainder, 60)
             invite_message = f"""
-            🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
-            You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
+            💣 This Invite Will Self Destruct! ⏳
+            This is how you get an IrregularChat Login and how you can see all the chats and services:
             **IrregularChat Temp Invite**: https://sso.irregularchat.com/if/flow/simple-enrollment-flow/?itoken={invite_id}
             **Invite Expires**: {int(hours)} hours and {int(minutes)} minutes from now
             
             🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
-            Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/links/
+            Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome/
             """
             
             

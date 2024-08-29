@@ -133,10 +133,10 @@ def get_existing_usernames(API_URL, headers):
     users = response.json()['results']
     return {user['username'] for user in users}
 
-def create_user(API_URL, headers, username, email):
+def create_user(API_URL, headers, username, email, name):
     data = {
         "username": username,
-        "name": username,
+        "name": name,
         "is_active": True,
         "email": email,
         "groups": [MAIN_GROUP_ID],
@@ -189,8 +189,10 @@ operation = st.selectbox("Select Operation", [
     "List Users"
 ])
 
-entity_name = st.text_input("Enter Username or Invite Name")
-processed_username = entity_name.strip().lower().replace(" ", "-")
+first_name = st.text_input("Enter First Name")
+last_name = st.text_input("Enter Last Name")
+base_username = f"{first_name.strip().lower()}-{last_name.strip()[0].lower()}"
+processed_username = base_username.replace(" ", "-")
 email_input = st.text_input("Enter Email Address (optional)")
 
 # Show date and time inputs only for specific operations
@@ -212,7 +214,8 @@ if st.button("Submit"):
                 existing_usernames = get_existing_usernames(API_URL, headers)
                 new_username = create_unique_username(processed_username, existing_usernames)
                 email = email_input if email_input else f"{new_username}@{base_domain}"
-                new_user = create_user(API_URL, headers, new_username, email)
+                full_name = f"{first_name.strip()} {last_name.strip()}"
+                new_user = create_user(API_URL, headers, new_username, email, full_name)
                 
                 if new_user is None:
                     st.warning(f"Username {new_username} might already exist. Trying to fetch existing user.")
@@ -243,10 +246,10 @@ if st.button("Submit"):
                     st.success("User created successfully!")
 
         elif operation == "Generate Recovery Link":
-            recovery_link = generate_recovery_link(API_URL, headers, entity_name)
+            recovery_link = generate_recovery_link(API_URL, headers, processed_username)
             recovery_message = f"""
             🌟 Your account recovery link 🌟
-            **Username**: {entity_name}
+            **Username**: {processed_username}
             **Recovery Link**: {recovery_link}
 
             Use the link above to recover your account.
@@ -263,7 +266,7 @@ if st.button("Submit"):
             else:
                 expires = None
             
-            invite_id, invite_expires = create_invite(API_URL, headers, entity_name, expires)
+            invite_id, invite_expires = create_invite(API_URL, headers, processed_username, expires)
             invite_expires_time = datetime.fromisoformat(invite_expires).astimezone(timezone.utc) - datetime.now(timezone.utc)
             hours, remainder = divmod(invite_expires_time.total_seconds(), 3600)
             minutes, _ = divmod(remainder, 60)
@@ -281,7 +284,7 @@ if st.button("Submit"):
             st.success("Invite created successfully!")
 
         elif operation == "List Users":
-            users = list_users(API_URL, headers, entity_name if entity_name else None)
+            users = list_users(API_URL, headers, processed_username if processed_username else None)
             st.session_state['user_list'] = users
             st.session_state['message'] = "Users listed successfully!"
 

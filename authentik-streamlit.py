@@ -204,6 +204,10 @@ else:
     base_username = "user"  # Default base username if both are empty
 
 processed_username = base_username.replace(" ", "-")
+
+# Editable username field
+username_input = st.text_input("Username", value=processed_username)
+
 email_input = st.text_input("Enter Email Address (optional)")
 
 # Show date and time inputs only for specific operations
@@ -219,14 +223,14 @@ if st.button("Submit"):
         if operation == "Create User":
             # Search locally first
             update_local_db()
-            user_exists = search_local_db(processed_username)
+            user_exists = search_local_db(username_input)
             if not user_exists.empty:
-                st.warning(f"User {processed_username} already exists. Trying to create a unique username.")
+                st.warning(f"User {username_input} already exists. Trying to create a unique username.")
                 existing_usernames = get_existing_usernames(API_URL, headers)
-                new_username = create_unique_username(processed_username, existing_usernames)
+                new_username = create_unique_username(username_input, existing_usernames)
             else:
                 existing_usernames = get_existing_usernames(API_URL, headers)
-                new_username = create_unique_username(processed_username, existing_usernames)
+                new_username = create_unique_username(username_input, existing_usernames)
             
             email = email_input if email_input else f"{new_username}@{base_domain}"
             full_name = f"{first_name.strip()} {last_name.strip()}"
@@ -263,10 +267,10 @@ if st.button("Submit"):
 
 
         elif operation == "Generate Recovery Link":
-            recovery_link = generate_recovery_link(API_URL, headers, processed_username)
+            recovery_link = generate_recovery_link(API_URL, headers, username_input)
             recovery_message = f"""
             🌟 Your account recovery link 🌟
-            **Username**: {processed_username}
+            **Username**: {username_input}
             **Recovery Link**: {recovery_link}
 
             Use the link above to recover your account.
@@ -283,7 +287,7 @@ if st.button("Submit"):
             else:
                 expires = None
             
-            invite_id, invite_expires = create_invite(API_URL, headers, processed_username, expires)
+            invite_id, invite_expires = create_invite(API_URL, headers, username_input, expires)
             invite_expires_time = datetime.fromisoformat(invite_expires).astimezone(timezone.utc) - datetime.now(timezone.utc)
             hours, remainder = divmod(invite_expires_time.total_seconds(), 3600)
             minutes, _ = divmod(remainder, 60)
@@ -301,7 +305,7 @@ if st.button("Submit"):
             st.success("Invite created successfully!")
 
         elif operation == "List Users":
-            users = list_users(API_URL, headers, processed_username if processed_username else None)
+            users = list_users(API_URL, headers, username_input if username_input else None)
             st.session_state['user_list'] = users
             st.session_state['message'] = "Users listed successfully!"
 

@@ -218,6 +218,7 @@ if st.button("Submit"):
     try:
         if operation == "Create User":
             # Search locally first
+            update_local_db()
             user_exists = search_local_db(processed_username)
             if not user_exists.empty:
                 st.warning(f"User {processed_username} already exists. Trying to create a unique username.")
@@ -256,6 +257,7 @@ if st.button("Submit"):
                 """
                 st.code(welcome_message, language='markdown')
                 st.session_state['message'] = welcome_message
+                update_local_db()
                 st.session_state['user_list'] = None  # Clear user list if there was any
                 st.success("User created successfully!")
 

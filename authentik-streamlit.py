@@ -154,8 +154,9 @@ operation = st.selectbox("Select Operation", [
     "List Users"
 ])
 
-entity_name = st.text_input("Enter Username or Invite Name (if applicable)")
+entity_name = st.text_input("Enter Username or Invite Name")
 email_input = st.text_input("Enter Email Address (optional)")
+replace_spaces = st.checkbox("Replace spaces with hyphens (-)")
 
 # Show date and time inputs only for specific operations
 if operation in ["Generate Recovery Link", "Create Invite"]:
@@ -168,13 +169,18 @@ else:
 if st.button("Submit"):
     try:
         if operation == "Create User":
+            # Process the username
+            processed_username = entity_name.strip().lower()
+            if replace_spaces:
+                processed_username = processed_username.replace(" ", "-")
+            
             existing_usernames = get_existing_usernames(API_URL, headers)
-            new_username = create_unique_username(entity_name, existing_usernames)
+            new_username = create_unique_username(processed_username, existing_usernames)
             email = email_input if email_input else f"{new_username}@{base_domain}"
             new_user = create_user(API_URL, headers, new_username, email)
             
             while new_user is None:
-                new_username = create_unique_username(entity_name, existing_usernames)
+                new_username = create_unique_username(processed_username, existing_usernames)
                 new_user = create_user(API_URL, headers, new_username, email)
             
             recovery_link = generate_recovery_link(API_URL, headers, new_username)
@@ -196,7 +202,7 @@ Username: {new_username}
             st.session_state['message'] = welcome_message
             st.session_state['user_list'] = None  # Clear user list if there was any
             st.success("User created successfully!")
-        
+                
         # Other operations remain unchanged
         
         elif operation == "Generate Recovery Link":

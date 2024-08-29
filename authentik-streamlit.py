@@ -7,6 +7,7 @@ import os
 import hashlib
 import base64
 from cryptography.fernet import Fernet
+from io import StringIO
 
 load_dotenv()
 
@@ -65,7 +66,7 @@ def load_local_db():
     with open(local_db, 'r') as file:
         encrypted_data = file.read()
     decrypted_data = decrypt_data(encrypted_data)
-    df = pd.read_csv(pd.compat.StringIO(decrypted_data))
+    df = pd.read_csv(StringIO(decrypted_data))
     return df
 
 def search_local_db(username):

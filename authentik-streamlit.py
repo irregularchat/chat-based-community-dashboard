@@ -54,12 +54,18 @@ def decrypt_data(data):
 def update_local_db():
     users = list_users(API_URL, headers)
     df = pd.DataFrame(users)
-    df.to_csv(local_db, index=False)
+    # Encrypt the data before saving
+    encrypted_data = encrypt_data(df.to_csv(index=False))
+    with open(local_db, 'w') as file:
+        file.write(encrypted_data)
 
 def load_local_db():
     if not os.path.exists(local_db):
         update_local_db()
-    df = pd.read_csv(local_db)
+    with open(local_db, 'r') as file:
+        encrypted_data = file.read()
+    decrypted_data = decrypt_data(encrypted_data)
+    df = pd.read_csv(pd.compat.StringIO(decrypted_data))
     return df
 
 def search_local_db(username):

@@ -250,11 +250,11 @@ if st.button("Submit"):
                 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
                 You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
                 ---
-                vvvvvvvvv See Below for username vvvvvvvvv
+                vv See Below for username vv
 
                 Username: {new_username}
                 
-                ^^^^^^^^^ See Above for username ^^^^^^^^^
+                ^^ See Above for username ^^
                 **Step 1**:
                 - Activate your IrregularChat Login with your username ({new_username}) here: {recovery_link}
 

@@ -171,7 +171,10 @@ if st.button("Submit"):
             welcome_message = f"""
 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
 You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
-**Username**: {new_username}
+---
+Username: {new_username}
+
+^^^^^^^^ See Above for User Name ^^^^^^^^^^^
 
 **Step 1**:
 - Activate your IrregularChat Login with your username ({new_username}) here: {recovery_link}
@@ -192,7 +195,8 @@ You've just joined a community focused on breaking down silos, fostering innovat
 **Recovery Link**: {recovery_link}
 
 Use the link above to recover your account.
-"""         st.code(recovery_message, language='markdown')
+"""
+            st.code(recovery_message, language='markdown')
             st.session_state['message'] = recovery_message
             st.session_state['user_list'] = None  # Clear user list if there was any
             st.success("Recovery link generated successfully!")

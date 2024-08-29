@@ -28,6 +28,7 @@ st.markdown("""
 AUTHENTIK_API_TOKEN = os.getenv("AUTHENTIK_API_TOKEN")
 MAIN_GROUP_ID = os.getenv("MAIN_GROUP_ID")
 base_domain = os.getenv("BASE_DOMAIN")
+FLOW_ID = os.getenv("FLOW_ID")
 local_db = "users.csv"
 encryption_key = base64.urlsafe_b64encode(hashlib.sha256(os.getenv("ENCRYPTION_PASSWORD").encode()).digest())
 
@@ -97,7 +98,7 @@ def create_invite(API_URL, headers, name, expires=None):
         "expires": expires,
         "fixed_data": {},
         "single_use": True,
-        "flow": "41a44b0e-1d06-4551-9ec1-41bd793b6f27"
+        "flow": "FLOW_ID"
     }
     
     url = f"{API_URL}/stages/invitation/invitations/"

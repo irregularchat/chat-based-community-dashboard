@@ -154,9 +154,11 @@ operation = st.selectbox("Select Operation", [
     "List Users"
 ])
 
+# Automatically replace spaces with hyphens and make the username lowercase
 entity_name = st.text_input("Enter Username or Invite Name")
+processed_username = entity_name.strip().lower().replace(" ", "-")
+
 email_input = st.text_input("Enter Email Address (optional)")
-replace_spaces = st.checkbox("Replace spaces with hyphens (-)")
 
 # Show date and time inputs only for specific operations
 if operation in ["Generate Recovery Link", "Create Invite"]:
@@ -169,11 +171,7 @@ else:
 if st.button("Submit"):
     try:
         if operation == "Create User":
-            # Process the username
-            processed_username = entity_name.strip().lower()
-            if replace_spaces:
-                processed_username = processed_username.replace(" ", "-")
-            
+            # Process the username (already processed above)
             existing_usernames = get_existing_usernames(API_URL, headers)
             new_username = create_unique_username(processed_username, existing_usernames)
             email = email_input if email_input else f"{new_username}@{base_domain}"

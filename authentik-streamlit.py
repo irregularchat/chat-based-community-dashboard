@@ -337,7 +337,7 @@ if 'user_list' in st.session_state and st.session_state['user_list']:
                     user_id = user['pk']
                     if action == "Activate":
                         update_user_status(API_URL, headers, user_id, True)
-                    elif action was "Deactivate":
+                    elif action == "Deactivate":
                         update_user_status(API_URL, headers, user_id, False)
                     elif action == "Reset Password":
                         if new_password:

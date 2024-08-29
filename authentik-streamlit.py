@@ -191,7 +191,17 @@ operation = st.selectbox("Select Operation", [
 
 first_name = st.text_input("Enter First Name")
 last_name = st.text_input("Enter Last Name")
-base_username = f"{first_name.strip().lower()}-{last_name.strip()[0].lower()}"
+
+# Handle cases where first or last name might be empty
+if first_name and last_name:
+    base_username = f"{first_name.strip().lower()}-{last_name.strip()[0].lower()}"
+elif first_name:
+    base_username = first_name.strip().lower()
+elif last_name:
+    base_username = last_name.strip().lower()
+else:
+    base_username = ""
+
 processed_username = base_username.replace(" ", "-")
 email_input = st.text_input("Enter Email Address (optional)")
 
@@ -206,44 +216,47 @@ else:
 if st.button("Submit"):
     try:
         if operation == "Create User":
-            # Search locally first
-            user_exists = search_local_db(processed_username)
-            if not user_exists.empty:
-                st.warning(f"User {processed_username} already exists. Please reset the password or create a new user with a different username.")
+            if not base_username:
+                st.warning("Please enter at least a first name or a last name.")
             else:
-                existing_usernames = get_existing_usernames(API_URL, headers)
-                new_username = create_unique_username(processed_username, existing_usernames)
-                email = email_input if email_input else f"{new_username}@{base_domain}"
-                full_name = f"{first_name.strip()} {last_name.strip()}"
-                new_user = create_user(API_URL, headers, new_username, email, full_name)
-                
-                if new_user is None:
-                    st.warning(f"Username {new_username} might already exist. Trying to fetch existing user.")
-                    user_exists = search_local_db(new_username)
-                    if user_exists.empty:
-                        st.error(f"Could not create or find user {new_username}. Please try again.")
-                    else:
-                        st.warning(f"User {new_username} already exists. Please reset the password or create a new user with a different username.")
+                # Search locally first
+                user_exists = search_local_db(processed_username)
+                if not user_exists.empty:
+                    st.warning(f"User {processed_username} already exists. Please reset the password or create a new user with a different username.")
                 else:
-                    # Update the local database
-                    update_local_db()
-                    recovery_link = generate_recovery_link(API_URL, headers, new_username)
-                    welcome_message = f"""
-                    🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
-                    You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
-                    ---
-                    Username: {new_username}
-                    vvvvvvvvv See Below for username vvvvvvvvv
-                    **Step 1**:
-                    - Activate your IrregularChat Login with your username ({new_username}) here: {recovery_link}
+                    existing_usernames = get_existing_usernames(API_URL, headers)
+                    new_username = create_unique_username(processed_username, existing_usernames)
+                    email = email_input if email_input else f"{new_username}@{base_domain}"
+                    full_name = f"{first_name.strip()} {last_name.strip()}".strip()
+                    new_user = create_user(API_URL, headers, new_username, email, full_name)
+                    
+                    if new_user is None:
+                        st.warning(f"Username {new_username} might already exist. Trying to fetch existing user.")
+                        user_exists = search_local_db(new_username)
+                        if user_exists.empty:
+                            st.error(f"Could not create or find user {new_username}. Please try again.")
+                        else:
+                            st.warning(f"User {new_username} already exists. Please reset the password or create a new user with a different username.")
+                    else:
+                        # Update the local database
+                        update_local_db()
+                        recovery_link = generate_recovery_link(API_URL, headers, new_username)
+                        welcome_message = f"""
+                        🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
+                        You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
+                        ---
+                        Username: {new_username}
+                        vvvvvvvvv See Below for username vvvvvvvvv
+                        **Step 1**:
+                        - Activate your IrregularChat Login with your username ({new_username}) here: {recovery_link}
 
-                    **Step 2**:
-                    - Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome
-                    """
-                    st.code(welcome_message, language='markdown')
-                    st.session_state['message'] = welcome_message
-                    st.session_state['user_list'] = None  # Clear user list if there was any
-                    st.success("User created successfully!")
+                        **Step 2**:
+                        - Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome
+                        """
+                        st.code(welcome_message, language='markdown')
+                        st.session_state['message'] = welcome_message
+                        st.session_state['user_list'] = None  # Clear user list if there was any
+                        st.success("User created successfully!")
 
         elif operation == "Generate Recovery Link":
             recovery_link = generate_recovery_link(API_URL, headers, processed_username)

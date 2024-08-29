@@ -4,5 +4,6 @@ nltk
 streamlit
 pandas
 streamlit-copy-to-clipboard
+cryptography
 # streamlit-annotated-text
 # streamlit-easy-button

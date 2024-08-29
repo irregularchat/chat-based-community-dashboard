@@ -12,11 +12,12 @@ from io import StringIO
 load_dotenv()
 
 # Configuration
-favicon_url = "https://filedn.com/lDsr08WnANmQTUJg2h6Jg2Q/Logos/Irregular%20Chat-Tech.png"
-st.set_page_config(page_title="IrregularChat User Management", page_icon=favicon_url)
-st.title("IrregularChat User Management")
+favicon_url = "FAVICON_URL"
+st.set_page_config(PAGE_TITLE=, page_icon=FAVICON_URL)
+st.title(PAGE_TITLE)
 
 # Links under the title
+# Replace links here as needed
 st.markdown("""
 - [Login to the IrregularChat SSO](https://sso.irregularchat.com)
 - [Use the Signal CopyPasta for Welcome Messages](https://wiki.irregularchat.com/en/community/chat/admin/signal-prompts)
@@ -25,6 +26,8 @@ st.markdown("""
 """)
 
 # Define the vars for the app
+PAGE_TITLE = os.getenv("PAGE_TITLE")
+FAVICON_URL = os.getenv("FAVICON_URL")
 AUTHENTIK_API_TOKEN = os.getenv("AUTHENTIK_API_TOKEN")
 MAIN_GROUP_ID = os.getenv("MAIN_GROUP_ID")
 base_domain = os.getenv("BASE_DOMAIN")
@@ -246,6 +249,7 @@ if st.button("Submit"):
             else:
                 # Update the local database
                 recovery_link = generate_recovery_link(API_URL, headers, new_username)
+                #replace welcome message here
                 welcome_message = f"""
                 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
                 You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
@@ -270,6 +274,7 @@ if st.button("Submit"):
 
         elif operation == "Generate Recovery Link":
             recovery_link = generate_recovery_link(API_URL, headers, username_input)
+            #replace recovery message here
             recovery_message = f"""
             🌟 Your account recovery link 🌟
             **Username**: {username_input}
@@ -293,6 +298,7 @@ if st.button("Submit"):
             invite_expires_time = datetime.fromisoformat(invite_expires).astimezone(timezone.utc) - datetime.now(timezone.utc)
             hours, remainder = divmod(invite_expires_time.total_seconds(), 3600)
             minutes, _ = divmod(remainder, 60)
+            #replace invite message here
             invite_message = f"""
             💣 This Invite Will Self Destruct! ⏳
             This is how you get an IrregularChat Login and how you can see all the chats and services:

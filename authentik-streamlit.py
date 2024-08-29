@@ -98,12 +98,12 @@ def get_existing_usernames(API_URL, headers):
     users = response.json()['results']
     return {user['username'] for user in users}
 
-def create_user(API_URL, headers, username):
+def create_user(API_URL, headers, username, email):
     data = {
         "username": username,
         "name": username,
         "is_active": True,
-        "email": f"{username}@{base_domain}",
+        "email": email,
         "groups": [MAIN_GROUP_ID],
         "attributes": {},
         "path": "users",

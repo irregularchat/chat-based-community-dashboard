@@ -245,7 +245,6 @@ if st.button("Submit"):
                     st.warning(f"User {new_username} already exists. Please reset the password or create a new user with a different username.")
             else:
                 # Update the local database
-                update_local_db()
                 recovery_link = generate_recovery_link(API_URL, headers, new_username)
                 welcome_message = f"""
                 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟

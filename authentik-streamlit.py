@@ -4,27 +4,32 @@ import pandas as pd
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import os
+import hashlib
+import base64
+from cryptography.fernet import Fernet
 
 load_dotenv()
 
-########## Configuration ##########
-# Site Static Content
+# Configuration
 favicon_url = "https://filedn.com/lDsr08WnANmQTUJg2h6Jg2Q/Logos/Irregular%20Chat-Tech.png"
 st.set_page_config(page_title="IrregularChat User Management", page_icon=favicon_url)
 st.title("IrregularChat User Management")
-# Adding the list of links under the title
+
+# Links under the title
 st.markdown("""
 - [Login to the IrregularChat SSO](https://sso.irregularchat.com)
 - [Use the Signal CopyPasta for Welcome Messages](https://wiki.irregularchat.com/en/community/chat/admin/signal-prompts)
 - [Admin Prompts for Common Situations](https://wiki.irregularchat.com/community/chat/admin.md)
 - [Links to All the Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
 """)
+
 # Define the vars for the app
 AUTHENTIK_API_TOKEN = os.getenv("AUTHENTIK_API_TOKEN")
 MAIN_GROUP_ID = os.getenv("MAIN_GROUP_ID")
 base_domain = os.getenv("BASE_DOMAIN")
+local_db = "users.csv"
+encryption_key = base64.urlsafe_b64encode(hashlib.sha256(os.getenv("ENCRYPTION_PASSWORD").encode()).digest())
 
-# If AUTHENTIK_API_TOKEN or MAIN_GROUP_ID are blank, ask the user to input the values
 if not AUTHENTIK_API_TOKEN or not MAIN_GROUP_ID:
     st.warning("Please enter both the API token and the main group ID to proceed.")
     AUTHENTIK_API_TOKEN = st.text_input("Enter your AUTHENTIK API TOKEN", type="password")
@@ -37,7 +42,30 @@ headers = {
     "Content-Type": "application/json"
 }
 
-########## Functions ##########
+# Functions
+def encrypt_data(data):
+    f = Fernet(encryption_key)
+    return f.encrypt(data.encode()).decode()
+
+def decrypt_data(data):
+    f = Fernet(encryption_key)
+    return f.decrypt(data.encode()).decode()
+
+def update_local_db():
+    users = list_users(API_URL, headers)
+    df = pd.DataFrame(users)
+    df.to_csv(local_db, index=False)
+
+def load_local_db():
+    if not os.path.exists(local_db):
+        update_local_db()
+    df = pd.read_csv(local_db)
+    return df
+
+def search_local_db(username):
+    df = load_local_db()
+    return df[df['username'].str.lower() == username.lower()]
+
 def get_user_id_by_username(API_URL, headers, username):
     url = f"{API_URL}core/users/?search={username}"
     response = requests.get(url, headers=headers)
@@ -154,10 +182,8 @@ operation = st.selectbox("Select Operation", [
     "List Users"
 ])
 
-# Automatically replace spaces with hyphens and make the username lowercase
 entity_name = st.text_input("Enter Username or Invite Name")
 processed_username = entity_name.strip().lower().replace(" ", "-")
-
 email_input = st.text_input("Enter Email Address (optional)")
 
 # Show date and time inputs only for specific operations
@@ -171,55 +197,58 @@ else:
 if st.button("Submit"):
     try:
         if operation == "Create User":
-            # Process the username (already processed above)
-            existing_usernames = get_existing_usernames(API_URL, headers)
-            new_username = create_unique_username(processed_username, existing_usernames)
-            email = email_input if email_input else f"{new_username}@{base_domain}"
-            new_user = create_user(API_URL, headers, new_username, email)
-            
-            while new_user is None:
+            # Search locally first
+            user_exists = search_local_db(processed_username)
+            if not user_exists.empty:
+                st.warning(f"User {processed_username} already exists. Please reset the password or create a new user with a different username.")
+            else:
+                existing_usernames = get_existing_usernames(API_URL, headers)
                 new_username = create_unique_username(processed_username, existing_usernames)
+                email = email_input if email_input else f"{new_username}@{base_domain}"
                 new_user = create_user(API_URL, headers, new_username, email)
-            
-            recovery_link = generate_recovery_link(API_URL, headers, new_username)
-            welcome_message = f"""
-🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
-You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
----
-Username: 
-vvvvvvvvv See Below for username vvvvvvvvv
-
-{new_username}
-
-^^^^^^^^ See Above for username ^^^^^^^^^^^
-
-**Step 1**:
-- Activate your IrregularChat Login with your username ({new_username}) here: {recovery_link}
-
-**Step 2**:
-- Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome
-"""
-            st.code(welcome_message, language='markdown')
-            st.session_state['message'] = welcome_message
-            st.session_state['user_list'] = None  # Clear user list if there was any
-            st.success("User created successfully!")
                 
-        # Other operations remain unchanged
-        
+                if new_user is None:
+                    st.warning(f"Username {new_username} might already exist. Trying to fetch existing user.")
+                    user_exists = search_local_db(new_username)
+                    if user_exists.empty:
+                        st.error(f"Could not create or find user {new_username}. Please try again.")
+                    else:
+                        st.warning(f"User {new_username} already exists. Please reset the password or create a new user with a different username.")
+                else:
+                    # Update the local database
+                    update_local_db()
+                    recovery_link = generate_recovery_link(API_URL, headers, new_username)
+                    welcome_message = f"""
+                    🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
+                    You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
+                    ---
+                    Username: {new_username}
+                    vvvvvvvvv See Below for username vvvvvvvvv
+                    **Step 1**:
+                    - Activate your IrregularChat Login with your username ({new_username}) here: {recovery_link}
+
+                    **Step 2**:
+                    - Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome
+                    """
+                    st.code(welcome_message, language='markdown')
+                    st.session_state['message'] = welcome_message
+                    st.session_state['user_list'] = None  # Clear user list if there was any
+                    st.success("User created successfully!")
+
         elif operation == "Generate Recovery Link":
             recovery_link = generate_recovery_link(API_URL, headers, entity_name)
             recovery_message = f"""
-🌟 Your account recovery link 🌟
-**Username**: {entity_name}
-**Recovery Link**: {recovery_link}
+            🌟 Your account recovery link 🌟
+            **Username**: {entity_name}
+            **Recovery Link**: {recovery_link}
 
-Use the link above to recover your account.
-"""
+            Use the link above to recover your account.
+            """
             st.code(recovery_message, language='markdown')
             st.session_state['message'] = recovery_message
             st.session_state['user_list'] = None  # Clear user list if there was any
             st.success("Recovery link generated successfully!")
-        
+
         elif operation == "Create Invite":
             if expires_date and expires_time:
                 local_expires = datetime.combine(expires_date, expires_time)
@@ -240,14 +269,10 @@ Use the link above to recover your account.
             🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
             Login to the wiki with that Irregular Chat Login and visit https://wiki.irregularchat.com/community/welcome/
             """
-            
-            
+            st.code(invite_message, language='markdown')
             st.session_state['user_list'] = None  # Clear user list if there was any
             st.success("Invite created successfully!")
-            #create code block with invite message make sure that the copy button works and shows click when clicked
-            st.code(invite_message, language='markdown')
-            st.session_state['message'] = invite_message
-        
+
         elif operation == "List Users":
             users = list_users(API_URL, headers, entity_name if entity_name else None)
             st.session_state['user_list'] = users

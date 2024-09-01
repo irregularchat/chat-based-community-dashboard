@@ -21,20 +21,19 @@ FLOW_ID = os.getenv("FLOW_ID")
 local_db = "users.csv"
 encryption_key = base64.urlsafe_b64encode(hashlib.sha256(os.getenv("ENCRYPTION_PASSWORD").encode()).digest())
 SHLINK_API_TOKEN = os.getenv("SHLINK_API_TOKEN")
-SHLINK_URL= os.getenv("SHLINK_URL")
+SHLINK_URL = os.getenv("SHLINK_URL")
+
 # Configuration
 st.set_page_config(page_title=PAGE_TITLE, page_icon=FAVICON_URL)
 st.title(PAGE_TITLE)
 
 # Links under the title
-# Replace links here as needed
 st.markdown("""
 - [Login to the IrregularChat SSO](https://sso.irregularchat.com)
 - [Use the Signal CopyPasta for Welcome Messages](https://wiki.irregularchat.com/en/community/chat/admin/signal-prompts)
 - [Admin Prompts for Common Situations](https://wiki.irregularchat.com/community/chat/admin.md)
 - [Links to All the Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
 """)
-
 
 if not AUTHENTIK_API_TOKEN or not MAIN_GROUP_ID:
     st.warning("Please enter both the API token and the main group ID to proceed.")
@@ -55,29 +54,24 @@ def shorten_url(long_url, type, name=None):
     
     Parameters:
         long_url (str): The URL to be shortened.
-        type (str): The type of the URL (e.g., 'recovery', 'invite').
+        type (str): The type of the URL (e.g., 'recovery', 'invite', 'setup').
         name (str, optional): The custom name for the shortened URL. Defaults to 'type-yyyymmdd'.
     
     Returns:
         str: The shortened URL or the original URL if the API key is not set.
     """
-
-    # Check if API key and Shlink URL are properly set
-    if SHLINK_API_TOKEN == "your_api_token_here" or not SHLINK_URL:
+    if not SHLINK_API_TOKEN or SHLINK_API_TOKEN == "your_api_token_here" or not SHLINK_URL:
         return long_url
 
-    # Default the name if not provided
     if not name:
         name = f"{type}-{datetime.now().strftime('%Y%m%d')}"
 
-    # Set up headers for the API request
     headers = {
         'X-Api-Key': SHLINK_API_TOKEN,
         'Accept': 'application/json',
         'Content-Type': 'application/json'
     }
 
-    # Set up payload for the API request
     payload = {
         'longUrl': long_url,
         'customSlug': name,
@@ -85,26 +79,21 @@ def shorten_url(long_url, type, name=None):
     }
 
     try:
-        # Make the request to Shlink API to shorten the URL
         response = requests.post(SHLINK_URL, json=payload, headers=headers)
+        response_data = response.json()
 
-        # Check if the request was successful
         if response.status_code == 201:
-            response_data = response.json()
-            short_url = response_data.get('shortUrl')  # Ensure 'shortUrl' is in the response
+            short_url = response_data.get('shortUrl')
             if short_url:
                 return short_url
             else:
-                # Handle case where 'shortUrl' is not in the response
                 print('Error: The API response does not contain a "shortUrl" field.')
                 return long_url
         else:
-            # Handle error
             print(f'Error: {response.status_code}')
-            print(response.json())
+            print(response_data)
             return long_url
     except requests.exceptions.RequestException as e:
-        # Handle any requests exceptions (network issues, etc.)
         print(f'Exception: {e}')
         return long_url
 
@@ -119,7 +108,6 @@ def decrypt_data(data):
 def update_local_db():
     users = list_users(API_URL, headers)
     df = pd.DataFrame(users)
-    # Encrypt the data before saving
     encrypted_data = encrypt_data(df.to_csv(index=False))
     with open(local_db, 'w') as file:
         file.write(encrypted_data)
@@ -167,11 +155,11 @@ def create_invite(API_URL, headers, name, expires=None):
     url = f"{API_URL}/stages/invitation/invitations/"
     response = requests.post(url, headers=headers, json=data)
     response.raise_for_status()
-    # Shorten the invite link
+    
     invite_id = response.json()['id']
     invite_link = f"{API_URL}if/flow/simple-enrollment-flow/?itoken={invite_id}"
     invite_link = shorten_url(invite_link, 'invite', name)
-    return invite_id, expires
+    return invite_link, expires
 
 def generate_recovery_link(API_URL, headers, username):
     user_id = get_user_id_by_username(API_URL, headers, username)
@@ -183,7 +171,7 @@ def generate_recovery_link(API_URL, headers, username):
     recovery_link = response.json().get('link')
     if not recovery_link:
         raise ValueError("Failed to generate recovery link.")
-    # Shorten the recovery link
+    
     recovery_link = shorten_url(recovery_link, 'recovery', username)
     return recovery_link
 
@@ -312,9 +300,12 @@ if st.button("Submit"):
                 else:
                     st.warning(f"User {new_username} already exists. Please reset the password or create a new user with a different username.")
             else:
-                # Update the local database
+                # Generate and shorten the setup link
+                setup_link = f"https://{base_domain}/setup/{new_username}"
+                setup_link = shorten_url(setup_link, 'setup', datetime.now().strftime('%Y%m%d%H%M%S') + f"-setup-{new_username}")
+                
                 recovery_link = generate_recovery_link(API_URL, headers, new_username)
-                #replace welcome message here
+                
                 welcome_message = f"""
                 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
                 You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
@@ -322,6 +313,8 @@ if st.button("Submit"):
                 vv See Below for username vv
 
                 Username: {new_username}
+
+                **Setup Link**: {setup_link}
                 
                 ^^ See Above for username ^^
                 **Step 1**:
@@ -336,10 +329,8 @@ if st.button("Submit"):
                 st.session_state['user_list'] = None  # Clear user list if there was any
                 st.success("User created successfully!")
 
-
         elif operation == "Generate Recovery Link":
             recovery_link = generate_recovery_link(API_URL, headers, username_input)
-            #replace recovery message here
             recovery_message = f"""
             🌟 Your account recovery link 🌟
             **Username**: {username_input}
@@ -359,15 +350,14 @@ if st.button("Submit"):
             else:
                 expires = None
             
-            invite_id, invite_expires = create_invite(API_URL, headers, username_input, expires)
+            invite_link, invite_expires = create_invite(API_URL, headers, username_input, expires)
             invite_expires_time = datetime.fromisoformat(invite_expires).astimezone(timezone.utc) - datetime.now(timezone.utc)
             hours, remainder = divmod(invite_expires_time.total_seconds(), 3600)
             minutes, _ = divmod(remainder, 60)
-            #replace invite message here
             invite_message = f"""
             💣 This Invite Will Self Destruct! ⏳
             This is how you get an IrregularChat Login and how you can see all the chats and services:
-            **IrregularChat Temp Invite**: https://sso.irregularchat.com/if/flow/simple-enrollment-flow/?itoken={invite_id}
+            **IrregularChat Temp Invite**: {invite_link}
             **Invite Expires**: {int(hours)} hours and {int(minutes)} minutes from now
             
             🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 

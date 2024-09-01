@@ -8,6 +8,7 @@ import hashlib
 import base64
 from cryptography.fernet import Fernet
 from io import StringIO
+import logging
 
 # Load environment variables from .env file
 load_dotenv()
@@ -56,18 +57,19 @@ def shorten_url(long_url, type, name=None):
     Parameters:
         long_url (str): The URL to be shortened.
         type (str): The type of the URL (e.g., 'recovery', 'invite', 'setup').
-        name (str, optional): The custom name for the shortened URL. Defaults to 'datetime-type' if not provided.
+        name (str, optional): The custom name for the shortened URL. Defaults to 'DDHHMM-type-name'.
     
     Returns:
         str: The shortened URL or the original URL if the API key is not set.
     """
     if not SHLINK_API_TOKEN or SHLINK_API_TOKEN == "your_api_token_here" or not SHLINK_URL:
+        # print("Shlink API token or URL not set. Returning the original URL.") To prevent printing in Streamlit
         return long_url
 
     if not name:
-        name = f"{datetime.now().strftime('%d%H%M%S')}-{type}"
+        name = f"{datetime.now().strftime('%d%H%M')}-{type}"
     else:
-        name = f"{datetime.now().strftime('%d%H%M%S')}-{type}-{name}"
+        name = f"{datetime.now().strftime('%d%H%M')}-{type}-{name}"
 
     headers = {
         'X-Api-Key': SHLINK_API_TOKEN,
@@ -88,6 +90,8 @@ def shorten_url(long_url, type, name=None):
         if response.status_code == 201 or response.status_code == 200:
             short_url = response_data.get('shortUrl')
             if short_url:
+                # change http:// to https:// to prevent mixed content issues
+                short_url = short_url.replace('http://', 'https://')
                 return short_url
             else:
                 print('Error: The API response does not contain a "shortUrl" field.')
@@ -129,13 +133,16 @@ def search_local_db(username):
     return df[df['username'].str.lower() == username.lower()]
 
 def get_user_id_by_username(Authentik_API_URL, headers, username):
-    url = f"{Authentik_API_URL}core/users/?search={username}"
+    url = f"{Authentik_API_URL}/core/users/?search={username}"
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     users = response.json()['results']
     if not users:
         raise ValueError(f"User with username {username} not found.")
     return users[0]['pk']
+
+# Set up logging to a file
+logging.basicConfig(filename='invite_creation.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def create_invite(Authentik_API_URL, headers, name, expires=None):
     current_time_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')
@@ -157,17 +164,37 @@ def create_invite(Authentik_API_URL, headers, name, expires=None):
     
     url = f"{Authentik_API_URL}/stages/invitation/invitations/"
     response = requests.post(url, headers=headers, json=data)
-    response.raise_for_status()
     
-    invite_id = response.json()['id']
-    invite_link = f"{Authentik_API_URL}if/flow/simple-enrollment-flow/?itoken={invite_id}"
-    invite_link = shorten_url(invite_link, 'invite', name)
-    return invite_link, expires
+    try:
+        response.raise_for_status()  # Ensure the request was successful
+        response_data = response.json()
+        
+        # Log the entire response for debugging
+        logging.info("Invite API Response: %s", response_data)
+        
+        invite_id = response_data.get('pk')
+        if not invite_id:
+            raise ValueError("The API response does not contain a 'pk' field.")
+
+        invite_link = f"https://sso.{base_domain}/if/flow/simple-enrollment-flow/?itoken={invite_id}"
+
+        # Shorten the invite link after obtaining the full URL from Authentik
+        short_invite_link = shorten_url(invite_link, 'invite', name)
+        return short_invite_link, expires
+
+    except requests.exceptions.HTTPError as http_err:
+        logging.error(f"HTTP error occurred: {http_err}")
+        logging.info("Invite API Response: %s", response.json())
+    except Exception as err:
+        logging.error(f"An error occurred: {err}")
+        logging.info("Invite API Response: %s", response.text)
+
+    return None, None  # Return None if there's an issue
 
 def generate_recovery_link(Authentik_API_URL, headers, username):
     user_id = get_user_id_by_username(Authentik_API_URL, headers, username)
     
-    url = f"{Authentik_API_URL}core/users/{user_id}/recovery/"
+    url = f"{Authentik_API_URL}/core/users/{user_id}/recovery/"
     response = requests.post(url, headers=headers)
     response.raise_for_status()
     
@@ -187,7 +214,7 @@ def create_unique_username(base_username, existing_usernames):
     return new_username
 
 def get_existing_usernames(Authentik_API_URL, headers):
-    url = f"{Authentik_API_URL}core/users/"
+    url = f"{Authentik_API_URL}/core/users/"
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     users = response.json()['results']
@@ -204,7 +231,7 @@ def create_user(Authentik_API_URL, headers, username, email, name):
         "path": "users",
         "type": "internal"
     }
-    url = f"{Authentik_API_URL}core/users/"
+    url = f"{Authentik_API_URL}/core/users/"
     response = requests.post(url, headers=headers, json=data)
     if response.status_code == 400:
         return None
@@ -213,29 +240,29 @@ def create_user(Authentik_API_URL, headers, username, email, name):
 
 def list_users(Authentik_API_URL, headers, search_term=None):
     if search_term:
-        url = f"{Authentik_API_URL}core/users/?search={search_term}"
+        url = f"{Authentik_API_URL}/core/users/?search={search_term}"
     else:
-        url = f"{Authentik_API_URL}core/users/"
+        url = f"{Authentik_API_URL}/core/users/"
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     users = response.json()['results']
     return users
 
 def update_user_status(Authentik_API_URL, headers, user_id, is_active):
-    url = f"{Authentik_API_URL}core/users/{user_id}/"
+    url = f"{Authentik_API_URL}/core/users/{user_id}/"
     data = {"is_active": is_active}
     response = requests.patch(url, headers=headers, json=data)
     response.raise_for_status()
     return response.json()
 
 def delete_user(Authentik_API_URL, headers, user_id):
-    url = f"{Authentik_API_URL}core/users/{user_id}/"
+    url = f"{Authentik_API_URL}/core/users/{user_id}/"
     response = requests.delete(url, headers=headers)
     response.raise_for_status()
     return response.status_code == 204
 
 def reset_user_password(Authentik_API_URL, headers, user_id, new_password):
-    url = f"{Authentik_API_URL}core/users/{user_id}/set_password/"
+    url = f"{Authentik_API_URL}/core/users/{user_id}/set_password/"
     data = {"password": new_password}
     response = requests.post(url, headers=headers, json=data)
     response.raise_for_status()
@@ -324,7 +351,7 @@ if st.button("Submit"):
                 - Activate your IrregularChat Login with your username ({new_username}) here: {recovery_link}
 
                 **Step 2**:
-                - Login to the wiki with that Irregular Chat Login and visit http://url.irregular.chat/welcome
+                - Login to the wiki with that Irregular Chat Login and visit https://url.irregular.chat/welcome
                 """
                 st.code(welcome_message, language='markdown')
                 st.session_state['message'] = welcome_message
@@ -354,21 +381,24 @@ if st.button("Submit"):
                 expires = None
             
             invite_link, invite_expires = create_invite(Authentik_API_URL, headers, username_input, expires)
-            invite_expires_time = datetime.fromisoformat(invite_expires).astimezone(timezone.utc) - datetime.now(timezone.utc)
-            hours, remainder = divmod(invite_expires_time.total_seconds(), 3600)
-            minutes, _ = divmod(remainder, 60)
-            invite_message = f"""
-            💣 This Invite Will Self Destruct! ⏳
-            This is how you get an IrregularChat Login and how you can see all the chats and services:
-            **IrregularChat Temp Invite**: {invite_link}
-            **Invite Expires**: {int(hours)} hours and {int(minutes)} minutes from now
-            
-            🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
-            Login to the wiki with that Irregular Chat Login and visit http://url.irregular.chat/welcome/
-            """
-            st.code(invite_message, language='markdown')
-            st.session_state['user_list'] = None  # Clear user list if there was any
-            st.success("Invite created successfully!")
+            if invite_expires:  # Ensure invite_expires is properly handled as a string
+                invite_expires_time = datetime.fromisoformat(invite_expires.replace('Z', '+00:00')) - datetime.now(timezone.utc)
+                hours, remainder = divmod(invite_expires_time.total_seconds(), 3600)
+                minutes, _ = divmod(remainder, 60)
+                invite_message = f"""
+                💣 This Invite Will Self Destruct! ⏳
+                This is how you get an IrregularChat Login and how you can see all the chats and services:
+                **IrregularChat Temp Invite**: {invite_link}
+                **Invite Expires**: {int(hours)} hours and {int(minutes)} minutes from now
+                
+                🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
+                Login to the wiki with that Irregular Chat Login and visit https://url.irregular.chat/welcome/
+                """
+                st.code(invite_message, language='markdown')
+                st.session_state['user_list'] = None
+                st.success("Invite created successfully!")
+            else:
+                st.error("Invite creation failed.")
 
         elif operation == "List Users":
             users = list_users(Authentik_API_URL, headers, username_input if username_input else None)

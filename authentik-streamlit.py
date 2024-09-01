@@ -90,8 +90,14 @@ def shorten_url(long_url, type, name=None):
 
         # Check if the request was successful
         if response.status_code == 201:
-            short_url = response.json().get('shortUrl')
-            return short_url
+            response_data = response.json()
+            short_url = response_data.get('shortUrl')  # Ensure 'shortUrl' is in the response
+            if short_url:
+                return short_url
+            else:
+                # Handle case where 'shortUrl' is not in the response
+                print('Error: The API response does not contain a "shortUrl" field.')
+                return long_url
         else:
             # Handle error
             print(f'Error: {response.status_code}')

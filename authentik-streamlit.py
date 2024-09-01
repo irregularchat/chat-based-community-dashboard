@@ -9,6 +9,7 @@ import base64
 from cryptography.fernet import Fernet
 from io import StringIO
 import logging
+from pytz import timezone
 
 # Load environment variables from .env file
 load_dotenv()
@@ -27,6 +28,8 @@ SHLINK_URL = os.getenv("SHLINK_URL")
 Authentik_API_URL = os.getenv("Authentik_API_URL")
 
 # Configuration
+# Define the Eastern Time zone
+eastern = timezone('US/Eastern')
 st.set_page_config(page_title=PAGE_TITLE, page_icon=FAVICON_URL)
 st.title(PAGE_TITLE)
 
@@ -67,9 +70,9 @@ def shorten_url(long_url, type, name=None):
         return long_url
 
     if not name:
-        name = f"{datetime.now().strftime('%d%H%M')}-{type}"
+        name = f"{datetime.now(eastern).strftime('%d%H%M')}-{type}"
     else:
-        name = f"{datetime.now().strftime('%d%H%M')}-{type}-{name}"
+        name = f"{datetime.now(eastern).strftime('%d%H%M')}-{type}-{name}"
 
     headers = {
         'X-Api-Key': SHLINK_API_TOKEN,

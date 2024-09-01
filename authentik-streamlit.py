@@ -145,11 +145,11 @@ def get_user_id_by_username(Authentik_API_URL, headers, username):
 logging.basicConfig(filename='invite_creation.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def create_invite(Authentik_API_URL, headers, name, expires=None):
-    current_time_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')
+    current_time_str = datetime.now(timezone.utc).strftime('%H-%M-%S')
     if not name:
         name = current_time_str
     else:
-        name = f"{name}-{current_time_str}"
+        name = f"{name}"
     
     if expires is None:
         expires = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()

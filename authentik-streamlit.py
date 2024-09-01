@@ -23,6 +23,7 @@ local_db = "users.csv"
 encryption_key = base64.urlsafe_b64encode(hashlib.sha256(os.getenv("ENCRYPTION_PASSWORD").encode()).digest())
 SHLINK_API_TOKEN = os.getenv("SHLINK_API_TOKEN")
 SHLINK_URL = os.getenv("SHLINK_URL")
+Authentik_API_URL = os.getenv("Authentik_API_URL")
 
 # Configuration
 st.set_page_config(page_title=PAGE_TITLE, page_icon=FAVICON_URL)
@@ -42,7 +43,6 @@ if not AUTHENTIK_API_TOKEN or not MAIN_GROUP_ID:
     MAIN_GROUP_ID = st.text_input("Enter the MAIN GROUP ID")
     st.stop()
 
-API_URL = f"https://sso.{base_domain}/api/v3/"
 headers = {
     "Authorization": f"Bearer {AUTHENTIK_API_TOKEN}",
     "Content-Type": "application/json"
@@ -109,7 +109,7 @@ def decrypt_data(data):
     return f.decrypt(data.encode()).decode()
 
 def update_local_db():
-    users = list_users(API_URL, headers)
+    users = list_users(Authentik_API_URL, headers)
     df = pd.DataFrame(users)
     encrypted_data = encrypt_data(df.to_csv(index=False))
     with open(local_db, 'w') as file:
@@ -128,8 +128,8 @@ def search_local_db(username):
     df = load_local_db()
     return df[df['username'].str.lower() == username.lower()]
 
-def get_user_id_by_username(API_URL, headers, username):
-    url = f"{API_URL}core/users/?search={username}"
+def get_user_id_by_username(Authentik_API_URL, headers, username):
+    url = f"{Authentik_API_URL}core/users/?search={username}"
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     users = response.json()['results']
@@ -137,7 +137,7 @@ def get_user_id_by_username(API_URL, headers, username):
         raise ValueError(f"User with username {username} not found.")
     return users[0]['pk']
 
-def create_invite(API_URL, headers, name, expires=None):
+def create_invite(Authentik_API_URL, headers, name, expires=None):
     current_time_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')
     if not name:
         name = current_time_str
@@ -155,19 +155,19 @@ def create_invite(API_URL, headers, name, expires=None):
         "flow": FLOW_ID  # Use the actual value of FLOW_ID
     }
     
-    url = f"{API_URL}/stages/invitation/invitations/"
+    url = f"{Authentik_API_URL}/stages/invitation/invitations/"
     response = requests.post(url, headers=headers, json=data)
     response.raise_for_status()
     
     invite_id = response.json()['id']
-    invite_link = f"{API_URL}if/flow/simple-enrollment-flow/?itoken={invite_id}"
+    invite_link = f"{Authentik_API_URL}if/flow/simple-enrollment-flow/?itoken={invite_id}"
     invite_link = shorten_url(invite_link, 'invite', name)
     return invite_link, expires
 
-def generate_recovery_link(API_URL, headers, username):
-    user_id = get_user_id_by_username(API_URL, headers, username)
+def generate_recovery_link(Authentik_API_URL, headers, username):
+    user_id = get_user_id_by_username(Authentik_API_URL, headers, username)
     
-    url = f"{API_URL}core/users/{user_id}/recovery/"
+    url = f"{Authentik_API_URL}core/users/{user_id}/recovery/"
     response = requests.post(url, headers=headers)
     response.raise_for_status()
     
@@ -186,14 +186,14 @@ def create_unique_username(base_username, existing_usernames):
         counter += 1
     return new_username
 
-def get_existing_usernames(API_URL, headers):
-    url = f"{API_URL}core/users/"
+def get_existing_usernames(Authentik_API_URL, headers):
+    url = f"{Authentik_API_URL}core/users/"
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     users = response.json()['results']
     return {user['username'] for user in users}
 
-def create_user(API_URL, headers, username, email, name):
+def create_user(Authentik_API_URL, headers, username, email, name):
     data = {
         "username": username,
         "name": name,
@@ -204,38 +204,38 @@ def create_user(API_URL, headers, username, email, name):
         "path": "users",
         "type": "internal"
     }
-    url = f"{API_URL}core/users/"
+    url = f"{Authentik_API_URL}core/users/"
     response = requests.post(url, headers=headers, json=data)
     if response.status_code == 400:
         return None
     response.raise_for_status()
     return response.json()['pk']
 
-def list_users(API_URL, headers, search_term=None):
+def list_users(Authentik_API_URL, headers, search_term=None):
     if search_term:
-        url = f"{API_URL}core/users/?search={search_term}"
+        url = f"{Authentik_API_URL}core/users/?search={search_term}"
     else:
-        url = f"{API_URL}core/users/"
+        url = f"{Authentik_API_URL}core/users/"
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     users = response.json()['results']
     return users
 
-def update_user_status(API_URL, headers, user_id, is_active):
-    url = f"{API_URL}core/users/{user_id}/"
+def update_user_status(Authentik_API_URL, headers, user_id, is_active):
+    url = f"{Authentik_API_URL}core/users/{user_id}/"
     data = {"is_active": is_active}
     response = requests.patch(url, headers=headers, json=data)
     response.raise_for_status()
     return response.json()
 
-def delete_user(API_URL, headers, user_id):
-    url = f"{API_URL}core/users/{user_id}/"
+def delete_user(Authentik_API_URL, headers, user_id):
+    url = f"{Authentik_API_URL}core/users/{user_id}/"
     response = requests.delete(url, headers=headers)
     response.raise_for_status()
     return response.status_code == 204
 
-def reset_user_password(API_URL, headers, user_id, new_password):
-    url = f"{API_URL}core/users/{user_id}/set_password/"
+def reset_user_password(Authentik_API_URL, headers, user_id, new_password):
+    url = f"{Authentik_API_URL}core/users/{user_id}/set_password/"
     data = {"password": new_password}
     response = requests.post(url, headers=headers, json=data)
     response.raise_for_status()
@@ -285,15 +285,15 @@ if st.button("Submit"):
             user_exists = search_local_db(username_input)
             if not user_exists.empty:
                 st.warning(f"User {username_input} already exists. Trying to create a unique username.")
-                existing_usernames = get_existing_usernames(API_URL, headers)
+                existing_usernames = get_existing_usernames(Authentik_API_URL, headers)
                 new_username = create_unique_username(username_input, existing_usernames)
             else:
-                existing_usernames = get_existing_usernames(API_URL, headers)
+                existing_usernames = get_existing_usernames(Authentik_API_URL, headers)
                 new_username = create_unique_username(username_input, existing_usernames)
             
             email = email_input if email_input else f"{new_username}@{base_domain}"
             full_name = f"{first_name.strip()} {last_name.strip()}"
-            new_user = create_user(API_URL, headers, new_username, email, full_name)
+            new_user = create_user(Authentik_API_URL, headers, new_username, email, full_name)
             
             if new_user is None:
                 st.warning(f"Username {new_username} might already exist. Trying to fetch existing user.")
@@ -307,7 +307,7 @@ if st.button("Submit"):
                 setup_link = f"https://{base_domain}/setup/{new_username}"
                 setup_link = shorten_url(setup_link, 'setup', f"{new_username}")
                 
-                recovery_link = generate_recovery_link(API_URL, headers, new_username)
+                recovery_link = generate_recovery_link(Authentik_API_URL, headers, new_username)
                 
                 welcome_message = f"""
                 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
@@ -333,7 +333,7 @@ if st.button("Submit"):
                 st.success("User created successfully!")
 
         elif operation == "Generate Recovery Link":
-            recovery_link = generate_recovery_link(API_URL, headers, username_input)
+            recovery_link = generate_recovery_link(Authentik_API_URL, headers, username_input)
             recovery_message = f"""
             🌟 Your account recovery link 🌟
             **Username**: {username_input}
@@ -353,7 +353,7 @@ if st.button("Submit"):
             else:
                 expires = None
             
-            invite_link, invite_expires = create_invite(API_URL, headers, username_input, expires)
+            invite_link, invite_expires = create_invite(Authentik_API_URL, headers, username_input, expires)
             invite_expires_time = datetime.fromisoformat(invite_expires).astimezone(timezone.utc) - datetime.now(timezone.utc)
             hours, remainder = divmod(invite_expires_time.total_seconds(), 3600)
             minutes, _ = divmod(remainder, 60)
@@ -371,7 +371,7 @@ if st.button("Submit"):
             st.success("Invite created successfully!")
 
         elif operation == "List Users":
-            users = list_users(API_URL, headers, username_input if username_input else None)
+            users = list_users(Authentik_API_URL, headers, username_input if username_input else None)
             st.session_state['user_list'] = users
             st.session_state['message'] = "Users listed successfully!"
 
@@ -408,17 +408,17 @@ if 'user_list' in st.session_state and st.session_state['user_list']:
                 for user in selected_users:
                     user_id = user['pk']
                     if action == "Activate":
-                        update_user_status(API_URL, headers, user_id, True)
+                        update_user_status(Authentik_API_URL, headers, user_id, True)
                     elif action == "Deactivate":
-                        update_user_status(API_URL, headers, user_id, False)
+                        update_user_status(Authentik_API_URL, headers, user_id, False)
                     elif action == "Reset Password":
                         if new_password:
-                            reset_user_password(API_URL, headers, user_id, new_password)
+                            reset_user_password(Authentik_API_URL, headers, user_id, new_password)
                         else:
                             st.warning("Please enter a new password")
                             break
                     elif action == "Delete":
-                        delete_user(API_URL, headers, user_id)
+                        delete_user(Authentik_API_URL, headers, user_id)
                 st.success(f"{action} action applied successfully to selected users.")
             except Exception as e:
                 st.error(f"An error occurred while applying {action} action: {e}")

@@ -11,9 +11,18 @@ from io import StringIO
 
 load_dotenv()
 
+# Define the vars for the app
+PAGE_TITLE = os.getenv("PAGE_TITLE")
+FAVICON_URL = os.getenv("FAVICON_URL")
+AUTHENTIK_API_TOKEN = os.getenv("AUTHENTIK_API_TOKEN")
+MAIN_GROUP_ID = os.getenv("MAIN_GROUP_ID")
+base_domain = os.getenv("BASE_DOMAIN")
+FLOW_ID = os.getenv("FLOW_ID")
+local_db = "users.csv"
+encryption_key = base64.urlsafe_b64encode(hashlib.sha256(os.getenv("ENCRYPTION_PASSWORD").encode()).digest())
+
 # Configuration
-favicon_url = "FAVICON_URL"
-st.set_page_config(PAGE_TITLE=, page_icon=FAVICON_URL)
+st.set_page_config(page_title=PAGE_TITLE, page_icon=FAVICON_URL)
 st.title(PAGE_TITLE)
 
 # Links under the title
@@ -25,15 +34,6 @@ st.markdown("""
 - [Links to All the Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
 """)
 
-# Define the vars for the app
-PAGE_TITLE = os.getenv("PAGE_TITLE")
-FAVICON_URL = os.getenv("FAVICON_URL")
-AUTHENTIK_API_TOKEN = os.getenv("AUTHENTIK_API_TOKEN")
-MAIN_GROUP_ID = os.getenv("MAIN_GROUP_ID")
-base_domain = os.getenv("BASE_DOMAIN")
-FLOW_ID = os.getenv("FLOW_ID")
-local_db = "users.csv"
-encryption_key = base64.urlsafe_b64encode(hashlib.sha256(os.getenv("ENCRYPTION_PASSWORD").encode()).digest())
 
 if not AUTHENTIK_API_TOKEN or not MAIN_GROUP_ID:
     st.warning("Please enter both the API token and the main group ID to proceed.")

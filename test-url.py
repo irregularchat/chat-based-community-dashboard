@@ -17,7 +17,7 @@ def shorten_url(long_url, type, name=None):
     Parameters:
         long_url (str): The URL to be shortened.
         type (str): The type of the URL (e.g., 'recovery', 'invite').
-        name (str, optional): The custom name for the shortened URL. Defaults to 'type-yyyymmddHHMMSS'.
+        name (str, optional): The custom name for the shortened URL. Defaults to 'yyyymmddHHMMSS-type'.
     
     Returns:
         str: The shortened URL or the original URL if the API key is not set.
@@ -28,9 +28,12 @@ def shorten_url(long_url, type, name=None):
         print("Shlink API token or URL not set. Returning the original URL.")
         return long_url
 
-    # Default the name if not provided
-    if not name:
-        name = f"{type}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    # Generate the slug: 'yyyymmddHHMMSS-type' or 'yyyymmddHHMMSS-type-name' if name is provided
+    datetime_part = datetime.now().strftime('%Y%m%d%H%M%S')
+    if name:
+        slug = f"{datetime_part}-{type}-{name}"
+    else:
+        slug = f"{datetime_part}-{type}"
 
     # Set up headers for the API request
     headers = {
@@ -42,7 +45,7 @@ def shorten_url(long_url, type, name=None):
     # Set up payload for the API request
     payload = {
         'longUrl': long_url,
-        'customSlug': name,
+        'customSlug': slug,
         'findIfExists': True  # Optional: reuse an existing short URL if the long URL was previously shortened
     }
 

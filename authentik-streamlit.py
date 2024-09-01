@@ -364,7 +364,7 @@ if st.button("Submit"):
             **Invite Expires**: {int(hours)} hours and {int(minutes)} minutes from now
             
             🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
-            Login to the wiki with that Irregular Chat Login and visit http://url.irregularchat.com/welcome/
+            Login to the wiki with that Irregular Chat Login and visit http://url.irregular.chat/welcome/
             """
             st.code(invite_message, language='markdown')
             st.session_state['user_list'] = None  # Clear user list if there was any

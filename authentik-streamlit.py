@@ -64,7 +64,9 @@ def shorten_url(long_url, type, name=None):
         return long_url
 
     if not name:
-        name = f"{type}-{datetime.now().strftime('%Y%m%d')}"
+        name = f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{type}"
+    else:
+        name = f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{type}-{name}"
 
     headers = {
         'X-Api-Key': SHLINK_API_TOKEN,

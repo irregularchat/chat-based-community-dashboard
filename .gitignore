@@ -1,2 +1,13 @@
 .env
 venv
+env
+.idea
+.vscode
+#macos ignores
+.DS_Store
+#pyc files
+*.pyc
+#pycache
+__pycache__
+#logs
+*.log

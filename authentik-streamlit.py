@@ -9,6 +9,7 @@ import base64
 from cryptography.fernet import Fernet
 from io import StringIO
 
+# Load environment variables from .env file
 load_dotenv()
 
 # Define the vars for the app
@@ -55,7 +56,7 @@ def shorten_url(long_url, type, name=None):
     Parameters:
         long_url (str): The URL to be shortened.
         type (str): The type of the URL (e.g., 'recovery', 'invite', 'setup').
-        name (str, optional): The custom name for the shortened URL. Defaults to 'type-yyyymmdd'.
+        name (str, optional): The custom name for the shortened URL. Defaults to 'datetime-type' if not provided.
     
     Returns:
         str: The shortened URL or the original URL if the API key is not set.
@@ -84,7 +85,7 @@ def shorten_url(long_url, type, name=None):
         response = requests.post(SHLINK_URL, json=payload, headers=headers)
         response_data = response.json()
 
-        if response.status_code == 201:
+        if response.status_code == 201 or response.status_code == 200:
             short_url = response_data.get('shortUrl')
             if short_url:
                 return short_url
@@ -304,7 +305,7 @@ if st.button("Submit"):
             else:
                 # Generate and shorten the setup link
                 setup_link = f"https://{base_domain}/setup/{new_username}"
-                setup_link = shorten_url(setup_link, 'setup', datetime.now().strftime('%Y%m%d%H%M%S') + f"-setup-{new_username}")
+                setup_link = shorten_url(setup_link, 'setup', f"{new_username}")
                 
                 recovery_link = generate_recovery_link(API_URL, headers, new_username)
                 
@@ -363,7 +364,7 @@ if st.button("Submit"):
             **Invite Expires**: {int(hours)} hours and {int(minutes)} minutes from now
             
             🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
-            Login to the wiki with that Irregular Chat Login and visit http://url.irregular.chat/welcome/
+            Login to the wiki with that Irregular Chat Login and visit http://url.irregularchat.com/welcome/
             """
             st.code(invite_message, language='markdown')
             st.session_state['user_list'] = None  # Clear user list if there was any

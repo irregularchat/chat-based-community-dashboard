@@ -20,7 +20,8 @@ base_domain = os.getenv("BASE_DOMAIN")
 FLOW_ID = os.getenv("FLOW_ID")
 local_db = "users.csv"
 encryption_key = base64.urlsafe_b64encode(hashlib.sha256(os.getenv("ENCRYPTION_PASSWORD").encode()).digest())
-
+SHLINK_API_TOKEN = os.getenv("SHLINK_API_TOKEN")
+SHLINK_URL= os.getenv("SHLINK_URL")
 # Configuration
 st.set_page_config(page_title=PAGE_TITLE, page_icon=FAVICON_URL)
 st.title(PAGE_TITLE)
@@ -48,6 +49,59 @@ headers = {
 }
 
 # Functions
+def shorten_url(long_url, type, name=None):
+    """
+    Shorten a URL using Shlink API.
+    
+    Parameters:
+        long_url (str): The URL to be shortened.
+        type (str): The type of the URL (e.g., 'recovery', 'invite').
+        name (str, optional): The custom name for the shortened URL. Defaults to 'type-yyyymmdd'.
+    
+    Returns:
+        str: The shortened URL or the original URL if the API key is not set.
+    """
+
+    # Check if API key and Shlink URL are properly set
+    if SHLINK_API_TOKEN == "your_api_token_here" or not SHLINK_URL:
+        return long_url
+
+    # Default the name if not provided
+    if not name:
+        name = f"{type}-{datetime.now().strftime('%Y%m%d')}"
+
+    # Set up headers for the API request
+    headers = {
+        'X-Api-Key': SHLINK_API_TOKEN,
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+    }
+
+    # Set up payload for the API request
+    payload = {
+        'longUrl': long_url,
+        'customSlug': name,
+        'findIfExists': True  # Optional: reuse an existing short URL if the long URL was previously shortened
+    }
+
+    try:
+        # Make the request to Shlink API to shorten the URL
+        response = requests.post(SHLINK_URL, json=payload, headers=headers)
+
+        # Check if the request was successful
+        if response.status_code == 201:
+            short_url = response.json().get('shortUrl')
+            return short_url
+        else:
+            # Handle error
+            print(f'Error: {response.status_code}')
+            print(response.json())
+            return long_url
+    except requests.exceptions.RequestException as e:
+        # Handle any requests exceptions (network issues, etc.)
+        print(f'Exception: {e}')
+        return long_url
+
 def encrypt_data(data):
     f = Fernet(encryption_key)
     return f.encrypt(data.encode()).decode()
@@ -107,7 +161,11 @@ def create_invite(API_URL, headers, name, expires=None):
     url = f"{API_URL}/stages/invitation/invitations/"
     response = requests.post(url, headers=headers, json=data)
     response.raise_for_status()
-    return response.json()['pk'], expires
+    # Shorten the invite link
+    invite_id = response.json()['id']
+    invite_link = f"{API_URL}if/flow/simple-enrollment-flow/?itoken={invite_id}"
+    invite_link = shorten_url(invite_link, 'invite', name)
+    return invite_id, expires
 
 def generate_recovery_link(API_URL, headers, username):
     user_id = get_user_id_by_username(API_URL, headers, username)
@@ -119,7 +177,8 @@ def generate_recovery_link(API_URL, headers, username):
     recovery_link = response.json().get('link')
     if not recovery_link:
         raise ValueError("Failed to generate recovery link.")
-    
+    # Shorten the recovery link
+    recovery_link = shorten_url(recovery_link, 'recovery', username)
     return recovery_link
 
 def create_unique_username(base_username, existing_usernames):

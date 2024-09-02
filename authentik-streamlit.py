@@ -150,16 +150,17 @@ def get_user_id_by_username(Authentik_API_URL, headers, username):
 logging.basicConfig(filename='invite_creation.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def create_invite(headers, name, expires=None):
-    # Get the current time without timezone considerations
-    current_time_str = datetime.now().strftime('%H%M')  # Only hours and minutes
+    # Get the current time in Eastern Time Zone
+    eastern = timezone('US/Eastern')
+    current_time_str = datetime.now(eastern).strftime('%H-%M')  # Hours and Minutes only
 
     if not name:
-        name = f"{current_time_str}-invite"
+        name = current_time_str
     else:
-        name = f"{current_time_str}-invite-{name}"
+        name = f"{name}"
     
     if expires is None:
-        expires = (datetime.now() + timedelta(hours=2)).isoformat()
+        expires = (datetime.now(eastern) + timedelta(hours=2)).isoformat()
 
     data = {
         "name": name,
@@ -185,7 +186,7 @@ def create_invite(headers, name, expires=None):
         if not invite_id:
             raise ValueError("The API response does not contain a 'pk' field.")
 
-        # Construct the full invite URL by removing '/api/v3' from the Authentik API URL and appending the necessary path
+        # Construct the full invite URL
         invite_link = f"https://sso.{base_domain}/if/flow/simple-enrollment-flow/?itoken={invite_id}"
 
         # Shorten the invite link after obtaining the full URL from Authentik
@@ -386,13 +387,13 @@ if st.button("Submit"):
         elif operation == "Create Invite":
             if expires_date and expires_time:
                 local_expires = datetime.combine(expires_date, expires_time)
-                expires = local_expires.astimezone(timezone.utc).isoformat()
+                expires = (datetime.now(eastern) + timedelta(hours=2)).isoformat()
             else:
                 expires = None
             
-            invite_link, invite_expires = create_invite(Authentik_API_URL, headers, username_input, expires)
+            invite_link, invite_expires = create_invite(headers, username_input, expires)
             if invite_expires:  # Ensure invite_expires is properly handled as a string
-                invite_expires_time = datetime.fromisoformat(invite_expires.replace('Z', '+00:00')) - datetime.now(timezone.utc)
+                invite_expires_time = datetime.fromisoformat(invite_expires.replace('Z', '+00:00')).astimezone(timezone('US/Eastern')) - datetime.now(timezone('US/Eastern'))
                 hours, remainder = divmod(invite_expires_time.total_seconds(), 3600)
                 minutes, _ = divmod(remainder, 60)
                 invite_message = f"""

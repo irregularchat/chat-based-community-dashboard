@@ -38,9 +38,9 @@ st.title(PAGE_TITLE)
 # Links under the title
 st.markdown("""
 - [Login to the IrregularChat SSO](https://sso.irregularchat.com)
-- [Use the Signal CopyPasta for Welcome Messages](https://wiki.irregularchat.com/en/community/chat/admin/signal-prompts)
+- [📋 Use the Signal CopyPasta for Welcome Messages](https://wiki.irregularchat.com/en/community/chat/admin/signal-prompts)
 - [Admin Prompts for Common Situations](https://wiki.irregularchat.com/community/chat/admin.md)
-- [Links to All the Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
+- [🔗 Links to All the Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
 """)
 
 if not AUTHENTIK_API_TOKEN or not MAIN_GROUP_ID:
@@ -349,15 +349,14 @@ if st.button("Submit"):
                 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
                 You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
                 ---
-                vv See Below for username vv
-
+                See Below for username ⬇️
                 Username: {new_username}
-                
-                ^^ See Above for username ^^
-                **Step 1**:
-                - Activate your IrregularChat Login with your username ({new_username}) here: {setup_link}
+                👆🏼 See Above for username 👆🏼
 
-                **Step 2**:
+                1️⃣ Step 1:
+                - Activate your IrregularChat Login with your username 👉🏼 {new_username} 👈🏼 here: {setup_link}
+
+                2️⃣ Step 2:
                 - Login to the wiki with that Irregular Chat Login and visit https://url.irregular.chat/welcome
                 """
                 st.code(welcome_message, language='markdown')
@@ -395,8 +394,9 @@ if st.button("Submit"):
                 invite_message = f"""
                 💣 This Invite Will Self Destruct! ⏳
                 This is how you get an IrregularChat Login and how you can see all the chats and services:
-                **IrregularChat Temp Invite**: {invite_link}
-                **Invite Expires**: {int(hours)} hours and {int(minutes)} minutes from now
+                
+                IrregularChat Temp Invite ⏭️ : {invite_link}
+                ⏲️ Invite Expires: {int(hours)} hours and {int(minutes)} minutes from now
                 
                 🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
                 Login to the wiki with that Irregular Chat Login and visit https://url.irregular.chat/welcome/

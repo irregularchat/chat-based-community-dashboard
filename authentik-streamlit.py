@@ -9,6 +9,7 @@ import base64
 from cryptography.fernet import Fernet
 from io import StringIO
 import logging
+from datetime import datetime, timedelta
 from pytz import timezone
 
 # Load environment variables from .env file
@@ -30,6 +31,7 @@ Authentik_API_URL = os.getenv("Authentik_API_URL")
 # Configuration
 # Define the Eastern Time zone
 eastern = timezone('US/Eastern')
+current_time_eastern = datetime.now(eastern)
 st.set_page_config(page_title=PAGE_TITLE, page_icon=FAVICON_URL)
 st.title(PAGE_TITLE)
 
@@ -70,9 +72,9 @@ def shorten_url(long_url, type, name=None):
         return long_url
 
     if not name:
-        name = f"{datetime.now(eastern).strftime('%d%H%M')}-{type}"
+        name = f"{current_time_eastern.strftime('%d%H%M')}-{type}"
     else:
-        name = f"{datetime.now(eastern).strftime('%d%H%M')}-{type}-{name}"
+        name = f"{current_time_eastern.strftime('%d%H%M')}-{type}-{name}"
 
     headers = {
         'X-Api-Key': SHLINK_API_TOKEN,
@@ -147,16 +149,18 @@ def get_user_id_by_username(Authentik_API_URL, headers, username):
 # Set up logging to a file
 logging.basicConfig(filename='invite_creation.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def create_invite(Authentik_API_URL, headers, name, expires=None):
-    current_time_str = datetime.now(timezone.utc).strftime('%H-%M-%S')
+def create_invite(headers, name, expires=None):
+    # Get the current time without timezone considerations
+    current_time_str = datetime.now().strftime('%H%M')  # Only hours and minutes
+
     if not name:
-        name = current_time_str
+        name = f"{current_time_str}-invite"
     else:
-        name = f"{name}"
+        name = f"{current_time_str}-invite-{name}"
     
     if expires is None:
-        expires = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
-    
+        expires = (datetime.now() + timedelta(hours=2)).isoformat()
+
     data = {
         "name": name,
         "expires": expires,
@@ -165,10 +169,12 @@ def create_invite(Authentik_API_URL, headers, name, expires=None):
         "flow": FLOW_ID  # Use the actual value of FLOW_ID
     }
     
-    url = f"{Authentik_API_URL}/stages/invitation/invitations/"
-    response = requests.post(url, headers=headers, json=data)
+    # Construct the correct URL for Authentik's invitation API
+    invite_api_url = f"{Authentik_API_URL}/stages/invitation/invitations/"
     
     try:
+        # Make the request to create the invitation
+        response = requests.post(invite_api_url, headers=headers, json=data)
         response.raise_for_status()  # Ensure the request was successful
         response_data = response.json()
         
@@ -179,6 +185,7 @@ def create_invite(Authentik_API_URL, headers, name, expires=None):
         if not invite_id:
             raise ValueError("The API response does not contain a 'pk' field.")
 
+        # Construct the full invite URL by removing '/api/v3' from the Authentik API URL and appending the necessary path
         invite_link = f"https://sso.{base_domain}/if/flow/simple-enrollment-flow/?itoken={invite_id}"
 
         # Shorten the invite link after obtaining the full URL from Authentik

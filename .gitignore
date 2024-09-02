@@ -11,3 +11,6 @@ env
 __pycache__
 #logs
 *.log
+#database
+*.db
+*.csv

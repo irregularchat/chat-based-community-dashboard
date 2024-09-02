@@ -14,3 +14,4 @@ __pycache__
 #database
 *.db
 *.csv
+users.csv

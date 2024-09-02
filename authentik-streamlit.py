@@ -344,9 +344,7 @@ if st.button("Submit"):
                 # Generate and shorten the setup link
                 setup_link = f"https://{base_domain}/setup/{new_username}"
                 setup_link = shorten_url(setup_link, 'setup', f"{new_username}")
-                
-                recovery_link = generate_recovery_link(Authentik_API_URL, headers, new_username)
-                
+                                
                 welcome_message = f"""
                 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
                 You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
@@ -354,12 +352,10 @@ if st.button("Submit"):
                 vv See Below for username vv
 
                 Username: {new_username}
-
-                **Setup Link**: {setup_link}
                 
                 ^^ See Above for username ^^
                 **Step 1**:
-                - Activate your IrregularChat Login with your username ({new_username}) here: {recovery_link}
+                - Activate your IrregularChat Login with your username ({new_username}) here: {setup_link}
 
                 **Step 2**:
                 - Login to the wiki with that Irregular Chat Login and visit https://url.irregular.chat/welcome

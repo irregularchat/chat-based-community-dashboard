@@ -97,7 +97,8 @@ def shorten_url(long_url, type, name=None):
             if short_url:
                 # change http:// to https:// to prevent mixed content issues
                 short_url = short_url.replace('http://', 'https://')
-                return short_url
+                #return short_url # currently not working so returning long_url
+                return long_url
             else:
                 print('Error: The API response does not contain a "shortUrl" field.')
                 return long_url

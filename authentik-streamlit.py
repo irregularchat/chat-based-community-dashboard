@@ -344,7 +344,7 @@ if st.button("Submit"):
             else:
                 # Generate and shorten the setup link
                 setup_link = f"https://{base_domain}/setup/{new_username}"
-                setup_link = shorten_url(setup_link, 'setup', f"{new_username}")
+                #setup_link = shorten_url(setup_link, 'setup', f"{new_username}") # currently not working so returning long_url
                                 
                 welcome_message = f"""
                 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟

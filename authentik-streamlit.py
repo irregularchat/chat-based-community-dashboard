@@ -369,7 +369,7 @@ if st.button("Submit"):
                 # Generate and shorten the setup link
                 # Generate the recovery link for the new user
                 # Shorten the recovery link
-                shortened_recovery_link = shorten_url(generate_recovery_link(AUTHENTIK_API_URL, headers, new_username), 'recovery', f"{new_username}")
+                shortened_recovery_link = shorten_url(generate_recovery_link(AUTHENTIK_API_URL, headers, new_username), 'first-login', f"{new_username}")
                 welcome_message = f"""
                 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
                 You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:

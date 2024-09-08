@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import os
 import hashlib
@@ -9,13 +9,12 @@ import base64
 from cryptography.fernet import Fernet
 from io import StringIO
 import logging
-from datetime import datetime, timedelta
 from pytz import timezone
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Define the vars for the app
+# Define the vars for the app from the .env file
 PAGE_TITLE = os.getenv("PAGE_TITLE")
 FAVICON_URL = os.getenv("FAVICON_URL")
 AUTHENTIK_API_TOKEN = os.getenv("AUTHENTIK_API_TOKEN")
@@ -29,9 +28,11 @@ SHLINK_URL = os.getenv("SHLINK_URL")
 Authentik_API_URL = os.getenv("Authentik_API_URL")
 
 # Configuration
-# Define the Eastern Time zone
+# Define the Eastern Time zone for accurate time processing
 eastern = timezone('US/Eastern')
 current_time_eastern = datetime.now(eastern)
+
+# Set page configuration for Streamlit UI
 st.set_page_config(page_title=PAGE_TITLE, page_icon=FAVICON_URL)
 st.title(PAGE_TITLE)
 
@@ -43,6 +44,7 @@ st.markdown("""
 - [🔗 Links to All the Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
 """)
 
+# Authentication check
 if not AUTHENTIK_API_TOKEN or not MAIN_GROUP_ID:
     st.warning("Please enter both the API token and the main group ID to proceed.")
     AUTHENTIK_API_TOKEN = st.text_input("Enter your AUTHENTIK API TOKEN", type="password")
@@ -54,27 +56,27 @@ headers = {
     "Content-Type": "application/json"
 }
 
-# Functions
-def shorten_url(long_url, type, name=None):
+# Function to shorten URL using Shlink API
+def shorten_url(long_url, url_type, name=None):
     """
     Shorten a URL using Shlink API.
     
     Parameters:
         long_url (str): The URL to be shortened.
-        type (str): The type of the URL (e.g., 'recovery', 'invite', 'setup').
-        name (str, optional): The custom name for the shortened URL. Defaults to 'DDHHMM-type-name'.
+        url_type (str): The type of the URL (e.g., 'recovery', 'invite', 'setup').
+        name (str, optional): The custom name for the shortened URL.
     
     Returns:
         str: The shortened URL or the original URL if the API key is not set.
     """
-    if not SHLINK_API_TOKEN or SHLINK_API_TOKEN == "your_api_token_here" or not SHLINK_URL:
-        # print("Shlink API token or URL not set. Returning the original URL.") To prevent printing in Streamlit
-        return long_url
+    if not SHLINK_API_TOKEN or not SHLINK_URL:
+        return long_url  # Return original if no Shlink setup
 
+    # Generate name for slug if not provided
     if not name:
-        name = f"{current_time_eastern.strftime('%d%H%M')}-{type}"
+        name = f"{current_time_eastern.strftime('%d%H%M')}-{url_type}"
     else:
-        name = f"{current_time_eastern.strftime('%d%H%M')}-{type}-{name}"
+        name = f"{current_time_eastern.strftime('%d%H%M')}-{url_type}-{name}"
 
     headers = {
         'X-Api-Key': SHLINK_API_TOKEN,
@@ -85,22 +87,19 @@ def shorten_url(long_url, type, name=None):
     payload = {
         'longUrl': long_url,
         'customSlug': name,
-        'findIfExists': True  # Optional: reuse an existing short URL if the long URL was previously shortened
+        'findIfExists': True  # Reuse existing short URL if available
     }
 
     try:
         response = requests.post(SHLINK_URL, json=payload, headers=headers)
         response_data = response.json()
 
-        if response.status_code == 201 or response.status_code == 200:
+        if response.status_code in [201, 200]:
             short_url = response_data.get('shortUrl')
             if short_url:
-                # change http:// to https:// to prevent mixed content issues
-                short_url = short_url.replace('http://', 'https://')
-                #return short_url # currently not working so returning long_url
-                return long_url
+                return short_url.replace('http://', 'https://')  # Ensure HTTPS
             else:
-                print('Error: The API response does not contain a "shortUrl" field.')
+                print('Error: API response missing "shortUrl".')
                 return long_url
         else:
             print(f'Error: {response.status_code}')
@@ -110,14 +109,17 @@ def shorten_url(long_url, type, name=None):
         print(f'Exception: {e}')
         return long_url
 
+# Function to encrypt data
 def encrypt_data(data):
     f = Fernet(encryption_key)
     return f.encrypt(data.encode()).decode()
 
+# Function to decrypt data
 def decrypt_data(data):
     f = Fernet(encryption_key)
     return f.decrypt(data.encode()).decode()
 
+# Function to update the local user database
 def update_local_db():
     users = list_users(Authentik_API_URL, headers)
     df = pd.DataFrame(users)
@@ -125,6 +127,7 @@ def update_local_db():
     with open(local_db, 'w') as file:
         file.write(encrypted_data)
 
+# Function to load local user database
 def load_local_db():
     if not os.path.exists(local_db):
         update_local_db()
@@ -134,10 +137,12 @@ def load_local_db():
     df = pd.read_csv(StringIO(decrypted_data))
     return df
 
+# Function to search the local database for a username
 def search_local_db(username):
     df = load_local_db()
     return df[df['username'].str.lower() == username.lower()]
 
+# Function to get user ID by username
 def get_user_id_by_username(Authentik_API_URL, headers, username):
     url = f"{Authentik_API_URL}/core/users/?search={username}"
     response = requests.get(url, headers=headers)
@@ -147,65 +152,72 @@ def get_user_id_by_username(Authentik_API_URL, headers, username):
         raise ValueError(f"User with username {username} not found.")
     return users[0]['pk']
 
-# Set up logging to a file
+# Set up logging to file
 logging.basicConfig(filename='invite_creation.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def create_invite(headers, name, expires=None):
-    # Get the current time in Eastern Time Zone
-    eastern = timezone('US/Eastern')
-    current_time_str = datetime.now(eastern).strftime('%H-%M')  # Hours and Minutes only
+# Function to create an invite
+def create_invite(headers, label, expires=None):
+    """
+    Create an invitation for a user.
 
-    if not name:
-        name = current_time_str
-    else:
-        name = f"{name}"
+    Parameters:
+        headers (dict): The request headers for Authentik API.
+        label (str): The label to identify the invitation.
+        expires (str, optional): The expiration time for the invite.
     
+    Returns:
+        tuple: The shortened invite URL and expiration time, if successful.
+    """
+    eastern = timezone('US/Eastern')
+    current_time_str = datetime.now(eastern).strftime('%H-%M')
+
+    # Default name for the invite
+    if not label:
+        label = current_time_str
+
+    # Expiration logic
     if expires is None:
         expires = (datetime.now(eastern) + timedelta(hours=2)).isoformat()
 
     data = {
-        "name": name,
+        "name": label,
         "expires": expires,
         "fixed_data": {},
         "single_use": True,
-        "flow": FLOW_ID  # Use the actual value of FLOW_ID
+        "flow": FLOW_ID
     }
     
-    # Construct the correct URL for Authentik's invitation API
+    # Authentik API invitation endpoint
     invite_api_url = f"{Authentik_API_URL}/stages/invitation/invitations/"
-    
+
     try:
-        # Make the request to create the invitation
         response = requests.post(invite_api_url, headers=headers, json=data)
-        response.raise_for_status()  # Ensure the request was successful
+        response.raise_for_status()
         response_data = response.json()
-        
-        # Log the entire response for debugging
-        logging.info("Invite API Response: %s", response_data)
-        
+
+        # Get the invite ID and construct the full URL
         invite_id = response_data.get('pk')
         if not invite_id:
-            raise ValueError("The API response does not contain a 'pk' field.")
+            raise ValueError("API response missing 'pk' field.")
 
-        # Construct the full invite URL
         invite_link = f"https://sso.{base_domain}/if/flow/simple-enrollment-flow/?itoken={invite_id}"
 
-        # Shorten the invite link after obtaining the full URL from Authentik
-        short_invite_link = shorten_url(invite_link, 'invite', name)
+        # Shorten the invite link
+        short_invite_link = shorten_url(invite_link, 'invite', label)
         return short_invite_link, expires
 
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred: {http_err}")
-        logging.info("Invite API Response: %s", response.json())
+        logging.info("API Response: %s", response.json())
     except Exception as err:
         logging.error(f"An error occurred: {err}")
-        logging.info("Invite API Response: %s", response.text)
+        logging.info("API Response: %s", response.text)
 
-    return None, None  # Return None if there's an issue
+    return None, None
 
+# Function to generate a recovery link for the user
 def generate_recovery_link(Authentik_API_URL, headers, username):
     user_id = get_user_id_by_username(Authentik_API_URL, headers, username)
-    
     url = f"{Authentik_API_URL}/core/users/{user_id}/recovery/"
     response = requests.post(url, headers=headers)
     response.raise_for_status()
@@ -214,9 +226,9 @@ def generate_recovery_link(Authentik_API_URL, headers, username):
     if not recovery_link:
         raise ValueError("Failed to generate recovery link.")
     
-    recovery_link = shorten_url(recovery_link, 'recovery', username)
-    return recovery_link
+    return shorten_url(recovery_link, 'recovery', username)
 
+# Function to create a unique username
 def create_unique_username(base_username, existing_usernames):
     counter = 1
     new_username = base_username
@@ -225,6 +237,7 @@ def create_unique_username(base_username, existing_usernames):
         counter += 1
     return new_username
 
+# Function to list all usernames
 def get_existing_usernames(Authentik_API_URL, headers):
     url = f"{Authentik_API_URL}/core/users/"
     response = requests.get(url, headers=headers)
@@ -232,6 +245,7 @@ def get_existing_usernames(Authentik_API_URL, headers):
     users = response.json()['results']
     return {user['username'] for user in users}
 
+# Function to create a new user
 def create_user(Authentik_API_URL, headers, username, email, name):
     data = {
         "username": username,
@@ -250,16 +264,14 @@ def create_user(Authentik_API_URL, headers, username, email, name):
     response.raise_for_status()
     return response.json()['pk']
 
+# Function to list users
 def list_users(Authentik_API_URL, headers, search_term=None):
-    if search_term:
-        url = f"{Authentik_API_URL}/core/users/?search={search_term}"
-    else:
-        url = f"{Authentik_API_URL}/core/users/"
+    url = f"{Authentik_API_URL}/core/users/?search={search_term}" if search_term else f"{Authentik_API_URL}/core/users/"
     response = requests.get(url, headers=headers)
     response.raise_for_status()
-    users = response.json()['results']
-    return users
+    return response.json()['results']
 
+# Function to update a user's status
 def update_user_status(Authentik_API_URL, headers, user_id, is_active):
     url = f"{Authentik_API_URL}/core/users/{user_id}/"
     data = {"is_active": is_active}
@@ -267,12 +279,14 @@ def update_user_status(Authentik_API_URL, headers, user_id, is_active):
     response.raise_for_status()
     return response.json()
 
+# Function to delete a user
 def delete_user(Authentik_API_URL, headers, user_id):
     url = f"{Authentik_API_URL}/core/users/{user_id}/"
     response = requests.delete(url, headers=headers)
     response.raise_for_status()
     return response.status_code == 204
 
+# Function to reset a user's password
 def reset_user_password(Authentik_API_URL, headers, user_id, new_password):
     url = f"{Authentik_API_URL}/core/users/{user_id}/set_password/"
     data = {"password": new_password}
@@ -281,6 +295,7 @@ def reset_user_password(Authentik_API_URL, headers, user_id, new_password):
     return response.json()
 
 ########## Streamlit Interface ##########
+# Define Streamlit UI
 operation = st.selectbox("Select Operation", [
     "Create User", 
     "Generate Recovery Link", 
@@ -288,6 +303,7 @@ operation = st.selectbox("Select Operation", [
     "List Users"
 ])
 
+# Fields for first and last name input
 first_name = st.text_input("Enter First Name")
 last_name = st.text_input("Enter Last Name")
 
@@ -306,6 +322,7 @@ processed_username = base_username.replace(" ", "-")
 # Editable username field
 username_input = st.text_input("Username", value=processed_username)
 
+# Email input field
 email_input = st.text_input("Enter Email Address (optional)")
 
 # Show date and time inputs only for specific operations
@@ -316,6 +333,7 @@ if operation in ["Generate Recovery Link", "Create Invite"]:
 else:
     expires_date, expires_time = None, None
 
+# Handling form submission
 if st.button("Submit"):
     try:
         if operation == "Create User":
@@ -343,9 +361,9 @@ if st.button("Submit"):
                     st.warning(f"User {new_username} already exists. Please reset the password or create a new user with a different username.")
             else:
                 # Generate and shorten the setup link
-                setup_link = f"https://{base_domain}/setup/{new_username}"
-                #setup_link = shorten_url(setup_link, 'setup', f"{new_username}") # currently not working so returning long_url
-                                
+                setup_link = f"https://sso.{base_domain}/setup/{new_username}"
+                shortened_setup_link = shorten_url(setup_link, 'setup', f"{new_username}")
+
                 welcome_message = f"""
                 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
                 You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. Here's what you need to know to get started and a guide to join the wiki and other services:
@@ -355,7 +373,7 @@ if st.button("Submit"):
                 👆🏼 See Above for username 👆🏼
 
                 1️⃣ Step 1:
-                - Activate your IrregularChat Login with your username 👉🏼 {new_username} 👈🏼 here: {setup_link}
+                - Activate your IrregularChat Login with your username 👉🏼 {new_username} 👈🏼 here: {shortened_setup_link}
 
                 2️⃣ Step 2:
                 - Login to the wiki with that Irregular Chat Login and visit https://url.irregular.chat/welcome
@@ -416,17 +434,20 @@ if st.button("Submit"):
     except Exception as e:
         st.error(f"An error occurred: {e}")
 
+# Display any messages or errors from previous actions
 if 'message' in st.session_state:
     st.success(st.session_state['message'])
 
+# Display the user list and handle user actions
 if 'user_list' in st.session_state and st.session_state['user_list']:
     df = pd.DataFrame(st.session_state['user_list'])
 
-    # Sorting options
+    # Sorting options for the user list
     sort_by = st.selectbox("Sort by", options=["username", "email", "is_active"], index=0)
     sort_ascending = st.radio("Sort order", ("Ascending", "Descending"))
     df = df.sort_values(by=sort_by, ascending=(sort_ascending == "Ascending"))
 
+    # Checkbox for selecting users
     selected_users = []
     for idx, row in df.iterrows():
         if st.checkbox(f"**Username**: {row['username']}, **Email**: {row['email']}, **Active**: {row['is_active']}", key=row['username']):
@@ -434,6 +455,7 @@ if 'user_list' in st.session_state and st.session_state['user_list']:
 
     st.write(f"Selected Users: {len(selected_users)}")
 
+    # Actions for selected users
     if selected_users:
         st.write("**Actions for Selected Users**")
         action = st.selectbox("Select Action", ["Activate", "Deactivate", "Reset Password", "Delete"])
@@ -463,5 +485,7 @@ if 'user_list' in st.session_state and st.session_state['user_list']:
 
     st.dataframe(df)
 
+# Clean up session state
 if 'message' in st.session_state:
     del st.session_state['message']
+    

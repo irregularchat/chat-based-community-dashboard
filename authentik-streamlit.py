@@ -37,12 +37,12 @@ st.set_page_config(page_title=PAGE_TITLE, page_icon=FAVICON_URL)
 st.title(PAGE_TITLE)
 
 # Links under the title
-st.markdown("""
-- [Login to the IrregularChat SSO](https://sso.irregularchat.com)
-- [📋 Use the Signal CopyPasta for Welcome Messages](https://wiki.irregularchat.com/en/community/chat/admin/signal-prompts)
-- [Admin Prompts for Common Situations](https://wiki.irregularchat.com/community/chat/admin.md)
-- [🔗 Links to All the Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
-""")
+# st.markdown("""
+# - [Login to the IrregularChat SSO](https://sso.irregularchat.com)
+# - [📋 Use the Signal CopyPasta for Welcome Messages](https://wiki.irregularchat.com/en/community/chat/admin/signal-prompts)
+# - [Admin Prompts for Common Situations](https://wiki.irregularchat.com/community/chat/admin.md)
+# - [🔗 Links to All the Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
+# """)
 
 # Authentication check
 if not AUTHENTIK_API_TOKEN or not MAIN_GROUP_ID:
@@ -259,7 +259,10 @@ def create_user(AUTHENTIK_API_URL, headers, username, email, name):
         "is_active": True,
         "email": email,
         "groups": [MAIN_GROUP_ID],
-        "attributes": {},
+        "attributes": {
+            "intro": intro,
+            "invited_by": invited_by
+        },
         "path": "users",
         "type": "internal"
     }
@@ -301,19 +304,27 @@ def reset_user_password(AUTHENTIK_API_URL, headers, user_id, new_password):
     return response.json()
 
 ########## Streamlit Interface ##########
-# Define Streamlit UI
-operation = st.selectbox("Select Operation", [
-    "Create User", 
-    "Generate Recovery Link", 
-    "Create Invite",
-    "List Users"
-])
+# Set up a row layout with columns to adjust the width (2/3 for links, 1/3 for form)
+col_links, col_form = st.columns([2, 1])  # Adjust width: 2 parts for links, 1 part for the form
 
-# Fields for first and last name input
-first_name = st.text_input("Enter First Name")
-last_name = st.text_input("Enter Last Name")
+# Display the links on the left side (column 1)
+with col_links:
+    st.markdown("""
+    - [Login to the IrregularChat SSO](https://sso.irregularchat.com)
+    - [📋 Use the Signal CopyPasta for Welcome Messages](https://wiki.irregularchat.com/en/community/chat/admin/signal-prompts)
+    - [Admin Prompts for Common Situations](https://wiki.irregularchat.com/community/chat/admin.md)
+    - [🔗 Links to All the Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
+    """)
 
-# Handle cases where first or last name might be empty
+# First name and last name input before the username so that username can be updated dynamically
+# First name and last name input before the username so that username can be updated dynamically
+col1, col2 = st.columns(2)
+with col1:
+    first_name = st.text_input("Enter First Name", key="first_name_input")
+with col2:
+    last_name = st.text_input("Enter Last Name", key="last_name_input")
+
+# Handle cases where first or last name might be empty and update session state for the username
 if first_name and last_name:
     base_username = f"{first_name.strip().lower()}-{last_name.strip()[0].lower()}"
 elif first_name:
@@ -321,15 +332,40 @@ elif first_name:
 elif last_name:
     base_username = last_name.strip().lower()
 else:
-    base_username = "user"  # Default base username if both are empty
+    base_username = "pending"  # Default base username if both are empty
 
+# Processed username
 processed_username = base_username.replace(" ", "-")
 
-# Editable username field
-username_input = st.text_input("Username", value=processed_username)
+# Update session state with the processed username
+st.session_state['username_input'] = processed_username
 
-# Email input field
-email_input = st.text_input("Enter Email Address (optional)")
+# Form on the right side (column 2, narrower)
+with col_form:
+    # Username field at the top, dynamically updated
+    username_input = st.text_input("Username", key="username_input")
+    # Operation dropdown below the username
+    operation = st.selectbox("Select Operation", [
+        "Create User", 
+        "Generate Recovery Link", 
+        "Create Invite",
+        "List Users"
+    ])
+
+# Place email and invited by side by side
+col1, col2 = st.columns(2)
+with col1:
+    email_input = st.text_input("Enter Email Address (optional)", key="email_input")
+with col2:
+    invited_by = st.text_input("Invited by (optional)", key="invited_by_input")
+
+# Intro (long text 2 lines tall)
+intro = st.text_area("Intro (optional)", height=2, key="intro_input")
+
+# Submit button now below the intro field, aligned to the right with balanced spacing
+col1, col2 = st.columns([6, 1])  # Adjusting the width: 6 parts for spacing, 1 part for the button
+with col2:
+    submit_button = st.button("Submit", key="unique_submit_button")
 
 # Show date and time inputs only for specific operations
 if operation in ["Generate Recovery Link", "Create Invite"]:
@@ -338,9 +374,8 @@ if operation in ["Generate Recovery Link", "Create Invite"]:
     expires_time = st.time_input("Enter Expiration Time (optional)", value=expires_default.time())
 else:
     expires_date, expires_time = None, None
-
 # Handling form submission
-if st.button("Submit"):
+if submit_button:
     try:
         if operation == "Create User":
             # Search locally first

@@ -36,14 +36,6 @@ current_time_eastern = datetime.now(eastern)
 st.set_page_config(page_title=PAGE_TITLE, page_icon=FAVICON_URL)
 st.title(PAGE_TITLE)
 
-# Links under the title
-# st.markdown("""
-# - [Login to the IrregularChat SSO](https://sso.irregularchat.com)
-# - [📋 Use the Signal CopyPasta for Welcome Messages](https://wiki.irregularchat.com/en/community/chat/admin/signal-prompts)
-# - [Admin Prompts for Common Situations](https://wiki.irregularchat.com/community/chat/admin.md)
-# - [🔗 Links to All the Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
-# """)
-
 # Authentication check
 if not AUTHENTIK_API_TOKEN or not MAIN_GROUP_ID:
     st.warning("Please enter both the API token and the main group ID to proceed.")
@@ -234,6 +226,7 @@ def generate_recovery_link(AUTHENTIK_API_URL, headers, username):
         raise ValueError("Failed to generate recovery link.")
     
     return recovery_link
+
 # Function to create a unique username
 def create_unique_username(base_username, existing_usernames):
     counter = 1
@@ -374,6 +367,7 @@ if operation in ["Generate Recovery Link", "Create Invite"]:
     expires_time = st.time_input("Enter Expiration Time (optional)", value=expires_default.time())
 else:
     expires_date, expires_time = None, None
+
 # Handling form submission
 if submit_button:
     try:
@@ -396,14 +390,12 @@ if submit_button:
             if new_user is None:
                 st.warning(f"Username {new_username} might already exist. Trying to fetch existing user.")
                 user_exists = search_LOCAL_DB(new_username)
-                if user_exists.empty:
+                if user_exists.empty():
                     st.error(f"Could not create or find user {new_username}. Please try again.")
                 else:
                     st.warning(f"User {new_username} already exists. Please reset the password or create a new user with a different username.")
             else:
                 # Generate and shorten the setup link
-                # Generate the recovery link for the new user
-                # Shorten the recovery link
                 shortened_recovery_link = shorten_url(generate_recovery_link(AUTHENTIK_API_URL, headers, new_username), 'first-login', f"{new_username}")
                 welcome_message = f"""
                 🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
@@ -529,4 +521,3 @@ if 'user_list' in st.session_state and st.session_state['user_list']:
 # Clean up session state
 if 'message' in st.session_state:
     del st.session_state['message']
-    

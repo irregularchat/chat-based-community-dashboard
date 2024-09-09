@@ -11,6 +11,9 @@ from cryptography.fernet import Fernet
 from io import StringIO
 import logging
 from pytz import timezone
+from auth.session_init import initialize_session_state
+# Call the function to initialize session state
+initialize_session_state()
 
 
 # Load environment variables from .env file
@@ -39,13 +42,6 @@ headers = {
     "Authorization": f"Bearer {AUTHENTIK_API_TOKEN}",
     "Content-Type": "application/json"
 }
-
-# Ensure session state initialization for user_list and selected_users
-if 'user_list' not in st.session_state:
-    st.session_state['user_list'] = []  # Initialize an empty list if it doesn't exist
-
-if 'selected_users' not in st.session_state:
-    st.session_state['selected_users'] = []  # Initialize an empty list for selected users
 
 
 # Function to shorten URL using Shlink API
@@ -285,6 +281,7 @@ def list_users(AUTHENTIK_API_URL, headers, search_term=None):
             'username': user['username'],
             'email': user['email'],
             'is_active': user['is_active'],
+            'pk': user.get('pk', 'N/A'),  # User ID
             'name': user.get('name', 'N/A'),  # Full name
             'last_login': user.get('last_login', 'N/A'),  # Add 'N/A' if no last login available
             'intro': user['attributes'].get('intro', 'N/A'),  # Intro from attributes
@@ -339,10 +336,7 @@ def clear_session_state():
         del st.session_state['message']
 
 def display_user_list(AUTHENTIK_API_URL, headers):
-    # Initialize 'user_list' in session state if not already present
-    if 'user_list' not in st.session_state:
-        st.session_state['user_list'] = []  # Set default as an empty list
-
+    initialize_session_state()
     # Check if user list is available and display
     if st.session_state['user_list']:
         users = st.session_state['user_list']
@@ -386,9 +380,15 @@ def display_user_list(AUTHENTIK_API_URL, headers):
             if st.button("Apply"):
                 try:
                     for username in st.session_state['selected_users']:
-                        user_data = df[df['username'] == username].iloc[0]
-                        user_id = user_data['pk']
+                        user_data = df[df['username'] == username]
+                        
+                        if not user_data.empty:
+                            user_id = user_data.iloc[0]['pk']  # Corrected to access 'user_data'
+                        else:
+                            st.warning(f"No data found for the username: {username}")
+                            continue  # Skip to the next iteration if no user data is found
 
+                        # Now process the action for the current user
                         if action == "Activate":
                             update_user_status(AUTHENTIK_API_URL, headers, user_id, True)
                         elif action == "Deactivate":

@@ -26,23 +26,27 @@ ENCRYPTION_PASSWORD = base64.urlsafe_b64encode(hashlib.sha256(os.getenv("ENCRYPT
 SHLINK_API_TOKEN = os.getenv("SHLINK_API_TOKEN")
 SHLINK_URL = os.getenv("SHLINK_URL")
 AUTHENTIK_API_URL = os.getenv("AUTHENTIK_API_URL")
+PAGE_TITLE = os.getenv("PAGE_TITLE")
+FAVICON_URL = os.getenv("FAVICON_URL")
+
 
 # Configuration
 # Define the Eastern Time zone for accurate time processing
 eastern = timezone('US/Eastern')
 current_time_eastern = datetime.now(eastern)
 
-# Authentication check
-if not AUTHENTIK_API_TOKEN or not MAIN_GROUP_ID:
-    st.warning("Please enter both the API token and the main group ID to proceed.")
-    AUTHENTIK_API_TOKEN = st.text_input("Enter your AUTHENTIK API TOKEN", type="password")
-    MAIN_GROUP_ID = st.text_input("Enter the MAIN GROUP ID")
-    st.stop()
-
 headers = {
     "Authorization": f"Bearer {AUTHENTIK_API_TOKEN}",
     "Content-Type": "application/json"
 }
+
+# Ensure session state initialization for user_list and selected_users
+if 'user_list' not in st.session_state:
+    st.session_state['user_list'] = []  # Initialize an empty list if it doesn't exist
+
+if 'selected_users' not in st.session_state:
+    st.session_state['selected_users'] = []  # Initialize an empty list for selected users
+
 
 # Function to shorten URL using Shlink API
 def shorten_url(long_url, url_type, name=None):
@@ -335,7 +339,11 @@ def clear_session_state():
         del st.session_state['message']
 
 def display_user_list(AUTHENTIK_API_URL, headers):
-    # Check if user list is available
+    # Initialize 'user_list' in session state if not already present
+    if 'user_list' not in st.session_state:
+        st.session_state['user_list'] = []  # Set default as an empty list
+
+    # Check if user list is available and display
     if st.session_state['user_list']:
         users = st.session_state['user_list']
         df = pd.DataFrame(users)
@@ -348,8 +356,8 @@ def display_user_list(AUTHENTIK_API_URL, headers):
         # Display the user list with the new fields
         for idx, row in df.iterrows():
             st.write(f"**Username**: {row['username']}, **Name**: {row['name']}, **Email**: {row['email']}, "
-                    f"**Active**: {row['is_active']}, **Last Login**: {row['last_login']}, "
-                    f"**Intro**: {row['intro']}, **Invited By**: {row['invited_by']}")
+                     f"**Active**: {row['is_active']}, **Last Login**: {row['last_login']}, "
+                     f"**Intro**: {row['intro']}, **Invited By**: {row['invited_by']}")
 
             if st.checkbox(f"Select {row['username']}", key=row['username']):
                 if row['username'] not in st.session_state['selected_users']:

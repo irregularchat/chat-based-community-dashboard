@@ -7,29 +7,33 @@ from authentik_streamlit import (
     update_LOCAL_DB, search_LOCAL_DB, shorten_url, update_user_status, 
     reset_user_password, delete_user, update_user_intro, update_user_invited_by,
     display_message, clear_session_state, create_unique_username, get_existing_usernames,
-    display_user_list
+    display_user_list, BASE_DOMAIN, AUTHENTIK_API_URL, AUTHENTIK_API_TOKEN, headers,
+    PAGE_TITLE, FAVICON_URL, MAIN_GROUP_ID
 )
 from datetime import datetime, timedelta
 from pytz import timezone
 from messages import (
-    create_user_message, create_recovery_message, create_invite_message
+    create_user_message, create_recovery_message, create_invite_message,
 )
-""" Must contain create handle_form_submission and render_home_page functions """
+from .forms import (
+    render_create_user_form, render_invite_form
+)
 
-# Load environment variables
-load_dotenv(dotenv_path='../.env')
+# Call set_page_config as the very first Streamlit command
+st.set_page_config(page_title=PAGE_TITLE, page_icon=FAVICON_URL)
 
-# Define headers for Authentik API requests
-BASE_DOMAIN = os.getenv("BASE_DOMAIN")
-AUTHENTIK_API_URL = os.getenv("AUTHENTIK_API_URL")
-AUTHENTIK_API_TOKEN = os.getenv("AUTHENTIK_API_TOKEN")
-PAGE_TITLE = os.getenv("PAGE_TITLE")
-FAVICON_URL = os.getenv("FAVICON_URL")
+# Cached list users to avoid re-fetching too often
+@st.cache_data(ttl=600)  # Cache for 10 minutes
+def list_users_cached(authentik_api_url, headers, username_input=None):
+    return list_users(authentik_api_url, headers, username_input)
 
-headers = {
-    "Authorization": f"Bearer {AUTHENTIK_API_TOKEN}",
-    "Content-Type": "application/json"
-}
+def get_user_list():
+    """Retrieve the list of users from session state."""
+    return st.session_state.get('user_list', [])
+
+def set_user_list(users):
+    """Set the list of users in session state."""
+    st.session_state['user_list'] = users
 
 # Handle form submissions based on operation selected
 def handle_form_submission(operation, username_input, email_input, invited_by, intro, expires_date, expires_time, first_name, last_name):
@@ -71,88 +75,56 @@ def handle_form_submission(operation, username_input, email_input, invited_by, i
             create_invite_message(username_input, invite_link, invite_expires)
 
         elif operation == "List Users":
-            users = list_users(AUTHENTIK_API_URL, headers, username_input if username_input else None)
-            st.session_state['user_list'] = users
-            st.session_state['message'] = "Users listed successfully!"
-    
+            users = list_users_cached(AUTHENTIK_API_URL, headers, username_input if username_input else None)
+            set_user_list(users)
+            st.success("Users listed successfully!")
+
     except Exception as e:
         st.error(f"An error occurred: {e}")
 
-# Define the function to render the home page with dynamic fields based on the operation
+# Render home page with dynamic fields based on operation
 def render_home_page():
-    # Set page configuration and title
-    st.set_page_config(page_title=PAGE_TITLE, page_icon=FAVICON_URL)
-    st.title(PAGE_TITLE)
-
-    # Display useful links
-    st.markdown("""
-    ## Useful Links:
-    - [Login to IrregularChat SSO](https://sso.irregularchat.com)
-    - [Use Signal CopyPasta for Welcome Messages](https://wiki.irregularchat.com/en/community/chat/admin/signal-prompts)
-    - [Admin Prompts for Common Situations](https://wiki.irregularchat.com/community/chat/admin.md)
-    - [Links to Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
+    # Sidebar for useful links
+    st.sidebar.markdown("""
+        ## Useful Links:
+        - [Login to IrregularChat SSO](https://sso.irregularchat.com)
+        - [Use Signal CopyPasta for Welcome Messages](https://wiki.irregularchat.com/en/community/chat/admin/signal-prompts)
+        - [Admin Prompts for Common Situations](https://wiki.irregularchat.com/community/chat/admin.md)
+        - [Links to Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
     """)
 
-    # Fetch user list only once, on first load
-    if 'user_list' not in st.session_state:
-        st.session_state['user_list'] = []
+    # Operation selection and username input
+    col1, col2 = st.columns([2, 3])
+    with col1:
+        operation = st.selectbox(
+            "Select Operation",
+            ["Create User", "Generate Recovery Link", "Create Invite", "List Users"],
+            key="operation_selection"  # Use a static key tied to session state
+        )
 
-    if 'selected_users' not in st.session_state:
-        st.session_state['selected_users'] = []
+    with col2:
+        username_input = st.text_input("Username", key="username_input")  # Static key for the username
 
-    # Move the operation dropdown OUTSIDE the form to avoid the callback restriction
-    operation = st.selectbox("Select Operation", [
-        "Create User", 
-        "Generate Recovery Link", 
-        "Create Invite",
-        "List Users"
-    ], key="operation_selection")
-
-    # Form Section
+    # Form section
     with st.form(key="user_management_form"):
-        # Show/Hide fields based on the operation selected
+        # Dynamic fields based on the operation selected
         if operation == "Create User":
-            # Fields for creating a user
-            col1, col2 = st.columns(2)
-            with col1:
-                first_name = st.text_input("Enter First Name", key="first_name_input")
-            with col2:
-                last_name = st.text_input("Enter Last Name", key="last_name_input")
-
-            username_input = st.text_input("Username", key="username_input")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                email_input = st.text_input("Enter Email Address (optional)", key="email_input")
-            with col2:
-                invited_by = st.text_input("Invited by (optional)", key="invited_by_input")
-
-            intro = st.text_area("Intro (optional)", height=2, key="intro_input")
+            first_name, last_name, email_input, invited_by, intro = render_create_user_form()
             expires_date, expires_time = None, None
-
         elif operation == "Generate Recovery Link":
-            # Only username for recovery link
-            username_input = st.text_input("Username", key="username_input")
-            first_name, last_name, email_input, invited_by, intro, expires_date, expires_time = [None] * 7
-
-        elif operation == "Create Invite":
-            # Only username and invite expiration details for invite creation
-            username_input = st.text_input("Username", key="username_input")
             first_name, last_name, email_input, invited_by, intro = [None] * 5
-
-            expires_default = datetime.now() + timedelta(hours=2)
-            expires_date = st.date_input("Enter Expiration Date (optional)", value=expires_default.date())
-            expires_time = st.time_input("Enter Expiration Time (optional)", value=expires_default.time())
-
+            expires_date, expires_time = None, None
+        elif operation == "Create Invite":
+            invite_label, expires_date, expires_time = render_invite_form()
+            first_name, last_name, email_input, invited_by, intro = [None] * 5
         elif operation == "List Users":
-            # Only username input for searching users
-            username_input = st.text_input("Search Users by Username (optional)", key="username_input")
-            first_name, last_name, email_input, invited_by, intro, expires_date, expires_time = [None] * 7
-
-        # Submit button for form
+            first_name, last_name, email_input, invited_by, intro = [None] * 5
+            expires_date, expires_time = None, None
+        
+        # Submit button for the form
         submit_button = st.form_submit_button("Submit")
 
-    # Form handling logic
+    # Form submission logic
     if submit_button:
         handle_form_submission(
             operation, 
@@ -166,8 +138,8 @@ def render_home_page():
             last_name
         )
 
-    # Call the display_user_list function to handle listing and user actions
+    # Display user list and actions
     display_user_list(AUTHENTIK_API_URL, headers)
 
-# Call render home page to display the form
+# Call render_home_page to display the form and user list
 render_home_page()

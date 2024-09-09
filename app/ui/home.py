@@ -18,9 +18,12 @@ from messages import (
 from .forms import (
     render_create_user_form, render_invite_form
 )
-
+from auth.session_init import initialize_session_state
 # Call set_page_config as the very first Streamlit command
 st.set_page_config(page_title=PAGE_TITLE, page_icon=FAVICON_URL)
+# Call the function to initialize session state
+initialize_session_state()
+
 
 # Cached list users to avoid re-fetching too often
 @st.cache_data(ttl=600)  # Cache for 10 minutes

@@ -67,12 +67,3 @@ def create_invite_message(username_input, invite_link, invite_expires):
     else:
         st.error("Invite creation failed.")
 
-def display_message():
-    """Display any previously stored message."""
-    if 'message' in st.session_state:
-        st.success(st.session_state['message'])
-
-def clear_session_state():
-    """Clear session state after the user list has been displayed."""
-    if 'message' in st.session_state:
-        del st.session_state['message']

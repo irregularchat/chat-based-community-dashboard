@@ -1,4 +1,5 @@
 # authentik-streamlit.py
+import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
@@ -10,6 +11,7 @@ from cryptography.fernet import Fernet
 from io import StringIO
 import logging
 from pytz import timezone
+
 
 # Load environment variables from .env file
 load_dotenv(dotenv_path='../.env')
@@ -239,7 +241,8 @@ def get_existing_usernames(AUTHENTIK_API_URL, headers):
     return {user['username'] for user in users}
 
 # Function to create a new user
-def create_user(AUTHENTIK_API_URL, headers, username, email, name):
+def create_user(AUTHENTIK_API_URL, headers, username, email, name, intro=None, invited_by=None):
+    # Add intro and invited_by to the user attributes
     data = {
         "username": username,
         "name": name,
@@ -247,25 +250,44 @@ def create_user(AUTHENTIK_API_URL, headers, username, email, name):
         "email": email,
         "groups": [MAIN_GROUP_ID],
         "attributes": {
-            "intro": intro,
-            "invited_by": invited_by
+            "intro": intro,              # Pass intro attribute
+            "invited_by": invited_by      # Pass invited_by attribute
         },
         "path": "users",
         "type": "internal"
     }
+    
     url = f"{AUTHENTIK_API_URL}/core/users/"
     response = requests.post(url, headers=headers, json=data)
+    
     if response.status_code == 400:
         return None
     response.raise_for_status()
+    
     return response.json()['pk']
 
 # Function to list users
 def list_users(AUTHENTIK_API_URL, headers, search_term=None):
+    # Update the search query only if search_term is provided
     url = f"{AUTHENTIK_API_URL}/core/users/?search={search_term}" if search_term else f"{AUTHENTIK_API_URL}/core/users/"
     response = requests.get(url, headers=headers)
     response.raise_for_status()
-    return response.json()['results']
+    users = response.json()['results']
+    
+    # Adding necessary fields like name, last_login, and attributes (intro, invited_by)
+    user_list = []
+    for user in users:
+        user_list.append({
+            'username': user['username'],
+            'email': user['email'],
+            'is_active': user['is_active'],
+            'name': user.get('name', 'N/A'),  # Full name
+            'last_login': user.get('last_login', 'N/A'),  # Add 'N/A' if no last login available
+            'intro': user['attributes'].get('intro', 'N/A'),  # Intro from attributes
+            'invited_by': user['attributes'].get('invited_by', 'N/A')  # Invited by from attributes
+        })
+
+    return user_list
 
 # Function to update a user's status
 def update_user_status(AUTHENTIK_API_URL, headers, user_id, is_active):
@@ -274,7 +296,19 @@ def update_user_status(AUTHENTIK_API_URL, headers, user_id, is_active):
     response = requests.patch(url, headers=headers, json=data)
     response.raise_for_status()
     return response.json()
+def update_user_intro(AUTHENTIK_API_URL, headers, user_id, intro_text):
+    url = f"{AUTHENTIK_API_URL}/core/users/{user_id}/"
+    data = {"attributes": {"intro": intro_text}}
+    response = requests.patch(url, headers=headers, json=data)
+    response.raise_for_status()
+    return response.json()
 
+def update_user_invited_by(AUTHENTIK_API_URL, headers, user_id, invited_by):
+    url = f"{AUTHENTIK_API_URL}/core/users/{user_id}/"
+    data = {"attributes": {"invited_by": invited_by}}
+    response = requests.patch(url, headers=headers, json=data)
+    response.raise_for_status()
+    return response.json()
 # Function to delete a user
 def delete_user(AUTHENTIK_API_URL, headers, user_id):
     url = f"{AUTHENTIK_API_URL}/core/users/{user_id}/"
@@ -289,3 +323,81 @@ def reset_user_password(AUTHENTIK_API_URL, headers, user_id, new_password):
     response = requests.post(url, headers=headers, json=data)
     response.raise_for_status()
     return response.json()
+
+def display_message():
+    """Display any previously stored message."""
+    if 'message' in st.session_state:
+        st.success(st.session_state['message'])
+
+def clear_session_state():
+    """Clear session state after the user list has been displayed."""
+    if 'message' in st.session_state:
+        del st.session_state['message']
+
+def display_user_list(AUTHENTIK_API_URL, headers):
+    # Check if user list is available
+    if st.session_state['user_list']:
+        users = st.session_state['user_list']
+        df = pd.DataFrame(users)
+
+        # Sorting options for the user list
+        sort_by = st.selectbox("Sort by", options=["username", "email", "is_active", "name", "last_login"], index=0)
+        sort_ascending = st.radio("Sort order", ("Ascending", "Descending"))
+        df = df.sort_values(by=sort_by, ascending=(sort_ascending == "Ascending"))
+
+        # Display the user list with the new fields
+        for idx, row in df.iterrows():
+            st.write(f"**Username**: {row['username']}, **Name**: {row['name']}, **Email**: {row['email']}, "
+                    f"**Active**: {row['is_active']}, **Last Login**: {row['last_login']}, "
+                    f"**Intro**: {row['intro']}, **Invited By**: {row['invited_by']}")
+
+            if st.checkbox(f"Select {row['username']}", key=row['username']):
+                if row['username'] not in st.session_state['selected_users']:
+                    st.session_state['selected_users'].append(row['username'])
+            else:
+                if row['username'] in st.session_state['selected_users']:
+                    st.session_state['selected_users'].remove(row['username'])
+
+        st.write(f"Selected Users: {len(st.session_state['selected_users'])}")
+
+        # Actions for selected users
+        if st.session_state['selected_users']:
+            st.write("**Actions for Selected Users**")
+            action = st.selectbox("Select Action", ["Activate", "Deactivate", "Reset Password", "Delete", "Add Intro", "Add Invited By"])
+
+            if action == "Reset Password":
+                new_password = st.text_input("Enter new password", type="password")
+
+            if action == "Add Intro":
+                intro_text = st.text_area("Enter Intro Text", height=2)
+
+            if action == "Add Invited By":
+                invited_by = st.text_input("Enter Invited By")
+
+            # Apply actions
+            if st.button("Apply"):
+                try:
+                    for username in st.session_state['selected_users']:
+                        user_data = df[df['username'] == username].iloc[0]
+                        user_id = user_data['pk']
+
+                        if action == "Activate":
+                            update_user_status(AUTHENTIK_API_URL, headers, user_id, True)
+                        elif action == "Deactivate":
+                            update_user_status(AUTHENTIK_API_URL, headers, user_id, False)
+                        elif action == "Reset Password":
+                            if new_password:
+                                reset_user_password(AUTHENTIK_API_URL, headers, user_id, new_password)
+                            else:
+                                st.warning("Please enter a new password")
+                                break
+                        elif action == "Delete":
+                            delete_user(AUTHENTIK_API_URL, headers, user_id)
+                        elif action == "Add Intro":
+                            update_user_intro(AUTHENTIK_API_URL, headers, user_id, intro_text)
+                        elif action == "Add Invited By":
+                            update_user_invited_by(AUTHENTIK_API_URL, headers, user_id, invited_by)
+
+                    st.success(f"{action} action applied successfully to selected users.")
+                except Exception as e:
+                    st.error(f"An error occurred: {e}")

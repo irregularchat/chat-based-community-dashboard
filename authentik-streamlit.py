@@ -335,37 +335,48 @@ st.session_state['username_input'] = processed_username
 
 # Form on the right side (column 2, narrower)
 with col_form:
-    # Username field at the top, dynamically updated
-    username_input = st.text_input("Username", key="username_input")
-    # Operation dropdown below the username
-    operation = st.selectbox("Select Operation", [
-        "Create User", 
-        "Generate Recovery Link", 
-        "Create Invite",
-        "List Users"
-    ])
+    # Operation dropdown with dynamic form rendering
+    operation = st.selectbox(
+        "Select Operation", 
+        ["Create User", "Generate Recovery Link", "Create Invite", "List Users"], 
+        key="operation_selection", 
+        on_change=lambda: st.experimental_rerun()  # Force rerun when selection changes
+    )
 
-# Place email and invited by side by side
-col1, col2 = st.columns(2)
-with col1:
-    email_input = st.text_input("Enter Email Address (optional)", key="email_input")
-with col2:
-    invited_by = st.text_input("Invited by (optional)", key="invited_by_input")
+    # Dynamically show/hide form fields based on selected operation
+    if st.session_state.operation_selection == "Create User":
+        # Fields for "Create User"
+        col1, col2 = st.columns(2)
+        with col1:
+            first_name = st.text_input("Enter First Name", key="first_name_input")
+        with col2:
+            last_name = st.text_input("Enter Last Name", key="last_name_input")
+        email_input = st.text_input("Enter Email Address (optional)", key="email_input")
+        invited_by = st.text_input("Invited by (optional)", key="invited_by_input")
+        intro = st.text_area("Intro (optional)", height=2, key="intro_input")
 
-# Intro (long text 2 lines tall)
-intro = st.text_area("Intro (optional)", height=2, key="intro_input")
+    elif st.session_state.operation_selection == "Generate Recovery Link":
+        # Only the username is needed for generating a recovery link
+        username_input = st.text_input("Username", key="username_input")
 
-# Submit button now below the intro field, aligned to the right with balanced spacing
-col1, col2 = st.columns([6, 1])  # Adjusting the width: 6 parts for spacing, 1 part for the button
-with col2:
-    submit_button = st.button("Submit", key="unique_submit_button")
+    elif st.session_state.operation_selection == "Create Invite":
+        # Only the invite label is required for creating an invite
+        invited_by = st.text_input("Enter invite label", key="invite_label_input")
+        
+        # Expiration date and time fields, visible only for Create Invite
+        expires_default = datetime.now() + timedelta(hours=2)
+        expires_date = st.date_input("Enter Expiration Date (optional)", value=expires_default.date())
+        expires_time = st.time_input("Enter Expiration Time (optional)", value=expires_default.time())
+    
+    elif st.session_state.operation_selection == "List Users":
+        # A search field to filter users
+        search_query = st.text_input("Search Users by Username (optional)", key="search_input")
 
-# Show date and time inputs only for specific operations
-if operation in ["Generate Recovery Link", "Create Invite"]:
-    expires_default = datetime.now() + timedelta(hours=2)
-    expires_date = st.date_input("Enter Expiration Date (optional)", value=expires_default.date())
-    expires_time = st.time_input("Enter Expiration Time (optional)", value=expires_default.time())
-else:
+    # Submit button for the operation
+    submit_button = st.button("Submit")
+
+# Default for date and time if operation is not "Create Invite"
+if st.session_state.operation_selection != "Create Invite":
     expires_date, expires_time = None, None
 
 # Handling form submission
@@ -472,6 +483,7 @@ if 'message' in st.session_state:
     st.success(st.session_state['message'])
 
 # Display the user list and handle user actions
+# Display the user list and handle user actions
 if 'user_list' in st.session_state and st.session_state['user_list']:
     df = pd.DataFrame(st.session_state['user_list'])
 
@@ -491,15 +503,31 @@ if 'user_list' in st.session_state and st.session_state['user_list']:
     # Actions for selected users
     if selected_users:
         st.write("**Actions for Selected Users**")
-        action = st.selectbox("Select Action", ["Activate", "Deactivate", "Reset Password", "Delete"])
+        
+        # Adding the new options to the action dropdown
+        action = st.selectbox("Select Action", ["Activate", "Deactivate", "Reset Password", "Delete", "Add Intro", "Add Invited By"])
 
         if action == "Reset Password":
             new_password = st.text_input("Enter new password", type="password")
 
+        # Add fields for new actions
+        if action == "Add Intro":
+            intro_text = st.text_area("Enter Intro Text", height=2)
+
+        if action == "Add Invited By":
+            invited_by = st.text_input("Enter Invited By")
+
+        # Submit button for actions
         if st.button("Apply"):
             try:
                 for user in selected_users:
-                    user_id = user['pk']
+                    # Ensure 'pk' or 'id' is correct in the response
+                    user_id = user.get('pk', None) or user.get('id', None)
+                    
+                    if not user_id:
+                        st.error(f"User {user['username']} does not have a valid ID.")
+                        continue
+                    
                     if action == "Activate":
                         update_user_status(AUTHENTIK_API_URL, headers, user_id, True)
                     elif action == "Deactivate":
@@ -512,10 +540,16 @@ if 'user_list' in st.session_state and st.session_state['user_list']:
                             break
                     elif action == "Delete":
                         delete_user(AUTHENTIK_API_URL, headers, user_id)
+                    elif action == "Add Intro":
+                        update_user_intro(AUTHENTIK_API_URL, headers, user_id, intro_text)
+                    elif action == "Add Invited By":
+                        update_user_invited_by(AUTHENTIK_API_URL, headers, user_id, invited_by)
+
                 st.success(f"{action} action applied successfully to selected users.")
+            
             except Exception as e:
                 st.error(f"An error occurred while applying {action} action: {e}")
-
+            
     st.dataframe(df)
 
 # Clean up session state

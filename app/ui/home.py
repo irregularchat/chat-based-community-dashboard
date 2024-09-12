@@ -29,6 +29,19 @@ initialize_session_state()
 @st.cache_data(ttl=600)  # Cache for 10 minutes
 def list_users_cached(authentik_api_url, headers, username_input=None):
     return list_users(authentik_api_url, headers, username_input)
+# Ensure session state for username exists
+if 'username_input' not in st.session_state:
+    st.session_state['username_input'] = ''
+
+# Text input field for username with session state
+username_input = st.text_input("Username", value=st.session_state['username_input'])
+
+# Update session state with the input value
+if username_input:
+    st.session_state['username_input'] = username_input
+
+# Display the updated username
+st.write(f"Current Username: {st.session_state['username_input']}")
 
 def get_user_list():
     """Retrieve the list of users from session state."""
@@ -37,7 +50,11 @@ def get_user_list():
 def set_user_list(users):
     """Set the list of users in session state."""
     st.session_state['user_list'] = users
+def update_username():
+    st.session_state['username_input'] = st.session_state['temp_username']
 
+st.text_input("Username", key="temp_username", on_change=update_username)
+st.write(f"Current Username: {st.session_state.get('username_input', '')}")
 # Handle form submissions based on operation selected
 def handle_form_submission(operation, username_input, email_input, invited_by, intro, expires_date, expires_time, first_name, last_name):
     try:

@@ -244,6 +244,11 @@ def get_existing_usernames(AUTHENTIK_API_URL, headers):
     users = response.json()['results']
     return {user['username'] for user in users}
 
+def update_username():
+    st.session_state['username'] = st.session_state['username_input']
+
+st.text_input('Username', key='username_input', on_change=update_username)
+
 # Function to create a new user
 def create_user(AUTHENTIK_API_URL, headers, username, email, name):
     data = {

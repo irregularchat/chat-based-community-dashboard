@@ -9,6 +9,7 @@ services:
       - BASE_DOMAIN=${BASE_DOMAIN}
       - PORT=${PORT}
     volumes:
-      - .:/app
+      - ./app:/app/app
     env_file:
       - .env
+    restart: unless-stopped

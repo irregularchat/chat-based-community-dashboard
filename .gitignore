@@ -7,8 +7,11 @@ env
 .DS_Store
 #pyc files
 *.pyc
+*.pyo
+*.pyd
 #pycache
 __pycache__
+__pycache__/ 
 #logs
 *.log
 #database

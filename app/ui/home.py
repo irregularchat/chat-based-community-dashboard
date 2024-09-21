@@ -1,5 +1,7 @@
     # ui/home.py
 import streamlit as st
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
+import json
 from utils.config import Config
 from auth.api import (
     create_user,
@@ -51,40 +53,98 @@ def update_username():
         base_username = "pending"
     st.session_state['username_input'] = base_username.replace(" ", "-")
 
+
+## Working good table
 def display_user_list(auth_api_url, headers):
     if 'user_list' in st.session_state and st.session_state['user_list']:
         users = st.session_state['user_list']
         st.subheader("User List")
+
+        # Create DataFrame
         df = pd.DataFrame(users)
 
-        # Log the DataFrame columns
-        logging.debug(f"DataFrame columns: {df.columns.tolist()}")
+        # Display available columns for debugging
+        # st.write("Available DataFrame Columns:", df.columns.tolist())
 
-        # Determine the username field
-        if 'username' in df.columns:
-            username_field = 'username'
-        elif 'name' in df.columns:
-            username_field = 'name'
-        else:
-            st.error("No suitable username field found in user data.")
-            logging.error("No suitable username field found in DataFrame.")
+        # Determine the identifier field
+        identifier_field = None
+        for field in ['username', 'name', 'email']:
+            if field in df.columns:
+                identifier_field = field
+                break
+
+        if not identifier_field:
+            st.error("No suitable identifier field found in user data.")
+            logging.error("No suitable identifier field found in DataFrame.")
             return
 
-        # Sorting options
-        sort_by_options = [col for col in ['username', 'name', 'email', 'is_active'] if col in df.columns]
-        sort_by = st.selectbox("Sort by", options=sort_by_options, index=0)
-        sort_order = st.radio("Sort order", ["Ascending", "Descending"])
-        df = df.sort_values(by=sort_by, ascending=(sort_order == "Ascending"))
+        # Limit the displayed columns
+        display_columns = ['username', 'name', 'is_active', 'last_login', 'email', 'attributes']
+        display_columns = [col for col in display_columns if col in df.columns]
 
-        # Multiselect for user selection
-        selected_usernames = st.multiselect(
-            "Select Users",
-            options=df[username_field],
-            format_func=lambda x: f"Username: {x}"
+        # Include 'id' and 'pk' columns if they exist
+        identifier_columns = ['id', 'pk']
+        available_identifier_columns = [col for col in identifier_columns if col in df.columns]
+
+        if not available_identifier_columns:
+            st.error("User data does not contain 'id' or 'pk' fields required for performing actions.")
+            logging.error("No 'id' or 'pk' fields in user data.")
+            return
+
+        # Combine columns to be used in the DataFrame
+        all_columns = display_columns + available_identifier_columns
+
+        # Update the DataFrame with available columns
+        df = df[all_columns]
+
+        # Process 'attributes' column
+        if 'attributes' in df.columns:
+            df['attributes'] = df['attributes'].apply(
+                lambda x: json.dumps(x, indent=2) if isinstance(x, dict) else str(x)
+            )
+
+        # Build AgGrid options
+        gb = GridOptionsBuilder.from_dataframe(df)
+
+        # Configure default columns (make all columns filterable, sortable, and resizable)
+        gb.configure_default_column(filter=True, sortable=True, resizable=True)
+
+        # Hide 'id' and 'pk' columns if they are present
+        gb.configure_columns(available_identifier_columns, hide=True)
+
+        # Page size options
+        page_size_options = [20, 50, 100, 500, 1000]
+        page_size = st.selectbox("Page Size", options=page_size_options, index=2)
+
+        # Configure grid options
+        gb.configure_selection('multiple', use_checkbox=True)
+        gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=page_size)
+        gb.configure_side_bar()
+        gb.configure_grid_options(domLayout='normal')
+        grid_options = gb.build()
+
+        # Adjust table height
+        table_height = 800
+
+        # Display AgGrid table
+        grid_response = AgGrid(
+            df,
+            gridOptions=grid_options,
+            data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+            update_mode=GridUpdateMode.SELECTION_CHANGED,
+            fit_columns_on_grid_load=True,
+            enable_enterprise_modules=False,
+            theme='alpine',
+            height=table_height,
+            width='100%',
+            reload_data=True
         )
-        selected_users = df[df[username_field].isin(selected_usernames)]
+
+        selected_rows = grid_response['selected_rows']
+        selected_users = pd.DataFrame(selected_rows)
 
         st.write(f"Selected Users: {len(selected_users)}")
+        # st.write("Selected Users Columns:", selected_users.columns.tolist())  # For debugging
 
         if not selected_users.empty:
             action = st.selectbox("Select Action", [
@@ -103,9 +163,13 @@ def display_user_list(auth_api_url, headers):
                 try:
                     success_count = 0
                     for _, user in selected_users.iterrows():
-                        user_id = user.get('pk') or user.get('id')
+                        user_id = None
+                        for col in available_identifier_columns:
+                            if col in user and pd.notna(user[col]):
+                                user_id = user[col]
+                                break
                         if not user_id:
-                            st.error(f"User {user[username_field]} does not have a valid ID.")
+                            st.error(f"User {user[identifier_field]} does not have a valid ID.")
                             continue
 
                         # Perform the selected action
@@ -133,11 +197,11 @@ def display_user_list(auth_api_url, headers):
                     st.success(f"{action} action applied successfully to {success_count} out of {len(selected_users)} selected users.")
                 except Exception as e:
                     st.error(f"An error occurred while applying {action} action: {e}")
-            st.dataframe(df)
         else:
             st.info("No users selected.")
     else:
         st.info("No users found.")
+
 
 def render_home_page():
     # Initialize session state variables
@@ -304,11 +368,36 @@ def handle_form_submission(
             else:
                 st.error("Failed to create invite.")
 
+        # elif operation == "List Users":
+        #     search_query = username_input.strip()
+        #     if not search_query:
+        #         st.error("Please enter a search query.")
+        #         return
         elif operation == "List Users":
             search_query = username_input.strip()
-            if not search_query:
-                st.error("Please enter a search query.")
-                return
+            # Allow empty search_query to fetch all users
+
+            # First, search the local database
+            local_users = search_LOCAL_DB(search_query)
+            if not local_users.empty:
+                st.session_state['user_list'] = local_users.to_dict(orient='records')
+                st.session_state['message'] = "Users found in local database."
+            else:
+                # If not found locally or search query is empty, search using the API
+                users = list_users(Config.AUTHENTIK_API_URL, headers, search_query)
+                if users:
+                    st.session_state['user_list'] = users
+                    st.session_state['message'] = "Users found via API."
+                else:
+                    st.session_state['user_list'] = []
+                    st.session_state['message'] = "No users found."
+
+            # Logging and debugging (optional)
+            logging.debug(f"user_list data: {st.session_state['user_list']}")
+            if st.session_state['user_list']:
+                first_user = st.session_state['user_list'][0]
+                logging.debug(f"First user keys: {first_user.keys()}")
+        ####
 
             # First, search the local database
             local_users = search_LOCAL_DB(search_query)

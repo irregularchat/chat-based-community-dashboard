@@ -6,5 +6,6 @@ pandas
 streamlit-copy-to-clipboard
 cryptography
 pytz
+streamlit-aggrid
 # streamlit-annotated-text
 # streamlit-easy-button

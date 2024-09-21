@@ -18,10 +18,11 @@ def create_user_message(new_username, shortened_recovery_link):
     See Above for username 👆🏼
 
     1️⃣ Step 1:
-    - Activate your IrregularChat Login with your username 👉🏼 {new_username} 👈🏼 here: {shortened_recovery_link}
+    - Activate your IrregularChat Login with your username 👉🏼 {new_username} 👈🏼 and update your email here: {shortened_recovery_link}
 
     2️⃣ Step 2:
-    - Login to the wiki with that Irregular Chat Login and visit https://url.irregular.chat/welcome
+    - Save your Login Username and Password to a Password Manager
+    - Login to see all the chats and services, visit https://url.irregular.chat/welcome
     """
     st.code(welcome_message)
     st.session_state['message'] = welcome_message

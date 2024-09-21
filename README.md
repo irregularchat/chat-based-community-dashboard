@@ -1,15 +1,24 @@
 # Authentik User Creation Script
 
-This script automates the creation of user accounts on an Authentik instance. It generates a strong password and ensures unique usernames. The script uses environment variables for secure handling of sensitive information.
-.
+This application brings authentik admin actions in a controled and dedicated manner for your community moderators. The application uses environment variables for secure handling of sensitive information. The application runs with streamlit and can be deployed on a server for easy access by the community moderators. No Authentication is built into the application, so it is important to secure the server where the application is deployed; this app has been tested with an identity aware proxy like cloudlfare access.
+
+The application has the following features:
+- Create a new user account, generating a custom message for the user
+- Reset the password for an existing user account
+- Create a temporary invite link for a user, group, event, or person, with an expiration time and label
+- List all users in the system
+- Search users and filter by multiple attributes
+- Update selected users by:
+   - Activating / Deactivating
+   - Changing password
+   - Deleting
+
 
 ## Prerequisites
 
-- Python 3.x
-- `requests` library
-- `python-dotenv` library
+- Docker Compose
 - Access to the Authentik API
-   - If you are an admin, you can generate an API token from the Authentik web interface: https://sso.irregularchat.com/if/admin/#/core/tokens
+   - If you are an admin, you can generate an API token from the Authentik web interface: https://sso.domain.tld/if/admin/#/core/tokens
 ## Installation
 
 1. **Clone the Repository**
@@ -18,18 +27,7 @@ This script automates the creation of user accounts on an Authentik instance. It
    cd authentik-user-creation
    ```
 
-2. **Create a Virtual Environment**
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-   ```
-
-3. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Set Up Environment Variables**
+2. **Set Up Environment Variables**
    - Copy the .env template, gitignore it so that it doesn't sync and edit
    ```bash
    cp .env-template .env
@@ -49,62 +47,23 @@ This script automates the creation of user accounts on an Authentik instance. It
     ```bash
     echo ".env" >> .gitignore
     ```
-
+3. **Build and Run the Docker Container**
+   ```bash
+   docker-compose up -d --build
+   ```
 ## Usage
 
-### Create User Account
-#### Syntax
+### Local Development
+1. **Access the Application**
+   - Open a web browser and navigate to `http://localhost:8501` to access the application.
 
-Run the script to create a new user account:
-```bash
-python authentik-creation-workflow.py create {username}
-```
-
-Run the script to reset the password for a user account:
-```bash
-python authentik-creation-workflow.py reset {username}
-```
-#### Example Output
-> New Username: user1
-> 
-> New Password: !!Temp_Password@2gh#k1872
-> 
-> [Community Message]
-
-### Create Temporary Invite Link
-#### Syntax
-```bash
-python authentik-creation-workflow.py invite {username|group|event|person}
-```
-
-#### Example Output
-> [Community Message]
-> 
-> IrregularChat Temp Invite: https://sso.irregularchat.com/if/flow/simple-enrollment-flow/?itoken=goes_here_123
-Invite Expires: 2 hours from now
-> 
-> [Community Message]
-
-### Reset Password
-#### Syntax
-```bash
-python authentik-creation-workflow.py reset {username}
-```
-
-## Script Overview
-
-### Environment Variables
-
-- `AUTHENTIK_API_TOKEN`: The API token for accessing the Authentik API.
-- `base_password`: The base pasword to generate unique passwords.
-
-### Functions
-
-- **generate_password()**: Generates a strong password starting with "TempPassword" followed by a random sequence of characters and numbers.
-- **create_unique_username(base_username, existing_usernames)**: Ensures the generated username is unique by appending a counter if necessary.
-- **get_existing_usernames(api_url, headers)**: Retrieves the list of existing usernames from the Authentik API.
-- **create_user(api_url, headers, username, password)**: Creates a new user on the Authentik instance with the provided username and password.
-- **reset_password(api_url, headers, username, password)**: Resets the password for an existing user on the Authentik instance.
+### Production Deployment
+1. **Setup Cloudflared Tunnel**
+2. **Serve Application**
+   - Set domain or subdomain 
+   - Point cloudflare tunnel to  `http://localhost:8501` to access the application
+3. **Access the Application**
+   - Open a web browser and navigate to `http://your.domain.tld` to access the application.
 
 ## Best Practices for Setting Up the Environment
 
@@ -112,9 +71,6 @@ python authentik-creation-workflow.py reset {username}
 2. **Store Sensitive Information Securely**: Use environment variables to store sensitive information like API tokens. Never hard-code them in your script.
 3. **Use a `.env` File**: Use a `.env` file to manage environment variables. Make sure to add the `.env` file to your `.gitignore` to avoid committing sensitive information to version control.
 
-## Running on a Server
-
-#TODO
 
 ## Contributing
 

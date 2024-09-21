@@ -9,7 +9,11 @@ import logging
 setup_logging()
 
 # Set page config early
-st.set_page_config(page_title=Config.PAGE_TITLE, page_icon=Config.FAVICON_URL)
+st.set_page_config(
+    page_title=Config.PAGE_TITLE,
+    page_icon=Config.FAVICON_URL,
+    layout="wide"
+)
 
 def main():
     try:

@@ -1,7 +1,8 @@
-    # ui/home.py
+# ui/home.py
 import streamlit as st
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 import json
+import pandas as pd
 from utils.config import Config
 from auth.api import (
     create_user,
@@ -55,6 +56,153 @@ def update_username():
 
 
 ## Working good table
+# def display_user_list(auth_api_url, headers):
+#     if 'user_list' in st.session_state and st.session_state['user_list']:
+#         users = st.session_state['user_list']
+#         st.subheader("User List")
+
+#         # Create DataFrame
+#         df = pd.DataFrame(users)
+
+#         # Display available columns for debugging
+#         # st.write("Available DataFrame Columns:", df.columns.tolist())
+
+#         # Determine the identifier field
+#         identifier_field = None
+#         for field in ['username', 'name', 'email']:
+#             if field in df.columns:
+#                 identifier_field = field
+#                 break
+
+#         if not identifier_field:
+#             st.error("No suitable identifier field found in user data.")
+#             logging.error("No suitable identifier field found in DataFrame.")
+#             return
+
+#         # Limit the displayed columns
+#         display_columns = ['username', 'name', 'is_active', 'last_login', 'email', 'attributes']
+#         display_columns = [col for col in display_columns if col in df.columns]
+
+#         # Include 'id' and 'pk' columns if they exist
+#         identifier_columns = ['id', 'pk']
+#         available_identifier_columns = [col for col in identifier_columns if col in df.columns]
+
+#         if not available_identifier_columns:
+#             st.error("User data does not contain 'id' or 'pk' fields required for performing actions.")
+#             logging.error("No 'id' or 'pk' fields in user data.")
+#             return
+
+#         # Combine columns to be used in the DataFrame
+#         all_columns = display_columns + available_identifier_columns
+
+#         # Update the DataFrame with available columns
+#         df = df[all_columns]
+
+#         # Process 'attributes' column
+#         if 'attributes' in df.columns:
+#             df['attributes'] = df['attributes'].apply(
+#                 lambda x: json.dumps(x, indent=2) if isinstance(x, dict) else str(x)
+#             )
+
+#         # Build AgGrid options
+#         gb = GridOptionsBuilder.from_dataframe(df)
+
+#         # Configure default columns (make all columns filterable, sortable, and resizable)
+#         gb.configure_default_column(filter=True, sortable=True, resizable=True)
+
+#         # Hide 'id' and 'pk' columns if they are present
+#         gb.configure_columns(available_identifier_columns, hide=True)
+
+#         # Page size options
+#         page_size_options = [20, 50, 100, 500, 1000]
+#         page_size = st.selectbox("Page Size", options=page_size_options, index=2)
+
+#         # Configure grid options
+#         gb.configure_selection('multiple', use_checkbox=True)
+#         gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=page_size)
+#         gb.configure_side_bar()
+#         gb.configure_grid_options(domLayout='normal')
+#         grid_options = gb.build()
+
+#         # Adjust table height
+#         table_height = 800
+
+#         # Display AgGrid table
+#         grid_response = AgGrid(
+#             df,
+#             gridOptions=grid_options,
+#             data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+#             update_mode=GridUpdateMode.SELECTION_CHANGED,
+#             fit_columns_on_grid_load=True,
+#             enable_enterprise_modules=False,
+#             theme='alpine',
+#             height=table_height,
+#             width='100%',
+#             reload_data=True
+#         )
+
+#         selected_rows = grid_response['selected_rows']
+#         selected_users = pd.DataFrame(selected_rows)
+
+#         st.write(f"Selected Users: {len(selected_users)}")
+#         # st.write("Selected Users Columns:", selected_users.columns.tolist())  # For debugging
+
+#         if not selected_users.empty:
+#             action = st.selectbox("Select Action", [
+#                 "Activate", "Deactivate", "Reset Password", "Delete", "Add Intro", "Add Invited By"
+#             ])
+
+#             # Action-specific inputs
+#             if action == "Reset Password":
+#                 new_password = st.text_input("Enter new password", type="password")
+#             elif action == "Add Intro":
+#                 intro_text = st.text_area("Enter Intro Text", height=2)
+#             elif action == "Add Invited By":
+#                 invited_by = st.text_input("Enter Invited By")
+
+#             if st.button("Apply"):
+#                 try:
+#                     success_count = 0
+#                     for _, user in selected_users.iterrows():
+#                         user_id = None
+#                         for col in available_identifier_columns:
+#                             if col in user and pd.notna(user[col]):
+#                                 user_id = user[col]
+#                                 break
+#                         if not user_id:
+#                             st.error(f"User {user[identifier_field]} does not have a valid ID.")
+#                             continue
+
+#                         # Perform the selected action
+#                         if action == "Activate":
+#                             result = update_user_status(auth_api_url, headers, user_id, True)
+#                         elif action == "Deactivate":
+#                             result = update_user_status(auth_api_url, headers, user_id, False)
+#                         elif action == "Reset Password":
+#                             if new_password:
+#                                 result = reset_user_password(auth_api_url, headers, user_id, new_password)
+#                             else:
+#                                 st.warning("Please enter a new password")
+#                                 continue
+#                         elif action == "Delete":
+#                             result = delete_user(auth_api_url, headers, user_id)
+#                         elif action == "Add Intro":
+#                             result = update_user_intro(auth_api_url, headers, user_id, intro_text)
+#                         elif action == "Add Invited By":
+#                             result = update_user_invited_by(auth_api_url, headers, user_id, invited_by)
+#                         else:
+#                             result = None
+
+#                         if result:
+#                             success_count += 1
+#                     st.success(f"{action} action applied successfully to {success_count} out of {len(selected_users)} selected users.")
+#                 except Exception as e:
+#                     st.error(f"An error occurred while applying {action} action: {e}")
+#         else:
+#             st.info("No users selected.")
+#     else:
+#         st.info("No users found.")
+
 def display_user_list(auth_api_url, headers):
     if 'user_list' in st.session_state and st.session_state['user_list']:
         users = st.session_state['user_list']
@@ -62,9 +210,6 @@ def display_user_list(auth_api_url, headers):
 
         # Create DataFrame
         df = pd.DataFrame(users)
-
-        # Display available columns for debugging
-        # st.write("Available DataFrame Columns:", df.columns.tolist())
 
         # Determine the identifier field
         identifier_field = None
@@ -112,12 +257,18 @@ def display_user_list(auth_api_url, headers):
         # Hide 'id' and 'pk' columns if they are present
         gb.configure_columns(available_identifier_columns, hide=True)
 
+        # Configure selection
+        gb.configure_selection(
+            selection_mode='multiple',
+            use_checkbox=True,
+            header_checkbox=True  # Enable header checkbox for "Select All"
+        )
+
         # Page size options
-        page_size_options = [20, 50, 100, 500, 1000]
+        page_size_options = [100, 250, 500, 1000]
         page_size = st.selectbox("Page Size", options=page_size_options, index=2)
 
         # Configure grid options
-        gb.configure_selection('multiple', use_checkbox=True)
         gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=page_size)
         gb.configure_side_bar()
         gb.configure_grid_options(domLayout='normal')
@@ -131,7 +282,7 @@ def display_user_list(auth_api_url, headers):
             df,
             gridOptions=grid_options,
             data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-            update_mode=GridUpdateMode.SELECTION_CHANGED,
+            update_mode=GridUpdateMode.MODEL_CHANGED,
             fit_columns_on_grid_load=True,
             enable_enterprise_modules=False,
             theme='alpine',
@@ -144,7 +295,6 @@ def display_user_list(auth_api_url, headers):
         selected_users = pd.DataFrame(selected_rows)
 
         st.write(f"Selected Users: {len(selected_users)}")
-        # st.write("Selected Users Columns:", selected_users.columns.tolist())  # For debugging
 
         if not selected_users.empty:
             action = st.selectbox("Select Action", [
@@ -201,7 +351,6 @@ def display_user_list(auth_api_url, headers):
             st.info("No users selected.")
     else:
         st.info("No users found.")
-
 
 def render_home_page():
     # Initialize session state variables

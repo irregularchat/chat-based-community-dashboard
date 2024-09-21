@@ -56,18 +56,38 @@ def load_LOCAL_DB():
         logging.error(f"Error loading Local DB: {e}")
         return pd.DataFrame()  # Return empty DataFrame on failure
 
+# def search_LOCAL_DB(query):
+#     df = load_LOCAL_DB()
+#     # Perform a case-insensitive search across multiple fields
+#     mask = (
+#         df['username'].str.contains(query, case=False, na=False) |
+#         df['email'].str.contains(query, case=False, na=False) |
+#         df['name'].str.contains(query, case=False, na=False) |
+#         df['attributes'].astype(str).str.contains(query, case=False, na=False)
+#     )
+#     results = df[mask]
+#     return results
+
 def search_LOCAL_DB(query):
     df = load_LOCAL_DB()
-    # Perform a case-insensitive search across multiple fields
-    mask = (
-        df['username'].str.contains(query, case=False, na=False) |
-        df['email'].str.contains(query, case=False, na=False) |
-        df['name'].str.contains(query, case=False, na=False) |
-        df['attributes'].astype(str).str.contains(query, case=False, na=False)
-    )
-    results = df[mask]
-    return results
+    if df.empty:
+        logging.warning("Local DB is empty.")
+        return df
 
+    if query:
+        # Perform a case-insensitive search across multiple fields
+        mask = (
+            df['username'].str.contains(query, case=False, na=False) |
+            df['email'].str.contains(query, case=False, na=False) |
+            df['name'].str.contains(query, case=False, na=False) |
+            df['attributes'].astype(str).str.contains(query, case=False, na=False)
+        )
+        results = df[mask]
+    else:
+        # If query is empty, return all users
+        results = df
+
+    return results
 
 def get_existing_usernames():
     if os.path.exists(Config.LOCAL_DB):

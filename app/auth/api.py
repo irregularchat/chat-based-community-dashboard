@@ -109,21 +109,33 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         return None
 
 # List Users Function is needed and works better than the new methos session.get(f"{auth_api_url}/users/", headers=headers, timeout=10)
-
+    
 def list_users(auth_api_url, headers, search_term=None):
     """List users, optionally filtering by a search term."""
     try:
         params = {}
         if search_term:
             params['search'] = search_term
-        response = session.get(f"{auth_api_url}/core/users/", headers=headers, params=params, timeout=10)
-        response.raise_for_status()
-        users = response.json().get('results', [])
+        else:
+            params['page_size'] = 1000  # Adjust based on API limits
+
+        users = []
+        next_url = f"{auth_api_url}/core/users/"
+
+        while next_url:
+            response = session.get(next_url, headers=headers, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            users.extend(data.get('results', []))
+            next_url = data.get('next')
+
+            # Clear params after the first request to avoid duplicate parameters
+            params = {}
+
         return users
     except requests.exceptions.RequestException as e:
         logging.error(f"Error listing users: {e}")
         return []
-
 def list_users_cached(auth_api_url, headers):
     """List users with caching to reduce API calls."""
     try:
@@ -292,3 +304,32 @@ def generate_recovery_link(username):
     except requests.exceptions.RequestException as e:
         logging.error(f"Error generating recovery link for {username}: {e}")
         return None
+
+def force_password_reset(username):
+    """Force a password reset for a user."""
+    headers = {
+        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+        'Content-Type': 'application/json'
+    }
+    try:
+        # First, get the user ID by username
+        user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?search={username}"
+        response = session.get(user_search_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        users = response.json().get('results', [])
+        if not users:
+            logging.error(f"No user found with username: {username}")
+            return False
+        user_id = users[0]['pk']
+
+        # Now, force the password reset using POST
+        reset_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/force_password_reset/"
+        response = session.post(reset_api_url, headers=headers, timeout=10)
+        response.raise_for_status()
+    except response.json().get('detail'):
+        logging.error(f"Error forcing password reset for {username}: {response.json().get('detail')}")
+        return False
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error forcing password reset for {username}: {e}")
+        return False
+    return True

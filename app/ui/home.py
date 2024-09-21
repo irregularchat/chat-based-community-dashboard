@@ -1,6 +1,35 @@
-from dotenv import load_dotenv
-import os
+# ui/home.py
 import streamlit as st
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
+import json
+import pandas as pd
+from utils.config import Config
+from auth.api import (
+    create_user,
+    generate_recovery_link,
+    list_users_cached,
+    update_user_status,
+    delete_user,
+    reset_user_password,
+    update_user_intro,
+    update_user_invited_by,
+    create_invite,
+    shorten_url,
+    list_users
+)
+from ui.forms import render_create_user_form, render_invite_form
+from utils.helpers import (
+    get_existing_usernames,
+    create_unique_username,
+    update_LOCAL_DB,
+    search_LOCAL_DB
+)
+from messages import (
+    create_user_message,
+    create_recovery_message,
+    create_invite_message
+)
+import logging
 import pandas as pd
 from authentik_streamlit import (
     create_user, generate_recovery_link, create_invite, list_users, 
@@ -51,58 +80,314 @@ def set_user_list(users):
     """Set the list of users in session state."""
     st.session_state['user_list'] = users
 def update_username():
-    st.session_state['username_input'] = st.session_state['temp_username']
+    if st.session_state.get('first_name_input') and st.session_state.get('last_name_input'):
+        base_username = f"{st.session_state['first_name_input'].strip().lower()}-{st.session_state['last_name_input'].strip()[0].lower()}"
+    elif st.session_state.get('first_name_input'):
+        base_username = st.session_state['first_name_input'].strip().lower()
+    elif st.session_state.get('last_name_input'):
+        base_username = st.session_state['last_name_input'].strip().lower()
+    else:
+        base_username = "pending"
+    st.session_state['username_input'] = base_username.replace(" ", "-")
 
-st.text_input("Username", key="temp_username", on_change=update_username)
-st.write(f"Current Username: {st.session_state.get('username_input', '')}")
-# Handle form submissions based on operation selected
-def handle_form_submission(operation, username_input, email_input, invited_by, intro, expires_date, expires_time, first_name, last_name):
-    try:
-        if operation == "Create User":
-            update_LOCAL_DB()
-            user_exists = search_LOCAL_DB(username_input)
-            if not user_exists.empty:
-                st.warning(f"User {username_input} already exists.")
-                existing_usernames = get_existing_usernames(AUTHENTIK_API_URL, headers)
-                new_username = create_unique_username(username_input, existing_usernames)
-            else:
-                new_username = username_input
 
-            email = email_input if email_input else f"{new_username}@{BASE_DOMAIN}"
-            full_name = f"{first_name.strip()} {last_name.strip()}"
-            
-            # Ensure intro and invited_by are passed when creating the user
-            new_user = create_user(AUTHENTIK_API_URL, headers, new_username, email, full_name, intro, invited_by)
+## Working good table
+# def display_user_list(auth_api_url, headers):
+#     if 'user_list' in st.session_state and st.session_state['user_list']:
+#         users = st.session_state['user_list']
+#         st.subheader("User List")
 
-            if new_user is None:
-                st.warning(f"Username {new_username} might already exist.")
-            else:
-                shortened_recovery_link = shorten_url(generate_recovery_link(AUTHENTIK_API_URL, headers, new_username), 'first-login', new_username)
-                create_user_message(new_username, shortened_recovery_link)
+#         # Create DataFrame
+#         df = pd.DataFrame(users)
 
-        elif operation == "Generate Recovery Link":
-            recovery_link = generate_recovery_link(AUTHENTIK_API_URL, headers, username_input)
-            create_recovery_message(username_input, recovery_link)
+#         # Display available columns for debugging
+#         # st.write("Available DataFrame Columns:", df.columns.tolist())
 
-        elif operation == "Create Invite":
-            if expires_date and expires_time:
-                local_expires = datetime.combine(expires_date, expires_time)
-                expires = local_expires.isoformat()
-            else:
-                expires = None
-            
-            invite_link, invite_expires = create_invite(headers, username_input, expires)
-            create_invite_message(username_input, invite_link, invite_expires)
+#         # Determine the identifier field
+#         identifier_field = None
+#         for field in ['username', 'name', 'email']:
+#             if field in df.columns:
+#                 identifier_field = field
+#                 break
 
-        elif operation == "List Users":
-            users = list_users_cached(AUTHENTIK_API_URL, headers, username_input if username_input else None)
-            set_user_list(users)
-            st.success("Users listed successfully!")
+#         if not identifier_field:
+#             st.error("No suitable identifier field found in user data.")
+#             logging.error("No suitable identifier field found in DataFrame.")
+#             return
 
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
+#         # Limit the displayed columns
+#         display_columns = ['username', 'name', 'is_active', 'last_login', 'email', 'attributes']
+#         display_columns = [col for col in display_columns if col in df.columns]
 
-# Render home page with dynamic fields based on operation
+#         # Include 'id' and 'pk' columns if they exist
+#         identifier_columns = ['id', 'pk']
+#         available_identifier_columns = [col for col in identifier_columns if col in df.columns]
+
+#         if not available_identifier_columns:
+#             st.error("User data does not contain 'id' or 'pk' fields required for performing actions.")
+#             logging.error("No 'id' or 'pk' fields in user data.")
+#             return
+
+#         # Combine columns to be used in the DataFrame
+#         all_columns = display_columns + available_identifier_columns
+
+#         # Update the DataFrame with available columns
+#         df = df[all_columns]
+
+#         # Process 'attributes' column
+#         if 'attributes' in df.columns:
+#             df['attributes'] = df['attributes'].apply(
+#                 lambda x: json.dumps(x, indent=2) if isinstance(x, dict) else str(x)
+#             )
+
+#         # Build AgGrid options
+#         gb = GridOptionsBuilder.from_dataframe(df)
+
+#         # Configure default columns (make all columns filterable, sortable, and resizable)
+#         gb.configure_default_column(filter=True, sortable=True, resizable=True)
+
+#         # Hide 'id' and 'pk' columns if they are present
+#         gb.configure_columns(available_identifier_columns, hide=True)
+
+#         # Page size options
+#         page_size_options = [20, 50, 100, 500, 1000]
+#         page_size = st.selectbox("Page Size", options=page_size_options, index=2)
+
+#         # Configure grid options
+#         gb.configure_selection('multiple', use_checkbox=True)
+#         gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=page_size)
+#         gb.configure_side_bar()
+#         gb.configure_grid_options(domLayout='normal')
+#         grid_options = gb.build()
+
+#         # Adjust table height
+#         table_height = 800
+
+#         # Display AgGrid table
+#         grid_response = AgGrid(
+#             df,
+#             gridOptions=grid_options,
+#             data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+#             update_mode=GridUpdateMode.SELECTION_CHANGED,
+#             fit_columns_on_grid_load=True,
+#             enable_enterprise_modules=False,
+#             theme='alpine',
+#             height=table_height,
+#             width='100%',
+#             reload_data=True
+#         )
+
+#         selected_rows = grid_response['selected_rows']
+#         selected_users = pd.DataFrame(selected_rows)
+
+#         st.write(f"Selected Users: {len(selected_users)}")
+#         # st.write("Selected Users Columns:", selected_users.columns.tolist())  # For debugging
+
+#         if not selected_users.empty:
+#             action = st.selectbox("Select Action", [
+#                 "Activate", "Deactivate", "Reset Password", "Delete", "Add Intro", "Add Invited By"
+#             ])
+
+#             # Action-specific inputs
+#             if action == "Reset Password":
+#                 new_password = st.text_input("Enter new password", type="password")
+#             elif action == "Add Intro":
+#                 intro_text = st.text_area("Enter Intro Text", height=2)
+#             elif action == "Add Invited By":
+#                 invited_by = st.text_input("Enter Invited By")
+
+#             if st.button("Apply"):
+#                 try:
+#                     success_count = 0
+#                     for _, user in selected_users.iterrows():
+#                         user_id = None
+#                         for col in available_identifier_columns:
+#                             if col in user and pd.notna(user[col]):
+#                                 user_id = user[col]
+#                                 break
+#                         if not user_id:
+#                             st.error(f"User {user[identifier_field]} does not have a valid ID.")
+#                             continue
+
+#                         # Perform the selected action
+#                         if action == "Activate":
+#                             result = update_user_status(auth_api_url, headers, user_id, True)
+#                         elif action == "Deactivate":
+#                             result = update_user_status(auth_api_url, headers, user_id, False)
+#                         elif action == "Reset Password":
+#                             if new_password:
+#                                 result = reset_user_password(auth_api_url, headers, user_id, new_password)
+#                             else:
+#                                 st.warning("Please enter a new password")
+#                                 continue
+#                         elif action == "Delete":
+#                             result = delete_user(auth_api_url, headers, user_id)
+#                         elif action == "Add Intro":
+#                             result = update_user_intro(auth_api_url, headers, user_id, intro_text)
+#                         elif action == "Add Invited By":
+#                             result = update_user_invited_by(auth_api_url, headers, user_id, invited_by)
+#                         else:
+#                             result = None
+
+#                         if result:
+#                             success_count += 1
+#                     st.success(f"{action} action applied successfully to {success_count} out of {len(selected_users)} selected users.")
+#                 except Exception as e:
+#                     st.error(f"An error occurred while applying {action} action: {e}")
+#         else:
+#             st.info("No users selected.")
+#     else:
+#         st.info("No users found.")
+
+def display_user_list(auth_api_url, headers):
+    if 'user_list' in st.session_state and st.session_state['user_list']:
+        users = st.session_state['user_list']
+        st.subheader("User List")
+
+        # Create DataFrame
+        df = pd.DataFrame(users)
+
+        # Determine the identifier field
+        identifier_field = None
+        for field in ['username', 'name', 'email']:
+            if field in df.columns:
+                identifier_field = field
+                break
+
+        if not identifier_field:
+            st.error("No suitable identifier field found in user data.")
+            logging.error("No suitable identifier field found in DataFrame.")
+            return
+
+        # Limit the displayed columns
+        display_columns = ['username', 'name', 'is_active', 'last_login', 'email', 'attributes']
+        display_columns = [col for col in display_columns if col in df.columns]
+
+        # Include 'id' and 'pk' columns if they exist
+        identifier_columns = ['id', 'pk']
+        available_identifier_columns = [col for col in identifier_columns if col in df.columns]
+
+        if not available_identifier_columns:
+            st.error("User data does not contain 'id' or 'pk' fields required for performing actions.")
+            logging.error("No 'id' or 'pk' fields in user data.")
+            return
+
+        # Combine columns to be used in the DataFrame
+        all_columns = display_columns + available_identifier_columns
+
+        # Update the DataFrame with available columns
+        df = df[all_columns]
+
+        # Process 'attributes' column
+        if 'attributes' in df.columns:
+            df['attributes'] = df['attributes'].apply(
+                lambda x: json.dumps(x, indent=2) if isinstance(x, dict) else str(x)
+            )
+
+        # Build AgGrid options
+        gb = GridOptionsBuilder.from_dataframe(df)
+
+        # Configure default columns (make all columns filterable, sortable, and resizable)
+        gb.configure_default_column(filter=True, sortable=True, resizable=True)
+
+        # Hide 'id' and 'pk' columns if they are present
+        gb.configure_columns(available_identifier_columns, hide=True)
+
+        # Configure selection
+        gb.configure_selection(
+            selection_mode='multiple',
+            use_checkbox=True,
+            header_checkbox=True  # Enable header checkbox for "Select All"
+        )
+
+        # Page size options
+        page_size_options = [100, 250, 500, 1000]
+        page_size = st.selectbox("Page Size", options=page_size_options, index=2)
+
+        # Configure grid options
+        gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=page_size)
+        gb.configure_side_bar()
+        gb.configure_grid_options(domLayout='normal')
+        grid_options = gb.build()
+
+        # Adjust table height
+        table_height = 800
+
+        # Display AgGrid table
+        grid_response = AgGrid(
+            df,
+            gridOptions=grid_options,
+            data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+            update_mode=GridUpdateMode.MODEL_CHANGED,
+            fit_columns_on_grid_load=True,
+            enable_enterprise_modules=False,
+            theme='alpine',
+            height=table_height,
+            width='100%',
+            reload_data=True
+        )
+
+        selected_rows = grid_response['selected_rows']
+        selected_users = pd.DataFrame(selected_rows)
+
+        st.write(f"Selected Users: {len(selected_users)}")
+
+        if not selected_users.empty:
+            action = st.selectbox("Select Action", [
+                "Activate", "Deactivate", "Reset Password", "Delete", "Add Intro", "Add Invited By"
+            ])
+
+            # Action-specific inputs
+            if action == "Reset Password":
+                new_password = st.text_input("Enter new password", type="password")
+            elif action == "Add Intro":
+                intro_text = st.text_area("Enter Intro Text", height=2)
+            elif action == "Add Invited By":
+                invited_by = st.text_input("Enter Invited By")
+
+            if st.button("Apply"):
+                try:
+                    success_count = 0
+                    for _, user in selected_users.iterrows():
+                        user_id = None
+                        for col in available_identifier_columns:
+                            if col in user and pd.notna(user[col]):
+                                user_id = user[col]
+                                break
+                        if not user_id:
+                            st.error(f"User {user[identifier_field]} does not have a valid ID.")
+                            continue
+
+                        # Perform the selected action
+                        if action == "Activate":
+                            result = update_user_status(auth_api_url, headers, user_id, True)
+                        elif action == "Deactivate":
+                            result = update_user_status(auth_api_url, headers, user_id, False)
+                        elif action == "Reset Password":
+                            if new_password:
+                                result = reset_user_password(auth_api_url, headers, user_id, new_password)
+                            else:
+                                st.warning("Please enter a new password")
+                                continue
+                        elif action == "Delete":
+                            result = delete_user(auth_api_url, headers, user_id)
+                        elif action == "Add Intro":
+                            result = update_user_intro(auth_api_url, headers, user_id, intro_text)
+                        elif action == "Add Invited By":
+                            result = update_user_invited_by(auth_api_url, headers, user_id, invited_by)
+                        else:
+                            result = None
+
+                        if result:
+                            success_count += 1
+                    st.success(f"{action} action applied successfully to {success_count} out of {len(selected_users)} selected users.")
+                except Exception as e:
+                    st.error(f"An error occurred while applying {action} action: {e}")
+        else:
+            st.info("No users selected.")
+    else:
+        st.info("No users found.")
+
 def render_home_page():
     # Sidebar for useful links
     st.sidebar.markdown("""
@@ -161,5 +446,136 @@ def render_home_page():
     # Display user list and actions
     display_user_list(AUTHENTIK_API_URL, headers)
 
-# Call render_home_page to display the form and user list
-render_home_page()
+
+def handle_form_submission(
+    operation, username_input, email_input, invited_by, intro, expires_date,
+    expires_time, first_name, last_name, invite_label=None
+):
+    headers = {
+        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+        'Content-Type': 'application/json'
+    }
+    try:
+        if operation == "Create User":
+            if not first_name and not last_name:
+                st.error("At least one of first name or last name is required.")
+                return
+
+            # Update Local DB to ensure it's up-to-date
+            update_LOCAL_DB()
+
+            # Check if the username already exists
+            user_exists = search_LOCAL_DB(username_input)
+            if not user_exists.empty:
+                st.warning(f"User '{username_input}' already exists. Creating a unique username.")
+                new_username = create_unique_username(username_input)
+            else:
+                new_username = username_input
+
+            email = email_input if email_input else f"{new_username}@{Config.BASE_DOMAIN}"
+
+            # Construct the full name based on available inputs
+            if first_name and last_name:
+                full_name = f"{first_name.strip()} {last_name.strip()}"
+            elif first_name:
+                full_name = first_name.strip()
+            elif last_name:
+                full_name = last_name.strip()
+            else:
+                full_name = ""  # This should not occur due to the earlier check
+
+            # Create the user
+            new_user = create_user(new_username, full_name, email, invited_by, intro)
+            if new_user:
+                recovery_link = generate_recovery_link(new_username)
+                if recovery_link:
+                    shortened_recovery_link = shorten_url(recovery_link, 'first-login', new_username)
+                    create_user_message(new_username, shortened_recovery_link)
+                else:
+                    st.error("Failed to generate recovery link.")
+            else:
+                st.error("Failed to create user.")
+
+        elif operation == "Generate Recovery Link":
+            if not username_input:
+                st.error("Username is required to generate a recovery link.")
+                return
+            recovery_link = generate_recovery_link(username_input)
+            if recovery_link:
+                shortened_recovery_link = shorten_url(recovery_link, 'recovery', username_input)
+                create_recovery_message(username_input, shortened_recovery_link)
+            else:
+                st.error("Failed to generate recovery link.")
+
+        elif operation == "Create Invite":
+            if not invite_label:
+                st.error("Invite label is required.")
+                return
+            if not expires_date or not expires_time:
+                st.error("Expiration date and time are required.")
+                return
+
+            expires_datetime = datetime.combine(expires_date, expires_time)
+            expires_iso = expires_datetime.isoformat()
+
+            invite_link, invite_expires = create_invite(headers, invite_label, expires_iso)
+            if invite_link:
+                create_invite_message(invite_label, invite_link, invite_expires)
+            else:
+                st.error("Failed to create invite.")
+
+        # elif operation == "List Users":
+        #     search_query = username_input.strip()
+        #     if not search_query:
+        #         st.error("Please enter a search query.")
+        #         return
+        elif operation == "List Users":
+            search_query = username_input.strip()
+            # Allow empty search_query to fetch all users
+
+            # First, search the local database
+            local_users = search_LOCAL_DB(search_query)
+            if not local_users.empty:
+                st.session_state['user_list'] = local_users.to_dict(orient='records')
+                st.session_state['message'] = "Users found in local database."
+            else:
+                # If not found locally or search query is empty, search using the API
+                users = list_users(Config.AUTHENTIK_API_URL, headers, search_query)
+                if users:
+                    st.session_state['user_list'] = users
+                    st.session_state['message'] = "Users found via API."
+                else:
+                    st.session_state['user_list'] = []
+                    st.session_state['message'] = "No users found."
+
+            # Logging and debugging (optional)
+            logging.debug(f"user_list data: {st.session_state['user_list']}")
+            if st.session_state['user_list']:
+                first_user = st.session_state['user_list'][0]
+                logging.debug(f"First user keys: {first_user.keys()}")
+        ####
+
+            # First, search the local database
+            local_users = search_LOCAL_DB(search_query)
+            if not local_users.empty:
+                st.session_state['user_list'] = local_users.to_dict(orient='records')
+                st.session_state['message'] = "Users found in local database."
+            else:
+                # If not found locally, search using the API
+                users = list_users(Config.AUTHENTIK_API_URL, headers, search_query)
+                if users:
+                    st.session_state['user_list'] = users
+                    st.session_state['message'] = "Users found via API."
+                else:
+                    st.session_state['user_list'] = []
+                    st.session_state['message'] = "No users found."
+
+            # Add logging to inspect the data
+            logging.debug(f"user_list data: {st.session_state['user_list']}")
+            if st.session_state['user_list']:
+                first_user = st.session_state['user_list'][0]
+                logging.debug(f"First user keys: {first_user.keys()}")
+
+    except Exception as e:
+        st.error(f"An error occurred during '{operation}': {e}")
+        logging.error(f"Error during '{operation}': {e}")

@@ -117,7 +117,7 @@ def list_users(auth_api_url, headers, search_term=None):
         if search_term:
             params['search'] = search_term
         else:
-            params['page_size'] = 1000  # Adjust based on API limits
+            params['page_size'] = 600  # Adjust based on API limits
 
         users = []
         next_url = f"{auth_api_url}/core/users/"

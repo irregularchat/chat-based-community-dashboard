@@ -31,54 +31,18 @@ from messages import (
 )
 import logging
 import pandas as pd
-from authentik_streamlit import (
-    create_user, generate_recovery_link, create_invite, list_users, 
-    update_LOCAL_DB, search_LOCAL_DB, shorten_url, update_user_status, 
-    reset_user_password, delete_user, update_user_intro, update_user_invited_by,
-    display_message, clear_session_state, create_unique_username, get_existing_usernames,
-    display_user_list, BASE_DOMAIN, AUTHENTIK_API_URL, AUTHENTIK_API_TOKEN, headers,
-    PAGE_TITLE, FAVICON_URL, MAIN_GROUP_ID
-)
 from datetime import datetime, timedelta
-from pytz import timezone
-from messages import (
-    create_user_message, create_recovery_message, create_invite_message,
-)
-from .forms import (
-    render_create_user_form, render_invite_form
-)
-from auth.session_init import initialize_session_state
-# Call set_page_config as the very first Streamlit command
-st.set_page_config(page_title=PAGE_TITLE, page_icon=FAVICON_URL)
-# Call the function to initialize session state
-initialize_session_state()
+from pytz import timezone  # Ensure this is imported
 
 
-# Cached list users to avoid re-fetching too often
-@st.cache_data(ttl=600)  # Cache for 10 minutes
-def list_users_cached(authentik_api_url, headers, username_input=None):
-    return list_users(authentik_api_url, headers, username_input)
-# Ensure session state for username exists
-if 'username_input' not in st.session_state:
-    st.session_state['username_input'] = ''
+def reset_form():
+    for key in [
+        'first_name_input', 'last_name_input', 'username_input', 'email_input',
+        'invited_by', 'intro', 'invite_label', 'expires_date', 'expires_time'
+    ]:
+        if key in st.session_state:
+            del st.session_state[key]
 
-# Text input field for username with session state
-username_input = st.text_input("Username", value=st.session_state['username_input'])
-
-# Update session state with the input value
-if username_input:
-    st.session_state['username_input'] = username_input
-
-# Display the updated username
-st.write(f"Current Username: {st.session_state['username_input']}")
-
-def get_user_list():
-    """Retrieve the list of users from session state."""
-    return st.session_state.get('user_list', [])
-
-def set_user_list(users):
-    """Set the list of users in session state."""
-    st.session_state['user_list'] = users
 def update_username():
     if st.session_state.get('first_name_input') and st.session_state.get('last_name_input'):
         base_username = f"{st.session_state['first_name_input'].strip().lower()}-{st.session_state['last_name_input'].strip()[0].lower()}"
@@ -89,6 +53,7 @@ def update_username():
     else:
         base_username = "pending"
     st.session_state['username_input'] = base_username.replace(" ", "-")
+
 
 def display_user_list(auth_api_url, headers):
     if 'user_list' in st.session_state and st.session_state['user_list']:
@@ -240,7 +205,17 @@ def display_user_list(auth_api_url, headers):
         st.info("No users found.")
 
 def render_home_page():
-    # Sidebar for useful links
+    # Initialize session state variables
+    for var in ['message', 'user_list', 'prev_operation']:
+        if var not in st.session_state:
+            st.session_state[var] = "" if var in ['message', 'prev_operation'] else []
+    
+    # Initialize variables
+    invite_label = None
+    expires_date, expires_time = None, None
+    first_name = last_name = email_input = invited_by = intro = None
+
+    # Sidebar links
     st.sidebar.markdown("""
         ## Useful Links:
         - [Login to IrregularChat SSO](https://sso.irregularchat.com)
@@ -249,53 +224,72 @@ def render_home_page():
         - [Links to Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
     """)
 
-    # Operation selection and username input
-    col1, col2 = st.columns([2, 3])
-    with col1:
-        operation = st.selectbox(
-            "Select Operation",
-            ["Create User", "Generate Recovery Link", "Create Invite", "List Users"],
-            key="operation_selection"  # Use a static key tied to session state
-        )
+    # Define headers
+    headers = {
+        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+        'Content-Type': 'application/json'
+    }
 
-    with col2:
-        username_input = st.text_input("Username", key="username_input")  # Static key for the username
+    # Operation selection
+    operation = st.selectbox(
+        "Select Operation",
+        ["Create User", "Generate Recovery Link", "Create Invite", "List Users"],
+        key="operation_selection"
+    )
+
+    # Check if the operation has changed
+    if st.session_state['prev_operation'] != operation:
+        reset_form()
+        st.session_state['prev_operation'] = operation
+
+    # Username input or search query
+    if operation == "Create User":
+        # Inputs for creating a user
+        first_name = st.text_input("Enter First Name", key="first_name_input", on_change=update_username)
+        last_name = st.text_input("Enter Last Name", key="last_name_input", on_change=update_username)
+        username_input = st.text_input("Username", key="username_input")
+    elif operation == "List Users":
+        # Search query input for listing users
+        username_input = st.text_input("Search Query", key="username_input")
+    else:
+        # Username input for other operations
+        username_input = st.text_input("Username", key="username_input")
 
     # Form section
     with st.form(key="user_management_form"):
-        # Dynamic fields based on the operation selected
         if operation == "Create User":
-            first_name, last_name, email_input, invited_by, intro = render_create_user_form()
-            expires_date, expires_time = None, None
+            email_input = st.text_input("Enter Email Address (optional)", key="email_input")
+            invited_by = st.text_input("Invited by (optional)", key="invited_by")
+            intro = st.text_area("Intro (optional)", height=100, key="intro")
+            submit_button_label = "Submit"
         elif operation == "Generate Recovery Link":
-            first_name, last_name, email_input, invited_by, intro = [None] * 5
-            expires_date, expires_time = None, None
+            submit_button_label = "Submit"
         elif operation == "Create Invite":
             invite_label, expires_date, expires_time = render_invite_form()
-            first_name, last_name, email_input, invited_by, intro = [None] * 5
+            submit_button_label = "Submit"
         elif operation == "List Users":
-            first_name, last_name, email_input, invited_by, intro = [None] * 5
-            expires_date, expires_time = None, None
-        
-        # Submit button for the form
-        submit_button = st.form_submit_button("Submit")
+            submit_button_label = "Search"
 
-    # Form submission logic
+        submit_button = st.form_submit_button(submit_button_label)
+
+    # Handle form submissions
     if submit_button:
         handle_form_submission(
-            operation, 
-            username_input, 
-            email_input, 
-            invited_by, 
-            intro, 
-            expires_date, 
+            operation,
+            username_input,
+            email_input,
+            invited_by,
+            intro,
+            expires_date,
             expires_time,
             first_name,
-            last_name
+            last_name,
+            invite_label
         )
 
     # Display user list and actions
-    display_user_list(AUTHENTIK_API_URL, headers)
+    if operation == "List Users" and 'user_list' in st.session_state:
+        display_user_list(Config.AUTHENTIK_API_URL, headers)
 
 
 def handle_form_submission(

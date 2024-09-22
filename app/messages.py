@@ -10,7 +10,7 @@ from utils.config import Config  # Ensure Config is imported
 def create_user_message(new_username, shortened_recovery_link):
     """Generate and display the welcome message after user creation."""
     welcome_message = f"""
-    🌟 Welcome to the IrregularChat Community of Interest (CoI)! 🌟
+    🌟 Your First Step Into the IrregularChat! 🌟
     You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. To be added to rooms please activate your account and update your email.
     ---
     See Below for username ⬇️

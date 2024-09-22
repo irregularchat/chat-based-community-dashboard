@@ -109,33 +109,63 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         return None
 
 # List Users Function is needed and works better than the new methos session.get(f"{auth_api_url}/users/", headers=headers, timeout=10)
-    
+ # auth/api.py
+
 def list_users(auth_api_url, headers, search_term=None):
-    """List users, optionally filtering by a search term."""
+    """List users, optionally filtering by a search term, handling pagination to fetch all users."""
     try:
-        params = {}
+        params = {
+            'page_size': 750  # Adjust based on API limits
+        }
         if search_term:
             params['search'] = search_term
-        else:
-            params['page_size'] = 600  # Adjust based on API limits
 
         users = []
-        next_url = f"{auth_api_url}/core/users/"
+        url = f"{auth_api_url}/core/users/"
 
-        while next_url:
-            response = session.get(next_url, headers=headers, params=params, timeout=10)
+        while url:
+            response = session.get(url, headers=headers, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
             users.extend(data.get('results', []))
-            next_url = data.get('next')
+            url = data.get('next')  # Next page URL
 
-            # Clear params after the first request to avoid duplicate parameters
+            # After the first request, clear params to avoid sending them again
             params = {}
 
+        logging.info(f"Total users fetched: {len(users)}")
         return users
     except requests.exceptions.RequestException as e:
         logging.error(f"Error listing users: {e}")
         return []
+       
+# def list_users(auth_api_url, headers, search_term=None):
+#     """List users, optionally filtering by a search term."""
+#     try:
+#         params = {}
+#         if search_term:
+#             params['search'] = search_term
+#         else:
+#             params['page_size'] = 500  # Adjust based on API limits
+
+#         users = []
+#         next_url = f"{auth_api_url}/core/users/"
+
+#         while next_url:
+#             response = session.get(next_url, headers=headers, params=params, timeout=10)
+#             response.raise_for_status()
+#             data = response.json()
+#             users.extend(data.get('results', []))
+#             next_url = data.get('next')
+
+#             # Clear params after the first request to avoid duplicate parameters
+#             params = {}
+
+#         return users
+#     except requests.exceptions.RequestException as e:
+#         logging.error(f"Error listing users: {e}")
+#         return []
+
 def list_users_cached(auth_api_url, headers):
     """List users with caching to reduce API calls."""
     try:

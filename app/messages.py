@@ -37,7 +37,9 @@ def create_recovery_message(username_input, recovery_link):
     **Username**: {username_input}
     **Recovery Link**: {recovery_link}
 
-    Use the link above to recover your account.
+    Use the link above to recover your account. Make sure you update your email address after recovering your account as needed.
+    
+    If you have any issues, please reach out to the admin team.
     """
     st.code(recovery_message)
     st.session_state['message'] = recovery_message

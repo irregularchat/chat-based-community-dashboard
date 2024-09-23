@@ -22,7 +22,7 @@ def create_user_message(new_username, shortened_recovery_link):
 
     2️⃣ Step 2:
     - Save your Login Username and Password to a Password Manager
-    - Login to see all the chats and services, visit https://url.irregular.chat/welcome
+    - Login to see all the chats and services, visit https://forum.irregularchat.com/t/84
     """
     st.code(welcome_message)
     st.session_state['message'] = welcome_message
@@ -40,6 +40,7 @@ def create_recovery_message(username_input, recovery_link):
     Use the link above to recover your account. Make sure you update your email address after recovering your account as needed.
     
     If you have any issues, please reach out to the admin team.
+    - Login to see all the chats and services, visit https://forum.irregularchat.com/t/84
     """
     st.code(recovery_message)
     st.session_state['message'] = recovery_message
@@ -71,7 +72,7 @@ def create_invite_message(label, invite_link, invite_expires):
         ⏲️ Invite Expires: {hours} hours and {minutes} minutes from now
         
         🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
-        Login to the wiki with that Irregular Chat Login and visit https://url.irregular.chat/welcome/
+        Login to the wiki with that Irregular Chat Login and visit https://forum.irregularchat.com/t/84/
         """
         st.code(invite_message)
         st.session_state['user_list'] = None

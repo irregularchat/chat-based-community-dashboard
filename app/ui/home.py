@@ -219,9 +219,9 @@ def render_home_page():
     st.sidebar.markdown("""
         ## Useful Links:
         - [Login to IrregularChat SSO](https://sso.irregularchat.com)
-        - [Use Signal CopyPasta for Welcome Messages](https://wiki.irregularchat.com/en/community/chat/admin/signal-prompts)
-        - [Admin Prompts for Common Situations](https://wiki.irregularchat.com/community/chat/admin.md)
-        - [Links to Community Chats and Services](https://wiki.irregularchat.com/community/links.md)
+        - [Use Signal CopyPasta for Welcome Messages](https://irregularpedia.org/index.php/Signal_Welcome_Prompts)
+        - [Admin Prompts for Common Situations](https://irregularpedia.org/index.php/Admin)
+        - [Links to Community Chats and Services](https://irregularpedia.org/index.php/Links)
     """)
 
     # Define headers

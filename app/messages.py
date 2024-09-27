@@ -13,16 +13,17 @@ def create_user_message(new_username, shortened_recovery_link):
     🌟 Your First Step Into the IrregularChat! 🌟
     You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans. To be added to rooms please activate your account and update your email.
     ---
-    See Below for username ⬇️
+    Use This Username ⬇️
     Username: {new_username}
-    See Above for username 👆🏼
+    Exactly as shown above 👆🏼
 
     1️⃣ Step 1:
-    - Activate your IrregularChat Login with your username 👉🏼 {new_username} 👈🏼 and update your email here: {shortened_recovery_link}
+    - Activate your IrregularChat Login with your username 👉🏼 {new_username} 👈🏼 here: {shortened_recovery_link}
 
     2️⃣ Step 2:
     - Save your Login Username and Password to a Password Manager
-    - Login to see all the chats and services, visit https://forum.irregularchat.com/t/84
+    - Update your email, important to be able to recover your account and verify your identity
+    - Visit the welcome page while logged in https://forum.irregularchat.com/t/84
     """
     st.code(welcome_message)
     st.session_state['message'] = welcome_message

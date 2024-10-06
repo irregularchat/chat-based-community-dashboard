@@ -329,17 +329,14 @@ def handle_form_submission(
             else:
                 full_name = ""  # This should not occur due to the earlier check
 
+
             # Create the user
-            new_user = create_user(new_username, full_name, email, invited_by, intro)
+            new_user, temp_password = create_user(new_username, full_name, email, invited_by, intro)
             if new_user:
-                recovery_link = generate_recovery_link(new_username)
-                if recovery_link:
-                    shortened_recovery_link = shorten_url(recovery_link, 'first-login', new_username)
-                    create_user_message(new_username, shortened_recovery_link)
-                else:
-                    st.error("Failed to generate recovery link.")
+                create_user_message(new_username, temp_password)
+                st.success(f"User '{new_username}' created successfully with a temporary password.")
             else:
-                st.error("Failed to create user.")
+                st.error("Failed to create user. Please verify inputs and try again.")
 
         elif operation == "Generate Recovery Link":
             if not username_input:

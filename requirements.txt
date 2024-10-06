@@ -7,5 +7,6 @@ streamlit-copy-to-clipboard
 cryptography
 pytz
 streamlit-aggrid
+xkcdpass
 # streamlit-annotated-text
 # streamlit-easy-button

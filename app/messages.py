@@ -7,22 +7,23 @@ from datetime import datetime
 import logging
 from utils.config import Config  # Ensure Config is imported
 
-def create_user_message(new_username, shortened_recovery_link):
-    """Generate and display the welcome message after user creation."""
+def create_user_message(new_username, temp_password):
+    """Generate and display the welcome message after user creation with temp password."""
     welcome_message = f"""
     🌟 Your First Step Into the IrregularChat! 🌟
     You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans.
     ---
-    Use This Username ⬇️
+    Use This Username and Temporary Password ⬇️
     Username: {new_username}
+    Temporary Password: {temp_password}
     Exactly as shown above 👆🏼
 
     1️⃣ Step 1:
-    - Activate your IrregularChat Login with your username 👉🏼 {new_username} 👈🏼 here: {shortened_recovery_link}
-
+    - Use the username and temporary password to log in to https://sso.irregularchat.com
+    
     2️⃣ Step 2:
-    - Save your Login Username and Password to a Password Manager
     - Update your email, important to be able to recover your account and verify your identity
+    - Save your Login Username and New Password to a Password Manager
     - Visit the welcome page while logged in https://forum.irregularchat.com/t/84
 
     Please take a moment to learn about the community before you jump in.
@@ -32,6 +33,7 @@ def create_user_message(new_username, shortened_recovery_link):
     update_LOCAL_DB()
     st.session_state['user_list'] = None  # Clear user list if there was any
     st.success("User created successfully!")
+
 
 def create_recovery_message(username_input, recovery_link):
     """Generate and display the recovery message after generating a recovery link."""

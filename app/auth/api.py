@@ -1,5 +1,7 @@
 # auth/api.py
 import requests
+import random
+from xkcdpass import xkcd_password as xp
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from utils.config import Config
@@ -8,12 +10,15 @@ from pytz import timezone
 import logging
 
 # Initialize a session with retry strategy
+# auth/api.py
+
+# Initialize a session with adjusted retry strategy
 session = requests.Session()
 retry = Retry(
-    total=5,
-    backoff_factor=1,
+    total=2,  # Reduced total retries
+    backoff_factor=0.5,  # Reduced backoff factor
     status_forcelist=[429, 500, 502, 503, 504],
-    allowed_methods=["HEAD", "GET", "POST", "PUT", "DELETE", "OPTIONS", "TRACE"]  # Updated for newer urllib3 versions
+    allowed_methods=["HEAD", "GET", "POST", "PUT", "DELETE", "OPTIONS", "TRACE"]
 )
 adapter = HTTPAdapter(max_retries=retry)
 session.mount("http://", adapter)
@@ -68,45 +73,94 @@ def shorten_url(long_url, url_type, name=None):
         logging.error(f'Error shortening URL: {e}')
         return long_url
 
+# Function to generate a secure password
+
+# Locate the default wordlist provided by xkcdpass
+wordfile = xp.locate_wordfile()
+# Generate a wordlist with words of length between 5 and 8 characters
+wordlist = xp.generate_wordlist(wordfile=wordfile, min_length=3, max_length=6)
+# Create a passphrase using 4 words and optional special characters
+def generate_secure_passphrase():
+    # Generate a random number to use as part of the delimiter
+    random_number = str(random.randint(10, 99))  # Generates a 2-digit number
+    # Use the random number as a delimiter
+    delimiter = random_number
+    # Generate the passphrase with the random number as the delimiter
+    passphrase = xp.generate_xkcdpassword(wordlist, numwords=2, delimiter=delimiter)
+    return passphrase
+
+def reset_user_password(auth_api_url, headers, user_id, new_password):
+    """Reset a user's password using the correct endpoint and data payload."""
+    url = f"{auth_api_url}/core/users/{user_id}/set_password/"
+    data = {"password": new_password}
+    try:
+        response = session.post(url, headers=headers, json=data, timeout=10)
+        response.raise_for_status()
+        logging.info(f"Password for user {user_id} reset successfully.")
+        return True
+    except requests.exceptions.HTTPError as http_err:
+        logging.error(f"HTTP error occurred while resetting password for user {user_id}: {http_err}")
+        logging.error(f"Response status code: {response.status_code}")
+        logging.error(f"Response content: {response.text}")
+        return False
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error resetting password for user {user_id}: {e}")
+        return False
 
 def create_user(username, full_name, email, invited_by=None, intro=None):
     """Create a new user in Authentik."""
+    
+    # Generate a temporary password using a secure passphrase
+    temp_password = generate_secure_passphrase()
+
     user_data = {
         "username": username,
         "name": full_name,
         "is_active": True,
         "email": email,
         "groups": [Config.MAIN_GROUP_ID],
+        # Removed "password" from the user_data
         "attributes": {}
     }
 
-    # Add 'invited_by' and 'intro' to attributes if they are provided
+    # Add 'invited_by' and 'intro' to attributes if provided
     if invited_by:
         user_data['attributes']['invited_by'] = invited_by
     if intro:
         user_data['attributes']['intro'] = intro
 
+    # Generate API URL and headers
     user_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
     headers = {
         'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
         'Content-Type': 'application/json'
     }
+
     try:
+        # API request to create the user
         response = session.post(user_api_url, headers=headers, json=user_data, timeout=10)
         response.raise_for_status()
         user = response.json()
         logging.info(f"User created: {user.get('username')}")
-        return user
+
+        # Reset the user's password
+        reset_result = reset_user_password(Config.AUTHENTIK_API_URL, headers, user['pk'], temp_password)
+        if not reset_result:
+            logging.error(f"Failed to reset the password for user {user.get('username')}. Returning default_pass_issue.")
+            return user, 'default_pass_issue'
+
+        return user, temp_password  # Return the user and the temp password
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred while creating user: {http_err}")
         try:
             logging.error(f"Response: {response.text}")
         except Exception:
             pass
-        return None
+        return None, 'default_pass_issue'
     except requests.exceptions.RequestException as e:
         logging.error(f"Error creating user: {e}")
-        return None
+        return None, 'default_pass_issue'
+
 
 # List Users Function is needed and works better than the new methos session.get(f"{auth_api_url}/users/", headers=headers, timeout=10)
  # auth/api.py
@@ -270,17 +324,6 @@ def delete_user(auth_api_url, headers, user_id):
         logging.error(f"Error deleting user: {e}")
         return False
 
-def reset_user_password(auth_api_url, headers, user_id, new_password):
-    url = f"{auth_api_url}/core/users/{user_id}/set_password/"
-    data = {"password": new_password}
-    try:
-        response = session.post(url, headers=headers, json=data, timeout=10)
-        response.raise_for_status()
-        logging.info(f"Password for user {user_id} reset successfully.")
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error resetting password: {e}")
-        return None
 
 def update_user_intro(auth_api_url, headers, user_id, intro_text):
     url = f"{auth_api_url}/core/users/{user_id}/"

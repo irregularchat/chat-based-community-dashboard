@@ -1,6 +1,6 @@
 # app/messages.py
 import streamlit as st
-from auth.api import shorten_url, generate_recovery_link, create_invite  # Ensure create_invite is imported
+from auth.api import shorten_url, force_password_reset, generate_secure_passphrase, create_invite  # Ensure create_invite is imported
 from utils.helpers import update_LOCAL_DB
 from pytz import timezone
 from datetime import datetime
@@ -35,17 +35,17 @@ def create_user_message(new_username, temp_password):
     st.success("User created successfully!")
 
 
-def create_recovery_message(username_input, recovery_link):
+def create_recovery_message(username_input, new_password):
     """Generate and display the recovery message after generating a recovery link."""
     recovery_message = f"""
     🌟 Your account recovery link 🌟
     **Username**: {username_input}
-    **Recovery Link**: {recovery_link}
+    **New Password**: {new_password}
 
-    Use the link above to recover your account. Make sure you update your email address after recovering your account as needed.
+    Use the credentials above to recover your account. Make sure you update your email address after recovering your account as needed.
     
     If you have any issues, please reach out to the admin team.
-    - Login to see all the chats and services, visit https://forum.irregularchat.com/t/84
+    Once Logged in, see all the chats and services: https://forum.irregularchat.com/t/84
     """
     st.code(recovery_message)
     st.session_state['message'] = recovery_message

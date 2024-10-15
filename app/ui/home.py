@@ -1,12 +1,16 @@
 # ui/home.py
 import streamlit as st
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 import json
 import pandas as pd
 from utils.config import Config
 from auth.api import (
     create_user,
-    generate_recovery_link,
+    force_password_reset,
+    generate_secure_passphrase,
     list_users_cached,
     update_user_status,
     delete_user,
@@ -33,6 +37,18 @@ import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from pytz import timezone  # Ensure this is imported
+
+session = requests.Session()
+retry = Retry(
+    total=2,  # Reduced total retries
+    backoff_factor=0.5,  # Reduced backoff factor
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["HEAD", "GET", "POST", "PUT", "DELETE", "OPTIONS", "TRACE"]
+)
+adapter = HTTPAdapter(max_retries=retry)
+session.mount("http://", adapter)
+session.mount("https://", adapter)
+
 
 
 def reset_form():
@@ -233,7 +249,7 @@ def render_home_page():
     # Operation selection
     operation = st.selectbox(
         "Select Operation",
-        ["Create User", "Generate Recovery Link", "Create Invite", "List Users"],
+        ["Create User", "Reset User Password", "Create Invite", "List Users"],
         key="operation_selection"
     )
 
@@ -262,7 +278,7 @@ def render_home_page():
             invited_by = st.text_input("Invited by (optional)", key="invited_by")
             intro = st.text_area("Intro (optional)", height=100, key="intro")
             submit_button_label = "Submit"
-        elif operation == "Generate Recovery Link":
+        elif operation == "Reset User Password":
             submit_button_label = "Submit"
         elif operation == "Create Invite":
             invite_label, expires_date, expires_time = render_invite_form()
@@ -337,18 +353,29 @@ def handle_form_submission(
                 st.success(f"User '{new_username}' created successfully with a temporary password.")
             else:
                 st.error("Failed to create user. Please verify inputs and try again.")
-
-        elif operation == "Generate Recovery Link":
+        elif operation == "Reset User Password":
             if not username_input:
-                st.error("Username is required to generate a recovery link.")
+                st.error("Username is required to reset password.")
                 return
-            recovery_link = generate_recovery_link(username_input)
-            if recovery_link:
-                shortened_recovery_link = shorten_url(recovery_link, 'recovery', username_input)
-                create_recovery_message(username_input, shortened_recovery_link)
-            else:
-                st.error("Failed to generate recovery link.")
-
+            new_password = generate_secure_passphrase()
+            # First, get the user ID by username
+            user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?search={username_input}"
+            try:
+                response = session.get(user_search_url, headers=headers, timeout=10)
+                response.raise_for_status()
+                users = response.json().get('results', [])
+                if users:
+                    user_id = users[0]['pk']
+                    if reset_user_password(Config.AUTHENTIK_API_URL, headers, user_id, new_password):
+                        create_recovery_message(username_input, new_password)
+                        st.success(f"Password reset successfully for user: {username_input}")
+                    else:
+                        st.error("Failed to set new password.")
+                else:
+                    st.error(f"No user found with username: {username_input}")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Error occurred while resetting password: {str(e)}")
+            
         elif operation == "Create Invite":
             if not invite_label:
                 st.error("Invite label is required.")

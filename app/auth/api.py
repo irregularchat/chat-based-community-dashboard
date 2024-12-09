@@ -30,21 +30,22 @@ def webhook_notification(user, event_type):
     """
     This function sends a webhook notification to the webhook url with the user and event type
     """
+    WEBHOOK_URL = "https://n8.domain.com/webhook/XYZ"
     headers = {
-        "Content-Type": "application/json",
-        "Authorization": Config.WEBHOOK_SECRET  # Use environment variable
+        "Content-Type": "application/json"
     }
     data = {
-        "event": event_type,  # The event type
-        "username": user['username']  # The username of the user
+        "event": event_type,
+        "username": user['username']
     }
-    logging.debug(f"Preparing to send POST request to {Config.WEBHOOK_URL} with headers: {headers} and data: {data}")
+    logging.debug(f"Preparing to send POST request to {WEBHOOK_URL} with headers: {headers} and data: {data}")
     try:
-        # Ensure this is a POST request
-        response = requests.post(Config.WEBHOOK_URL, headers=headers, json=data)  # Use environment variable
+        # Use session.post instead of requests.post to utilize the retry configuration
+        response = requests.post(WEBHOOK_URL, json=data, headers=headers)
         response.raise_for_status()
+        print("Request method sent:", response.request.method)
+        print("Request URL used:", response.request.url)
         
-        # Optionally, log the response message
         logging.info("Webhook notification sent successfully.")
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred while sending webhook: {http_err}")
@@ -52,6 +53,7 @@ def webhook_notification(user, event_type):
         logging.error(f"Response content: {response.text}")
     except requests.exceptions.RequestException as e:
         logging.error(f"Error sending webhook notification: {e}")
+        print(f"Final Webhook URL: '{WEBHOOK_URL}'")
 
 
 def shorten_url(long_url, url_type, name=None):
@@ -85,7 +87,7 @@ def shorten_url(long_url, url_type, name=None):
 
 
     try:
-        response = session.post(Config.SHLINK_URL, json=payload, headers=headers, timeout=10)
+        response = requests.post(Config.SHLINK_URL, json=payload, headers=headers, timeout=10)
         response.raise_for_status()
         response_data = response.json()
 
@@ -128,7 +130,7 @@ def reset_user_password(auth_api_url, headers, user_id, new_password):
     url = f"{auth_api_url}/core/users/{user_id}/set_password/"
     data = {"password": new_password}
     try:
-        response = session.post(url, headers=headers, json=data, timeout=10)
+        response = requests.post(url, headers=headers, json=data, timeout=10)
         response.raise_for_status()
         logging.info(f"Password for user {user_id} reset successfully.")
         # webhook_notification(user_id, event_type="password_reset")
@@ -190,7 +192,7 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
 
     try:
         # API request to create the user
-        response = session.post(user_api_url, headers=headers, json=user_data, timeout=10)
+        response = requests.post(user_api_url, headers=headers, json=user_data, timeout=10)
         response.raise_for_status()
         user = response.json()
 
@@ -304,7 +306,7 @@ def create_invite(headers, label, expires=None):
     invite_api_url = f"{Config.AUTHENTIK_API_URL}/stages/invitation/invitations/"
 
     try:
-        response = session.post(invite_api_url, headers=headers, json=data, timeout=10)
+        response = requests.post(invite_api_url, headers=headers, json=data, timeout=10)
         response.raise_for_status()
         response_data = response.json()
 
@@ -405,7 +407,7 @@ def generate_recovery_link(username):
 
         # Now, generate the recovery link using POST
         recovery_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/recovery/"
-        response = session.post(recovery_api_url, headers=headers, timeout=10)
+        response = requests.post(recovery_api_url, headers=headers, timeout=10)
         response.raise_for_status()
         recovery_link = response.json().get('link')
         logging.info(f"Recovery link generated for user: {username}")
@@ -434,7 +436,7 @@ def force_password_reset(username):
 
         # Now, force the password reset using POST
         reset_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/force_password_reset/"
-        response = session.post(reset_api_url, headers=headers, timeout=10)
+        response = requests.post(reset_api_url, headers=headers, timeout=10)
         response.raise_for_status()
     except response.json().get('detail'):
         logging.error(f"Error forcing password reset for {username}: {response.json().get('detail')}")

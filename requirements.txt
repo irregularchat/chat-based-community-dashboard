@@ -10,3 +10,4 @@ streamlit-aggrid
 xkcdpass
 # streamlit-annotated-text
 # streamlit-easy-button
+thorn

@@ -260,23 +260,29 @@ def render_home_page():
 
     # Username input or search query
     if operation == "Create User":
+        username_input = st.text_input("Username", key="username_input", placeholder="Enter a unique username")
         # Inputs for creating a user
-        first_name = st.text_input("Enter First Name", key="first_name_input", on_change=update_username)
-        last_name = st.text_input("Enter Last Name", key="last_name_input", on_change=update_username)
-        username_input = st.text_input("Username", key="username_input")
+        first_name_col, last_name_col = st.columns(2)
+        with first_name_col:
+            first_name = st.text_input("First Name", key="first_name_input", placeholder="Enter first name", on_change=update_username)
+        with last_name_col:
+            last_name = st.text_input("Last Name", key="last_name_input", placeholder="Enter last name", on_change=update_username)
     elif operation == "List Users":
         # Search query input for listing users
-        username_input = st.text_input("Search Query", key="username_input")
+        username_input = st.text_input("Search Query", key="username_input", placeholder="Enter username or email to search")
     else:
         # Username input for other operations
-        username_input = st.text_input("Username", key="username_input")
+        username_input = st.text_input("Username", key="username_input", placeholder="Enter the username")
 
     # Form section
     with st.form(key="user_management_form"):
         if operation == "Create User":
-            email_input = st.text_input("Enter Email Address (optional)", key="email_input")
-            invited_by = st.text_input("Invited by (optional)", key="invited_by")
-            intro = st.text_area("Intro (optional)", height=100, key="intro")
+            intro = st.text_area("Intro (optional)", height=100, key="intro", placeholder="Enter a brief introduction")
+            email_col, invited_by_col = st.columns(2)
+            with email_col:
+                email_input = st.text_input("Email Address (optional)", key="email_input", placeholder="Enter email address")
+            with invited_by_col:
+                invited_by = st.text_input("Invited by (optional)", key="invited_by", placeholder="Enter the name of the inviter")
             submit_button_label = "Submit"
         elif operation == "Reset User Password":
             submit_button_label = "Submit"

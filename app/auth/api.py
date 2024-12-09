@@ -88,6 +88,10 @@ def generate_secure_passphrase():
     # Generate the passphrase with the random number as the delimiter
     passphrase = xp.generate_xkcdpassword(wordlist, numwords=2, delimiter=delimiter)
     return passphrase
+def list_events_cached(api_url, headers):
+    response = requests.get(f"{api_url}/events", headers=headers)
+    response.raise_for_status()  # Raise an error for bad responses
+    return response.json()
 
 def reset_user_password(auth_api_url, headers, user_id, new_password):
     """Reset a user's password using the correct endpoint and data payload."""

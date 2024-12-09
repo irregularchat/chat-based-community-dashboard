@@ -3,6 +3,8 @@ import streamlit as st
 from utils.config import Config
 from ui.home import render_home_page
 from ui.summary import main as render_summary_page
+from ui.help_resources import main as render_help_page
+from ui.prompts import main as render_prompts_page
 from utils.helpers import setup_logging
 import logging
 
@@ -21,7 +23,7 @@ def main():
         # Add a selectbox for navigation
         page = st.sidebar.selectbox(
             "Select Page",
-            ["Home", "Summary"]
+            ["Home", "Summary", "Help", "Prompts"]
         )
 
         # Render the selected page
@@ -29,6 +31,10 @@ def main():
             render_home_page()
         elif page == "Summary":
             render_summary_page()
+        elif page == "Help":
+            render_help_page()
+        elif page == "Prompts":
+            render_prompts_page()
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
         logging.error(f"Unexpected error in main: {e}")

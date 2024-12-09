@@ -345,12 +345,13 @@ def handle_form_submission(
             else:
                 full_name = ""  # This should not occur due to the earlier check
 
-
             # Create the user
             new_user, temp_password = create_user(new_username, full_name, email, invited_by, intro)
             if new_user:
-                create_user_message(new_username, temp_password)
-                st.success(f"User '{new_username}' created successfully with a temporary password.")
+                # Use the username from the created user
+                created_username = new_user.get('username', new_username)
+                create_user_message(created_username, temp_password)
+                st.success(f"User '{created_username}' created successfully with a temporary password.")
             else:
                 st.error("Failed to create user. Please verify inputs and try again.")
         elif operation == "Reset User Password":

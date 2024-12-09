@@ -22,13 +22,13 @@ class Config:
     BASE_DOMAIN = os.getenv("BASE_DOMAIN")
     FLOW_ID = os.getenv("FLOW_ID")
     LOCAL_DB = os.getenv("LOCAL_DB", "users.csv")
-    # ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")  # Commented out
     SHLINK_API_TOKEN = os.getenv("SHLINK_API_TOKEN")
     SHLINK_URL = os.getenv("SHLINK_URL")
     AUTHENTIK_API_URL = os.getenv("AUTHENTIK_API_URL")
     PAGE_TITLE = os.getenv("PAGE_TITLE", "Authentik Streamlit App")
     FAVICON_URL = os.getenv("FAVICON_URL", "default_favicon.ico")
-
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+    WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
     # # Log loaded environment variables (mask sensitive data)
     # logger.info("Loaded Environment Variables:")
     # logger.info(f"AUTHENTIK_API_TOKEN: {'****' if AUTHENTIK_API_TOKEN else None}")
@@ -48,10 +48,11 @@ class Config:
         "MAIN_GROUP_ID": MAIN_GROUP_ID,
         "BASE_DOMAIN": BASE_DOMAIN,
         "FLOW_ID": FLOW_ID,
-        # "ENCRYPTION_KEY": ENCRYPTION_KEY,  # Commented out
         "SHLINK_API_TOKEN": SHLINK_API_TOKEN,
         "SHLINK_URL": SHLINK_URL,
-        "AUTHENTIK_API_URL": AUTHENTIK_API_URL
+        "AUTHENTIK_API_URL": AUTHENTIK_API_URL,
+        "WEBHOOK_URL": WEBHOOK_URL,
+        "WEBHOOK_SECRET": WEBHOOK_SECRET
     }
     
     missing_vars = [var_name for var_name, var in required_vars.items() if var is None]

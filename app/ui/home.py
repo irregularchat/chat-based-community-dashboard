@@ -1,5 +1,6 @@
 # ui/home.py
 import streamlit as st
+import os
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -31,13 +32,13 @@ from utils.helpers import (
 from messages import (
     create_user_message,
     create_recovery_message,
-    create_invite_message
+    create_invite_message, 
+    multi_recovery_message
 )
 import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from pytz import timezone  # Ensure this is imported
-import os
 
 session = requests.Session()
 retry = Retry(
@@ -146,6 +147,24 @@ def display_user_list(auth_api_url, headers):
         # Adjust table height
         table_height = 800
 
+        # Action dropdown and Apply button above the table
+        action_col, button_col = st.columns([3, 1])
+        with action_col:
+            action = st.selectbox("Select Action", [
+                "Activate", "Deactivate", "Reset Password", "Delete", "Add Intro", "Add Invited By"
+            ])
+            # Add action-specific inputs here
+            if action == "Reset Password":
+                use_password_generator = st.checkbox("Use Password Generator", value=True)
+                if not use_password_generator:
+                    new_password = st.text_input("Enter new password", type="password", key="reset_password_input")
+            elif action == "Add Intro":
+                intro_text = st.text_area("Enter Intro Text", height=2, key="add_intro_textarea")
+            elif action == "Add Invited By":
+                invited_by = st.text_input("Enter Invited By", key="add_invited_by_input")
+        with button_col:
+            apply_button = st.button("Apply")
+
         # Display AgGrid table
         grid_response = AgGrid(
             df,
@@ -165,20 +184,33 @@ def display_user_list(auth_api_url, headers):
 
         st.write(f"Selected Users: {len(selected_users)}")
 
-        if not selected_users.empty:
-            action = st.selectbox("Select Action", [
+        # Action dropdown and Apply button below the table
+        action_col_below, button_col_below = st.columns([3, 1])
+        with action_col_below:
+            action_below = st.selectbox("Select Action", [
                 "Activate", "Deactivate", "Reset Password", "Delete", "Add Intro", "Add Invited By"
-            ])
+            ], key="action_below")
+        with button_col_below:
+            apply_button_below = st.button("Apply", key="apply_below")
 
-            # Action-specific inputs
-            if action == "Reset Password":
-                new_password = st.text_input("Enter new password", type="password")
-            elif action == "Add Intro":
-                intro_text = st.text_area("Enter Intro Text", height=2)
-            elif action == "Add Invited By":
-                invited_by = st.text_input("Enter Invited By")
+        # Initialize a message variable
+        action_message = ""
 
-            if st.button("Apply"):
+        # Determine which apply button was pressed
+        if apply_button or apply_button_below:
+            if not selected_users.empty:
+                # Action-specific inputs
+                if action == "Reset Password":
+                    if use_password_generator:
+                        new_passwords = {user['username']: generate_secure_passphrase() for _, user in selected_users.iterrows()}
+                    else:
+                        new_password = st.text_input("Enter new password", type="password", key="reset_password_input_top")
+                        new_passwords = {user['username']: new_password for _, user in selected_users.iterrows()}
+                elif action == "Add Intro":
+                    intro_text = st.text_area("Enter Intro Text", height=2, key="add_intro_textarea_top")
+                elif action == "Add Invited By":
+                    invited_by = st.text_input("Enter Invited By", key="add_invited_by_input_top")
+
                 try:
                     success_count = 0
                     for _, user in selected_users.iterrows():
@@ -188,7 +220,8 @@ def display_user_list(auth_api_url, headers):
                                 user_id = user[col]
                                 break
                         if not user_id:
-                            st.error(f"User {user[identifier_field]} does not have a valid ID.")
+                            action_message = f"User {user[identifier_field]} does not have a valid ID."
+                            st.error(action_message)
                             continue
 
                         # Perform the selected action
@@ -197,10 +230,13 @@ def display_user_list(auth_api_url, headers):
                         elif action == "Deactivate":
                             result = update_user_status(auth_api_url, headers, user_id, False)
                         elif action == "Reset Password":
-                            if new_password:
-                                result = reset_user_password(auth_api_url, headers, user_id, new_password)
+                            if new_passwords[user['username']]:
+                                result = reset_user_password(auth_api_url, headers, user_id, new_passwords[user['username']])
+                                if result:
+                                    st.success(f"Password for user {user[identifier_field]} has been reset.")
                             else:
-                                st.warning("Please enter a new password")
+                                action_message = "Please enter a new password"
+                                st.warning(action_message)
                                 continue
                         elif action == "Delete":
                             result = delete_user(auth_api_url, headers, user_id)
@@ -213,11 +249,26 @@ def display_user_list(auth_api_url, headers):
 
                         if result:
                             success_count += 1
-                    st.success(f"{action} action applied successfully to {success_count} out of {len(selected_users)} selected users.")
+
+                    if action == "Reset Password":
+                        multi_recovery_message(selected_users.to_dict(orient='records'))
+
+                    action_message = f"{action} action applied successfully to {success_count} out of {len(selected_users)} selected users."
+                    st.success(action_message)
                 except Exception as e:
-                    st.error(f"An error occurred while applying {action} action: {e}")
-        else:
-            st.info("No users selected.")
+                    action_message = f"An error occurred while applying {action} action: {e}"
+                    st.error(action_message)
+            else:
+                action_message = "No users selected."
+                st.info(action_message)
+
+        # Display the message at the top section
+        if action_message:
+            st.write(action_message)
+
+        # Display the message at the bottom section
+        if action_message:
+            st.write(action_message)
     else:
         st.info("No users found.")
 

@@ -38,11 +38,11 @@ def create_user_message(new_username, temp_password):
 def create_recovery_message(username_input, new_password):
     """Generate and display the recovery message after generating a recovery link."""
     recovery_message = f"""
-    🌟 Your account recovery link 🌟
+    Account recovery Details
     **Username**: {username_input}
     **New Password**: {new_password}
 
-    Use the credentials above to recover your account. Make sure you update your email address after recovering your account as needed.
+    Use the credentials above to recover your account. Make sure you update your email address after recovering your account so you can recover your account in the future.
     
     If you have any issues, please reach out to the admin team.
     Once Logged in, see all the chats and services: https://forum.irregularchat.com/t/84
@@ -51,6 +51,29 @@ def create_recovery_message(username_input, new_password):
     st.session_state['message'] = recovery_message
     st.session_state['user_list'] = None  # Clear user list if there was any
     st.success("Recovery link generated successfully!")
+
+def multi_recovery_message(user_list):
+    """Generate and display recovery messages after resetting passwords for multiple users."""
+    for user in user_list:
+        username_input = user['username']
+        new_password = generate_secure_passphrase()  # Assuming this function generates a secure password
+
+        recovery_message = f"""
+        Account recovery Details
+        **Username**: {username_input}
+        **New Password**: {new_password}
+
+        Use the credentials above to recover your account. Make sure you update your email address after recovering your account so you can recover your account in the future.
+        
+        If you have any issues, please reach out to the admin team.
+        Once Logged in, see all the chats and services: https://forum.irregularchat.com/t/84
+        """
+
+        st.code(recovery_message)
+        st.session_state['message'] = recovery_message
+        st.success(f"Recovery link generated successfully for {username_input}!")
+
+    st.session_state['user_list'] = None  # Clear user list if there was any
 
 def create_invite_message(label, invite_link, invite_expires):
     """Generate and display the invite message."""

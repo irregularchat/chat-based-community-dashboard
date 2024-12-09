@@ -113,6 +113,27 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
     # Generate a temporary password using a secure passphrase
     temp_password = generate_secure_passphrase()
 
+    # Check for existing usernames and modify if necessary
+    original_username = username
+    counter = 1
+    headers = {
+        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+        'Content-Type': 'application/json'
+    }
+    
+    while True:
+        user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
+        response = session.get(user_search_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        users = response.json().get('results', [])
+        
+        # Explicitly check for exact username match
+        if not any(user['username'] == username for user in users):
+            break  # Unique username found
+        else:
+            username = f"{original_username}{counter}"
+            counter += 1
+
     user_data = {
         "username": username,
         "name": full_name,
@@ -131,10 +152,6 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
 
     # Generate API URL and headers
     user_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
-    headers = {
-        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-        'Content-Type': 'application/json'
-    }
 
     try:
         # API request to create the user

@@ -37,6 +37,7 @@ import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from pytz import timezone  # Ensure this is imported
+import os
 
 session = requests.Session()
 retry = Retry(
@@ -221,6 +222,16 @@ def display_user_list(auth_api_url, headers):
         st.info("No users found.")
 
 def render_home_page():
+    # Correctly construct the path to styles.css
+    css_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'styles.css'))
+    try:
+        with open(css_path) as f:
+            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+    except FileNotFoundError:
+        st.error("The styles.css file was not found. Please ensure it is in the correct directory.")
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
+
     # Initialize session state variables
     for var in ['message', 'user_list', 'prev_operation']:
         if var not in st.session_state:
@@ -258,7 +269,7 @@ def render_home_page():
         reset_form()
         st.session_state['prev_operation'] = operation
 
-    # Username input or search query
+    # Form section
     if operation == "Create User":
         username_input = st.text_input("Username", key="username_input", placeholder="Enter a unique username")
         # Inputs for creating a user
@@ -270,8 +281,9 @@ def render_home_page():
     elif operation == "List Users":
         # Search query input for listing users
         username_input = st.text_input("Search Query", key="username_input", placeholder="Enter username or email to search")
-    else:
-        # Username input for other operations
+    elif operation == "Reset User Password":
+        username_input = st.text_input("Username", key="username_input", placeholder="Enter the username")
+    elif operation == "Create Invite":
         username_input = st.text_input("Username", key="username_input", placeholder="Enter the username")
 
     # Form section

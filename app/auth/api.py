@@ -35,11 +35,12 @@ def webhook_notification(user, event_type):
         "Authorization": Config.WEBHOOK_SECRET  # Use environment variable
     }
     data = {
-        "event": event_type, # The event type
-        "username": user['username'] # The username of the user
+        "event": event_type,  # The event type
+        "username": user['username']  # The username of the user
     }
-    logging.debug(f"Sending webhook with headers: {headers} and data: {data}")
+    logging.debug(f"Preparing to send POST request to {Config.WEBHOOK_URL} with headers: {headers} and data: {data}")
     try:
+        # Ensure this is a POST request
         response = requests.post(Config.WEBHOOK_URL, headers=headers, json=data)  # Use environment variable
         response.raise_for_status()
         

@@ -311,7 +311,7 @@ def render_home_page():
     # Operation selection
     operation = st.selectbox(
         "Select Operation",
-        ["Create User", "Create Invite", "List Users"],
+        ["Create User", "Create Invite", "List and Manage Users"],
         key="operation_selection"
     )
 
@@ -329,7 +329,7 @@ def render_home_page():
             first_name = st.text_input("First Name", key="first_name_input", placeholder="Enter first name", on_change=update_username)
         with last_name_col:
             last_name = st.text_input("Last Name", key="last_name_input", placeholder="Enter last name", on_change=update_username)
-    elif operation == "List Users":
+    elif operation == "List and Manage Users":
         # Search query input for listing users
         username_input = st.text_input("Search Query", key="username_input", placeholder="Enter username or email to search")
     elif operation == "Create Invite":
@@ -350,7 +350,7 @@ def render_home_page():
         elif operation == "Create Invite":
             invite_label, expires_date, expires_time = render_invite_form()
             submit_button_label = "Submit"
-        elif operation == "List Users":
+        elif operation == "List and Manage Users":
             submit_button_label = "Search"
 
         submit_button = st.form_submit_button(submit_button_label)
@@ -371,7 +371,7 @@ def render_home_page():
         )
 
     # Display user list and actions
-    if operation == "List Users" and 'user_list' in st.session_state:
+    if operation == "List and Manage Users" and 'user_list' in st.session_state:
         display_user_list(Config.AUTHENTIK_API_URL, headers)
 
 
@@ -461,7 +461,7 @@ def handle_form_submission(
             else:
                 st.error("Failed to create invite.")
 
-        elif operation == "List Users":
+        elif operation == "List and Manage Users":
             search_query = username_input.strip()
             # Allow empty search_query to fetch all users
 

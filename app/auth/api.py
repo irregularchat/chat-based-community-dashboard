@@ -4,10 +4,11 @@ import random
 from xkcdpass import xkcd_password as xp
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from utils.config import Config
+from utils.config import Config # This will import the Config class from the config module
 from datetime import datetime, timedelta
 from pytz import timezone  
 import logging
+import os
 
 # Initialize a session with retry strategy
 # auth/api.py
@@ -23,6 +24,34 @@ retry = Retry(
 adapter = HTTPAdapter(max_retries=retry)
 session.mount("http://", adapter)
 session.mount("https://", adapter)
+
+# This function sends a webhook notification to the webhook url with the user and event type
+def webhook_notification(user, event_type):
+    """
+    This function sends a webhook notification to the webhook url with the user and event type
+    """
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": Config.WEBHOOK_SECRET  # Use environment variable
+    }
+    data = {
+        "event": event_type, # The event type
+        "username": user['username'] # The username of the user
+    }
+    logging.debug(f"Sending webhook with headers: {headers} and data: {data}")
+    try:
+        response = requests.post(Config.WEBHOOK_URL, headers=headers, json=data)  # Use environment variable
+        response.raise_for_status()
+        
+        # Optionally, log the response message
+        logging.info("Webhook notification sent successfully.")
+    except requests.exceptions.HTTPError as http_err:
+        logging.error(f"HTTP error occurred while sending webhook: {http_err}")
+        logging.error(f"Response status code: {response.status_code}")
+        logging.error(f"Response content: {response.text}")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error sending webhook notification: {e}")
+
 
 def shorten_url(long_url, url_type, name=None):
     if not Config.SHLINK_API_TOKEN or not Config.SHLINK_URL:
@@ -101,6 +130,7 @@ def reset_user_password(auth_api_url, headers, user_id, new_password):
         response = session.post(url, headers=headers, json=data, timeout=10)
         response.raise_for_status()
         logging.info(f"Password for user {user_id} reset successfully.")
+        # webhook_notification(user_id, event_type="password_reset")
         return True
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred while resetting password for user {user_id}: {http_err}")
@@ -162,6 +192,12 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         response = session.post(user_api_url, headers=headers, json=user_data, timeout=10)
         response.raise_for_status()
         user = response.json()
+
+        # Ensure 'user' is a dictionary
+        if not isinstance(user, dict):
+            logging.error("Unexpected response format: user is not a dictionary.")
+            return None, 'default_pass_issue'
+
         logging.info(f"User created: {user.get('username')}")
 
         # Reset the user's password
@@ -169,6 +205,12 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         if not reset_result:
             logging.error(f"Failed to reset the password for user {user.get('username')}. Returning default_pass_issue.")
             return user, 'default_pass_issue'
+
+        # After user creation, send a webhook notification
+        if 'username' in user:
+            webhook_notification(user, event_type="user_created")
+        else:
+            logging.error("User object is missing 'username' key.")
 
         return user, temp_password  # Return the user and the temp password
     except requests.exceptions.HTTPError as http_err:
@@ -214,33 +256,6 @@ def list_users(auth_api_url, headers, search_term=None):
         logging.error(f"Error listing users: {e}")
         return []
        
-# def list_users(auth_api_url, headers, search_term=None):
-#     """List users, optionally filtering by a search term."""
-#     try:
-#         params = {}
-#         if search_term:
-#             params['search'] = search_term
-#         else:
-#             params['page_size'] = 500  # Adjust based on API limits
-
-#         users = []
-#         next_url = f"{auth_api_url}/core/users/"
-
-#         while next_url:
-#             response = session.get(next_url, headers=headers, params=params, timeout=10)
-#             response.raise_for_status()
-#             data = response.json()
-#             users.extend(data.get('results', []))
-#             next_url = data.get('next')
-
-#             # Clear params after the first request to avoid duplicate parameters
-#             params = {}
-
-#         return users
-#     except requests.exceptions.RequestException as e:
-#         logging.error(f"Error listing users: {e}")
-#         return []
-
 def list_users_cached(auth_api_url, headers):
     """List users with caching to reduce API calls."""
     try:

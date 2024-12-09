@@ -311,7 +311,7 @@ def render_home_page():
     # Operation selection
     operation = st.selectbox(
         "Select Operation",
-        ["Create User", "Reset User Password", "Create Invite", "List Users"],
+        ["Create User", "Create Invite", "List Users"],
         key="operation_selection"
     )
 
@@ -332,8 +332,6 @@ def render_home_page():
     elif operation == "List Users":
         # Search query input for listing users
         username_input = st.text_input("Search Query", key="username_input", placeholder="Enter username or email to search")
-    elif operation == "Reset User Password":
-        username_input = st.text_input("Username", key="username_input", placeholder="Enter the username")
     elif operation == "Create Invite":
         username_input = st.text_input("Username", key="username_input", placeholder="Enter the username")
 

@@ -463,11 +463,6 @@ def handle_form_submission(
             else:
                 st.error("Failed to create invite.")
 
-        # elif operation == "List Users":
-        #     search_query = username_input.strip()
-        #     if not search_query:
-        #         st.error("Please enter a search query.")
-        #         return
         elif operation == "List Users":
             search_query = username_input.strip()
             # Allow empty search_query to fetch all users
@@ -488,28 +483,6 @@ def handle_form_submission(
                     st.session_state['message'] = "No users found."
 
             # Logging and debugging (optional)
-            logging.debug(f"user_list data: {st.session_state['user_list']}")
-            if st.session_state['user_list']:
-                first_user = st.session_state['user_list'][0]
-                logging.debug(f"First user keys: {first_user.keys()}")
-        ####
-
-            # First, search the local database
-            local_users = search_LOCAL_DB(search_query)
-            if not local_users.empty:
-                st.session_state['user_list'] = local_users.to_dict(orient='records')
-                st.session_state['message'] = "Users found in local database."
-            else:
-                # If not found locally, search using the API
-                users = list_users(Config.AUTHENTIK_API_URL, headers, search_query)
-                if users:
-                    st.session_state['user_list'] = users
-                    st.session_state['message'] = "Users found via API."
-                else:
-                    st.session_state['user_list'] = []
-                    st.session_state['message'] = "No users found."
-
-            # Add logging to inspect the data
             logging.debug(f"user_list data: {st.session_state['user_list']}")
             if st.session_state['user_list']:
                 first_user = st.session_state['user_list'][0]

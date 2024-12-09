@@ -26,17 +26,21 @@ session.mount("http://", adapter)
 session.mount("https://", adapter)
 
 # This function sends a webhook notification to the webhook url with the user and event type
-def webhook_notification(user, event_type):
+def webhook_notification(user, email, intro, invited_by, event_type, full_name):
     """
     This function sends a webhook notification to the webhook url with the user and event type
     """
-    WEBHOOK_URL = "https://n8.domain.com/webhook/XYZ"
+    WEBHOOK_URL = "https://n8.irregularchat.com/webhook/matrix-account-notify"
     headers = {
         "Content-Type": "application/json"
     }
     data = {
         "event": event_type,
-        "username": user['username']
+        "full_name": full_name,
+        "username": user['username'],
+        "email": user.get('email', ''),
+        "intro": user.get('intro', ''),
+        "invited_by": user.get('invited_by', '')
     }
     logging.debug(f"Preparing to send POST request to {WEBHOOK_URL} with headers: {headers} and data: {data}")
     try:
@@ -211,7 +215,14 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
 
         # After user creation, send a webhook notification
         if 'username' in user:
-            webhook_notification(user, event_type="user_created")
+            webhook_notification(
+                user,
+                user.get('email', ''),
+                user.get('attributes', {}).get('intro', ''),  # Use the intro parameter directly
+                user.get('attributes', {}).get('invited_by', ''),  # Use the invited_by parameter directly
+                "user_created",
+                full_name
+            )
         else:
             logging.error("User object is missing 'username' key.")
 

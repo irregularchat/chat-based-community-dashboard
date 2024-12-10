@@ -35,11 +35,11 @@ def webhook_notification(event_type, username=None, full_name=None, email=None, 
     to run with only partial of the optional parameters, use None for the missing parameters:
     webhook_notification(event_type, username, full_name, None, None, invited_by, None)
     """
-    WEBHOOK_URL = "https://n8.irregularchat.com/webhook/matrix-account-notify"
-    # WEBHOOK_URL = "https://n8.irregularchat.com/webhook/development-and-testing"
+    WEBHOOK_URL = Config.WEBHOOK_URL
+    WEBHOOK_SECRET = Config.WEBHOOK_SECRET
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer WEBHOOK_SECRET"  # Added testing authentication header
+        "Authorization": f"Bearer {WEBHOOK_SECRET}"  # Added testing authentication header
     }
     data = {
         "event": event_type,

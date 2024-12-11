@@ -43,3 +43,9 @@ hr {
     background: #bdc3c7;
     margin: 20px 0;
 }
+
+/* Ensure the send_signal_notification checkbox is visible */
+#send_signal_notification {
+    display: block; /* or inline-block, depending on your layout */
+    margin: 10px 0; /* optional: add some margin for spacing */
+}

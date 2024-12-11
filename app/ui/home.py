@@ -20,7 +20,8 @@ from auth.api import (
     update_user_invited_by,
     create_invite,
     shorten_url,
-    list_users
+    list_users,
+    webhook_notification
 )
 from ui.forms import render_create_user_form, render_invite_form
 from utils.helpers import (
@@ -367,7 +368,8 @@ def render_home_page():
             expires_time,
             first_name,
             last_name,
-            invite_label
+            invite_label,
+            
         )
 
     # Display user list and actions
@@ -378,7 +380,7 @@ def render_home_page():
 def handle_form_submission(
     operation, username_input, email_input, invited_by, intro, expires_date,
     expires_time, first_name, last_name, invite_label=None
-):
+):  
     headers = {
         'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
         'Content-Type': 'application/json'
@@ -418,7 +420,13 @@ def handle_form_submission(
                 # Use the username from the created user
                 created_username = new_user.get('username', new_username)
                 create_user_message(created_username, temp_password)
-                st.success(f"User '{created_username}' created successfully with a temporary password.")
+                # Send a webhook notification
+                st.success(f"User '{created_username}' created successfully with a temporary password.") # show success message to webuser
+                """webhook_notification
+                function is defined in auth/api.py and is called here. 
+                New format def webhook_notification(event_type, username=None, full_name=None, email=None, intro=None, invited_by=None, password=None):
+                """
+                webhook_notification("user_created", new_username, full_name, email, intro, invited_by, temp_password)
             else:
                 st.error("Failed to create user. Please verify inputs and try again.")
         elif operation == "Reset User Password":
@@ -489,3 +497,4 @@ def handle_form_submission(
     except Exception as e:
         st.error(f"An error occurred during '{operation}': {e}")
         logging.error(f"Error during '{operation}': {e}")
+

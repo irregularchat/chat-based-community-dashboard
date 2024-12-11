@@ -41,6 +41,8 @@ class Config:
     # logger.info(f"AUTHENTIK_API_URL: {AUTHENTIK_API_URL}")
     # logger.info(f"PAGE_TITLE: {PAGE_TITLE}")
     # logger.info(f"FAVICON_URL: {FAVICON_URL}")
+    # logger.info(f"WEBHOOK_URL: {WEBHOOK_URL}")
+    # logger.info(f"WEBHOOK_SECRET: {WEBHOOK_SECRET}")
 
     # Validate critical configurations
     required_vars = {

@@ -26,29 +26,35 @@ session.mount("http://", adapter)
 session.mount("https://", adapter)
 
 # This function sends a webhook notification to the webhook url with the user and event type
-def webhook_notification(user, email, intro, invited_by, event_type, full_name):
+def webhook_notification(event_type, username=None, full_name=None, email=None, intro=None, invited_by=None, password=None):
     """
     This function sends a webhook notification to the webhook url with the user and event type
+    The required parameters are event_type, send_signal_notification
+    The optional parameters are username, full_name, email, intro, invited_by, password
+    Example: webhook_notification(event_type)
+    to run with only partial of the optional parameters, use None for the missing parameters:
+    webhook_notification(event_type, username, full_name, None, None, invited_by, None)
     """
-    WEBHOOK_URL = "https://n8.irregularchat.com/webhook/matrix-account-notify"
+    WEBHOOK_URL = Config.WEBHOOK_URL
+    WEBHOOK_SECRET = Config.WEBHOOK_SECRET
     headers = {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {WEBHOOK_SECRET}"  # Added testing authentication header
     }
     data = {
         "event": event_type,
-        "full_name": full_name,
-        "username": user['username'],
-        "email": user.get('email', ''),
-        "intro": user.get('intro', ''),
-        "invited_by": user.get('invited_by', '')
+        "full_name": full_name or '',
+        "username": username or '',
+        "email": email or '',
+        "intro": intro or '',
+        "invited_by": invited_by or '',
+        "password": password or ''
     }
     logging.debug(f"Preparing to send POST request to {WEBHOOK_URL} with headers: {headers} and data: {data}")
     try:
         # Use session.post instead of requests.post to utilize the retry configuration
         response = requests.post(WEBHOOK_URL, json=data, headers=headers)
         response.raise_for_status()
-        print("Request method sent:", response.request.method)
-        print("Request URL used:", response.request.url)
         
         logging.info("Webhook notification sent successfully.")
     except requests.exceptions.HTTPError as http_err:
@@ -137,7 +143,6 @@ def reset_user_password(auth_api_url, headers, user_id, new_password):
         response = requests.post(url, headers=headers, json=data, timeout=10)
         response.raise_for_status()
         logging.info(f"Password for user {user_id} reset successfully.")
-        # webhook_notification(user_id, event_type="password_reset")
         return True
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred while resetting password for user {user_id}: {http_err}")
@@ -212,20 +217,6 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         if not reset_result:
             logging.error(f"Failed to reset the password for user {user.get('username')}. Returning default_pass_issue.")
             return user, 'default_pass_issue'
-
-        # After user creation, send a webhook notification
-        if 'username' in user:
-            webhook_notification(
-                user,
-                user.get('email', ''),
-                user.get('attributes', {}).get('intro', ''),  # Use the intro parameter directly
-                user.get('attributes', {}).get('invited_by', ''),  # Use the invited_by parameter directly
-                "user_created",
-                full_name
-            )
-        else:
-            logging.error("User object is missing 'username' key.")
-
         return user, temp_password  # Return the user and the temp password
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred while creating user: {http_err}")

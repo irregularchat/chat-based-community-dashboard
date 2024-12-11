@@ -13,6 +13,8 @@ def render_create_user_form():
     intro = st.text_area("Intro (optional)", height=100, key="intro")
     email_input = st.text_input("Enter Email Address (optional)", key="email_input")
     
+    # Add a checkbox for sending notification to Signal
+    # send_signal_notification = st.checkbox("Send notification to Signal", value=True, key="send_signal_notification")
     return first_name, last_name, email_input, invited_by, intro
 
 def render_invite_form():
@@ -21,3 +23,4 @@ def render_invite_form():
     expires_date = st.date_input("Enter Expiration Date", value=expires_default.date(), key="expires_date")
     expires_time = st.time_input("Enter Expiration Time", value=expires_default.time(), key="expires_time")
     return invite_label, expires_date, expires_time
+

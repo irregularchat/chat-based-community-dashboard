@@ -1,1 +1,40 @@
+# Project Roadmap: Chat-Based Community Dashboard
 
+This roadmap outlines the key features and milestones planned for the Chat-Based Community Dashboard project. Each task is designed to enhance functionality, streamline user management, and improve community engagement.
+
+## Features and Milestones
+
+- [ ] **NoCoDB for User Verification**
+   - Integrate NoCoDB to manage and verify users via a no-code database interface.
+
+- [ ] **Verification Email Process**
+   - Implement an automated email verification system to streamline user onboarding.
+
+- [ ] **Integration of Other Identity Managers**
+   - Add options for identity management, starting with APIs such as Keycloak.
+
+- [ ] **Signal Bot Launch**
+   - Provide a customizable Signal bot for announcements, updates, and user interactions.
+
+- [ ] **Maubot Integration**
+   - Enable Maubot for Matrix to automate interactions and enhance community engagement.
+
+- [ ] **Global Announcements via API or Webhooks**
+   - Add the ability to send announcements across all rooms using APIs or webhooks.
+
+- [ ] **Room Management Tools**
+   - Maintain a list of all rooms for easier tracking and management.
+   - Add users to rooms programmatically or via admin commands.
+
+- [ ] **Chat-Based Account Management**
+   - Allow users to create accounts, reset passwords, or update credentials using chat-based subcommands.
+
+- [ ] **Quick Creation of Conflict Rooms**
+   - Add functionality to create a conflict resolution room quickly, automatically adding all moderators and the relevant individual(s) into a private space.
+
+- [ ] **Direct Messaging for Account Support**
+   - Enable admins to send users direct messages containing account creation details or verification steps.
+
+---
+
+This roadmap serves as a guide to track progress and ensure key objectives are met. Each feature is critical to improving the user experience and operational efficiency of the Chat-Based Community Dashboard.

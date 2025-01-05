@@ -21,25 +21,33 @@ def parse_input(input_text):
     
     # Initialize the dictionary with default values
     parsed_data = {
-        "name": fields[0] if len(fields) > 0 else "",
-        "organization": "",
-        "invited_by": "",
+        "first_name": fields[0] if len(fields) > 0 else "",
+        "last_name": "",
         "email": "",
-        "interests": ""
+        "invited_by": "",
+        "intro": {
+            "organization": "",
+            "interests": ""
+        }
     }
     
     # Iterate over the fields to find email and other data
     for field in fields[1:]:
         if "@" in field and "." in field:
             parsed_data["email"] = field
-        elif parsed_data["organization"] == "":
-            parsed_data["organization"] = field
         elif parsed_data["invited_by"] == "":
             parsed_data["invited_by"] = field
         else:
-            parsed_data["interests"] += field + " "
+            if parsed_data["intro"]["organization"] == "":
+                parsed_data["intro"]["organization"] = field
+            else:
+                parsed_data["intro"]["interests"] += field + " "
+    
+    # Assign remaining fields to last_name
+    last_name_index = fields.index(parsed_data["email"]) if parsed_data["email"] else len(fields)
+    parsed_data["last_name"] = " ".join(fields[1:last_name_index])
     
     # Trim any trailing space from interests
-    parsed_data["interests"] = parsed_data["interests"].strip()
+    parsed_data["intro"]["interests"] = parsed_data["intro"]["interests"].strip()
     
     return parsed_data

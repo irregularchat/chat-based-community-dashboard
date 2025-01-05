@@ -16,12 +16,12 @@ def parse_input(input_text):
     # Remove numbers and any following periods from the input text
     input_text = re.sub(r'\d+\.*', '', input_text)
     
-    # Split the input text by spaces
-    fields = input_text.split()
+    # Split the input text by newlines and strip whitespace
+    lines = [line.strip() for line in input_text.split('\n') if line.strip()]
     
     # Initialize the dictionary with default values
     parsed_data = {
-        "first_name": fields[0] if len(fields) > 0 else "",
+        "first_name": "",
         "last_name": "",
         "email": "",
         "invited_by": "",
@@ -31,23 +31,22 @@ def parse_input(input_text):
         }
     }
     
-    # Iterate over the fields to find email and other data
-    for field in fields[1:]:
-        if "@" in field and "." in field:
-            parsed_data["email"] = field
-        elif parsed_data["invited_by"] == "":
-            parsed_data["invited_by"] = field
-        else:
-            if parsed_data["intro"]["organization"] == "":
-                parsed_data["intro"]["organization"] = field
-            else:
-                parsed_data["intro"]["interests"] += field + " "
+    # Assign fields based on expected order
+    if len(lines) > 0:
+        name_parts = lines[0].split()
+        parsed_data["first_name"] = name_parts[0]
+        parsed_data["last_name"] = " ".join(name_parts[1:])
     
-    # Assign remaining fields to last_name
-    last_name_index = fields.index(parsed_data["email"]) if parsed_data["email"] else len(fields)
-    parsed_data["last_name"] = " ".join(fields[1:last_name_index])
+    if len(lines) > 1:
+        parsed_data["intro"]["organization"] = lines[1]
     
-    # Trim any trailing space from interests
-    parsed_data["intro"]["interests"] = parsed_data["intro"]["interests"].strip()
+    if len(lines) > 2:
+        parsed_data["invited_by"] = lines[2]
+    
+    if len(lines) > 3:
+        parsed_data["email"] = lines[3]
+    
+    if len(lines) > 4:
+        parsed_data["intro"]["interests"] = " ".join(lines[4:])
     
     return parsed_data

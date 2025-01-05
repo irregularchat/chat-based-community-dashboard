@@ -14,7 +14,7 @@ import re
 # Function to parse the input with 5 fields and return a dictionary
 def parse_input(input_text):
     # Remove numbers and any following periods from the input text
-    input_text = re.sub(r'\d+\.*', '', input_text)
+    input_text = re.sub(r'^[\d\-#\.]+\s*', '', input_text, flags=re.MULTILINE)
     
     # Split the input text by newlines and strip whitespace
     lines = [line.strip() for line in input_text.split('\n') if line.strip()]

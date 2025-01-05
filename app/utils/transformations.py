@@ -13,8 +13,8 @@ import re
 
 # Function to parse the input with 5 fields and return a dictionary
 def parse_input(input_text):
-    # Remove numbers from the input text
-    input_text = re.sub(r'\d+', '', input_text)
+    # Remove numbers and any following periods from the input text
+    input_text = re.sub(r'\d+\.*', '', input_text)
     
     # Split the input text by spaces
     fields = input_text.split()

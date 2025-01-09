@@ -323,9 +323,38 @@ def render_home_page():
     elif operation == "Create Invite":
         invite_label, expires_date, expires_time = render_invite_form()
         # Handle invite creation logic here
+        invite_button = st.button("Create Invite")
+        if invite_button:
+            handle_form_submission(
+                operation,
+                None,
+                None,
+                None,
+                None,
+                expires_date,
+                expires_time,
+                None,
+                None,
+                invite_label
+            )
     elif operation == "List and Manage Users":
         username_input = st.text_input("Search Query", key="username_input", placeholder="Enter username or email to search")
-        # Handle user listing and management logic here
+        
+        # Add a submit button for the search
+        search_button = st.button("Search")
+        
+        if search_button:
+            handle_form_submission(
+                operation,
+                username_input,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None
+            )
 
 
 def handle_form_submission(

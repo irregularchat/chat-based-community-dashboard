@@ -6,7 +6,7 @@ import logging
 from auth.api import list_users_cached
 # from auth.encryption import encrypt_data, decrypt_data
 from io import StringIO
-
+import streamlit as st
 
 def setup_logging():
     logging.basicConfig(
@@ -100,6 +100,17 @@ def get_existing_usernames():
     else:
         logging.warning("Local DB does not exist.")
         return []
+def update_username():
+    import streamlit as st  # Import here to avoid circular import issues
+    if st.session_state.get('first_name_input') and st.session_state.get('last_name_input'):
+        base_username = f"{st.session_state['first_name_input'].strip().lower()}-{st.session_state['last_name_input'].strip()[0].lower()}"
+    elif st.session_state.get('first_name_input'):
+        base_username = st.session_state['first_name_input'].strip().lower()
+    elif st.session_state.get('last_name_input'):
+        base_username = st.session_state['last_name_input'].strip().lower()
+    else:
+        base_username = "pending"
+    st.session_state['username_input'] = base_username.replace(" ", "-")
 
 def create_unique_username(desired_username):
     existing_usernames = get_existing_usernames()

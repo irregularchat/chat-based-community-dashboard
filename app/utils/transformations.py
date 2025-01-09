@@ -31,7 +31,15 @@ def parse_input(input_text):
         }
     }
     
-    # Assign fields based on expected order
+    # Search for email in all lines first
+    email_found = False
+    for i, line in enumerate(lines):
+        email_match = re.search(r'[\w\.-]+@[\w\.-]+', line)
+        if email_match:
+            parsed_data["email"] = email_match.group(0)
+            email_found = True
+            break
+
     if len(lines) > 0:
         name_parts = lines[0].split()
         parsed_data["first_name"] = name_parts[0]
@@ -43,10 +51,9 @@ def parse_input(input_text):
     if len(lines) > 2:
         parsed_data["invited_by"] = lines[2]
     
-    if len(lines) > 3:
-        parsed_data["email"] = lines[3]
-    
-    if len(lines) > 4:
-        parsed_data["intro"]["interests"] = " ".join(lines[4:])
+    # Collect all remaining lines as interests
+    if email_found and i + 1 < len(lines):
+        interests_lines = lines[i + 1:]
+        parsed_data["intro"]["interests"] = " ".join(interests_lines)
     
     return parsed_data

@@ -28,7 +28,8 @@ from utils.helpers import (
     get_existing_usernames,
     create_unique_username,
     update_LOCAL_DB,
-    search_LOCAL_DB
+    search_LOCAL_DB,
+    update_username
 )
 from messages import (
     create_user_message,
@@ -40,6 +41,7 @@ import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from pytz import timezone  # Ensure this is imported
+from utils.transformations import parse_input
 
 session = requests.Session()
 retry = Retry(
@@ -274,34 +276,10 @@ def display_user_list(auth_api_url, headers):
         st.info("No users found.")
 
 def render_home_page():
-    # Correctly construct the path to styles.css
-    css_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'styles.css'))
-    try:
-        with open(css_path) as f:
-            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-    except FileNotFoundError:
-        st.error("The styles.css file was not found. Please ensure it is in the correct directory.")
-    except Exception as e:
-        st.error(f"An unexpected error occurred: {e}")
-
     # Initialize session state variables
     for var in ['message', 'user_list', 'prev_operation']:
         if var not in st.session_state:
             st.session_state[var] = "" if var in ['message', 'prev_operation'] else []
-    
-    # Initialize variables
-    invite_label = None
-    expires_date, expires_time = None, None
-    first_name = last_name = email_input = invited_by = intro = None
-
-    # Sidebar links
-    st.sidebar.markdown("""
-        ## Useful Links:
-        - [Login to IrregularChat SSO](https://sso.irregularchat.com)
-        - [Use Signal CopyPasta for Welcome Messages](https://irregularpedia.org/index.php/Signal_Welcome_Prompts)
-        - [Admin Prompts for Common Situations](https://irregularpedia.org/index.php/Admin)
-        - [Links to Community Chats and Services](https://irregularpedia.org/index.php/Links)
-    """)
 
     # Define headers
     headers = {
@@ -321,60 +299,33 @@ def render_home_page():
         reset_form()
         st.session_state['prev_operation'] = operation
 
-    # Form section
+    # Render form based on operation
     if operation == "Create User":
-        username_input = st.text_input("Username", key="username_input", placeholder="Enter a unique username")
-        # Inputs for creating a user
-        first_name_col, last_name_col = st.columns(2)
-        with first_name_col:
-            first_name = st.text_input("First Name", key="first_name_input", placeholder="Enter first name", on_change=update_username)
-        with last_name_col:
-            last_name = st.text_input("Last Name", key="last_name_input", placeholder="Enter last name", on_change=update_username)
-    elif operation == "List and Manage Users":
-        # Search query input for listing users
-        username_input = st.text_input("Search Query", key="username_input", placeholder="Enter username or email to search")
+        first_name, last_name, username, email_input, invited_by, intro, submit_button = render_create_user_form()
+
+        if submit_button:
+            if not first_name and not last_name:
+                st.error("At least one of first name or last name is required.")
+                return
+
+            # Handle form submission with the correct values
+            handle_form_submission(
+                operation,
+                username,
+                email_input,
+                invited_by,
+                intro,
+                None,
+                None,
+                first_name,
+                last_name
+            )
     elif operation == "Create Invite":
-        username_input = st.text_input("Username", key="username_input", placeholder="Enter the username")
-
-    # Form section
-    with st.form(key="user_management_form"):
-        if operation == "Create User":
-            intro = st.text_area("Intro (optional)", height=100, key="intro", placeholder="Enter a brief introduction")
-            email_col, invited_by_col = st.columns(2)
-            with email_col:
-                email_input = st.text_input("Email Address (optional)", key="email_input", placeholder="Enter email address")
-            with invited_by_col:
-                invited_by = st.text_input("Invited by (optional)", key="invited_by", placeholder="Enter the name of the inviter")
-            submit_button_label = "Submit"
-        elif operation == "Reset User Password":
-            submit_button_label = "Submit"
-        elif operation == "Create Invite":
-            invite_label, expires_date, expires_time = render_invite_form()
-            submit_button_label = "Submit"
-        elif operation == "List and Manage Users":
-            submit_button_label = "Search"
-
-        submit_button = st.form_submit_button(submit_button_label)
-
-    # Handle form submissions
-    if submit_button:
-        handle_form_submission(
-            operation,
-            username_input,
-            email_input,
-            invited_by,
-            intro,
-            expires_date,
-            expires_time,
-            first_name,
-            last_name,
-            invite_label,
-            
-        )
-
-    # Display user list and actions
-    if operation == "List and Manage Users" and 'user_list' in st.session_state:
-        display_user_list(Config.AUTHENTIK_API_URL, headers)
+        invite_label, expires_date, expires_time = render_invite_form()
+        # Handle invite creation logic here
+    elif operation == "List and Manage Users":
+        username_input = st.text_input("Search Query", key="username_input", placeholder="Enter username or email to search")
+        # Handle user listing and management logic here
 
 
 def handle_form_submission(

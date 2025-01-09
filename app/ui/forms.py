@@ -1,36 +1,112 @@
 # ui/forms.py
 import streamlit as st
+from utils.transformations import parse_input
 from datetime import datetime, timedelta
-from utils.transformations import parse_input  # Import the parse_input function
+from utils.helpers import update_username
+import re
 
 def render_create_user_form():
-    col1, col2 = st.columns(2)
-    with col1:
-        first_name = st.text_input("Enter First Name", key="first_name")
-    with col2:
-        last_name = st.text_input("Enter Last Name", key="last_name")
-    
-    invited_by = st.text_input("Invited by (optional)", key="invited_by")
-    email_input = st.text_input("Enter Email Address (optional)", key="email_input")
-    intro = st.text_area("Intro (optional)", height=100, key="intro")
-    
-    # Parse button
-    if st.button("Parse"):
-        # Parse the input from the intro field
-        parsed_data = parse_input(intro)
+    # Initialize session state keys
+    for key in ["username_input", "first_name_input", "last_name_input", "invited_by_input", "email_input", "data_to_parse_input", "intro_input"]:
+        if key not in st.session_state:
+            st.session_state[key] = ""
+
+    # Check if the parse button was pressed in a previous run
+    if "parsed" in st.session_state and st.session_state["parsed"]:
+        # Update session state with the parsed values
+        parsed = parse_input(st.session_state["data_to_parse_input"])
+        st.session_state["first_name_input"] = parsed.get("first_name", st.session_state["first_name_input"])
+        st.session_state["last_name_input"] = parsed.get("last_name", st.session_state["last_name_input"])
+        st.session_state["email_input"] = parsed.get("email", st.session_state["email_input"])
+        st.session_state["invited_by_input"] = parsed.get("invited_by", st.session_state["invited_by_input"])
+        st.session_state["intro_input"] = parsed["intro"].get("organization", "")  # Only organization for intro
+        st.session_state["parsed"] = False  # Reset the parsed flag
+
+        # Update the username after parsing
+        update_username()
+
+    with st.form("create_user_form"):
+        # Draw input widgets referencing session state as the source of truth
+        username = st.text_input(
+            "Enter Username", 
+            key="username_input",
+            placeholder="e.g., johndoe123"
+        )
         
-        # Update the session state with parsed data
-        st.session_state['first_name'] = parsed_data['first_name']
-        st.session_state['last_name'] = parsed_data['last_name']
-        st.session_state['email_input'] = parsed_data['email']
-        st.session_state['invited_by'] = parsed_data['invited_by']
-        
-        # Format the intro field with organization and interests
-        st.session_state['intro'] = f"Organization: {parsed_data['intro']['organization']}\nInterests: {parsed_data['intro']['interests']}"
-    
-    # Add a checkbox for sending notification to Signal
-    # send_signal_notification = st.checkbox("Send notification to Signal", value=True, key="send_signal_notification")
-    return first_name, last_name, email_input, invited_by, intro
+        col1, col2 = st.columns(2)
+        with col1:
+            first_name = st.text_input(
+                "Enter First Name", 
+                key="first_name_input",
+                placeholder="e.g., John"
+            )
+        with col2:
+            last_name = st.text_input(
+                "Enter Last Name", 
+                key="last_name_input",
+                placeholder="e.g., Doe"
+            )
+
+        invited_by = st.text_input(
+            "Invited by (optional)", 
+            key="invited_by_input",
+            placeholder="Signal Username e.g., @janedoe"
+        )
+
+        email_input = st.text_input(
+            "Enter Email Address (optional)", 
+            key="email_input",
+            placeholder="e.g., johndoe@example.com"
+        )
+
+        intro = st.text_area(
+            "Intro", 
+            key="intro_input", 
+            height=100,
+            placeholder="e.g., Software Engineer at TechCorp"
+        )
+
+        # Custom style for the "Data to Parse" box
+        st.markdown(
+            """
+            <style>
+            .data-to-parse {
+                background-color: #e0e0e0;  /* Lighter shade for distinction */
+                padding: 10px;
+                border-radius: 5px;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+
+        st.markdown('<div class="data-to-parse">', unsafe_allow_html=True)
+        data_to_parse = st.text_area(
+            "Data to Parse", 
+            key="data_to_parse_input", 
+            height=100,
+            placeholder="1. John Doe\n2. TechCorp\n3. @janedoe\n4. johndoe@example.com\n5. Interested in AI, ML, and Data Science"
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Buttons
+        parse_button = st.form_submit_button("Parse")
+        if parse_button:
+            st.session_state["parsed"] = True
+            st.rerun()
+
+        submit_button = st.form_submit_button("Submit")
+
+    # Return the final values from session state
+    return (
+        st.session_state["first_name_input"],
+        st.session_state["last_name_input"],
+        st.session_state["username_input"],
+        st.session_state["email_input"],
+        st.session_state["invited_by_input"],
+        st.session_state["intro_input"],
+        submit_button
+    )
 
 def render_invite_form():
     invite_label = st.text_input("Invite Label", key="invite_label")

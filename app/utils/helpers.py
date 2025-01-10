@@ -103,14 +103,20 @@ def get_existing_usernames():
         return []
 def update_username():
     import streamlit as st  # Import here to avoid circular import issues
-    if st.session_state.get('first_name_input') and st.session_state.get('last_name_input'):
-        base_username = f"{st.session_state['first_name_input'].strip().lower()}-{st.session_state['last_name_input'].strip()[0].lower()}"
-    elif st.session_state.get('first_name_input'):
-        base_username = st.session_state['first_name_input'].strip().lower()
-    elif st.session_state.get('last_name_input'):
-        base_username = st.session_state['last_name_input'].strip().lower()
+    
+    # Check if parsed data has set the first and last name
+    first_name = st.session_state.get('first_name_input', '').strip().lower()
+    last_name = st.session_state.get('last_name_input', '').strip().lower()
+    
+    if first_name and last_name:
+        base_username = f"{first_name}-{last_name[0]}"
+    elif first_name:
+        base_username = first_name
+    elif last_name:
+        base_username = last_name
     else:
         base_username = "pending"
+    
     st.session_state['username_input'] = base_username.replace(" ", "-")
 
 def create_unique_username(desired_username):

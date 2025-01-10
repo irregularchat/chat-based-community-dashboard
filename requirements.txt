@@ -11,3 +11,4 @@ xkcdpass
 # streamlit-annotated-text
 # streamlit-easy-button
 thorn
+pytz

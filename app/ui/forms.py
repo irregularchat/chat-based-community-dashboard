@@ -2,7 +2,7 @@
 import streamlit as st
 from utils.transformations import parse_input
 from datetime import datetime, timedelta
-from utils.helpers import update_username
+from utils.helpers import update_username, get_eastern_time
 import re
 
 def render_create_user_form():
@@ -110,8 +110,16 @@ def render_create_user_form():
 
 def render_invite_form():
     invite_label = st.text_input("Invite Label", key="invite_label")
-    expires_default = datetime.now() + timedelta(hours=2)
+    
+    # Get the current Eastern Time
+    eastern_now = get_eastern_time(datetime.now().date(), datetime.now().time())
+    expires_default = eastern_now + timedelta(hours=2)
+    
     expires_date = st.date_input("Enter Expiration Date", value=expires_default.date(), key="expires_date")
     expires_time = st.time_input("Enter Expiration Time", value=expires_default.time(), key="expires_time")
-    return invite_label, expires_date, expires_time
+    
+    # Convert to Eastern Time
+    eastern_time = get_eastern_time(expires_date, expires_time)
+    
+    return invite_label, eastern_time.date(), eastern_time.time()
 

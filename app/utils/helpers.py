@@ -7,7 +7,8 @@ from auth.api import list_users_cached
 # from auth.encryption import encrypt_data, decrypt_data
 from io import StringIO
 import streamlit as st
-
+from pytz import timezone  
+from datetime import datetime
 def setup_logging():
     logging.basicConfig(
         level=logging.INFO,
@@ -122,3 +123,15 @@ def create_unique_username(desired_username):
             suffix += 1
         return f"{desired_username}{suffix}"
 
+
+def get_eastern_time(expires_date, expires_time):
+    # Combine date and time
+    local_time = datetime.combine(expires_date, expires_time)
+    
+    # Define Eastern Time zone
+    eastern = timezone('US/Eastern')
+    
+    # Localize the time to Eastern Time
+    eastern_time = eastern.localize(local_time)
+    
+    return eastern_time

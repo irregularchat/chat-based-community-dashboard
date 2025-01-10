@@ -6,7 +6,6 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from utils.config import Config # This will import the Config class from the config module
 from datetime import datetime, timedelta
-from pytz import timezone  
 import logging
 import os
 
@@ -256,6 +255,10 @@ def list_users(auth_api_url, headers, search_term=None):
             response = session.get(url, headers=headers, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
+            
+            # Log the response for debugging
+            logging.debug(f"API Response: {data}")
+
             users.extend(data.get('results', []))
             url = data.get('next')  # Next page URL
 
@@ -342,9 +345,7 @@ def create_invite(headers, label, expires=None):
             logging.info("API Response: %s", response.text)
         except Exception:
             pass
-
     return None, None
-
 
 def update_user_status(auth_api_url, headers, user_id, is_active):
     url = f"{auth_api_url}/core/users/{user_id}/"

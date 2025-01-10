@@ -29,7 +29,8 @@ from utils.helpers import (
     create_unique_username,
     update_LOCAL_DB,
     search_LOCAL_DB,
-    update_username
+    update_username,
+    get_eastern_time
 )
 from messages import (
     create_user_message,
@@ -440,8 +441,9 @@ def handle_form_submission(
                 st.error("Expiration date and time are required.")
                 return
 
-            expires_datetime = datetime.combine(expires_date, expires_time)
-            expires_iso = expires_datetime.isoformat()
+            # Convert to Eastern Time
+            eastern_time = get_eastern_time(expires_date, expires_time)
+            expires_iso = eastern_time.isoformat()
 
             invite_link, invite_expires = create_invite(headers, invite_label, expires_iso)
             if invite_link:
@@ -451,16 +453,20 @@ def handle_form_submission(
 
         elif operation == "List and Manage Users":
             search_query = username_input.strip()
-            # Allow empty search_query to fetch all users
+            st.write(f"Search Query: {search_query}")  # Debugging output
 
             # First, search the local database
             local_users = search_LOCAL_DB(search_query)
+            st.write(f"Local Users Found: {local_users}")  # Debugging output
+
             if not local_users.empty:
                 st.session_state['user_list'] = local_users.to_dict(orient='records')
                 st.session_state['message'] = "Users found in local database."
             else:
                 # If not found locally or search query is empty, search using the API
                 users = list_users(Config.AUTHENTIK_API_URL, headers, search_query)
+                st.write(f"API Users Found: {users}")  # Debugging output
+
                 if users:
                     st.session_state['user_list'] = users
                     st.session_state['message'] = "Users found via API."

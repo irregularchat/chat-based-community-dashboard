@@ -11,6 +11,10 @@ def render_create_user_form():
         if key not in st.session_state:
             st.session_state[key] = ""
 
+    # Define a callback to update the username
+    def update_username_callback():
+        update_username()
+
     # Check if the parse button was pressed in a previous run
     if "parsed" in st.session_state and st.session_state["parsed"]:
         # Update session state with the parsed values
@@ -22,8 +26,25 @@ def render_create_user_form():
         st.session_state["intro_input"] = parsed["intro"].get("organization", "")  # Only organization for intro
         st.session_state["parsed"] = False  # Reset the parsed flag
 
-        # Update the username after parsing
-        update_username()
+    # Update the username before rendering the form
+    update_username()
+
+    # Inputs outside the form to allow callbacks
+    col1, col2 = st.columns(2)
+    with col1:
+        first_name = st.text_input(
+            "Enter First Name", 
+            key="first_name_input",
+            placeholder="e.g., John",
+            on_change=update_username_callback
+        )
+    with col2:
+        last_name = st.text_input(
+            "Enter Last Name", 
+            key="last_name_input",
+            placeholder="e.g., Doe",
+            on_change=update_username_callback
+        )
 
     with st.form("create_user_form"):
         # Draw input widgets referencing session state as the source of truth
@@ -32,20 +53,6 @@ def render_create_user_form():
             key="username_input",
             placeholder="e.g., johndoe123"
         )
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            first_name = st.text_input(
-                "Enter First Name", 
-                key="first_name_input",
-                placeholder="e.g., John"
-            )
-        with col2:
-            last_name = st.text_input(
-                "Enter Last Name", 
-                key="last_name_input",
-                placeholder="e.g., Doe"
-            )
 
         invited_by = st.text_input(
             "Invited by (optional)", 

@@ -54,7 +54,6 @@ class Config:
         "SHLINK_URL": SHLINK_URL,
         "AUTHENTIK_API_URL": AUTHENTIK_API_URL,
         "WEBHOOK_URL": WEBHOOK_URL,
-        "WEBHOOK_SECRET": WEBHOOK_SECRET
     }
     
     missing_vars = [var_name for var_name, var in required_vars.items() if var is None]

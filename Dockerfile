@@ -25,7 +25,7 @@ RUN pip install --upgrade pip && \
 COPY . .
 
 # Expose the port Streamlit will run on (optional)
-EXPOSE 8501
+EXPOSE 8503
 
 # Command to run the Streamlit app using a shell to handle environment variable substitution
-CMD ["sh", "-c", "streamlit run /app/app/main.py --server.port=${PORT:-8501} --server.enableCORS=false"]
+CMD ["sh", "-c", "streamlit run /app/app/main.py --server.port=${PORT:-8503} --server.enableCORS=false"]

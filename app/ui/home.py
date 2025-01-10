@@ -401,12 +401,12 @@ def handle_form_submission(
                 created_username = new_user.get('username', new_username)
                 create_user_message(created_username, temp_password)
                 # Send a webhook notification
-                st.success(f"User '{created_username}' created successfully with a temporary password.") # show success message to webuser
                 """webhook_notification
                 function is defined in auth/api.py and is called here. 
                 New format def webhook_notification(event_type, username=None, full_name=None, email=None, intro=None, invited_by=None, password=None):
                 """
-                webhook_notification("user_created", new_username, full_name, email, intro, invited_by, temp_password)
+                webhook_notification("user_created", created_username, full_name, email, intro, invited_by, temp_password)
+                st.success(f"User '{created_username}' created successfully with a temporary password.")
             else:
                 st.error("Failed to create user. Please verify inputs and try again.")
         elif operation == "Reset User Password":

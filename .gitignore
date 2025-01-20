@@ -23,3 +23,11 @@ __pycache__/
 *.db
 *.csv
 users.csv
+
+# postgres from /app/db/postgres
+pg_dump.sql
+app/db/postgres/
+
+# postgres data directory
+app/db/postgres_data/
+app/db/postgres_data/*

@@ -236,12 +236,8 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
 def list_users(auth_api_url, headers, search_term=None):
     """List users, optionally filtering by a search term, handling pagination to fetch all users."""
     try:
-        params = {
-            'page_size': 750  # Adjust based on API limits
-        }
-        if search_term:
-            params['search'] = search_term
-
+        # First get all users since the API search might not catch attribute contents
+        params = {'page_size': 750}
         users = []
         url = f"{auth_api_url}/core/users/"
 
@@ -249,11 +245,37 @@ def list_users(auth_api_url, headers, search_term=None):
             response = session.get(url, headers=headers, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
-            users.extend(data.get('results', []))
-            url = data.get('next')  # Next page URL
-
-            # After the first request, clear params to avoid sending them again
-            params = {}
+            
+            if search_term:
+                search_term_lower = search_term.lower()
+                filtered_results = []
+                for user in data.get('results', []):
+                    # Get all searchable fields
+                    searchable_text = []
+                    
+                    # Add standard fields
+                    searchable_text.extend([
+                        str(user.get('username', '')).lower(),
+                        str(user.get('name', '')).lower(),
+                        str(user.get('email', '')).lower()
+                    ])
+                    
+                    # Add attributes content
+                    attributes = user.get('attributes', {})
+                    if isinstance(attributes, dict):
+                        # Add all attribute values to searchable text
+                        searchable_text.extend(str(value).lower() for value in attributes.values())
+                    
+                    # Check if search term is in any of the searchable text
+                    if any(search_term_lower in text for text in searchable_text):
+                        filtered_results.append(user)
+                
+                users.extend(filtered_results)
+            else:
+                users.extend(data.get('results', []))
+            
+            url = data.get('next')
+            params = {}  # Clear params after first request
 
         logging.info(f"Total users fetched: {len(users)}")
         return users

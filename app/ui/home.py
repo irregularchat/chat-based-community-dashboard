@@ -6,7 +6,6 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 import json
-import pandas as pd
 from utils.config import Config
 from auth.api import (
     create_user,
@@ -23,7 +22,7 @@ from auth.api import (
     list_users,
     webhook_notification
 )
-from ui.forms import render_create_user_form, render_invite_form
+from ui.forms import render_create_user_form, render_invite_form, display_user_list
 from utils.helpers import (
     get_existing_usernames,
     create_unique_username,
@@ -64,205 +63,6 @@ def reset_form():
     ]:
         if key in st.session_state:
             del st.session_state[key]
-
-def display_user_list(auth_api_url, headers):
-    if 'user_list' in st.session_state and st.session_state['user_list']:
-        users = st.session_state['user_list']
-        st.subheader("User List")
-
-        # Create DataFrame
-        df = pd.DataFrame(users)
-
-        # Determine the identifier field
-        identifier_field = None
-        for field in ['username', 'name', 'email']:
-            if field in df.columns:
-                identifier_field = field
-                break
-
-        if not identifier_field:
-            st.error("No suitable identifier field found in user data.")
-            logging.error("No suitable identifier field found in DataFrame.")
-            return
-
-        # Limit the displayed columns
-        display_columns = ['username', 'name', 'is_active', 'last_login', 'email', 'attributes']
-        display_columns = [col for col in display_columns if col in df.columns]
-
-        # Include 'id' and 'pk' columns if they exist
-        identifier_columns = ['id', 'pk']
-        available_identifier_columns = [col for col in identifier_columns if col in df.columns]
-
-        if not available_identifier_columns:
-            st.error("User data does not contain 'id' or 'pk' fields required for performing actions.")
-            logging.error("No 'id' or 'pk' fields in user data.")
-            return
-
-        # Combine columns to be used in the DataFrame
-        all_columns = display_columns + available_identifier_columns
-
-        # Update the DataFrame with available columns
-        df = df[all_columns]
-
-        # Process 'attributes' column
-        if 'attributes' in df.columns:
-            df['attributes'] = df['attributes'].apply(
-                lambda x: json.dumps(x, indent=2) if isinstance(x, dict) else str(x)
-            )
-
-        # Build AgGrid options
-        gb = GridOptionsBuilder.from_dataframe(df)
-
-        # Configure default columns (make all columns filterable, sortable, and resizable)
-        gb.configure_default_column(filter=True, sortable=True, resizable=True)
-
-        # Hide 'id' and 'pk' columns if they are present
-        gb.configure_columns(available_identifier_columns, hide=True)
-
-        # Configure selection
-        gb.configure_selection(
-            selection_mode='multiple',
-            use_checkbox=True,
-            header_checkbox=True  # Enable header checkbox for "Select All"
-        )
-
-        # Page size options
-        page_size_options = [100, 250, 500, 1000]
-        page_size = st.selectbox("Page Size", options=page_size_options, index=2)
-
-        # Configure grid options
-        gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=page_size)
-        gb.configure_side_bar()
-        gb.configure_grid_options(domLayout='normal')
-        grid_options = gb.build()
-
-        # Adjust table height
-        table_height = 800
-
-        # Action dropdown and Apply button above the table
-        action_col, button_col = st.columns([3, 1])
-        with action_col:
-            action = st.selectbox("Select Action", [
-                "Activate", "Deactivate", "Reset Password", "Delete", "Add Intro", "Add Invited By"
-            ])
-            # Add action-specific inputs here
-            if action == "Reset Password":
-                use_password_generator = st.checkbox("Use Password Generator", value=True)
-                if not use_password_generator:
-                    new_password = st.text_input("Enter new password", type="password", key="reset_password_input")
-            elif action == "Add Intro":
-                intro_text = st.text_area("Enter Intro Text", height=2, key="add_intro_textarea")
-            elif action == "Add Invited By":
-                invited_by = st.text_input("Enter Invited By", key="add_invited_by_input")
-        with button_col:
-            apply_button = st.button("Apply")
-
-        # Display AgGrid table
-        grid_response = AgGrid(
-            df,
-            gridOptions=grid_options,
-            data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-            update_mode=GridUpdateMode.MODEL_CHANGED,
-            fit_columns_on_grid_load=True,
-            enable_enterprise_modules=False,
-            theme='alpine',
-            height=table_height,
-            width='100%',
-            reload_data=True
-        )
-
-        selected_rows = grid_response['selected_rows']
-        selected_users = pd.DataFrame(selected_rows)
-
-        st.write(f"Selected Users: {len(selected_users)}")
-
-        # Action dropdown and Apply button below the table
-        action_col_below, button_col_below = st.columns([3, 1])
-        with action_col_below:
-            action_below = st.selectbox("Select Action", [
-                "Activate", "Deactivate", "Reset Password", "Delete", "Add Intro", "Add Invited By"
-            ], key="action_below")
-        with button_col_below:
-            apply_button_below = st.button("Apply", key="apply_below")
-
-        # Initialize a message variable
-        action_message = ""
-
-        # Determine which apply button was pressed
-        if apply_button or apply_button_below:
-            if not selected_users.empty:
-                # Action-specific inputs
-                if action == "Reset Password":
-                    if use_password_generator:
-                        new_passwords = {user['username']: generate_secure_passphrase() for _, user in selected_users.iterrows()}
-                    else:
-                        new_password = st.text_input("Enter new password", type="password", key="reset_password_input_top")
-                        new_passwords = {user['username']: new_password for _, user in selected_users.iterrows()}
-                elif action == "Add Intro":
-                    intro_text = st.text_area("Enter Intro Text", height=2, key="add_intro_textarea_top")
-                elif action == "Add Invited By":
-                    invited_by = st.text_input("Enter Invited By", key="add_invited_by_input_top")
-
-                try:
-                    success_count = 0
-                    for _, user in selected_users.iterrows():
-                        user_id = None
-                        for col in available_identifier_columns:
-                            if col in user and pd.notna(user[col]):
-                                user_id = user[col]
-                                break
-                        if not user_id:
-                            action_message = f"User {user[identifier_field]} does not have a valid ID."
-                            st.error(action_message)
-                            continue
-
-                        # Perform the selected action
-                        if action == "Activate":
-                            result = update_user_status(auth_api_url, headers, user_id, True)
-                        elif action == "Deactivate":
-                            result = update_user_status(auth_api_url, headers, user_id, False)
-                        elif action == "Reset Password":
-                            if new_passwords[user['username']]:
-                                result = reset_user_password(auth_api_url, headers, user_id, new_passwords[user['username']])
-                                if result:
-                                    st.success(f"Password for user {user[identifier_field]} has been reset.")
-                            else:
-                                action_message = "Please enter a new password"
-                                st.warning(action_message)
-                                continue
-                        elif action == "Delete":
-                            result = delete_user(auth_api_url, headers, user_id)
-                        elif action == "Add Intro":
-                            result = update_user_intro(auth_api_url, headers, user_id, intro_text)
-                        elif action == "Add Invited By":
-                            result = update_user_invited_by(auth_api_url, headers, user_id, invited_by)
-                        else:
-                            result = None
-
-                        if result:
-                            success_count += 1
-
-                    if action == "Reset Password":
-                        multi_recovery_message(selected_users.to_dict(orient='records'))
-
-                    action_message = f"{action} action applied successfully to {success_count} out of {len(selected_users)} selected users."
-                    st.success(action_message)
-                except Exception as e:
-                    action_message = f"An error occurred while applying {action} action: {e}"
-                    st.error(action_message)
-            else:
-                action_message = "No users selected."
-                st.info(action_message)
-
-        # Display the message at the top section
-        if action_message:
-            st.write(action_message)
-
-        # Display the message at the bottom section
-        if action_message:
-            st.write(action_message)
-    else:
-        st.info("No users found.")
 
 def render_home_page():
     # Initialize session state variables
@@ -344,6 +144,12 @@ def render_home_page():
                 None,
                 None
             )
+        
+        # Always try to display the user list if there's data in session state
+        if 'user_list' in st.session_state and st.session_state['user_list']:
+            display_user_list(Config.AUTHENTIK_API_URL, headers)
+        elif search_button:  # Only show "no results" message if search was attempted
+            st.info("No users found matching your search criteria.")
 
 
 def handle_form_submission(
@@ -441,32 +247,39 @@ def handle_form_submission(
 
         elif operation == "List and Manage Users":
             search_query = username_input.strip()
-            st.write(f"Search Query: {search_query}")  # Debugging output
-
-            # First, search the local database
+            
+            # First, search the local database including attributes/intro
             local_users = search_LOCAL_DB(search_query)
-            st.write(f"Local Users Found: {local_users}")  # Debugging output
-
+            
             if not local_users.empty:
                 st.session_state['user_list'] = local_users.to_dict(orient='records')
-                st.session_state['message'] = "Users found in local database."
             else:
                 # If not found locally or search query is empty, search using the API
                 users = list_users(Config.AUTHENTIK_API_URL, headers, search_query)
-                st.write(f"API Users Found: {users}")  # Debugging output
-
+                
                 if users:
-                    st.session_state['user_list'] = users
-                    st.session_state['message'] = "Users found via API."
+                    # Process the users list to make attributes searchable
+                    processed_users = []
+                    for user in users:
+                        # Extract intro from attributes if it exists
+                        attributes = user.get('attributes', {})
+                        intro = attributes.get('intro', '') if isinstance(attributes, dict) else ''
+                        
+                        # Add intro to searchable text
+                        if search_query.lower() in intro.lower():
+                            processed_users.append(user)
+                        elif any(search_query.lower() in str(value).lower() for value in user.values()):
+                            processed_users.append(user)
+                    
+                    st.session_state['user_list'] = processed_users
                 else:
                     st.session_state['user_list'] = []
-                    st.session_state['message'] = "No users found."
 
-            # Logging and debugging (optional)
-            logging.debug(f"user_list data: {st.session_state['user_list']}")
+            # Display user list if there are results
             if st.session_state['user_list']:
-                first_user = st.session_state['user_list'][0]
-                logging.debug(f"First user keys: {first_user.keys()}")
+                display_user_list(Config.AUTHENTIK_API_URL, headers)
+            else:
+                st.info("No users found matching your search criteria.")
 
     except Exception as e:
         st.error(f"An error occurred during '{operation}': {e}")

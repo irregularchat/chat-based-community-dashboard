@@ -114,16 +114,42 @@ def render_home_page():
             )
     elif operation == "Create Invite":
         invite_label, expires_date, expires_time = render_invite_form()
-        # Handle invite creation logic here
-        invite_button = st.button("Create Invite")
-        if invite_button:
-            handle_form_submission(
-                action=operation,
-                username=None,
-                invited_by=None,
-                intro=None,
-                verification_context=None
-            )
+        
+        if st.button("Create Invite"):
+            if not invite_label:
+                st.error("Please provide an invite label")
+                return
+            
+            try:
+                # Combine date and time into a datetime object in Eastern timezone
+                eastern = timezone('US/Eastern')
+                expires_datetime = eastern.localize(datetime.combine(expires_date, expires_time))
+                
+                # Log the expiration time for debugging
+                logging.info(f"Creating invite with label: {invite_label}")
+                logging.info(f"Expiration datetime: {expires_datetime}")
+                
+                # Call create_invite with the proper parameters
+                invite_url, expires = create_invite(headers, invite_label, expires_datetime)
+                
+                if invite_url:
+                    # Call create_invite_message with the URL and expiration
+                    create_invite_message(invite_label, invite_url, expires_datetime)
+                    
+                    # Add to timeline
+                    with next(get_db()) as db:
+                        add_timeline_event(
+                            db,
+                            "invite_created",
+                            "system",
+                            f"Created invite with label: {invite_label}"
+                        )
+                else:
+                    st.error("Failed to create invite. Check the logs for details.")
+                
+            except Exception as e:
+                logging.error(f"Error in invite creation: {e}")
+                st.error(f"Error creating invite: {e}")
     elif operation == "List and Manage Users":
         st.markdown("""
             ### Search Help

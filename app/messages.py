@@ -73,20 +73,12 @@ def multi_recovery_message(user_list):
 
     st.session_state['user_list'] = None  # Clear user list if there was any
 
-def create_invite_message(label, invite_link, invite_expires):
+def create_invite_message(label, invite_url, expires_datetime):
     """Generate and display the invite message."""
-    # Call create_invite to get the invite link and expiration
-    headers = {
-        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-        'Content-Type': 'application/json'
-    }
-    
-    invite_link, invite_expires = create_invite(headers, label)
-    
-    if invite_expires:
+    if invite_url:
         eastern = timezone('US/Eastern')
-        invite_expires_time = datetime.fromisoformat(invite_expires.replace('Z', '+00:00')).astimezone(eastern)
-        time_remaining = invite_expires_time - datetime.now(eastern)
+        now = datetime.now(eastern)
+        time_remaining = expires_datetime - now
         hours, remainder = divmod(int(time_remaining.total_seconds()), 3600)
         minutes, _ = divmod(remainder, 60)
 
@@ -94,14 +86,15 @@ def create_invite_message(label, invite_link, invite_expires):
         💣 This Invite Will Self Destruct! ⏳
         This is how you get an IrregularChat Login and how you can see all the chats and services:
         
-        IrregularChat Temp Invite ⏭️ : {invite_link}
+        IrregularChat Temp Invite ⏭️ : {invite_url}
         ⏲️ Invite Expires: {hours} hours and {minutes} minutes from now
         
         🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
         Login to the wiki with that Irregular Chat Login and visit https://forum.irregularchat.com/t/84/
         """
         st.code(invite_message)
+        st.session_state['message'] = invite_message
         st.session_state['user_list'] = None
         st.success("Invite created successfully!")
     else:
-        st.error("Invite creation failed.")
+        st.error("Failed to generate invite message - no invite URL provided.")

@@ -20,9 +20,9 @@ def should_sync_users(db: SessionLocal) -> bool:
             .order_by(AdminEvent.timestamp.desc())\
             .first()
         
-        # If no sync record or last sync was more than 1 hour ago
+        # If no sync record or last sync was more than 6 hours ago
         if not last_sync or \
-           (datetime.now() - last_sync.timestamp) > timedelta(hours=1):
+           (datetime.now() - last_sync.timestamp) > timedelta(hours=6):
             return True
 
         # Get local user count
@@ -36,14 +36,18 @@ def should_sync_users(db: SessionLocal) -> bool:
         authentik_users = list_users(Config.AUTHENTIK_API_URL, headers)
         authentik_count = len(authentik_users) if authentik_users else 0
         
-        # If counts differ significantly (more than 5% difference)
-        if abs(local_count - authentik_count) > (local_count * 0.05):
+        # If counts differ significantly (more than 10% difference)
+        if abs(local_count - authentik_count) > (local_count * 0.10):
             return True
             
         return False
     except Exception as e:
         logging.error(f"Error checking sync status: {e}")
-        return True  # Sync on error to be safe
+        # Only sync on error if there's no recent sync
+        if not last_sync or \
+           (datetime.now() - last_sync.timestamp) > timedelta(hours=12):
+            return True
+        return False
 
 def init_db():
     """Initialize database tables and sync with Authentik users if needed"""

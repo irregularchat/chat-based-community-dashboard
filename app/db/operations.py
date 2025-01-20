@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON, cast, String
 from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import JSONB
 from db.database import Base  # Make sure we're using the same Base
 from typing import List, Dict, Any
 from datetime import datetime
@@ -101,12 +102,47 @@ def search_users(db: Session, search_term: str) -> List[User]:
     if not search_term:
         return db.query(User).all()
     
-    return db.query(User).filter(
-        (User.username.ilike(f'%{search_term}%')) |
-        (User.name.ilike(f'%{search_term}%')) |
-        (User.email.ilike(f'%{search_term}%')) |
-        (User.attributes.cast(String).ilike(f'%{search_term}%'))
-    ).all()
+    # Parse search terms
+    search_filters = {}
+    terms = search_term.split()
+    general_terms = []
+    
+    for term in terms:
+        if ':' in term:
+            column, value = term.split(':', 1)
+            search_filters[column.lower()] = value.lower()
+        else:
+            general_terms.append(term.lower())
+
+    # Build the query
+    query = db.query(User)
+    
+    # Apply column-specific filters
+    for column, value in search_filters.items():
+        if column == 'username':
+            query = query.filter(User.username.ilike(f'%{value}%'))
+        elif column == 'name':
+            query = query.filter(User.name.ilike(f'%{value}%'))
+        elif column == 'email':
+            query = query.filter(User.email.ilike(f'%{value}%'))
+        elif column in ['intro', 'invited_by']:
+            # Cast JSON to string before searching
+            query = query.filter(
+                cast(User.attributes[column], String).ilike(f'%{value}%')
+            )
+
+    # Apply general search terms across all fields
+    for term in general_terms:
+        query = query.filter(
+            (User.username.ilike(f'%{term}%')) |
+            (User.name.ilike(f'%{term}%')) |
+            (User.email.ilike(f'%{term}%')) |
+            # Cast JSON to string before searching
+            (cast(User.attributes['intro'], String).ilike(f'%{term}%')) |
+            (cast(User.attributes['invited_by'], String).ilike(f'%{term}%'))
+        )
+
+    return query.all()
 
 def add_admin_event(db: Session, event_type: str, username: str, description: str, timestamp: datetime) -> AdminEvent:
     """Add a new admin event to the database"""

@@ -256,21 +256,64 @@ def list_users(auth_api_url, headers, search_term=None):
             response.raise_for_status()
             data = response.json()
             
-            # Log the response for debugging
-            logging.debug(f"API Response: {data}")
+            if search_term:
+                # Parse search terms into column-specific filters
+                search_filters = {}
+                terms = search_term.split()
+                for term in terms:
+                    if ':' in term:
+                        column, value = term.split(':', 1)
+                        search_filters[column.lower()] = value.lower()
+                    else:
+                        # If no column specified, search all columns
+                        search_filters['general'] = term.lower()
 
-            users.extend(data.get('results', []))
-            url = data.get('next')  # Next page URL
-
-            # After the first request, clear params to avoid sending them again
+                filtered_results = []
+                for user in data.get('results', []):
+                    match = True
+                    
+                    # Check each filter
+                    for column, value in search_filters.items():
+                        if column == 'general':
+                            # Search all searchable fields
+                            searchable_text = [
+                                str(user.get('username', '')).lower(),
+                                str(user.get('name', '')).lower(),
+                                str(user.get('email', '')).lower(),
+                                str(user.get('attributes', {}).get('intro', '')).lower(),
+                                str(user.get('attributes', {}).get('invited_by', '')).lower()
+                            ]
+                            if not any(value in text for text in searchable_text):
+                                match = False
+                                break
+                        else:
+                            # Column-specific search
+                            if column in ['intro', 'invited_by']:
+                                field_value = str(user.get('attributes', {}).get(column, '')).lower()
+                            else:
+                                field_value = str(user.get(column, '')).lower()
+                            
+                            if value not in field_value:
+                                match = False
+                                break
+                    
+                    if match:
+                        filtered_results.append(user)
+                
+                users.extend(filtered_results)
+            else:
+                users.extend(data.get('results', []))
+            
+            url = data.get('next')
             params = {}
 
         logging.info(f"Total users fetched: {len(users)}")
         return users
+        
     except requests.exceptions.RequestException as e:
         logging.error(f"Error listing users: {e}")
         return []
-       
+
 def list_users_cached(auth_api_url, headers):
     """List users with caching to reduce API calls."""
     try:

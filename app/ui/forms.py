@@ -216,18 +216,22 @@ def display_user_list(auth_api_url, headers):
         st.info("No users found.")
         return
 
-    # Example column formatting
-    if 'last_login' in df.columns:
-        df['last_login'] = pd.to_datetime(df['last_login']).dt.strftime('%Y-%m-%d %H:%M')
-    if 'is_active' in df.columns:
-        df['is_active'] = df['is_active'].map({True: '✓', False: '×'})
+    # Ensure intro is properly extracted from attributes if it exists
     if 'attributes' in df.columns:
         df['intro'] = df['attributes'].apply(
             lambda x: x.get('intro', '') if isinstance(x, dict) else ''
         )
+    
+    # Format the columns
+    if 'last_login' in df.columns:
+        df['last_login'] = pd.to_datetime(df['last_login']).dt.strftime('%Y-%m-%d %H:%M')
+    if 'is_active' in df.columns:
+        df['is_active'] = df['is_active'].map({True: '✓', False: '×'})
 
-    # Select and reorder columns (adjust as you prefer)
+    # Select and reorder columns - ensure name and intro are included
     columns_to_display = ['pk', 'username', 'name', 'email', 'is_active', 'last_login', 'intro']
+    # Only include columns that exist in the DataFrame
+    columns_to_display = [col for col in columns_to_display if col in df.columns]
     df = df[columns_to_display]
 
     # Build grid options

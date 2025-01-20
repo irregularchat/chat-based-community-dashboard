@@ -102,12 +102,11 @@ def get_existing_usernames():
         logging.warning("Local DB does not exist.")
         return []
 def update_username():
-    import streamlit as st  # Import here to avoid circular import issues
-    
-    # Check if parsed data has set the first and last name
+    # Retrieve and clean first and last name inputs
     first_name = st.session_state.get('first_name_input', '').strip().lower()
     last_name = st.session_state.get('last_name_input', '').strip().lower()
     
+    # Construct base username based on available inputs
     if first_name and last_name:
         base_username = f"{first_name}-{last_name[0]}"
     elif first_name:
@@ -117,6 +116,7 @@ def update_username():
     else:
         base_username = "pending"
     
+    # Replace spaces with hyphens and update session state
     st.session_state['username_input'] = base_username.replace(" ", "-")
 
 def create_unique_username(desired_username):

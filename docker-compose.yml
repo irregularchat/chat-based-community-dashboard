@@ -8,8 +8,25 @@ services:
       - MAIN_GROUP_ID=${MAIN_GROUP_ID}
       - BASE_DOMAIN=${BASE_DOMAIN}
       - PORT=${PORT}
+      - DATABASE_URL=postgresql://userapp:yourpassword@db:5432/userdb
     volumes:
       - ./app:/app/app
     env_file:
       - .env
     restart: unless-stopped
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=userdb
+      - POSTGRES_USER=userapp
+      - POSTGRES_PASSWORD=yourpassword
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:

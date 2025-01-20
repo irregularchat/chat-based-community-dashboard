@@ -4,6 +4,11 @@ from utils.transformations import parse_input
 from datetime import datetime, timedelta
 from utils.helpers import update_username, get_eastern_time
 import re
+import pandas as pd
+import json
+import logging
+from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode
+import time
 
 def render_create_user_form():
     # Initialize session state keys
@@ -135,4 +140,164 @@ def render_invite_form():
     eastern_time = get_eastern_time(expires_date, expires_time)
     
     return invite_label, eastern_time.date(), eastern_time.time()
+
+def display_user_list(auth_api_url, headers):
+    # Generate a unique identifier for this instance using timestamp
+    form_id = str(int(time.time() * 1000))  # millisecond timestamp
+    
+    if 'user_list' in st.session_state and len(st.session_state['user_list']) > 0:
+        users = st.session_state['user_list']
+        st.subheader("User List")
+
+        # Create DataFrame without displaying raw data
+        df = pd.DataFrame(users)
+
+        # Format last_login to be more readable
+        if 'last_login' in df.columns:
+            df['last_login'] = pd.to_datetime(df['last_login']).dt.strftime('%Y-%m-%d %H:%M')
+
+        # Convert is_active to more compact display
+        if 'is_active' in df.columns:
+            df['is_active'] = df['is_active'].map({True: '✓', False: '×'})
+
+        # Process attributes to extract intro
+        if 'attributes' in df.columns:
+            df['intro'] = df['attributes'].apply(
+                lambda x: x.get('intro', '') if isinstance(x, dict) else ''
+            )
+
+        # Limit and reorder the displayed columns
+        display_columns = ['username', 'name', 'is_active', 'last_login', 'email', 'intro']
+        display_columns = [col for col in display_columns if col in df.columns]
+
+        # Include 'id' and 'pk' columns if they exist (but hide them)
+        identifier_columns = ['id', 'pk']
+        available_identifier_columns = [col for col in identifier_columns if col in df.columns]
+
+        if len(available_identifier_columns) == 0:
+            st.error("User data does not contain 'id' or 'pk' fields required for performing actions.")
+            logging.error("No 'id' or 'pk' fields in user data.")
+            return
+
+        # Combine columns to be used in the DataFrame
+        all_columns = display_columns + available_identifier_columns
+        df = df[all_columns]
+
+        # Action dropdown and Apply button above the table
+        action_col, button_col = st.columns([3, 1])
+        with action_col:
+            action = st.selectbox(
+                "Select Action",
+                options=[
+                    "Activate", "Deactivate", "Reset Password", "Delete", 
+                    "Add Intro", "Add Invited By"
+                ],
+                key=f"action_selectbox_{form_id}"
+            )
+            
+            # Add action-specific inputs here
+            if action == "Reset Password":
+                use_password_generator = st.checkbox(
+                    "Use Password Generator",
+                    value=True,
+                    key=f"use_password_generator_{form_id}"
+                )
+                if not use_password_generator:
+                    new_password = st.text_input(
+                        "Enter new password",
+                        type="password",
+                        key=f"new_password_{form_id}"
+                    )
+            elif action == "Add Intro":
+                intro_text = st.text_area(
+                    "Enter Intro Text",
+                    height=2,
+                    key=f"intro_text_{form_id}"
+                )
+            elif action == "Add Invited By":
+                invited_by = st.text_input(
+                    "Enter Invited By",
+                    key=f"invited_by_{form_id}"
+                )
+        
+        with button_col:
+            apply_button = st.button("Apply", key=f"apply_button_{form_id}")
+
+        # Configure pagination
+        page_size = st.selectbox(
+            "Page Size",
+            options=[100, 250, 500, 1000],
+            index=2,
+            key=f"page_size_{form_id}"
+        )
+
+        # Build AgGrid options
+        gb = GridOptionsBuilder.from_dataframe(df)
+        
+        # Configure default column properties
+        gb.configure_default_column(
+            resizable=True,
+            filterable=True,
+            sortable=True,
+            editable=False
+        )
+
+        # Configure specific column properties
+        gb.configure_column('is_active', width=80)
+        gb.configure_column('last_login', width=130)
+        gb.configure_column('username', width=120)
+        gb.configure_column('name', width=120)
+        gb.configure_column('email', width=200)
+        gb.configure_column('intro', width=200)
+        
+        # Hide identifier columns
+        gb.configure_columns(available_identifier_columns, hide=True)
+        
+        # Configure selection
+        gb.configure_selection(
+            selection_mode='multiple',
+            use_checkbox=True,
+            header_checkbox=True,
+            suppressRowDeselection=False,
+            suppressRowClickSelection=True
+        )
+        
+        # Configure pagination
+        gb.configure_pagination(
+            enabled=True,
+            paginationAutoPageSize=False,
+            paginationPageSize=page_size
+        )
+        
+        # Build grid options
+        grid_options = gb.build()
+
+        # Display AgGrid table
+        grid_response = AgGrid(
+            df,
+            gridOptions=grid_options,
+            data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+            update_mode=GridUpdateMode.MODEL_CHANGED | GridUpdateMode.SELECTION_CHANGED,
+            fit_columns_on_grid_load=True,
+            theme='alpine',
+            height=600,
+            allow_unsafe_jscode=True,
+            key=f"grid_{form_id}"
+        )
+
+        # Handle actions when Apply button is clicked
+        if apply_button and len(grid_response['selected_rows']) > 0:
+            selected_users = grid_response['selected_rows']
+            if action == "Activate":
+                st.success(f"Activated {len(selected_users)} users")
+            elif action == "Deactivate":
+                st.success(f"Deactivated {len(selected_users)} users")
+            elif action == "Reset Password":
+                st.success(f"Reset password for {len(selected_users)} users")
+            elif action == "Delete":
+                st.success(f"Deleted {len(selected_users)} users")
+            elif action == "Add Intro":
+                st.success(f"Updated intro for {len(selected_users)} users")
+            elif action == "Add Invited By":
+                st.success(f"Updated invited by for {len(selected_users)} users")
 

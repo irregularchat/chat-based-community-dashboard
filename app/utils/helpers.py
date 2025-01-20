@@ -69,26 +69,41 @@ def load_LOCAL_DB():
 #     results = df[mask]
 #     return results
 
-def search_LOCAL_DB(query):
-    df = load_LOCAL_DB()
-    if df.empty:
-        logging.warning("Local DB is empty.")
+def search_LOCAL_DB(search_term):
+    try:
+        # Load the local database
+        df = pd.read_csv(Config.LOCAL_DB)
+        
+        if search_term:
+            search_term = search_term.lower()
+            
+            # Create a mask for each column we want to search
+            masks = []
+            
+            # Search in standard columns
+            searchable_columns = ['username', 'name', 'email']
+            for col in searchable_columns:
+                if col in df.columns:
+                    masks.append(df[col].astype(str).str.lower().str.contains(search_term, na=False))
+            
+            # Search in attributes
+            if 'attributes' in df.columns:
+                # Convert attributes to string and search within it
+                # This will search through all attribute values
+                attributes_mask = df['attributes'].apply(
+                    lambda x: search_term in str(x).lower() if pd.notnull(x) else False
+                )
+                masks.append(attributes_mask)
+            
+            # Combine all masks with OR operation
+            if masks:
+                final_mask = pd.concat(masks, axis=1).any(axis=1)
+                return df[final_mask]
+            
         return df
-
-    if query:
-        # Perform a case-insensitive search across multiple fields
-        mask = (
-            df['username'].str.contains(query, case=False, na=False) |
-            df['email'].str.contains(query, case=False, na=False) |
-            df['name'].str.contains(query, case=False, na=False) |
-            df['attributes'].astype(str).str.contains(query, case=False, na=False)
-        )
-        results = df[mask]
-    else:
-        # If query is empty, return all users
-        results = df
-
-    return results
+    except Exception as e:
+        logging.error(f"Error searching LOCAL_DB: {e}")
+        return pd.DataFrame()
 
 def get_existing_usernames():
     if os.path.exists(Config.LOCAL_DB):

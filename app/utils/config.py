@@ -29,20 +29,7 @@ class Config:
     FAVICON_URL = os.getenv("FAVICON_URL", "default_favicon.ico")
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
-    # # Log loaded environment variables (mask sensitive data)
-    # logger.info("Loaded Environment Variables:")
-    # logger.info(f"AUTHENTIK_API_TOKEN: {'****' if AUTHENTIK_API_TOKEN else None}")
-    # logger.info(f"MAIN_GROUP_ID: {MAIN_GROUP_ID}")
-    # logger.info(f"BASE_DOMAIN: {BASE_DOMAIN}")
-    # logger.info(f"FLOW_ID: {FLOW_ID}")
-    # # logger.info(f"ENCRYPTION_KEY: {'****' if ENCRYPTION_KEY else None}")  # Commented out
-    # logger.info(f"SHLINK_API_TOKEN: {'****' if SHLINK_API_TOKEN else None}")
-    # logger.info(f"SHLINK_URL: {SHLINK_URL}")
-    # logger.info(f"AUTHENTIK_API_URL: {AUTHENTIK_API_URL}")
-    # logger.info(f"PAGE_TITLE: {PAGE_TITLE}")
-    # logger.info(f"FAVICON_URL: {FAVICON_URL}")
-    # logger.info(f"WEBHOOK_URL: {WEBHOOK_URL}")
-    # logger.info(f"WEBHOOK_SECRET: {WEBHOOK_SECRET}")
+    DATABASE_URL = os.getenv("DATABASE_URL")
 
     # Validate critical configurations
     required_vars = {
@@ -54,6 +41,7 @@ class Config:
         "SHLINK_URL": SHLINK_URL,
         "AUTHENTIK_API_URL": AUTHENTIK_API_URL,
         "WEBHOOK_URL": WEBHOOK_URL,
+        "DATABASE_URL": DATABASE_URL,
     }
     
     missing_vars = [var_name for var_name, var in required_vars.items() if var is None]

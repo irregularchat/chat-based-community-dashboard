@@ -1,7 +1,6 @@
 # app/messages.py
 import streamlit as st
-from auth.api import shorten_url, force_password_reset, generate_secure_passphrase, create_invite  # Ensure create_invite is imported
-from utils.helpers import update_LOCAL_DB
+from auth.api import shorten_url, force_password_reset, generate_secure_passphrase, create_invite
 from pytz import timezone
 from datetime import datetime
 import logging
@@ -30,7 +29,6 @@ def create_user_message(new_username, temp_password):
     """
     st.code(welcome_message)
     st.session_state['message'] = welcome_message
-    update_LOCAL_DB()
     st.session_state['user_list'] = None  # Clear user list if there was any
     st.success("User created successfully!")
 

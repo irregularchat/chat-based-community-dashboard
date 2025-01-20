@@ -2,89 +2,145 @@
 import streamlit as st
 from utils.transformations import parse_input
 from datetime import datetime, timedelta
-from utils.helpers import update_username, get_eastern_time
+from utils.helpers import (
+    update_username, 
+    get_eastern_time, 
+    add_timeline_event,
+    handle_form_submission
+)
+from db.operations import AdminEvent
+from db.database import get_db
+from db.init_db import should_sync_users
 import re
 import pandas as pd
 import json
 import logging
-from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode
+from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode, ColumnsAutoSizeMode
 import time
+import warnings
+import requests
+
+def reset_create_user_form_fields():
+    """Helper function to reset all fields related to create user."""
+    keys_to_reset = [
+        "username_input",
+        "first_name_input",
+        "last_name_input",
+        "email_input",
+        "invited_by_input",
+        "data_to_parse_input",
+        "intro_input"
+    ]
+    
+    # Set a flag in session state to indicate we should clear fields
+    st.session_state['clear_fields'] = True
+    
+    # Store current values temporarily to detect changes
+    old_values = {key: st.session_state.get(key, "") for key in keys_to_reset}
+    st.session_state['old_values'] = old_values
+
+def parse_and_rerun():
+    """Callback to parse data and rerun the script so widgets see updated session state."""
+    # Parse the data from the text area
+    parsed = parse_input(st.session_state["data_to_parse_input"])
+
+    # Update session state
+    st.session_state["first_name_input"] = parsed.get("first_name", st.session_state["first_name_input"])
+    st.session_state["last_name_input"] = parsed.get("last_name", st.session_state["last_name_input"])
+    st.session_state["email_input"] = parsed.get("email", st.session_state["email_input"])
+    st.session_state["invited_by_input"] = parsed.get("invited_by", st.session_state["invited_by_input"])
+    st.session_state["intro_input"] = parsed["intro"].get("organization", "")
+
+    # Rerun so the text inputs see the updated session state
+    st.rerun()
 
 def render_create_user_form():
-    # Initialize session state keys
-    for key in ["username_input", "first_name_input", "last_name_input", "invited_by_input", "email_input", "data_to_parse_input", "intro_input"]:
+    # 1. Check if we need to clear fields (do this before any widgets are created)
+    if st.session_state.get('clear_fields', False):
+        # Clear all the fields
+        for key in [
+            "username_input",
+            "first_name_input",
+            "last_name_input",
+            "email_input",
+            "invited_by_input",
+            "data_to_parse_input",
+            "intro_input"
+        ]:
+            if key in st.session_state:
+                del st.session_state[key]
+        
+        # Reset the clear flag
+        del st.session_state['clear_fields']
+        # Rerun to start fresh
+        st.rerun()
+
+    # 2. Initialize session state keys
+    for key in [
+        "username_input",
+        "first_name_input",
+        "last_name_input",
+        "invited_by_input",
+        "email_input",
+        "data_to_parse_input",
+        "intro_input"
+    ]:
         if key not in st.session_state:
             st.session_state[key] = ""
 
-    # Define a callback to update the username
+    # 3. Update username whenever first/last name changes
     def update_username_callback():
         update_username()
 
-    # Check if the parse button was pressed in a previous run
-    if "parsed" in st.session_state and st.session_state["parsed"]:
-        # Update session state with the parsed values
-        parsed = parse_input(st.session_state["data_to_parse_input"])
-        st.session_state["first_name_input"] = parsed.get("first_name", st.session_state["first_name_input"])
-        st.session_state["last_name_input"] = parsed.get("last_name", st.session_state["last_name_input"])
-        st.session_state["email_input"] = parsed.get("email", st.session_state["email_input"])
-        st.session_state["invited_by_input"] = parsed.get("invited_by", st.session_state["invited_by_input"])
-        st.session_state["intro_input"] = parsed["intro"].get("organization", "")  # Only organization for intro
-        st.session_state["parsed"] = False  # Reset the parsed flag
-
-    # Update the username before rendering the form
+    # 4. Update username *before* widgets are created
     update_username()
 
-    # Inputs outside the form to allow callbacks
+    # 5. Inputs outside the form to allow the on_change callbacks
     col1, col2 = st.columns(2)
     with col1:
-        first_name = st.text_input(
-            "Enter First Name", 
+        st.text_input(
+            "Enter First Name",
             key="first_name_input",
             placeholder="e.g., John",
             on_change=update_username_callback
         )
     with col2:
-        last_name = st.text_input(
-            "Enter Last Name", 
+        st.text_input(
+            "Enter Last Name",
             key="last_name_input",
             placeholder="e.g., Doe",
             on_change=update_username_callback
         )
 
     with st.form("create_user_form"):
-        # Draw input widgets referencing session state as the source of truth
-        username = st.text_input(
-            "Enter Username", 
+        # Text inputs
+        st.text_input(
+            "Enter Username",
             key="username_input",
             placeholder="e.g., johndoe123"
         )
-
-        invited_by = st.text_input(
-            "Invited by (optional)", 
+        st.text_input(
+            "Invited by (optional)",
             key="invited_by_input",
             placeholder="Signal Username e.g., @janedoe"
         )
-
-        email_input = st.text_input(
-            "Enter Email Address (optional)", 
+        st.text_input(
+            "Enter Email Address (optional)",
             key="email_input",
             placeholder="e.g., johndoe@example.com"
         )
-
-        intro = st.text_area(
-            "Intro", 
-            key="intro_input", 
+        st.text_area(
+            "Intro",
+            key="intro_input",
             height=100,
             placeholder="e.g., Software Engineer at TechCorp"
         )
-
-        # Custom style for the "Data to Parse" box
-        st.markdown(
-            # This is a hack to focus the data_to_parse_input box when the page loads
-            """
+        
+        # Text area for data parsing
+        st.markdown("""
             <style>
             .data-to-parse {
-                background-color: #e0e0e0;  /* Lighter shade for distinction */
+                background-color: #e0e0e0; 
                 padding: 10px;
                 border-radius: 5px;
             }
@@ -94,26 +150,28 @@ def render_create_user_form():
                 document.getElementById('data_to_parse_input').focus();
             });
             </script>
-            """,
-            unsafe_allow_html=True
-        )
-
+            """, unsafe_allow_html=True)
+        
         st.markdown('<div class="data-to-parse">', unsafe_allow_html=True)
-        data_to_parse = st.text_area(
-            "Data to Parse", 
-            key="data_to_parse_input", 
+        st.text_area(
+            "Data to Parse",
+            key="data_to_parse_input",
             height=180,
-            placeholder="(Optional Method. Take User's Intro and parse it.) \n1. John Doe\n2. TechCorp\n3. @janedoe\n4. johndoe@example.com\n5. Interested in AI, ML, and Data Science"
+            placeholder="(Optional) Paste user intro info here..."
         )
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Buttons
-        parse_button = st.form_submit_button("Parse")
-        if parse_button:
-            st.session_state["parsed"] = True
-            st.rerun()
+        # 6. Bind parse button to the parse_and_rerun callback
+        parse_button = st.form_submit_button("Parse", on_click=parse_and_rerun)
 
+        # 7. Submit and clear
         submit_button = st.form_submit_button("Submit")
+        clear_button = st.form_submit_button("Clear All Fields")
+
+    # Reset fields on Clear
+    if clear_button:
+        reset_create_user_form_fields()
+        st.rerun()
 
     # Return the final values from session state
     return (
@@ -142,174 +200,180 @@ def render_invite_form():
     return invite_label, eastern_time.date(), eastern_time.time()
 
 def display_user_list(auth_api_url, headers):
+    warnings.filterwarnings('ignore', category=FutureWarning, message='DataFrame.applymap has been deprecated')
+
+    # Ensure we always have a place to store selections
+    if 'persisted_selection' not in st.session_state:
+        st.session_state['persisted_selection'] = []
+
     if 'user_list' not in st.session_state or not st.session_state['user_list']:
         return
 
-    # Cache the DataFrame in session state
-    if 'df_cache' not in st.session_state:
-        df = pd.DataFrame(st.session_state['user_list'])
-        st.session_state['df_cache'] = df
-    else:
-        df = st.session_state['df_cache']
+    df = pd.DataFrame(st.session_state['user_list'])
 
-    # Only update cache if user list has changed
-    if len(st.session_state['user_list']) != len(st.session_state['df_cache']):
-        df = pd.DataFrame(st.session_state['user_list'])
-        st.session_state['df_cache'] = df
+    # If DataFrame is empty, stop
+    if df.empty:
+        st.info("No users found.")
+        return
 
-    # Generate a unique identifier for this instance using timestamp
-    form_id = str(int(time.time() * 1000))  # millisecond timestamp
-    
-    if 'user_list' in st.session_state and len(st.session_state['user_list']) > 0:
-        users = st.session_state['user_list']
-        st.subheader("User List")
+    # Example column formatting
+    if 'last_login' in df.columns:
+        df['last_login'] = pd.to_datetime(df['last_login']).dt.strftime('%Y-%m-%d %H:%M')
+    if 'is_active' in df.columns:
+        df['is_active'] = df['is_active'].map({True: '✓', False: '×'})
+    if 'attributes' in df.columns:
+        df['intro'] = df['attributes'].apply(
+            lambda x: x.get('intro', '') if isinstance(x, dict) else ''
+        )
 
-        # Format last_login to be more readable
-        if 'last_login' in df.columns:
-            df['last_login'] = pd.to_datetime(df['last_login']).dt.strftime('%Y-%m-%d %H:%M')
+    # Select and reorder columns (adjust as you prefer)
+    columns_to_display = ['pk', 'username', 'name', 'email', 'is_active', 'last_login', 'intro']
+    df = df[columns_to_display]
 
-        # Convert is_active to more compact display
-        if 'is_active' in df.columns:
-            df['is_active'] = df['is_active'].map({True: '✓', False: '×'})
+    # Build grid options
+    gb = GridOptionsBuilder.from_dataframe(df)
+    gb.configure_default_column(resizable=True, filterable=True, sortable=True, editable=False)
 
-        # Process attributes to extract intro
-        if 'attributes' in df.columns:
-            df['intro'] = df['attributes'].apply(
-                lambda x: x.get('intro', '') if isinstance(x, dict) else ''
-            )
+    # Configure selection, reapplying existing selection
+    gb.configure_selection(
+        selection_mode='multiple',
+        use_checkbox=True,
+        header_checkbox=True,
+        # We use "pre_selected_rows" to highlight rows previously selected
+        pre_selected_rows=st.session_state['persisted_selection']
+    )
 
-        # Limit and reorder the displayed columns
-        display_columns = ['username', 'name', 'is_active', 'last_login', 'email', 'intro']
-        display_columns = [col for col in display_columns if col in df.columns]
+    grid_options = gb.build()
 
-        # Include 'id' and 'pk' columns if they exist (but hide them)
-        identifier_columns = ['id', 'pk']
-        available_identifier_columns = [col for col in identifier_columns if col in df.columns]
+    # Show the AgGrid
+    grid_response = AgGrid(
+        df,
+        gridOptions=grid_options,
+        data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+        update_mode=GridUpdateMode.SELECTION_CHANGED,
+        fit_columns_on_grid_load=True,
+        theme='alpine',
+        height=600,
+        key="user_grid"
+    )
 
-        if len(available_identifier_columns) == 0:
-            st.error("User data does not contain 'id' or 'pk' fields required for performing actions.")
-            logging.error("No 'id' or 'pk' fields in user data.")
-            return
+    # If we have a valid grid response, retrieve selected rows
+    if grid_response and isinstance(grid_response, dict):
+        selected_rows = grid_response.get('selected_rows', [])
 
-        # Combine columns to be used in the DataFrame
-        all_columns = display_columns + available_identifier_columns
-        df = df[all_columns]
+        # Store the current selection's row indices in session state
+        # (Alternatively, store PK or any other unique field if the DF can reorder)
+        st.session_state['persisted_selection'] = [
+            row['_selectedRowNodeInfo']['nodeRowIndex'] for row in selected_rows
+        ]
 
-        # Action dropdown and Apply button above the table
-        action_col, button_col = st.columns([3, 1])
-        with action_col:
+        # Display action dropdown if rows are selected
+        if selected_rows:
+            st.write("---")
+            st.write(f"Selected {len(selected_rows)} users")
+
             action = st.selectbox(
                 "Select Action",
-                options=[
-                    "Activate", "Deactivate", "Reset Password", "Delete", 
-                    "Add Intro", "Add Invited By"
+                [
+                    "Activate", 
+                    "Deactivate", 
+                    "Reset Password", 
+                    "Delete", 
+                    "Add Intro", 
+                    "Add Invited By", 
+                    "Safety Number Change Verified",
+                    "Update Email"
                 ],
-                key=f"action_selectbox_{form_id}"
+                key="action_selection"
             )
-            
-            # Add action-specific inputs here
-            if action == "Reset Password":
-                use_password_generator = st.checkbox(
-                    "Use Password Generator",
-                    value=True,
-                    key=f"use_password_generator_{form_id}"
-                )
-                if not use_password_generator:
-                    new_password = st.text_input(
-                        "Enter new password",
-                        type="password",
-                        key=f"new_password_{form_id}"
+
+            # Example action-specific inputs
+            if action == "Add Intro":
+                intro_text = st.text_area("Enter Intro Text", key="intro_input")
+            elif action == "Add Invited By":
+                invited_by = st.text_input("Enter Invited By", key="invited_by_input")
+            elif action == "Safety Number Change Verified":
+                verification_context = st.text_area("Enter verification context", key="verification_context")
+            elif action == "Update Email":
+                for user in selected_rows:
+                    st.text_input(
+                        f"New email for {user['username']}",
+                        key=f"email_{user['pk']}",
+                        value=user.get('email', '')
                     )
+
+            if st.button("Apply", key="apply_action"):
+                st.session_state['pending_action'] = {
+                    'action': action,
+                    'selected_users': selected_rows,
+                    'verification_context': st.session_state.get("verification_context", "")
+                }
+                st.rerun()
+
+def handle_action(action, selected_users, verification_context=''):
+    """Pass the action to handle_form_submission in helpers.py"""
+    if not selected_users:
+        st.error("Please select users first")
+        return
+
+    # Initialize session state for form inputs if not exists
+    if 'form_inputs' not in st.session_state:
+        st.session_state.form_inputs = {}
+    
+    # Batch process all selected users
+    for user in selected_users:
+        username = user['username']  # Extract username from user dict
+        
+        try:
+            if action == "Update Email":
+                email_key = f"email_{user['pk']}"
+                new_email = st.session_state.get(email_key)
+                if new_email and new_email != user.get('email', ''):
+                    handle_form_submission(
+                        action=action,
+                        username=username,
+                        email=new_email
+                    )
+                    
             elif action == "Add Intro":
-                intro_text = st.text_area(
-                    "Enter Intro Text",
-                    height=2,
-                    key=f"intro_text_{form_id}"
-                )
+                intro_text = st.session_state.get("intro_input")
+                if intro_text:
+                    handle_form_submission(
+                        action=action,
+                        username=username,
+                        intro=intro_text
+                    )
+                    
             elif action == "Add Invited By":
-                invited_by = st.text_input(
-                    "Enter Invited By",
-                    key=f"invited_by_{form_id}"
-                )
-        
-        with button_col:
-            apply_button = st.button("Apply", key=f"apply_button_{form_id}")
-
-        # Configure pagination
-        page_size = st.selectbox(
-            "Page Size",
-            options=[100, 250, 500, 1000],
-            index=2,
-            key=f"page_size_{form_id}"
-        )
-
-        # Build AgGrid options
-        gb = GridOptionsBuilder.from_dataframe(df)
-        
-        # Configure default column properties
-        gb.configure_default_column(
-            resizable=True,
-            filterable=True,
-            sortable=True,
-            editable=False
-        )
-
-        # Configure specific column properties
-        gb.configure_column('is_active', width=80)
-        gb.configure_column('last_login', width=130)
-        gb.configure_column('username', width=120)
-        gb.configure_column('name', width=120)
-        gb.configure_column('email', width=200)
-        gb.configure_column('intro', width=200)
-        
-        # Hide identifier columns
-        gb.configure_columns(available_identifier_columns, hide=True)
-        
-        # Configure selection
-        gb.configure_selection(
-            selection_mode='multiple',
-            use_checkbox=True,
-            header_checkbox=True,
-            suppressRowDeselection=False,
-            suppressRowClickSelection=True
-        )
-        
-        # Configure pagination
-        gb.configure_pagination(
-            enabled=True,
-            paginationAutoPageSize=False,
-            paginationPageSize=page_size
-        )
-        
-        # Build grid options
-        grid_options = gb.build()
-
-        # Display AgGrid table
-        grid_response = AgGrid(
-            df,
-            gridOptions=grid_options,
-            data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-            update_mode=GridUpdateMode.MODEL_CHANGED | GridUpdateMode.SELECTION_CHANGED,
-            fit_columns_on_grid_load=True,
-            theme='alpine',
-            height=600,
-            allow_unsafe_jscode=True,
-            key=f"grid_{form_id}"
-        )
-
-        # Handle actions when Apply button is clicked
-        if apply_button and len(grid_response['selected_rows']) > 0:
-            selected_users = grid_response['selected_rows']
-            if action == "Activate":
-                st.success(f"Activated {len(selected_users)} users")
-            elif action == "Deactivate":
-                st.success(f"Deactivated {len(selected_users)} users")
+                invited_by = st.session_state.get("invited_by_input")
+                if invited_by:
+                    handle_form_submission(
+                        action=action,
+                        username=username,
+                        invited_by=invited_by
+                    )
+                    
             elif action == "Reset Password":
-                st.success(f"Reset password for {len(selected_users)} users")
-            elif action == "Delete":
-                st.success(f"Deleted {len(selected_users)} users")
-            elif action == "Add Intro":
-                st.success(f"Updated intro for {len(selected_users)} users")
-            elif action == "Add Invited By":
-                st.success(f"Updated invited by for {len(selected_users)} users")
+                handle_form_submission(
+                    action=action,
+                    username=username
+                )
+                
+            elif action in ["Activate", "Deactivate"]:
+                handle_form_submission(
+                    action=action,
+                    username=username
+                )
+                
+            elif action == "Safety Number Change Verified":
+                handle_form_submission(
+                    action=action,
+                    username=username,
+                    verification_context=verification_context
+                )
+                
+        except Exception as e:
+            logging.error(f"Error processing action {action} for user {username}: {e}")
+            st.error(f"Error processing action {action} for user {username}")
+            continue
 

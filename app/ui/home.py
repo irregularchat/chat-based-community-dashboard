@@ -125,7 +125,24 @@ def render_home_page():
                 verification_context=None
             )
     elif operation == "List and Manage Users":
-        username_input = st.text_input("Search Query", key="username_input", placeholder="Enter username or email to search")
+        st.markdown("""
+            ### Search Help
+            You can search by specific columns using the format `column:value`. For example:
+            - `username:john`
+            - `intro:engineer`
+            - `email:gmail`
+            
+            Multiple search terms can be combined with spaces:
+            - `username:john intro:engineer`
+            
+            Or search across all fields by entering text without a column specifier.
+        """)
+        
+        username_input = st.text_input(
+            "Search Query", 
+            key="username_input", 
+            placeholder="e.g., username:john intro:engineer"
+        )
         
         # Add a submit button for the search
         search_button = st.button("Search")
@@ -141,14 +158,14 @@ def render_home_page():
                             formatted_user = {
                                 'pk': user_id,
                                 'username': getattr(user, 'username', ''),
-                                'name': f"{getattr(user, 'first_name', '')} {getattr(user, 'last_name', '')}".strip(),
+                                'name': getattr(user, 'name', ''),
                                 'email': getattr(user, 'email', ''),
                                 'is_active': getattr(user, 'is_active', True),
                                 'last_login': getattr(user, 'last_login', None),
-                                'intro': getattr(user, 'intro', ''),
+                                'intro': getattr(user, 'attributes', {}).get('intro', ''),
                                 'attributes': {
-                                    'intro': getattr(user, 'intro', ''),
-                                    'invited_by': getattr(user, 'invited_by', '')
+                                    'intro': getattr(user, 'attributes', {}).get('intro', ''),
+                                    'invited_by': getattr(user, 'attributes', {}).get('invited_by', '')
                                 }
                             }
                             formatted_users.append(formatted_user)

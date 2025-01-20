@@ -117,39 +117,33 @@ def render_home_page():
         
         if st.button("Create Invite"):
             if not invite_label:
-                st.error("Please provide an invite label")
+                st.error("Invite label is required.")
                 return
-            
-            try:
-                # Combine date and time into a datetime object in Eastern timezone
-                eastern = timezone('US/Eastern')
-                expires_datetime = eastern.localize(datetime.combine(expires_date, expires_time))
+            if not expires_date or not expires_time:
+                st.error("Expiration date and time are required.")
+                return
+
+            # Combine date and time and set Eastern timezone
+            eastern = timezone('US/Eastern')
+            expires_datetime = datetime.combine(expires_date, expires_time)
+            expires_datetime = eastern.localize(expires_datetime)
+            expires_iso = expires_datetime.isoformat()
+
+            # Call create_invite with the ISO formatted string
+            invite_link, invite_expires = create_invite(headers, invite_label, expires_iso)
+            if invite_link:
+                create_invite_message(invite_label, invite_link, expires_datetime)
                 
-                # Log the expiration time for debugging
-                logging.info(f"Creating invite with label: {invite_label}")
-                logging.info(f"Expiration datetime: {expires_datetime}")
-                
-                # Call create_invite with the proper parameters
-                invite_url, expires = create_invite(headers, invite_label, expires_datetime)
-                
-                if invite_url:
-                    # Call create_invite_message with the URL and expiration
-                    create_invite_message(invite_label, invite_url, expires_datetime)
-                    
-                    # Add to timeline
-                    with next(get_db()) as db:
-                        add_timeline_event(
-                            db,
-                            "invite_created",
-                            "system",
-                            f"Created invite with label: {invite_label}"
-                        )
-                else:
-                    st.error("Failed to create invite. Check the logs for details.")
-                
-            except Exception as e:
-                logging.error(f"Error in invite creation: {e}")
-                st.error(f"Error creating invite: {e}")
+                # Add to timeline
+                with next(get_db()) as db:
+                    add_timeline_event(
+                        db,
+                        "invite_created",
+                        "system",
+                        f"Created invite with label: {invite_label}"
+                    )
+            else:
+                st.error("Failed to create invite.")
     elif operation == "List and Manage Users":
         st.markdown("""
             ### Search Help

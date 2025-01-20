@@ -142,15 +142,27 @@ def render_invite_form():
     return invite_label, eastern_time.date(), eastern_time.time()
 
 def display_user_list(auth_api_url, headers):
+    if 'user_list' not in st.session_state or not st.session_state['user_list']:
+        return
+
+    # Cache the DataFrame in session state
+    if 'df_cache' not in st.session_state:
+        df = pd.DataFrame(st.session_state['user_list'])
+        st.session_state['df_cache'] = df
+    else:
+        df = st.session_state['df_cache']
+
+    # Only update cache if user list has changed
+    if len(st.session_state['user_list']) != len(st.session_state['df_cache']):
+        df = pd.DataFrame(st.session_state['user_list'])
+        st.session_state['df_cache'] = df
+
     # Generate a unique identifier for this instance using timestamp
     form_id = str(int(time.time() * 1000))  # millisecond timestamp
     
     if 'user_list' in st.session_state and len(st.session_state['user_list']) > 0:
         users = st.session_state['user_list']
         st.subheader("User List")
-
-        # Create DataFrame without displaying raw data
-        df = pd.DataFrame(users)
 
         # Format last_login to be more readable
         if 'last_login' in df.columns:

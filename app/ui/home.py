@@ -26,7 +26,8 @@ from ui.forms import render_create_user_form, render_invite_form, display_user_l
 from utils.helpers import (
     create_unique_username,
     update_username,
-    get_eastern_time
+    get_eastern_time,
+    add_timeline_event
 )
 from db.database import get_db
 from db.operations import search_users
@@ -41,6 +42,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from pytz import timezone  # Ensure this is imported
 from utils.transformations import parse_input
+from db.init_db import should_sync_users, sync_user_data
 
 session = requests.Session()
 retry = Retry(
@@ -53,6 +55,11 @@ adapter = HTTPAdapter(max_retries=retry)
 session.mount("http://", adapter)
 session.mount("https://", adapter)
 
+# define headers
+headers = {
+    'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+    'Content-Type': 'application/json'
+}
 
 
 def reset_form():
@@ -65,15 +72,14 @@ def reset_form():
 
 def render_home_page():
     # Initialize session state variables
+    if 'last_sync_check' not in st.session_state:
+        st.session_state['last_sync_check'] = datetime.now()
+    if 'sync_interval' not in st.session_state:
+        st.session_state['sync_interval'] = timedelta(minutes=5)
+    
     for var in ['message', 'user_list', 'prev_operation']:
         if var not in st.session_state:
             st.session_state[var] = "" if var in ['message', 'prev_operation'] else []
-
-    # Define headers
-    headers = {
-        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-        'Content-Type': 'application/json'
-    }
 
     # Operation selection
     operation = st.selectbox(
@@ -82,8 +88,8 @@ def render_home_page():
         key="operation_selection"
     )
 
-    # Check if the operation has changed
-    if st.session_state['prev_operation'] != operation:
+    # Only reset form if operation changes
+    if 'prev_operation' not in st.session_state or st.session_state['prev_operation'] != operation:
         reset_form()
         st.session_state['prev_operation'] = operation
 
@@ -193,6 +199,21 @@ def handle_form_submission(
             if new_user:
                 # Use the username from the created user
                 created_username = new_user.get('username', new_username)
+                
+                # Add timeline event
+                event_description = (
+                    f"Created user: {full_name} ({created_username})\n"
+                    f"Email: {email}\n"
+                    f"Invited by: {invited_by if invited_by else 'N/A'}\n"
+                    f"Intro: {intro if intro else 'N/A'}"
+                )
+                add_timeline_event(
+                    db=db,
+                    event_type='user_created',
+                    username=created_username,
+                    event_description=event_description
+                )
+                
                 create_user_message(created_username, temp_password)
                 # Send a webhook notification
                 """webhook_notification
@@ -257,26 +278,24 @@ def handle_form_submission(
                 # Convert SQLAlchemy objects to dictionaries
                 st.session_state['user_list'] = [user.to_dict() for user in local_users]
             else:
-                # If not found locally or search query is empty, search using the API
-                users = list_users(Config.AUTHENTIK_API_URL, headers, search_query)
-                
-                if users:
-                    # Process the users list to make attributes searchable
-                    processed_users = []
-                    for user in users:
-                        # Extract intro from attributes if it exists
-                        attributes = user.get('attributes', {})
-                        intro = attributes.get('intro', '') if isinstance(attributes, dict) else ''
-                        
-                        # Add intro to searchable text
-                        if search_query.lower() in intro.lower():
-                            processed_users.append(user)
-                        elif any(search_query.lower() in str(value).lower() for value in user.values()):
-                            processed_users.append(user)
-                    
-                    st.session_state['user_list'] = processed_users
-                else:
-                    st.session_state['user_list'] = []
+                # Only check for sync if enough time has passed
+                current_time = datetime.now()
+                if (current_time - st.session_state['last_sync_check']) > st.session_state['sync_interval']:
+                    st.session_state['last_sync_check'] = current_time
+                    if should_sync_users(db):
+                        with st.spinner('Syncing user data...'):
+                            authentik_users = list_users(Config.AUTHENTIK_API_URL, headers)
+                            if authentik_users:
+                                sync_user_data(db, authentik_users)
+                                local_users = search_users(db, search_query)
+                                if local_users:
+                                    st.session_state['user_list'] = [user.to_dict() for user in local_users]
+                                    return
+            
+            # Only if still no results, use API as last resort
+            users = list_users(Config.AUTHENTIK_API_URL, headers, search_query)
+            if users:
+                st.session_state['user_list'] = users
 
             # Display user list if there are results
             if st.session_state['user_list']:

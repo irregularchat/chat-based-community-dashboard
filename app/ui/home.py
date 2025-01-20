@@ -65,18 +65,6 @@ def reset_form():
         if key in st.session_state:
             del st.session_state[key]
 
-def update_username():
-    if st.session_state.get('first_name_input') and st.session_state.get('last_name_input'):
-        base_username = f"{st.session_state['first_name_input'].strip().lower()}-{st.session_state['last_name_input'].strip()[0].lower()}"
-    elif st.session_state.get('first_name_input'):
-        base_username = st.session_state['first_name_input'].strip().lower()
-    elif st.session_state.get('last_name_input'):
-        base_username = st.session_state['last_name_input'].strip().lower()
-    else:
-        base_username = "pending"
-    st.session_state['username_input'] = base_username.replace(" ", "-")
-
-
 def display_user_list(auth_api_url, headers):
     if 'user_list' in st.session_state and st.session_state['user_list']:
         users = st.session_state['user_list']

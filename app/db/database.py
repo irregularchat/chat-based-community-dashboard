@@ -3,8 +3,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from utils.config import Config
 
-DATABASE_URL = Config.DATABASE_URL
 
+DATABASE_URL = Config.DATABASE_URL  # Must come from .env
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

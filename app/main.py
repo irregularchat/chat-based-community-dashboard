@@ -7,9 +7,14 @@ from ui.help_resources import main as render_help_page
 from ui.prompts import main as render_prompts_page
 from utils.helpers import setup_logging
 import logging
+from db.database import get_db
+from db.init_db import init_db
 
 # Initialize logging
 setup_logging()
+
+# Initialize database tables
+init_db()
 
 # Set page config early
 st.set_page_config(
@@ -20,6 +25,14 @@ st.set_page_config(
 
 def main():
     try:
+        # Get a database session
+        db_session = next(get_db())
+
+        # Now, db_session can be used to query or write to the DB
+        # E.g.: results = db_session.query(YourModel).all()
+
+        st.write("Database session is ready to use!")
+
         # Add a selectbox for navigation
         page = st.sidebar.selectbox(
             "Select Page",

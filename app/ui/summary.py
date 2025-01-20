@@ -3,6 +3,9 @@ import pandas as pd
 from datetime import datetime, timedelta
 from auth.api import list_users_cached, list_events_cached
 from utils.config import Config
+from db.database import get_db
+from db.operations import User, AdminEvent
+from sqlalchemy.orm import Session
 
 def fetch_user_data():
     headers = {
@@ -58,12 +61,16 @@ def display_metrics(metrics):
 #     }
 #     return list_events_cached(Config.AUTHENTIK_API_URL, headers)
 
-# FIXME: Commented out event history display; review if needed in the future
-# def display_event_history(events):
-#     st.subheader("Activity History")
-#     for event in events:
-#         st.write(f"Event: {event['action']}, User: {event['user']}, Time: {event['timestamp']}")
-#         # Add more details as needed
+def display_event_history(db: Session):
+    st.subheader("Admin Event Timeline")
+    events = db.query(AdminEvent).order_by(AdminEvent.timestamp.desc()).all()
+    if not events:
+        st.info("No admin events recorded yet.")
+        return
+    for event in events:
+        st.write(
+            f"{event.timestamp}: [{event.event_type}] {event.username} - {event.description}"
+        )
 
 def main():
     # Sidebar links
@@ -78,9 +85,9 @@ def main():
     metrics = calculate_metrics(users)
     display_metrics(metrics)
     
-    # FIXME: Event fetching and display are currently disabled
-    # events = fetch_event_data()
-    # display_event_history(events)
+    # Now display the timeline
+    with next(get_db()) as db:
+        display_event_history(db)
 
 if __name__ == "__main__":
     main() 

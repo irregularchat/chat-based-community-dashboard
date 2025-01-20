@@ -24,13 +24,12 @@ from auth.api import (
 )
 from ui.forms import render_create_user_form, render_invite_form, display_user_list
 from utils.helpers import (
-    get_existing_usernames,
     create_unique_username,
-    update_LOCAL_DB,
-    search_LOCAL_DB,
     update_username,
     get_eastern_time
 )
+from db.database import get_db
+from db.operations import search_users
 from messages import (
     create_user_message,
     create_recovery_message,
@@ -166,14 +165,14 @@ def handle_form_submission(
                 st.error("At least one of first name or last name is required.")
                 return
 
-            # Update Local DB to ensure it's up-to-date
-            update_LOCAL_DB()
+            # Get database session
+            db = next(get_db())
 
-            # Check if the username already exists
-            user_exists = search_LOCAL_DB(username_input)
-            if not user_exists.empty:
+            # Check if the username already exists using database search
+            existing_users = search_users(db, username_input)
+            if existing_users:
                 st.warning(f"User '{username_input}' already exists. Creating a unique username.")
-                new_username = create_unique_username(username_input)
+                new_username = create_unique_username(db, username_input)
             else:
                 new_username = username_input
 
@@ -248,11 +247,15 @@ def handle_form_submission(
         elif operation == "List and Manage Users":
             search_query = username_input.strip()
             
-            # First, search the local database including attributes/intro
-            local_users = search_LOCAL_DB(search_query)
+            # Get a database session
+            db = next(get_db())
             
-            if not local_users.empty:
-                st.session_state['user_list'] = local_users.to_dict(orient='records')
+            # Search users in the database
+            local_users = search_users(db, search_query)
+            
+            if local_users:
+                # Convert SQLAlchemy objects to dictionaries
+                st.session_state['user_list'] = [user.to_dict() for user in local_users]
             else:
                 # If not found locally or search query is empty, search using the API
                 users = list_users(Config.AUTHENTIK_API_URL, headers, search_query)

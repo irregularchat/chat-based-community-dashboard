@@ -9,7 +9,9 @@ from datetime import datetime, timedelta
 from pytz import timezone  
 import logging
 import os
-
+from sqlalchemy.orm import Session
+from db.operations import AdminEvent
+from db.database import SessionLocal
 # Initialize a session with retry strategy
 # auth/api.py
 
@@ -154,7 +156,7 @@ def reset_user_password(auth_api_url, headers, user_id, new_password):
         return False
 
 def create_user(username, full_name, email, invited_by=None, intro=None):
-    """Create a new user in Authentik."""
+    """Create a new user in Authentik and sync with local database."""
     
     # Generate a temporary password using a secure passphrase
     temp_password = generate_secure_passphrase()
@@ -186,7 +188,6 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         "is_active": True,
         "email": email,
         "groups": [Config.MAIN_GROUP_ID],
-        # Removed "password" from the user_data
         "attributes": {}
     }
 
@@ -196,28 +197,58 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
     if intro:
         user_data['attributes']['intro'] = intro
 
-    # Generate API URL and headers
+    # Generate API URL
     user_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
 
     try:
         # API request to create the user
         response = requests.post(user_api_url, headers=headers, json=user_data, timeout=10)
         response.raise_for_status()
-        user = response.json()
+        new_user = response.json()
 
         # Ensure 'user' is a dictionary
-        if not isinstance(user, dict):
+        if not isinstance(new_user, dict):
             logging.error("Unexpected response format: user is not a dictionary.")
             return None, 'default_pass_issue'
 
-        logging.info(f"User created: {user.get('username')}")
-
         # Reset the user's password
-        reset_result = reset_user_password(Config.AUTHENTIK_API_URL, headers, user['pk'], temp_password)
+        reset_result = reset_user_password(Config.AUTHENTIK_API_URL, headers, new_user['pk'], temp_password)
         if not reset_result:
-            logging.error(f"Failed to reset the password for user {user.get('username')}. Returning default_pass_issue.")
-            return user, 'default_pass_issue'
-        return user, temp_password  # Return the user and the temp password
+            logging.error(f"Failed to reset the password for user {new_user.get('username')}.")
+            return new_user, 'default_pass_issue'
+
+        # Sync the new user with local database
+        with SessionLocal() as db:
+            try:
+                # Fetch all users to ensure complete sync
+                all_users_request = requests.get(
+                    f"{Config.AUTHENTIK_API_URL}/core/users/",
+                    headers=headers,
+                    timeout=10
+                )
+                all_users_request.raise_for_status()
+                all_users = all_users_request.json().get('results', [])
+
+                # Sync users with local database
+                sync_user_data(db, all_users)
+
+                # Add creation event to admin events
+                admin_event = AdminEvent(
+                    timestamp=datetime.now(),
+                    event_type='user_created',
+                    username=username,
+                    description=f'User created and synced to local database'
+                )
+                db.add(admin_event)
+                db.commit()
+
+                logging.info(f"Successfully created and synced user {username}")
+            except Exception as e:
+                logging.error(f"Error syncing after user creation: {e}")
+                # Note: We continue even if sync fails, as the user was created in Authentik
+
+        return new_user, temp_password
+
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred while creating user: {http_err}")
         try:
@@ -469,3 +500,22 @@ def force_password_reset(username):
         logging.error(f"Error forcing password reset for {username}: {e}")
         return False
     return True
+
+def update_user_email(auth_api_url, headers, user_id, new_email):
+    """Update a user's email address in Authentik."""
+    url = f"{auth_api_url}/core/users/{user_id}/"
+    data = {"email": new_email}
+    
+    logging.info(f"Attempting to update email for user {user_id} to {new_email}")
+    try:
+        response = session.patch(url, headers=headers, json=data, timeout=10)
+        response.raise_for_status()
+        logging.info(f"Email for user {user_id} updated successfully to {new_email}")
+        return response.json()
+    except requests.exceptions.HTTPError as http_err:
+        logging.error(f"HTTP error updating email: {http_err}")
+        logging.error(f"Response content: {http_err.response.text if http_err.response else 'No response content'}")
+        return None
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error updating user email: {e}")
+        return None

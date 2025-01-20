@@ -25,8 +25,10 @@ services:
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_PORT=${POSTGRES_PORT}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432" # Default to port 5432 if POSTGRES_PORT not set
+      # it will still work on the new port 
 
 volumes:
   postgres_data:

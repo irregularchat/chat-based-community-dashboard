@@ -75,6 +75,7 @@ def render_create_user_form():
 
         # Custom style for the "Data to Parse" box
         st.markdown(
+            # This is a hack to focus the data_to_parse_input box when the page loads
             """
             <style>
             .data-to-parse {
@@ -83,6 +84,11 @@ def render_create_user_form():
                 border-radius: 5px;
             }
             </style>
+            <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                document.getElementById('data_to_parse_input').focus();
+            });
+            </script>
             """,
             unsafe_allow_html=True
         )
@@ -91,8 +97,8 @@ def render_create_user_form():
         data_to_parse = st.text_area(
             "Data to Parse", 
             key="data_to_parse_input", 
-            height=100,
-            placeholder="1. John Doe\n2. TechCorp\n3. @janedoe\n4. johndoe@example.com\n5. Interested in AI, ML, and Data Science"
+            height=180,
+            placeholder="(Optional Method. Take User's Intro and parse it.) \n1. John Doe\n2. TechCorp\n3. @janedoe\n4. johndoe@example.com\n5. Interested in AI, ML, and Data Science"
         )
         st.markdown('</div>', unsafe_allow_html=True)
 

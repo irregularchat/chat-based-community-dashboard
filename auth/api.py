@@ -329,7 +329,15 @@ def list_users_cached(auth_api_url, headers):
 
 def create_invite(headers, label, expires=None):
     """
-    Create an invitation for a user using Authentik's invitation API.
+    Create an invitation for a user.
+
+    Parameters:
+        headers (dict): The request headers for Authentik API.
+        label (str): The label to identify the invitation.
+        expires (str): The expiration time for the invite in ISO format.
+
+    Returns:
+        tuple: The shortened invite URL and expiration time, if successful.
     """
     eastern = timezone('US/Eastern')
     current_time_str = datetime.now(eastern).strftime('%H-%M')
@@ -338,62 +346,51 @@ def create_invite(headers, label, expires=None):
     if not label:
         label = current_time_str
 
-    # Convert expires to ISO format string
-    if expires:
-        if isinstance(expires, (datetime, date)):
-            # Convert to UTC and format as ISO string
-            if isinstance(expires, date):
-                expires = datetime.combine(expires, datetime.min.time())
-            if not expires.tzinfo:
-                expires = eastern.localize(expires)
-            # Format with milliseconds for Authentik API
-            expires = expires.astimezone(timezone('UTC')).isoformat()
-    else:
-        # Set default expiration to 2 hours from now
-        expires = (datetime.now(timezone('UTC')) + timedelta(hours=2)).isoformat()
+    # Use the provided ISO formatted expires string or create a default one
+    if expires is None:
+        expires = (datetime.now(eastern) + timedelta(hours=2)).isoformat()
 
     data = {
         "name": label,
         "expires": expires,
         "fixed_data": {},
         "single_use": True,
-        "flow": Config.FLOW_ID
+        "flow": Config.FLOW_ID  # The flow ID for invitation
     }
     
-    logging.info(f"Creating invite with data: {data}")
-    
+    # Authentik API invitation endpoint
+    invite_api_url = f"{Config.AUTHENTIK_API_URL}/stages/invitation/invitations/"
+
     try:
-        response = requests.post(
-            f"{Config.AUTHENTIK_API_URL}/stages/invitation/invitations/",
-            headers=headers,
-            json=data,
-            timeout=10
-        )
-        
-        logging.info(f"Response status code: {response.status_code}")
-        logging.info(f"Response content: {response.text}")
-        
+        response = session.post(invite_api_url, headers=headers, json=data, timeout=10)
         response.raise_for_status()
         response_data = response.json()
 
+        # Get the invite ID and construct the full URL
         invite_id = response_data.get('pk')
         if not invite_id:
-            logging.error("API response missing 'pk' field")
-            raise ValueError("API response missing 'pk' field")
+            raise ValueError("API response missing 'pk' field.")
 
-        # Construct the invite URL using the correct flow
-        invite_link = f"https://sso.{Config.BASE_DOMAIN}/if/flow/{Config.FLOW_ID}/?itoken={invite_id}"
-        logging.info(f"Generated invite link: {invite_link}")
+        invite_link = f"https://sso.{Config.BASE_DOMAIN}/if/flow/simple-enrollment-flow/?itoken={invite_id}"
 
-        return invite_link, expires
+        # Shorten the invite link
+        short_invite_link = shorten_url(invite_link, 'invite', label)
+        return short_invite_link, expires
 
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred: {http_err}")
-        logging.error(f"Response content: {response.text}")
-        return None, None
+        try:
+            logging.info("API Response: %s", response.json())
+        except Exception:
+            logging.info("API Response: %s", response.text)
     except Exception as err:
-        logging.error(f"Error creating invite: {err}")
-        return None, None
+        logging.error(f"An error occurred: {err}")
+        try:
+            logging.info("API Response: %s", response.text)
+        except Exception:
+            pass
+
+    return None, None
 
 def update_user_status(auth_api_url, headers, user_id, is_active):
     url = f"{auth_api_url}/core/users/{user_id}/"

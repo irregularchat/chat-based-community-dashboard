@@ -19,6 +19,7 @@ from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode
 import time
 import warnings
 import requests
+from pytz import timezone
 
 def reset_create_user_form_fields():
     """Helper function to reset all fields related to create user."""
@@ -188,16 +189,15 @@ def render_invite_form():
     invite_label = st.text_input("Invite Label", key="invite_label")
     
     # Get the current Eastern Time
-    eastern_now = get_eastern_time(datetime.now().date(), datetime.now().time())
+    eastern = timezone('US/Eastern')
+    eastern_now = datetime.now(eastern)
     expires_default = eastern_now + timedelta(hours=2)
     
+    # Use the Eastern time values for the date/time inputs
     expires_date = st.date_input("Enter Expiration Date", value=expires_default.date(), key="expires_date")
     expires_time = st.time_input("Enter Expiration Time", value=expires_default.time(), key="expires_time")
     
-    # Convert to Eastern Time
-    eastern_time = get_eastern_time(expires_date, expires_time)
-    
-    return invite_label, eastern_time.date(), eastern_time.time()
+    return invite_label, expires_date, expires_time
 
 def display_user_list(auth_api_url, headers):
     warnings.filterwarnings('ignore', category=FutureWarning, message='DataFrame.applymap has been deprecated')

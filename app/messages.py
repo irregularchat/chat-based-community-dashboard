@@ -77,7 +77,12 @@ def create_invite_message(label, invite_url, expires_datetime):
     """Generate and display the invite message."""
     if invite_url:
         eastern = timezone('US/Eastern')
+        
+        # Ensure both datetimes are timezone-aware in Eastern time
+        if expires_datetime.tzinfo is None:
+            expires_datetime = eastern.localize(expires_datetime)
         now = datetime.now(eastern)
+        
         time_remaining = expires_datetime - now
         hours, remainder = divmod(int(time_remaining.total_seconds()), 3600)
         minutes, _ = divmod(remainder, 60)

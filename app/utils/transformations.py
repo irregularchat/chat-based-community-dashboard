@@ -10,10 +10,10 @@ Typical Input is :
 """
 
 import re
+from utils.gpt_call import gpt_parse_input, gpt_check_api
 
-def parse_input(input_text):
+def simple_parse_input(input_text):
     """
-    Parse the input with 5 fields and return a dictionary
     This function works by removing numbers and any following periods from the input text
     then splitting the input text by newlines and stripping whitespace
     then initializing the dictionary with default values
@@ -78,3 +78,70 @@ def parse_input(input_text):
             parsed_data["intro"]["interests"] = "; ".join(lines[3:])
 
     return parsed_data
+
+
+def determine_input_format(input_text):
+    """
+    Determines if the input text is in numbered list format or chatgpt format.
+    Returns 'numbered' for numbered list format, 'chatgpt' for chatgpt format, 
+    or None if format is invalid.
+    """
+    # Clean the input text
+    text = input_text.strip()
+    if not text:
+        # this is an empty string and would mean the user didn't provide any input
+        return None, False
+    
+    # Check for numbered list format - supports numbers, hashes, dashes, and bullets
+    numbered_pattern = r'^(?:\d+[\.\-\)]|#|\-|\•|\*)\s+'
+    lines = text.split('\n')
+    
+    # If first non-empty line starts with any of the supported formats, treat as numbered format
+    for line in lines:
+        if line.strip():
+            if re.match(numbered_pattern, line.strip()):
+                return 'numbered', True
+            break
+    
+    # Check for chatgpt format - typically starts with greeting or name
+    chatgpt_indicators = ['hi', 'hello', 'thank', 'thanks', 'greetings', 'i am', "i'm", 'my name']
+    first_line_lower = lines[0].lower()
+    
+    if any(indicator in first_line_lower for indicator in chatgpt_indicators):
+        return 'chatgpt', True
+    
+    # Enhanced structured format detection
+    if len(lines) >= 3:  # At least 3 non-empty lines
+        non_empty_lines = [line for line in lines if line.strip()]
+        if len(non_empty_lines) >= 3:
+            # Check for common patterns in structured input:
+            # - Contains an email address
+            # - Contains a social media handle (@username)
+            # - Contains organizational unit/department
+            email_pattern = r'[\w\.-]+@[\w\.-]+'
+            social_handle_pattern = r'@\w+'
+            
+            has_email = any(re.search(email_pattern, line) for line in lines)
+            has_social = any(re.search(social_handle_pattern, line) for line in lines)
+            
+            if has_email or has_social:
+                return 'numbered', True
+    
+    # If no clear format is detected, return chatgpt with mismatch flag
+    return 'chatgpt', False
+
+def parse_input(input_text):
+    format_type, _ = determine_input_format(input_text)
+    if format_type == 'numbered':
+        return simple_parse_input(input_text)
+    elif format_type == 'chatgpt':
+        try:
+            # Get API key from Config
+            if gpt_check_api():
+                return gpt_parse_input(input_text)
+            else:
+                return {"error": "Please provide a valid OpenAI API key"}
+        except Exception as e:
+            return {"error": f"OpenAI API error: {str(e)}"}
+    else:
+        return None, False

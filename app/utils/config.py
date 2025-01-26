@@ -30,7 +30,7 @@ class Config:
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
     DATABASE_URL = os.getenv("DATABASE_URL")
-
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     # Validate critical configurations
     required_vars = {
         "AUTHENTIK_API_TOKEN": AUTHENTIK_API_TOKEN,
@@ -42,6 +42,7 @@ class Config:
         "AUTHENTIK_API_URL": AUTHENTIK_API_URL,
         "WEBHOOK_URL": WEBHOOK_URL,
         "DATABASE_URL": DATABASE_URL,
+        "OPENAI_API_KEY": OPENAI_API_KEY,
     }
     
     missing_vars = [var_name for var_name, var in required_vars.items() if var is None]

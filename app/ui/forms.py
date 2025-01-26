@@ -42,15 +42,34 @@ def reset_create_user_form_fields():
 
 def parse_and_rerun():
     """Callback to parse data and rerun the script so widgets see updated session state."""
+    # Check if input is empty
+    if not st.session_state["data_to_parse_input"].strip():
+        return  # Just return if there's no data to parse
+    
     # Parse the data from the text area
     parsed = parse_input(st.session_state["data_to_parse_input"])
+    
+    # Check for error in parsed data
+    if isinstance(parsed, dict) and "error" in parsed:
+        st.error(parsed["error"])
+        return
+    
+    if not parsed or (isinstance(parsed, tuple) and parsed[1] is False):
+        st.error("Could not parse the input text")
+        return
 
-    # Update session state
+    # Update session state with safer dictionary access
     st.session_state["first_name_input"] = parsed.get("first_name", st.session_state["first_name_input"])
     st.session_state["last_name_input"] = parsed.get("last_name", st.session_state["last_name_input"])
     st.session_state["email_input"] = parsed.get("email", st.session_state["email_input"])
     st.session_state["invited_by_input"] = parsed.get("invited_by", st.session_state["invited_by_input"])
-    st.session_state["intro_input"] = parsed["intro"].get("organization", "")
+    
+    # Safely access nested intro fields and combine organization and interests
+    intro_data = parsed.get("intro", {})
+    org = intro_data.get("organization", "")
+    interests = intro_data.get("interests", "")
+    combined_intro = f"{org}\n\nInterests: {interests}" if interests else org
+    st.session_state["intro_input"] = combined_intro
 
     # Rerun so the text inputs see the updated session state
     st.rerun()

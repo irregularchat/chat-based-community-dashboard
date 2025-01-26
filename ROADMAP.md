@@ -9,12 +9,15 @@ This roadmap outlines the key features and milestones planned for the Chat-Based
 
 - [ ] **Verification Email Process**
    - Implement an automated email verification system to streamline user onboarding.
+     - Currently using AWS SES for email sending. 
+     - Possible flow for Authentik to create this verification method. 
 
 - [ ] **Integration of Other Identity Managers**
    - Add options for identity management, starting with APIs such as Keycloak.
 
 - [ ] **Signal Bot Launch**
    - Provide a customizable Signal bot for announcements, updates, and user interactions.
+     - This signal bot would be a dependency of the dashboard. 
 
 - [ ] **Maubot Integration**
    - Enable Maubot for Matrix to automate interactions and enhance community engagement.
@@ -25,9 +28,12 @@ This roadmap outlines the key features and milestones planned for the Chat-Based
 - [ ] **Room Management Tools**
    - Maintain a list of all rooms for easier tracking and management.
    - Add users to rooms programmatically or via admin commands.
+   - Remove users from rooms programmatically or via admin commands.
+   - Admin announcements to all rooms. 
+   - Create Rooms and invite users to them see (Quick Creation of Conflict Rooms)
 
 - [ ] **Chat-Based Account Management**
-   - Allow users to create accounts, reset passwords, or update credentials using chat-based subcommands.
+   - Allow admin user accounts to create accounts, reset passwords, or update credentials using chat-based subcommands.
 
 - [ ] **Quick Creation of Conflict Rooms**
    - Add functionality to create a conflict resolution room quickly, automatically adding all moderators and the relevant individual(s) into a private space.

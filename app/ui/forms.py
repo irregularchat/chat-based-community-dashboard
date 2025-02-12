@@ -157,6 +157,13 @@ def render_create_user_form():
         )
         
         # Text area for data parsing
+        # the concept of the data to parse is that it is a list of users with their intro info
+        # the user will paste the intro info into the text area and then click parse
+        # the parse function will parse the intro info into a list of users
+        # the list of users will be displayed in the user grid
+        # the user can then select users to apply actions to
+        # the actions will be applied to the selected users
+        
         st.markdown("""
             <style>
             .data-to-parse {
@@ -219,56 +226,66 @@ def render_invite_form():
     return invite_label, expires_date, expires_time
 
 def display_user_list(auth_api_url, headers):
-    warnings.filterwarnings('ignore', category=FutureWarning, message='DataFrame.applymap has been deprecated')
+    # Process a pending action if one exists.
+    if 'pending_action' in st.session_state:
+        st.write("DEBUG: Processing pending action:", st.session_state['pending_action'])
+        pending = st.session_state['pending_action']
+        handle_action(
+            pending['action'],
+            pending['selected_users'],
+            pending.get('verification_context', '')
+        )
+        del st.session_state['pending_action']
 
-    # Ensure we always have a place to store selections
+    warnings.filterwarnings('ignore', category=FutureWarning, 
+                            message='DataFrame.applymap has been deprecated')
+
     if 'persisted_selection' not in st.session_state:
         st.session_state['persisted_selection'] = []
 
     if 'user_list' not in st.session_state or not st.session_state['user_list']:
+        st.write("DEBUG: No users found in session state.")
         return
 
     df = pd.DataFrame(st.session_state['user_list'])
 
-    # If DataFrame is empty, stop
     if df.empty:
         st.info("No users found.")
         return
 
-    # Ensure intro is properly extracted from attributes if it exists
+    # Process the attributes column if available.
     if 'attributes' in df.columns:
         df['intro'] = df['attributes'].apply(
             lambda x: x.get('intro', '') if isinstance(x, dict) else ''
         )
     
-    # Format the columns
     if 'last_login' in df.columns:
         df['last_login'] = pd.to_datetime(df['last_login']).dt.strftime('%Y-%m-%d %H:%M')
     if 'is_active' in df.columns:
         df['is_active'] = df['is_active'].map({True: '✓', False: '×'})
 
-    # Select and reorder columns - ensure name and intro are included
+    # Only include columns that exist in the DataFrame.
     columns_to_display = ['pk', 'username', 'name', 'email', 'is_active', 'last_login', 'intro']
-    # Only include columns that exist in the DataFrame
     columns_to_display = [col for col in columns_to_display if col in df.columns]
     df = df[columns_to_display]
-
-    # Build grid options
+    
+    # Debug: output the head of the DataFrame.
+    st.write("DEBUG: DataFrame head:", df.head())
+    
+    # Build grid options.
     gb = GridOptionsBuilder.from_dataframe(df)
     gb.configure_default_column(resizable=True, filterable=True, sortable=True, editable=False)
-
-    # Configure selection, reapplying existing selection
     gb.configure_selection(
         selection_mode='multiple',
         use_checkbox=True,
         header_checkbox=True,
-        # We use "pre_selected_rows" to highlight rows previously selected
         pre_selected_rows=st.session_state['persisted_selection']
     )
-
     grid_options = gb.build()
-
-    # Show the AgGrid
+    
+    st.write("DEBUG: Grid Options:", grid_options)
+    
+    # Launch AgGrid.
     grid_response = AgGrid(
         df,
         gridOptions=grid_options,
@@ -279,59 +296,64 @@ def display_user_list(auth_api_url, headers):
         height=600,
         key="user_grid"
     )
-
-    # If we have a valid grid response, retrieve selected rows
-    if grid_response and isinstance(grid_response, dict):
-        selected_rows = grid_response.get('selected_rows', [])
-
-        # Store the current selection's row indices in session state
-        # (Alternatively, store PK or any other unique field if the DF can reorder)
-        st.session_state['persisted_selection'] = [
-            row['_selectedRowNodeInfo']['nodeRowIndex'] for row in selected_rows
-        ]
-
-        # Display action dropdown if rows are selected
-        if selected_rows:
-            st.write("---")
-            st.write(f"Selected {len(selected_rows)} users")
-
-            action = st.selectbox(
-                "Select Action",
-                [
-                    "Activate", 
-                    "Deactivate", 
-                    "Reset Password", 
-                    "Delete", 
-                    "Add Intro", 
-                    "Add Invited By", 
-                    "Safety Number Change Verified",
-                    "Update Email"
-                ],
-                key="action_selection"
-            )
-
-            # Example action-specific inputs
-            if action == "Add Intro":
-                intro_text = st.text_area("Enter Intro Text", key="intro_input")
-            elif action == "Add Invited By":
-                invited_by = st.text_input("Enter Invited By", key="invited_by_input")
-            elif action == "Safety Number Change Verified":
-                verification_context = st.text_area("Enter verification context", key="verification_context")
-            elif action == "Update Email":
-                for user in selected_rows:
-                    st.text_input(
-                        f"New email for {user['username']}",
-                        key=f"email_{user['pk']}",
-                        value=user.get('email', '')
-                    )
-
-            if st.button("Apply", key="apply_action"):
-                st.session_state['pending_action'] = {
-                    'action': action,
-                    'selected_users': selected_rows,
-                    'verification_context': st.session_state.get("verification_context", "")
-                }
-                st.rerun()
+    
+    # Debug: show the full grid response.
+    st.write("DEBUG: Grid Response:", grid_response)
+    
+    # Use the AgGridReturn attribute to get selected rows.
+    selected_rows = grid_response.selected_rows
+    st.write("DEBUG: Selected Rows (raw):", selected_rows)
+    
+    # If selected_rows is a DataFrame, convert it to a list of dictionaries.
+    if isinstance(selected_rows, pd.DataFrame):
+        selected_rows = selected_rows.to_dict('records')
+    
+    # Save the selected row data into session state.
+    st.session_state['persisted_selection'] = selected_rows
+    
+    # Now, check if there are any selected rows.
+    if len(selected_rows) > 0:
+        st.write("---")
+        st.write(f"DEBUG: {len(selected_rows)} user(s) selected.")
+        
+        action = st.selectbox(
+            "Select Action",
+            [
+                "Activate", 
+                "Deactivate", 
+                "Reset Password", 
+                "Delete", 
+                "Add Intro", 
+                "Add Invited By", 
+                "Safety Number Change Verified",
+                "Update Email"
+            ],
+            key="action_selection"
+        )
+        st.write("DEBUG: Action selected:", action)
+        
+        if action == "Add Intro":
+            st.text_area("Enter Intro Text", key="intro_input")
+        elif action == "Add Invited By":
+            st.text_input("Enter Invited By", key="invited_by_input")
+        elif action == "Safety Number Change Verified":
+            st.text_area("Enter verification context", key="verification_context")
+        elif action == "Update Email":
+            for user in selected_rows:
+                st.text_input(
+                    f"New email for {user['username']}",
+                    key=f"email_{user['pk']}",
+                    value=user.get('email', '')
+                )
+        
+        if st.button("Apply", key="apply_action"):
+            st.write("DEBUG: Applying action.")
+            st.session_state['pending_action'] = {
+                'action': action,
+                'selected_users': selected_rows,
+                'verification_context': st.session_state.get("verification_context", "")
+            }
+            st.rerun()
 
 def handle_action(action, selected_users, verification_context=''):
     """Pass the action to handle_form_submission in helpers.py"""

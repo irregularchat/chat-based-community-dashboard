@@ -17,6 +17,7 @@ def create_user_message(new_username, temp_password):
     Temporary Password: {temp_password}
     Exactly as shown above 👆🏼
 
+    
     1️⃣ Step 1:
     - Use the username and temporary password to log in to https://sso.irregularchat.com
     

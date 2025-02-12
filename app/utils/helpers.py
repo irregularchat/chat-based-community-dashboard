@@ -111,7 +111,6 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
             last_name = st.session_state.get('last_name_input', '')
             full_name = f"{first_name} {last_name}".strip()
             
-            # Call create_user with correct parameters
             result, temp_password = create_user(
                 username=username,
                 full_name=full_name,
@@ -123,50 +122,62 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
             if result:
                 add_timeline_event(db, "user_created", username, f"User created by admin")
                 create_user_message(username, temp_password)
-                return True
-                
+                st.success(f"User {username} created successfully.")
+            return result
+
         elif action == "Reset Password":
-            # Handle password reset
             result = force_password_reset(username)
             if result:
                 add_timeline_event(db, "password_reset", username, f"Password reset by admin")
-                
+                st.success(f"Password reset for {username} succeeded.")
+            return result
+
         elif action in ["Activate", "Deactivate"]:
-            # Handle activation/deactivation
-            is_active = action == "Activate"
-            result = update_user_status(username, is_active)
+            # Assume "Activate" means the desired status is True (active)
+            # and "Deactivate" means False (inactive).
+            desired_status = True if action == "Activate" else False
+            result = update_user_status(username, desired_status)
             if result:
-                add_timeline_event(db, f"user_{action.lower()}", username, f"User {action.lower()}d by admin")
-                
-        elif action == "Safety Number Change Verified":
-            # Handle safety number verification
-            if verification_context:
-                add_timeline_event(db, "safety_number_verified", username, verification_context)
-                
-        elif action == "Update Email":
-            # Handle email update
-            if email:
-                result = update_user_email(username, email)
-                if result:
-                    add_timeline_event(db, "email_updated", username, f"Email updated to {email}")
-                    
+                add_timeline_event(db, f"user_{action.lower()}", username,
+                                   f"User {username} {action.lower()}d by admin")
+                st.success(f"User {username} {action.lower()}d successfully.")
+            else:
+                st.error(f"User {username} could not be {action.lower()}d.")
+            return result
+
+        elif action == "Delete":
+            result = delete_user(username)
+            if result:
+                add_timeline_event(db, "user_deleted", username, f"User {username} deleted by admin")
+                st.success(f"User {username} deleted successfully.")
+            return result
+
         elif action == "Add Intro":
-            # Handle intro update
             if intro:
                 result = update_user_intro(username, intro)
                 if result:
-                    add_timeline_event(db, "intro_updated", username, f"Intro updated")
-                    
+                    add_timeline_event(db, "user_intro_updated", username, f"Intro updated to: {intro}")
+                    st.success(f"Intro for {username} updated successfully.")
+                return result
+
         elif action == "Add Invited By":
-            # Handle invited by update
             if invited_by:
                 result = update_user_invited_by(username, invited_by)
                 if result:
-                    add_timeline_event(db, "invited_by_updated", username, f"Invited by updated to {invited_by}")
-        
-        db.close()
-        return True
-        
+                    add_timeline_event(db, "user_invited_by_updated", username, f"Invited by changed to: {invited_by}")
+                    st.success(f"Invited By for {username} updated successfully.")
+                return result
+
+        elif action == "Safety Number Change Verified":
+            result = handle_safety_number_change(username, verification_context)
+            if result:
+                add_timeline_event(db, "safety_number_change_verified", username, "Safety number change verified.")
+                st.success(f"Safety number change verified for {username}.")
+            return result
+
+        else:
+            st.error(f"Unrecognized action: {action}")
     except Exception as e:
-        logging.error(f"Error in handle_form_submission: {e}")
-        return False
+        logging.error(f"Error processing action {action} for user {username}: {e}")
+        st.error(f"Error processing action {action} for user {username}")
+        return None

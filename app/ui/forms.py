@@ -184,7 +184,12 @@ def render_create_user_form():
             "Data to Parse",
             key="data_to_parse_input",
             height=180,
-            placeholder="(Optional) Paste user intro info here..."
+            placeholder=("Please enter your details (each on a new line):\n"
+                         "1. What's Your Name\n"
+                         "2. What org are you with\n"
+                         "3. Who invited you (add and mention them in this chat)\n"
+                         "4. Your Email or Email-Alias/Mask (for password resets and safety number verifications)\n"
+                         "5. Your Interests (so we can get you to the right chats)")
         )
         st.markdown('</div>', unsafe_allow_html=True)
 

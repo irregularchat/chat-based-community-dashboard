@@ -89,14 +89,6 @@ def shorten_url(long_url, url_type, name=None):
         'Content-Type': 'application/json'
     }
 
-    payload = {
-        'longUrl': long_url,
-        'customSlug': name,
-        'findIfExists': True,
-        # Include 'domain' if necessary
-        # 'domain': 'your-domain.com'
-    }
-
 
     try:
         response = requests.post(Config.SHLINK_URL, json=payload, headers=headers, timeout=10)
@@ -336,28 +328,32 @@ def create_invite(headers, label, expires=None):
         expires (str, optional): The expiration time for the invite.
 
     Returns:
-        tuple: The shortened invite URL and expiration time, if successful.
+        tuple: The invite URL and expiration time, if successful.
     """
     eastern = timezone('US/Eastern')
-    current_time_str = datetime.now(eastern).strftime('%H-%M')
-
-    # Default name for the invite
     if not label:
-        label = current_time_str
+        label = datetime.now(eastern).strftime('%H-%M')
 
-    # Expiration logic
+    # Fix the label to ensure it is a valid slug:
+    # - Convert to lowercase
+    # - Replace whitespace with underscores
+    # - Remove any character that is not a letter, number, underscore, or hyphen
+    import re
+    fixed_label = label.strip().lower()
+    fixed_label = re.sub(r'\s+', '_', fixed_label)
+    fixed_label = re.sub(r'[^a-z0-9_-]', '', fixed_label)
+
     if expires is None:
         expires = (datetime.now(eastern) + timedelta(hours=2)).isoformat()
 
     data = {
-        "name": label,
+        "name": fixed_label,
         "expires": expires,
         "fixed_data": {},
         "single_use": True,
-        "flow": Config.FLOW_ID  # The flow ID for invitation
+        "flow": Config.INVITE_FLOW_ID  # Use the invite flow ID for invitations
     }
-    
-    # Authentik API invitation endpoint
+
     invite_api_url = f"{Config.AUTHENTIK_API_URL}/stages/invitation/invitations/"
 
     try:
@@ -365,16 +361,14 @@ def create_invite(headers, label, expires=None):
         response.raise_for_status()
         response_data = response.json()
 
-        # Get the invite ID and construct the full URL
+        # Get the invite ID from the API response
         invite_id = response_data.get('pk')
         if not invite_id:
             raise ValueError("API response missing 'pk' field.")
 
-        invite_link = f"https://sso.{Config.BASE_DOMAIN}/if/flow/simple-enrollment-flow/?itoken={invite_id}"
-
-        # Shorten the invite link
-        short_invite_link = shorten_url(invite_link, 'invite', label)
-        return short_invite_link, expires
+        # Construct the full invite URL without shortening it
+        invite_link = f"https://sso.{Config.BASE_DOMAIN}/if/flow/{Config.INVITE_LABEL}/?itoken={invite_id}"
+        return invite_link, expires
 
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred: {http_err}")

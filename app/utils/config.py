@@ -21,6 +21,8 @@ class Config:
     MAIN_GROUP_ID = os.getenv("MAIN_GROUP_ID")
     BASE_DOMAIN = os.getenv("BASE_DOMAIN")
     FLOW_ID = os.getenv("FLOW_ID")
+    INVITE_FLOW_ID = os.getenv("INVITE_FLOW_ID")
+    INVITE_LABEL = os.getenv("INVITE_LABEL")
     LOCAL_DB = os.getenv("LOCAL_DB", "users.csv")
     SHLINK_API_TOKEN = os.getenv("SHLINK_API_TOKEN")
     SHLINK_URL = os.getenv("SHLINK_URL")
@@ -37,6 +39,8 @@ class Config:
         "MAIN_GROUP_ID": MAIN_GROUP_ID,
         "BASE_DOMAIN": BASE_DOMAIN,
         "FLOW_ID": FLOW_ID,
+        "INVITE_FLOW_ID": INVITE_FLOW_ID,
+        "INVITE_LABEL": INVITE_LABEL,
         "SHLINK_API_TOKEN": SHLINK_API_TOKEN,
         "SHLINK_URL": SHLINK_URL,
         "AUTHENTIK_API_URL": AUTHENTIK_API_URL,

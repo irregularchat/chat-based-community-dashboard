@@ -33,6 +33,11 @@ class Config:
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
     DATABASE_URL = os.getenv("DATABASE_URL")
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    SMTP_SERVER = os.getenv("SMTP_SERVER")
+    SMTP_PORT = os.getenv("SMTP_PORT")
+    SMTP_USER = os.getenv("SMTP_USER")
+    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+    SMTP_FROM = os.getenv("SMTP_FROM")
     # Validate critical configurations
     required_vars = {
         "AUTHENTIK_API_TOKEN": AUTHENTIK_API_TOKEN,
@@ -47,6 +52,11 @@ class Config:
         "WEBHOOK_URL": WEBHOOK_URL,
         "DATABASE_URL": DATABASE_URL,
         "OPENAI_API_KEY": OPENAI_API_KEY,
+        "SMTP_SERVER": SMTP_SERVER,
+        "SMTP_PORT": SMTP_PORT,
+        "SMTP_USER": SMTP_USER,
+        "SMTP_PASSWORD": SMTP_PASSWORD,
+        "SMTP_FROM": SMTP_FROM,
     }
     
     missing_vars = [var_name for var_name, var in required_vars.items() if var is None]

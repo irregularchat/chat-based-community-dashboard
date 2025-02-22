@@ -6,7 +6,8 @@ from utils.helpers import (
     update_username, 
     get_eastern_time, 
     add_timeline_event,
-    handle_form_submission
+    handle_form_submission,
+    safety_number_change_email
 )
 from db.operations import AdminEvent
 from db.database import get_db
@@ -330,7 +331,7 @@ def display_user_list(auth_api_url, headers):
                 "Delete", 
                 "Add Intro", 
                 "Add Invited By", 
-                "Safety Number Change Verified",
+                "Verify Safety Number Change",
                 "Update Email"
             ],
             key="action_selection"
@@ -341,8 +342,21 @@ def display_user_list(auth_api_url, headers):
             st.text_area("Enter Intro Text", key="intro_input")
         elif action == "Add Invited By":
             st.text_input("Enter Invited By", key="invited_by_input")
-        elif action == "Safety Number Change Verified":
-            st.text_area("Enter verification context", key="verification_context")
+        elif action == "Verify Safety Number Change":
+            # Send the safety number change email with a unique code
+            user_email = st.session_state.get(f"email_{username}")
+            full_name = f"{st.session_state.get('first_name_input', '')} {st.session_state.get('last_name_input', '')}".strip()
+            
+            if user_email:
+                safety_number_change_email(
+                    to=user_email,
+                    subject="Verify Your Safety Number Change",
+                    full_name=full_name,
+                    username=username
+                )
+                st.success(f"Verification email sent to {user_email}.")
+            else:
+                st.error("User email not found. Cannot send verification email.")
         elif action == "Update Email":
             for user in selected_rows:
                 st.text_input(
@@ -415,15 +429,33 @@ def handle_action(action, selected_users, verification_context=''):
                     username=username
                 )
                 
-            elif action == "Safety Number Change Verified":
-                handle_form_submission(
-                    action=action,
-                    username=username,
-                    verification_context=verification_context
-                )
+            elif action == "Verify Safety Number Change":
+                # Send the safety number change email with a unique code
+                user_email = st.session_state.get(f"email_{username}")
+                full_name = f"{st.session_state.get('first_name_input', '')} {st.session_state.get('last_name_input', '')}".strip()
+                
+                if user_email:
+                    safety_number_change_email(
+                        to=user_email,
+                        subject="Verify Your Safety Number Change",
+                        full_name=full_name,
+                        username=username
+                    )
+                    st.success(f"Verification email sent to {user_email}.")
+                else:
+                    st.error("User email not found. Cannot send verification email.")
                 
         except Exception as e:
             logging.error(f"Error processing action {action} for user {username}: {e}")
             st.error(f"Error processing action {action} for user {username}")
             continue
+
+def verify_safety_number_change(username, input_code):
+    """Verify the safety number change using the input code."""
+    stored_code = st.session_state.get(f'verification_code_{username}')
+    if stored_code and stored_code == input_code:
+        st.success("Verification successful!")
+        # Proceed with any additional verification steps
+    else:
+        st.error("Verification failed. Please check the code and try again.")
 

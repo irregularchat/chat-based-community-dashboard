@@ -22,6 +22,11 @@ from messages import (
     multi_recovery_message
 )
 from typing import Tuple, Optional, List
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import random
+import string
 
 def setup_logging():
     logging.basicConfig(
@@ -181,3 +186,231 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
         logging.error(f"Error processing action {action} for user {username}: {e}")
         st.error(f"Error processing action {action} for user {username}")
         return None
+    
+
+def send_email(to, subject, body):
+    try:
+        # Create a MIMEText object to represent the email
+        msg = MIMEMultipart()
+        msg['From'] = config.SMTP_FROM
+        msg['To'] = to
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'html'))
+
+        # Connect to the SMTP server and send the email
+        server = smtplib.SMTP(config.SMTP_SERVER, config.SMTP_PORT)
+        server.starttls()
+        server.login(config.SMTP_USER, config.SMTP_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        
+        logging.info(f"Email sent successfully to {to}")
+    except Exception as e:
+        logging.error(f"Failed to send email to {to}: {e}")
+
+def get_email_html_content(full_name, username, password, topic_id):
+    """
+    Generate the HTML content for the email.
+
+    Args:
+        full_name (str): Full name of the user.
+        username (str): Username of the user.
+        password (str): Password for the user.
+        topic_id (str): Topic ID for the introduction post.
+
+    Returns:
+        str: HTML content for the email.
+    """
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                line-height: 1.6;
+                color: #333;
+                margin: 0;
+                padding: 0;
+            }}
+            .email-container {{
+                max-width: 600px;
+                margin: auto;
+                padding: 20px;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                background-color: #f9f9f9;
+            }}
+            h1 {{
+                font-size: 24px;
+                color: #0056b3;
+            }}
+            h2 {{
+                font-size: 20px;
+                color: #333;
+            }}
+            p {{
+                margin: 10px 0;
+            }}
+            a {{
+                color: #0056b3;
+                text-decoration: none;
+            }}
+            a:hover {{
+                text-decoration: underline;
+            }}
+            .button {{
+                display: inline-block;
+                padding: 10px 20px;
+                margin-top: 20px;
+                background-color: #0056b3;
+                color: #fff;
+                text-decoration: none;
+                border-radius: 4px;
+            }}
+            .button:hover {{
+                background-color: #003d80;
+            }}
+            .footer {{
+                font-size: 12px;
+                color: #666;
+                text-align: center;
+                margin-top: 20px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="email-container">
+            <h1>Welcome, {full_name}!</h1>
+            <p>We're excited to have you join the IrregularChat community.</p>
+
+            <h2>Your Next Steps:</h2>
+            
+            <p><strong>1. Log In and Change Your Password:</strong><br>
+               <em>We highly recommend using a password manager for a strong, secure password. Check out our <a href="https://irregularpedia.org/index.php/Guide_to_Password_Managers#Getting_Started_with_Password_Managers">quick guide on password managers</a>.</em><br>
+               Use your login details below to access your account to see all the chats, services, and login only pages:<br>
+               <strong>Username:</strong> {username}<br>
+               <strong>Password:</strong> {password}<br>
+               <strong>Login Link:</strong> <a href="https://sso.irregularchat.com/if/user/#/settings">https://sso.irregularchat.com/if/user/#/settings</a>
+            </p>
+            <hr style="border: 1px solid #eee; margin: 20px 0;">
+            <p><strong>2. Learn the Community Rules:</strong><br>
+               Please read the <a href="https://forum.irregularchat.com/t/irregularchat-forum-start-here-faqs/84/3">Community Start Guide</a> to understand how to participate in our community.   
+            </p>
+            <p><strong>3. Introduce Yourself:</strong><br>
+                People are often looking for someone to start a project with, get mentorship from, hire or request a recommendation, etc. Introducing yourself is a great way to connect with other community members!<br>
+                <a href="https://forum.irregularchat.com/t/{topic_id}">
+                    Post Created for Your Introduction
+                </a>.
+                This is a great way to connect with other community members!
+             </p>
+             <p><strong>4. Explore Chats and Services:</strong><br>
+               Once you've introduced yourself, dive into our community! Access all of our chats and services here:<br>
+               <a href="https://forum.irregularchat.com/t/community-links-to-chats-and-services/229">
+                   Community Links to Chats and Services
+               </a>.
+            </p>
+
+            <a href="https://sso.irregularchat.com" class="button">Log in Now</a>
+
+            <div class="footer">
+                 If you have any questions, feel free to reach out to our <a href="https://signal.group/#CjQKIL5qhTG80gnMDHO4u7gyArJm2VXkKmRlyWorGQFif8n_EhCIsKoPI0FBFas5ujyH2Uve">admin signal group</a>
+             </div>
+         </div>
+    </body>
+    </html>
+    """
+
+def community_intro_email(to, subject, full_name, username, password, topic_id):
+    """
+    Send a community introduction email to a new user.
+
+    Args:
+        to (str): Recipient's email address.
+        subject (str): Subject of the email.
+        full_name (str): Full name of the user.
+        username (str): Username of the user.
+        password (str): Password for the user.
+        topic_id (str): Topic ID for the introduction post.
+    """
+    # Get the HTML content for the email
+    html_content = get_email_html_content(full_name, username, password, topic_id)
+
+    # Send the email using the send_email function
+    send_email(to, subject, html_content)
+
+def generate_unique_code(length=6):
+    """Generate a random alphanumeric code of a given length."""
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
+def safety_number_change_email(to, subject, full_name, username):
+    """
+    Send a safety number change email to a user. Forcing them to verify their email after a signal safety number change.
+    A user's signal safety number change occurs when they change their phone number or when they lose their phone. 
+    To prevent a man-in-the-middle attack, the user must verify a unique code sent to their email which they will send to the signal chat room. 
+    Args:
+        to (str): Recipient's email address.
+        subject (str): Subject of the email.
+        full_name (str): Full name of the user.
+        username (str): Username of the user.
+    """
+    # Generate a unique verification code
+    verification_code = generate_unique_code()
+
+    # Store the verification code in session state or database for later verification
+    st.session_state[f'verification_code_{username}'] = verification_code
+
+    # Get the HTML content with the verification code
+    html_content = get_safety_number_change_email_html_content(full_name, username, verification_code)
+    send_email(to, subject, html_content)
+
+def get_safety_number_change_email_html_content(full_name, username, verification_code):
+    """
+    Get the HTML content for the safety number change email.
+    """
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                line-height: 1.6;
+                color: #333;
+                margin: 0;
+                padding: 0;
+            }}
+            .email-container {{
+                max-width: 600px;
+                margin: auto;
+                padding: 20px;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                background-color: #f9f9f9;
+            }}
+            h1 {{
+                font-size: 24px;
+                color: #0056b3;
+            }}
+            p {{
+                margin: 10px 0;
+            }}
+            .code {{
+                font-size: 20px;
+                font-weight: bold;
+                color: #0056b3;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="email-container">
+            <h1>Hello, {full_name}!</h1>
+            <p>We have detected a change in your Signal safety number. To ensure your account's security, please verify your identity by using the following code:</p>
+            <p class="code">{verification_code}</p>
+            <p>Send this code to the Signal chat room to complete the verification process.</p>
+            <p>If you did not initiate this change, please contact support immediately.</p>
+        </div>
+    </body>
+    </html>
+    """
+

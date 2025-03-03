@@ -3,6 +3,7 @@ FROM python:3.12-slim
 
 # Set environment variables for non-interactive installation
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_NO_CACHE_DIR=1
 
 # Set the working directory inside the container
 WORKDIR /app
@@ -17,9 +18,9 @@ RUN apt-get update && \
 # Copy the requirements.txt first to leverage Docker cache
 COPY requirements.txt .
 
-# Install the Python dependencies
+# Split pip commands and add verbose logging
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --verbose -r requirements.txt || (cat /root/.cache/pip/log/* && exit 1)
 
 # Copy the rest of the application code into the container
 COPY . .

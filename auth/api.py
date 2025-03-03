@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, date
 import logging
 import os
 from pytz import timezone  # Add this import at the top with other imports
+from app.utils.config import Config
 
 # Initialize a session with retry strategy
 # auth/api.py
@@ -161,8 +162,18 @@ def reset_user_password(auth_api_url, headers, user_id, new_password):
         return False
 
 def create_user(username, full_name, email, invited_by=None, intro=None):
-    """Create a new user in Authentik."""
+    """Create a new user in Authentik.
     
+    Args:
+        username: Username for the new user
+        full_name: Full name of the user
+        email: Email address of the user
+        invited_by: Username of the person who invited the user (optional)
+        intro: User's introduction text (optional)
+        
+    Returns:
+        tuple: (success, temp_password)
+    """
     # Generate a temporary password using a secure passphrase
     temp_password = generate_secure_passphrase()
 
@@ -215,7 +226,7 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         # Ensure 'user' is a dictionary
         if not isinstance(user, dict):
             logging.error("Unexpected response format: user is not a dictionary.")
-            return None, 'default_pass_issue'
+            return False, 'default_pass_issue'
 
         logging.info(f"User created: {user.get('username')}")
 
@@ -223,18 +234,24 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         reset_result = reset_user_password(Config.AUTHENTIK_API_URL, headers, user['pk'], temp_password)
         if not reset_result:
             logging.error(f"Failed to reset the password for user {user.get('username')}. Returning default_pass_issue.")
-            return user, 'default_pass_issue'
-        return user, temp_password  # Return the user and the temp password
+            return False, 'default_pass_issue'
+
+        # After successfully creating the user
+        if reset_result:
+            # No Discourse post creation here anymore
+            pass
+
+        return True, temp_password  # Return the user and the temp password
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred while creating user: {http_err}")
         try:
             logging.error(f"Response: {response.text}")
         except Exception:
             pass
-        return None, 'default_pass_issue'
+        return False, 'default_pass_issue'
     except requests.exceptions.RequestException as e:
         logging.error(f"Error creating user: {e}")
-        return None, 'default_pass_issue'
+        return False, 'default_pass_issue'
 
 
 # List Users Function is needed and works better than the new methos session.get(f"{auth_api_url}/users/", headers=headers, timeout=10)
@@ -500,3 +517,69 @@ def force_password_reset(username):
         logging.error(f"Error forcing password reset for {username}: {e}")
         return False
     return True
+
+def create_discourse_post(headers, title, content, username=None, intro=None, invited_by=None):
+    """Create a new post on Discourse for a new user.
+    
+    Args:
+        headers: Authentication headers for the API request (not used, we create our own)
+        title: Title of the post
+        content: Base content of the post (not used, we create our own)
+        username: Username of the new user
+        intro: User's introduction text (optional)
+        invited_by: Username of the person who invited the user (optional)
+    
+    Returns:
+        bool: True if post was created successfully, False otherwise
+    """
+    # Check if Discourse integration is configured
+    if not all([Config.DISCOURSE_API_URL, Config.DISCOURSE_API_KEY, 
+                Config.DISCOURSE_API_USERNAME, Config.DISCOURSE_CATEGORY_ID]):
+        logging.warning("Discourse integration not fully configured. Skipping post creation.")
+        return False
+        
+    try:
+        # Create the post content directly with the provided values
+        formatted_content = f"""This is {username or 'New Member'}
+
+Introduction:
+{intro or 'No introduction provided.'}
+
+Invited by: {invited_by or 'Not specified'}
+
+_Use this post to link to your introduction in the chats and have IrregularChat Members find you based on your interests or offerings._
+Notice that Login is required to view any of the Community posts. Please help maintain community privacy."""
+        
+        # Create completely new headers for the Discourse API
+        discourse_headers = {
+            "Api-Key": Config.DISCOURSE_API_KEY,
+            "Api-Username": Config.DISCOURSE_API_USERNAME,  # This should be an admin user in Discourse
+            "Content-Type": "application/json"
+        }
+        
+        url = f"{Config.DISCOURSE_API_URL}/posts"
+        data = {
+            "title": title,
+            "raw": formatted_content,
+            "category": Config.DISCOURSE_CATEGORY_ID,
+            "tags": ["introductions"]
+        }
+        
+        logging.info(f"Attempting to create Discourse post for {username}")
+        response = requests.post(url, headers=discourse_headers, json=data, timeout=10)
+        
+        if response.status_code >= 400:
+            error_detail = "Unknown error"
+            try:
+                error_detail = response.json().get('errors', response.text) if response.text else "Unknown error"
+            except:
+                error_detail = response.text if response.text else "Unknown error"
+                
+            logging.error(f"Error creating Discourse post: {error_detail}")
+            return False
+            
+        logging.info(f"Successfully created Discourse post for {username}")
+        return True
+    except Exception as e:
+        logging.error(f"Error creating Discourse post for {username}: {e}")
+        return False

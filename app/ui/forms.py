@@ -24,7 +24,12 @@ from pytz import timezone
 import numpy as np
 from auth.api import (
     update_user_status, delete_user, update_user_email, 
-    update_user_intro, update_user_invited_by
+    update_user_intro, update_user_invited_by, create_user, create_discourse_post,
+    list_users,
+    list_users_cached,
+    reset_user_password,
+    force_password_reset,
+    create_invite,
 )
 
 def reset_create_user_form_fields():
@@ -203,7 +208,7 @@ def render_create_user_form():
         parse_button = st.form_submit_button("Parse", on_click=parse_and_rerun)
 
         # 7. Submit and clear
-        submit_button = st.form_submit_button("Submit")
+        submit_button = st.form_submit_button("Create User")
         clear_button = st.form_submit_button("Clear All Fields")
 
     # Reset fields on Clear

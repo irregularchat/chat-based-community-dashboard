@@ -2,6 +2,7 @@
 import os
 from dotenv import load_dotenv
 import logging
+import uuid
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -38,6 +39,7 @@ class Config:
     SMTP_USER = os.getenv("SMTP_USER")
     SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
     SMTP_FROM = os.getenv("SMTP_FROM")
+    SMTP_BCC = os.getenv("SMTP_BCC")
     # Validate critical configurations
     required_vars = {
         "AUTHENTIK_API_TOKEN": AUTHENTIK_API_TOKEN,
@@ -57,8 +59,15 @@ class Config:
         "SMTP_USER": SMTP_USER,
         "SMTP_PASSWORD": SMTP_PASSWORD,
         "SMTP_FROM": SMTP_FROM,
+        "SMTP_BCC": SMTP_BCC,
     }
     
+    # Check if MAIN_GROUP_ID is a valid UUID
+    try:
+        uuid.UUID(MAIN_GROUP_ID)
+    except ValueError:
+        raise ValueError(f"MAIN_GROUP_ID is not a valid UUID: {MAIN_GROUP_ID}")
+
     missing_vars = [var_name for var_name, var in required_vars.items() if var is None]
     if missing_vars:
         raise EnvironmentError(f"Missing required environment variables: {', '.join(missing_vars)}")

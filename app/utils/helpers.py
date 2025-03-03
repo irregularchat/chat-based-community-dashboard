@@ -27,6 +27,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import random
 import string
+from utils.config import Config
 
 def setup_logging():
     logging.basicConfig(
@@ -126,7 +127,22 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
             
             if result:
                 add_timeline_event(db, "user_created", username, f"User created by admin")
+                # Display message in UI
                 create_user_message(username, temp_password)
+                
+                # Send welcome email if email is provided
+                if email:
+                    logging.info(f"Sending welcome email to {email} for user {username}")
+                    topic_id = "84"  # Default topic ID for introduction
+                    community_intro_email(
+                        to=email,
+                        subject="Welcome to IrregularChat!",
+                        full_name=full_name,
+                        username=username,
+                        password=temp_password,
+                        topic_id=topic_id
+                    )
+                
                 st.success(f"User {username} created successfully.")
             return result
 
@@ -190,23 +206,52 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
 
 def send_email(to, subject, body):
     try:
+        logging.info(f"Attempting to send email to: {to}")
+        
         # Create a MIMEText object to represent the email
         msg = MIMEMultipart()
-        msg['From'] = config.SMTP_FROM
+        msg['From'] = Config.SMTP_FROM
         msg['To'] = to
+        if Config.SMTP_BCC:
+            msg['Bcc'] = Config.SMTP_BCC
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'html'))
 
+        logging.info(f"Email content prepared. From: {Config.SMTP_FROM}, To: {to}, Subject: {subject}")
+
         # Connect to the SMTP server and send the email
-        server = smtplib.SMTP(config.SMTP_SERVER, config.SMTP_PORT)
+        logging.info(f"Connecting to SMTP server: {Config.SMTP_SERVER}:{Config.SMTP_PORT}")
+        server = smtplib.SMTP(Config.SMTP_SERVER, int(Config.SMTP_PORT))
+        server.set_debuglevel(1)  # Enable SMTP debug output
+        
+        logging.info("Starting TLS")
         server.starttls()
-        server.login(config.SMTP_USER, config.SMTP_PASSWORD)
-        server.send_message(msg)
+        
+        logging.info("Attempting SMTP login")
+        server.login(Config.SMTP_USER, Config.SMTP_PASSWORD)
+        
+        logging.info("Sending email message")
+        recipients = [to]
+        if Config.SMTP_BCC:
+            recipients.append(Config.SMTP_BCC)
+        server.sendmail(Config.SMTP_FROM, recipients, msg.as_string())
+        
+        logging.info("Closing SMTP connection")
         server.quit()
         
         logging.info(f"Email sent successfully to {to}")
+        return True
+    except smtplib.SMTPException as smtp_e:
+        logging.error(f"SMTP error sending email to {to}: {smtp_e}")
+        logging.error(f"SMTP Configuration: Server={Config.SMTP_SERVER}, Port={Config.SMTP_PORT}, From={Config.SMTP_FROM}")
+        logging.error(f"Error details: {str(smtp_e)}")
+        return False
     except Exception as e:
-        logging.error(f"Failed to send email to {to}: {e}")
+        logging.error(f"Unexpected error sending email to {to}: {e}")
+        logging.error(f"SMTP Configuration: Server={Config.SMTP_SERVER}, Port={Config.SMTP_PORT}, From={Config.SMTP_FROM}")
+        logging.error(f"Error type: {type(e).__name__}")
+        logging.error(f"Error details: {str(e)}")
+        return False
 
 def get_email_html_content(full_name, username, password, topic_id):
     """
@@ -324,20 +369,26 @@ def get_email_html_content(full_name, username, password, topic_id):
 def community_intro_email(to, subject, full_name, username, password, topic_id):
     """
     Send a community introduction email to a new user.
-
-    Args:
-        to (str): Recipient's email address.
-        subject (str): Subject of the email.
-        full_name (str): Full name of the user.
-        username (str): Username of the user.
-        password (str): Password for the user.
-        topic_id (str): Topic ID for the introduction post.
     """
-    # Get the HTML content for the email
-    html_content = get_email_html_content(full_name, username, password, topic_id)
-
-    # Send the email using the send_email function
-    send_email(to, subject, html_content)
+    try:
+        logging.info(f"Preparing community intro email for {username}")
+        
+        # Get the HTML content for the email
+        html_content = get_email_html_content(full_name, username, password, topic_id)
+        
+        # Send the email and get the result
+        result = send_email(to, subject, html_content)
+        
+        if result:
+            logging.info(f"Successfully sent community intro email to {to}")
+            return True
+        else:
+            logging.error(f"Failed to send community intro email to {to}")
+            return False
+            
+    except Exception as e:
+        logging.error(f"Error in community_intro_email: {e}")
+        return False
 
 def generate_unique_code(length=6):
     """Generate a random alphanumeric code of a given length."""
@@ -413,4 +464,32 @@ def get_safety_number_change_email_html_content(full_name, username, verificatio
     </body>
     </html>
     """
+
+def test_email_connection():
+    """Test SMTP connection and settings"""
+    try:
+        # Create test connection
+        server = smtplib.SMTP(Config.SMTP_SERVER, Config.SMTP_PORT)
+        server.set_debuglevel(1)  # Enable debug output
+        
+        # Try STARTTLS
+        try:
+            server.starttls()
+            logging.info("STARTTLS successful")
+        except Exception as e:
+            logging.error(f"STARTTLS failed: {e}")
+            
+        # Try login
+        try:
+            server.login(Config.SMTP_USER, Config.SMTP_PASSWORD)
+            logging.info("SMTP login successful")
+        except Exception as e:
+            logging.error(f"SMTP login failed: {e}")
+            
+        server.quit()
+        return True
+        
+    except Exception as e:
+        logging.error(f"SMTP connection test failed: {e}")
+        return False
 

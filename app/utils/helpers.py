@@ -1,10 +1,11 @@
 # utils/helpers.py
 import logging
 import streamlit as st
+import requests
 from pytz import timezone  
 from datetime import datetime, date, time as time_type
 import time
-from db.operations import search_users, add_admin_event, sync_user_data
+from db.operations import search_users, add_admin_event, sync_user_data, User
 from db.database import get_db
 from sqlalchemy.orm import Session
 from auth.api import (
@@ -13,7 +14,8 @@ from auth.api import (
     update_user_status,
     update_user_email,
     update_user_intro,
-    update_user_invited_by
+    update_user_invited_by,
+    delete_user
 )
 from messages import (
     create_user_message,
@@ -101,7 +103,7 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
     Handle form submissions for user management actions.
     
     Args:
-        action (str): The action to perform (e.g., "Create User", "Reset Password", etc.)
+        action (str): The action to perform (e.g., "create_user", "reset_password", etc.)
         username (str): The username to perform the action on
         email (str, optional): Email address for the user
         invited_by (str, optional): Who invited the user
@@ -110,8 +112,24 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
     """
     try:
         db = next(get_db())
+        headers = {
+            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+            'Content-Type': 'application/json'
+        }
         
-        if action == "Create User":
+        # First get the user's ID
+        user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
+        response = requests.get(user_search_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        users = response.json().get('results', [])
+        
+        if not users:
+            st.error(f"User {username} not found")
+            return False
+            
+        user_id = users[0]['pk']
+        
+        if action == "create_user":
             # Get the full name from session state
             first_name = st.session_state.get('first_name_input', '')
             last_name = st.session_state.get('last_name_input', '')
@@ -127,13 +145,11 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
             
             if result:
                 add_timeline_event(db, "user_created", username, f"User created by admin")
-                # Display message in UI
                 create_user_message(username, temp_password)
                 
-                # Send welcome email if email is provided
                 if email:
                     logging.info(f"Sending welcome email to {email} for user {username}")
-                    topic_id = "84"  # Default topic ID for introduction
+                    topic_id = "84"
                     community_intro_email(
                         to=email,
                         subject="Welcome to IrregularChat!",
@@ -146,63 +162,79 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
                 st.success(f"User {username} created successfully.")
             return result
 
-        elif action == "Reset Password":
+        elif action == "reset_password":
             result = force_password_reset(username)
             if result:
                 add_timeline_event(db, "password_reset", username, f"Password reset by admin")
                 st.success(f"Password reset for {username} succeeded.")
             return result
 
-        elif action in ["Activate", "Deactivate"]:
-            # Assume "Activate" means the desired status is True (active)
-            # and "Deactivate" means False (inactive).
-            desired_status = True if action == "Activate" else False
-            result = update_user_status(username, desired_status)
+        elif action in ["activate", "deactivate"]:
+            is_active = action == "activate"
+            result = update_user_status(Config.AUTHENTIK_API_URL, headers, user_id, is_active)
             if result:
-                add_timeline_event(db, f"user_{action.lower()}", username,
-                                   f"User {username} {action.lower()}d by admin")
-                st.success(f"User {username} {action.lower()}d successfully.")
+                add_timeline_event(db, f"user_{action}", username, f"User {username} {action}d by admin")
+                st.success(f"User {username} {action}d successfully.")
             else:
-                st.error(f"User {username} could not be {action.lower()}d.")
+                st.error(f"User {username} could not be {action}d.")
             return result
 
-        elif action == "Delete":
-            result = delete_user(username)
+        elif action == "delete":
+            result = delete_user(Config.AUTHENTIK_API_URL, headers, user_id)
             if result:
                 add_timeline_event(db, "user_deleted", username, f"User {username} deleted by admin")
+                
+                # Remove the user from the local database
+                try:
+                    # Delete the user from the local database
+                    db_user = db.query(User).filter_by(username=username).first()
+                    if db_user:
+                        db.delete(db_user)
+                        db.commit()
+                        logging.info(f"User {username} deleted from local database")
+                    
+                    # Force refresh of user list in session state
+                    if 'user_list' in st.session_state:
+                        st.session_state['user_list'] = [u for u in st.session_state['user_list'] 
+                                                        if u.get('username') != username]
+                except Exception as e:
+                    logging.error(f"Error removing user from local database: {e}")
+                
                 st.success(f"User {username} deleted successfully.")
             return result
 
-        elif action == "Add Intro":
+        elif action == "add_intro":
             if intro:
-                result = update_user_intro(username, intro)
+                result = update_user_intro(Config.AUTHENTIK_API_URL, headers, user_id, intro)
                 if result:
                     add_timeline_event(db, "user_intro_updated", username, f"Intro updated to: {intro}")
                     st.success(f"Intro for {username} updated successfully.")
                 return result
 
-        elif action == "Add Invited By":
+        elif action == "add_invited_by":
             if invited_by:
-                result = update_user_invited_by(username, invited_by)
+                result = update_user_invited_by(Config.AUTHENTIK_API_URL, headers, user_id, invited_by)
                 if result:
                     add_timeline_event(db, "user_invited_by_updated", username, f"Invited by changed to: {invited_by}")
                     st.success(f"Invited By for {username} updated successfully.")
                 return result
 
-        elif action == "Safety Number Change Verified":
-            result = handle_safety_number_change(username, verification_context)
-            if result:
-                add_timeline_event(db, "safety_number_change_verified", username, "Safety number change verified.")
-                st.success(f"Safety number change verified for {username}.")
-            return result
+        elif action == "update_email":
+            if email:
+                result = update_user_email(Config.AUTHENTIK_API_URL, headers, user_id, email)
+                if result:
+                    add_timeline_event(db, "user_email_updated", username, f"Email updated to: {email}")
+                    st.success(f"Email for {username} updated successfully.")
+                return result
 
         else:
             st.error(f"Unrecognized action: {action}")
+            return False
+            
     except Exception as e:
         logging.error(f"Error processing action {action} for user {username}: {e}")
         st.error(f"Error processing action {action} for user {username}")
-        return None
-    
+        return False
 
 def send_email(to, subject, body):
     try:

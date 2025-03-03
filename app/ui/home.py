@@ -31,7 +31,7 @@ from utils.helpers import (
     handle_form_submission
 )
 from db.database import get_db
-from db.operations import search_users
+from db.operations import search_users, User
 from messages import (
     create_user_message,
     create_recovery_message,
@@ -43,8 +43,11 @@ import pandas as pd
 from datetime import datetime, timedelta
 from pytz import timezone  # Ensure this is imported
 from utils.transformations import parse_input
-from db.init_db import should_sync_users, sync_user_data
+from db.init_db import should_sync_users, sync_user_data, sync_user_data_incremental
+from db.init_db import AdminEvent
+from auth.api import get_users_modified_since
 
+# Set up session with retry logic
 session = requests.Session()
 retry = Retry(
     total=2,  # Reduced total retries
@@ -56,22 +59,173 @@ adapter = HTTPAdapter(max_retries=retry)
 session.mount("http://", adapter)
 session.mount("https://", adapter)
 
-# define headers
-headers = {
-    'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-    'Content-Type': 'application/json'
-}
-
-
 def reset_form():
-    for key in [
-        'first_name_input', 'last_name_input', 'username_input', 'email_input',
-        'invited_by', 'intro', 'invite_label', 'expires_date', 'expires_time'
-    ]:
-        if key in st.session_state:
-            del st.session_state[key]
+    # Reset form fields
+    if 'username' in st.session_state:
+        del st.session_state['username']
+    if 'full_name' in st.session_state:
+        del st.session_state['full_name']
+    if 'email' in st.session_state:
+        del st.session_state['email']
+    if 'invited_by' in st.session_state:
+        del st.session_state['invited_by']
+    if 'intro' in st.session_state:
+        del st.session_state['intro']
 
 def render_home_page():
+    st.title("Community Dashboard")
+    
+    # Define headers here to ensure they're available throughout the function
+    headers = {
+        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+        'Content-Type': 'application/json'
+    }
+    
+    # Add a button to force user synchronization
+    if st.sidebar.button("Force User Sync"):
+        # Check if sync is already in progress
+        if 'sync_in_progress' in st.session_state and st.session_state['sync_in_progress']:
+            st.sidebar.warning("Sync already in progress, please wait...")
+        else:
+            st.sidebar.info("Starting user synchronization...")
+            try:
+                # Set sync in progress flag
+                st.session_state['sync_in_progress'] = True
+                
+                with next(get_db()) as db:
+                    # Ask user if they want a full sync or incremental sync
+                    sync_type = st.sidebar.radio(
+                        "Sync Type",
+                        ["Incremental (Only Changed Users)", "Full (All Users)"],
+                        index=0
+                    )
+                    
+                    is_full_sync = sync_type == "Full (All Users)"
+                    
+                    if is_full_sync:
+                        st.sidebar.info("Fetching all users from Authentik...")
+                        # Get all users from Authentik
+                        authentik_users = list_users(Config.AUTHENTIK_API_URL, headers)
+                        
+                        if authentik_users:
+                            st.sidebar.info(f"Syncing {len(authentik_users)} users...")
+                            # Use the incremental sync with full_sync=True
+                            success = sync_user_data_incremental(db, authentik_users, full_sync=True)
+                            
+                            if success:
+                                # Record sync event
+                                sync_event = AdminEvent(
+                                    timestamp=datetime.now(),
+                                    event_type='system_sync',
+                                    username='system',
+                                    description=f'Manual full sync of {len(authentik_users)} users from Authentik'
+                                )
+                                db.add(sync_event)
+                                db.commit()
+                                
+                                # Verify the sync worked
+                                local_count = db.query(User).count()
+                                st.sidebar.success(f"Successfully synced {len(authentik_users)} users. Local database now has {local_count} users.")
+                            else:
+                                st.sidebar.error("Sync failed. Check logs for details.")
+                        else:
+                            st.sidebar.error("No users fetched from Authentik API")
+                    else:
+                        # Get the last sync timestamp
+                        last_sync = (
+                            db.query(AdminEvent)
+                              .filter(AdminEvent.event_type == 'system_sync')
+                              .order_by(AdminEvent.timestamp.desc())
+                              .first()
+                        )
+                        
+                        if not last_sync:
+                            st.sidebar.warning("No previous sync found. Performing full sync instead.")
+                            # Get all users from Authentik
+                            authentik_users = list_users(Config.AUTHENTIK_API_URL, headers)
+                            
+                            if authentik_users:
+                                st.sidebar.info(f"Syncing {len(authentik_users)} users...")
+                                # Use the incremental sync with full_sync=True
+                                success = sync_user_data_incremental(db, authentik_users, full_sync=True)
+                                
+                                if success:
+                                    # Record sync event
+                                    sync_event = AdminEvent(
+                                        timestamp=datetime.now(),
+                                        event_type='system_sync',
+                                        username='system',
+                                        description=f'Manual full sync of {len(authentik_users)} users from Authentik'
+                                    )
+                                    db.add(sync_event)
+                                    db.commit()
+                                    
+                                    # Verify the sync worked
+                                    local_count = db.query(User).count()
+                                    st.sidebar.success(f"Successfully synced {len(authentik_users)} users. Local database now has {local_count} users.")
+                                else:
+                                    st.sidebar.error("Sync failed. Check logs for details.")
+                            else:
+                                st.sidebar.error("No users fetched from Authentik API")
+                        else:
+                            st.sidebar.info(f"Getting users modified since {last_sync.timestamp}...")
+                            # Get users modified since the last sync
+                            modified_users = get_users_modified_since(
+                                Config.AUTHENTIK_API_URL, 
+                                headers, 
+                                last_sync.timestamp
+                            )
+                            
+                            if modified_users:
+                                st.sidebar.info(f"Syncing {len(modified_users)} modified users...")
+                                # Use the incremental sync with full_sync=False
+                                success = sync_user_data_incremental(db, modified_users, full_sync=False)
+                                
+                                if success:
+                                    # Record sync event
+                                    sync_event = AdminEvent(
+                                        timestamp=datetime.now(),
+                                        event_type='system_sync',
+                                        username='system',
+                                        description=f'Manual incremental sync of {len(modified_users)} modified users from Authentik'
+                                    )
+                                    db.add(sync_event)
+                                    db.commit()
+                                    
+                                    # Verify the sync worked
+                                    local_count = db.query(User).count()
+                                    st.sidebar.success(f"Successfully synced {len(modified_users)} modified users. Local database now has {local_count} users.")
+                                else:
+                                    st.sidebar.error("Sync failed. Check logs for details.")
+                            else:
+                                st.sidebar.info("No modified users found since last sync.")
+                                # Still record a sync event to update the timestamp
+                                sync_event = AdminEvent(
+                                    timestamp=datetime.now(),
+                                    event_type='system_sync',
+                                    username='system',
+                                    description='Manual check - no modified users found since last sync'
+                                )
+                                db.add(sync_event)
+                                db.commit()
+                    
+                    # Update the last change check time
+                    st.session_state['last_change_check'] = datetime.now()
+                    
+                    # Force refresh of the page
+                    st.rerun()
+            except Exception as e:
+                st.sidebar.error(f"Error syncing users: {str(e)}")
+                logging.error(f"Error during manual user sync: {e}")
+            finally:
+                # Clear sync in progress flag
+                st.session_state['sync_in_progress'] = False
+    
+    # Clear all session state variables except those we want to keep
+    for var in ['message', 'user_list', 'prev_operation']:
+        if var in st.session_state:
+            del st.session_state[var]
+
     # Initialize session state variables
     if 'last_sync_check' not in st.session_state:
         st.session_state['last_sync_check'] = datetime.now()
@@ -203,11 +357,15 @@ def render_home_page():
             # Handle any pending actions from the grid
             if 'pending_action' in st.session_state:
                 action_data = st.session_state['pending_action']
-                handle_form_submission(
-                    action_data['action'],
-                    action_data['selected_users'],
-                    verification_context=action_data.get('verification_context', '')
-                )
+                # Extract the username from the selected_users list
+                username = action_data['selected_users'][0] if action_data['selected_users'] else None
+                
+                if username:
+                    handle_form_submission(
+                        action=action_data['action'],
+                        username=username,
+                        verification_context=action_data.get('verification_context', '')
+                    )
                 # Clear the pending action after handling
                 del st.session_state['pending_action']
         elif search_button:

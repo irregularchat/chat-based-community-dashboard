@@ -5,7 +5,7 @@ from ui.home import render_home_page
 from ui.summary import main as render_summary_page
 from ui.help_resources import main as render_help_page
 from ui.prompts import main as render_prompts_page
-from utils.helpers import setup_logging, test_email_connection
+from utils.helpers import setup_logging
 import logging
 from db.database import get_db
 from db.init_db import init_db
@@ -23,11 +23,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# Test email connection on startup
-if test_email_connection():
-    st.success("Email system configured correctly")
-else:
-    st.error("Email system configuration error - check logs for details")
 
 def main():
     try:

@@ -16,6 +16,7 @@ services:
     restart: unless-stopped
     depends_on:
       - db
+      - signal-cli
 
   db:
     image: postgres:15
@@ -30,5 +31,18 @@ services:
       - "${POSTGRES_PORT:-5432}:5432" # Default to port 5432 if POSTGRES_PORT not set
       # it will still work on the new port 
 
+  signal-cli:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: signal-cli
+    environment:
+      - MODE=json-rpc # Using JSON-RPC mode for better API access
+      - SIGNAL_NUMBER=${SIGNAL_PHONE_NUMBER}
+    volumes:
+      - ./signal-data:/home/.local/share/signal-cli # Persistent storage for signal data
+    ports:
+      - "${SIGNAL_PORT:-8080}:8080" # The REST API port
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  signal-data:

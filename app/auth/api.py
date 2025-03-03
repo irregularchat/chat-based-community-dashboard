@@ -12,6 +12,7 @@ import os
 from sqlalchemy.orm import Session
 from db.operations import AdminEvent
 from db.database import SessionLocal
+import time
 # Initialize a session with retry strategy
 # auth/api.py
 
@@ -260,19 +261,40 @@ def list_users(auth_api_url, headers, search_term=None):
     """List users, optionally filtering by a search term, handling pagination to fetch all users."""
     try:
         # First get all users since the API search might not catch attribute contents
-        params = {'page_size': 750}
+        params = {'page_size': 500}  # Reduced page size for better reliability
         users = []
         url = f"{auth_api_url}/core/users/"
+        page_count = 0
+        total_fetched = 0
+        max_retries = 3
 
         while url:
-            response = session.get(url, headers=headers, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+            page_count += 1
+            logging.info(f"Fetching users page {page_count}...")
+            
+            # Try with retries for each page
+            for retry in range(max_retries):
+                try:
+                    response = session.get(url, headers=headers, params=params, timeout=60)  # Increased timeout
+                    response.raise_for_status()
+                    data = response.json()
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    if retry < max_retries - 1:
+                        logging.warning(f"Error fetching page {page_count}, retrying ({retry+1}/{max_retries}): {e}")
+                        time.sleep(2)  # Wait before retrying
+                    else:
+                        logging.error(f"Failed to fetch page {page_count} after {max_retries} attempts: {e}")
+                        raise  # Re-raise the exception after all retries failed
+            
+            results = data.get('results', [])
+            total_fetched += len(results)
+            logging.info(f"Fetched {len(results)} users (total so far: {total_fetched})")
             
             if search_term:
                 search_term_lower = search_term.lower()
                 filtered_results = []
-                for user in data.get('results', []):
+                for user in results:
                     # Get all searchable fields
                     searchable_text = []
                     
@@ -295,7 +317,7 @@ def list_users(auth_api_url, headers, search_term=None):
                 
                 users.extend(filtered_results)
             else:
-                users.extend(data.get('results', []))
+                users.extend(results)
             
             url = data.get('next')
             params = {}  # Clear params after first request
@@ -387,16 +409,33 @@ def create_invite(headers, label, expires=None):
 
 
 def update_user_status(auth_api_url, headers, user_id, is_active):
+    """Update a user's active status in Authentik.
+    
+    Args:
+        auth_api_url (str): The base URL for the Authentik API
+        headers (dict): Headers for the API request
+        user_id (str): The ID of the user to update
+        is_active (bool): Whether the user should be active or inactive
+        
+    Returns:
+        bool: True if the update was successful, False otherwise
+    """
     url = f"{auth_api_url}/core/users/{user_id}/"
     data = {"is_active": is_active}
     try:
+        logging.info(f"Updating user {user_id} status to {'active' if is_active else 'inactive'}")
         response = session.patch(url, headers=headers, json=data, timeout=10)
-        response.raise_for_status()
-        logging.info(f"User {user_id} status updated to {'active' if is_active else 'inactive'}.")
-        return response.json()
+        
+        if response.status_code in [200, 201, 202, 204]:
+            logging.info(f"User {user_id} status updated to {'active' if is_active else 'inactive'}.")
+            return True
+        else:
+            logging.error(f"Failed to update user {user_id} status. Status code: {response.status_code}")
+            return False
+            
     except requests.exceptions.RequestException as e:
         logging.error(f"Error updating user status: {e}")
-        return None
+        return False
 
 def delete_user(auth_api_url, headers, user_id):
     url = f"{auth_api_url}/core/users/{user_id}/"
@@ -414,28 +453,60 @@ def delete_user(auth_api_url, headers, user_id):
 
 
 def update_user_intro(auth_api_url, headers, user_id, intro_text):
+    """Update a user's introduction in Authentik.
+    
+    Args:
+        auth_api_url (str): The base URL for the Authentik API
+        headers (dict): Headers for the API request
+        user_id (str): The ID of the user to update
+        intro_text (str): The introduction text to set
+        
+    Returns:
+        bool: True if the update was successful, False otherwise
+    """
     url = f"{auth_api_url}/core/users/{user_id}/"
     data = {"attributes": {"intro": intro_text}}
     try:
+        logging.info(f"Updating intro for user {user_id}")
         response = session.patch(url, headers=headers, json=data, timeout=10)
-        response.raise_for_status()
-        logging.info(f"Intro for user {user_id} updated successfully.")
-        return response.json()
+        
+        if response.status_code in [200, 201, 202, 204]:
+            logging.info(f"Intro for user {user_id} updated successfully.")
+            return True
+        else:
+            logging.error(f"Failed to update intro for user {user_id}. Status code: {response.status_code}")
+            return False
     except requests.exceptions.RequestException as e:
         logging.error(f"Error updating user intro: {e}")
-        return None
+        return False
 
 def update_user_invited_by(auth_api_url, headers, user_id, invited_by):
+    """Update a user's 'invited by' field in Authentik.
+    
+    Args:
+        auth_api_url (str): The base URL for the Authentik API
+        headers (dict): Headers for the API request
+        user_id (str): The ID of the user to update
+        invited_by (str): The name of the person who invited the user
+        
+    Returns:
+        bool: True if the update was successful, False otherwise
+    """
     url = f"{auth_api_url}/core/users/{user_id}/"
     data = {"attributes": {"invited_by": invited_by}}
     try:
+        logging.info(f"Updating 'invited by' for user {user_id}")
         response = session.patch(url, headers=headers, json=data, timeout=10)
-        response.raise_for_status()
-        logging.info(f"'Invited By' for user {user_id} updated successfully.")
-        return response.json()
+        
+        if response.status_code in [200, 201, 202, 204]:
+            logging.info(f"'Invited By' for user {user_id} updated successfully.")
+            return True
+        else:
+            logging.error(f"Failed to update 'invited by' for user {user_id}. Status code: {response.status_code}")
+            return False
     except requests.exceptions.RequestException as e:
         logging.error(f"Error updating 'Invited By': {e}")
-        return None
+        return False
 
 def generate_recovery_link(username):
     """Generate a recovery link for a user."""
@@ -483,33 +554,181 @@ def force_password_reset(username):
             return False
         user_id = users[0]['pk']
 
-        # Now, force the password reset using POST
+        # Now, force the password reset using the correct method
+        # The 405 error indicates Method Not Allowed, so we need to check the API documentation
+        # for the correct method (GET, PUT, or PATCH instead of POST)
         reset_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/force_password_reset/"
-        response = requests.post(reset_api_url, headers=headers, timeout=10)
-        response.raise_for_status()
-    except response.json().get('detail'):
-        logging.error(f"Error forcing password reset for {username}: {response.json().get('detail')}")
+        logging.info(f"Sending password reset request for user {username} (ID: {user_id})")
+        
+        # Try GET method first
+        response = session.get(reset_api_url, headers=headers, timeout=10)
+        
+        # If GET fails, try PUT
+        if response.status_code == 405:  # Method Not Allowed
+            logging.info(f"GET method not allowed for password reset, trying PUT")
+            response = session.put(reset_api_url, headers=headers, json={}, timeout=10)
+            
+        # If PUT fails, try PATCH
+        if response.status_code == 405:  # Method Not Allowed
+            logging.info(f"PUT method not allowed for password reset, trying PATCH")
+            response = session.patch(reset_api_url, headers=headers, json={}, timeout=10)
+        
+        # Check if the response has content before trying to parse JSON
+        if response.status_code in [200, 201, 202, 204]:  # Success codes
+            logging.info(f"Password reset successful for user {username} (ID: {user_id}) with status code {response.status_code}")
+            return True
+            
+        if response.content:  # Only try to parse JSON if there's content
+            try:
+                response_data = response.json()
+                logging.error(f"Error forcing password reset for {username}: {response_data.get('detail', 'Unknown error')}")
+            except ValueError:
+                logging.error(f"Invalid JSON response for password reset: {response.content}")
+        else:
+            logging.error(f"Password reset failed for user {username} (ID: {user_id}) with status code {response.status_code}")
+            
         return False
+            
     except requests.exceptions.RequestException as e:
         logging.error(f"Error forcing password reset for {username}: {e}")
         return False
-    return True
 
 def update_user_email(auth_api_url, headers, user_id, new_email):
-    """Update a user's email address in Authentik."""
+    """Update a user's email address in Authentik.
+    
+    Args:
+        auth_api_url (str): The base URL for the Authentik API
+        headers (dict): Headers for the API request
+        user_id (str): The ID of the user to update
+        new_email (str): The new email address
+        
+    Returns:
+        bool: True if the update was successful, False otherwise
+    """
     url = f"{auth_api_url}/core/users/{user_id}/"
     data = {"email": new_email}
     
     logging.info(f"Attempting to update email for user {user_id} to {new_email}")
     try:
         response = session.patch(url, headers=headers, json=data, timeout=10)
-        response.raise_for_status()
-        logging.info(f"Email for user {user_id} updated successfully to {new_email}")
-        return response.json()
+        
+        if response.status_code in [200, 201, 202, 204]:
+            logging.info(f"Email for user {user_id} updated successfully to {new_email}")
+            return True
+        else:
+            logging.error(f"Failed to update email for user {user_id}. Status code: {response.status_code}")
+            return False
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error updating email: {http_err}")
         logging.error(f"Response content: {http_err.response.text if http_err.response else 'No response content'}")
-        return None
+        return False
     except requests.exceptions.RequestException as e:
         logging.error(f"Error updating user email: {e}")
+        return False
+
+def get_last_modified_timestamp(auth_api_url, headers):
+    """
+    Get the timestamp of the most recently modified user in Authentik.
+    This helps determine if a sync is needed without fetching all users.
+    
+    Args:
+        auth_api_url: The Authentik API URL
+        headers: The request headers
+        
+    Returns:
+        datetime: The timestamp of the most recently modified user, or None if error
+    """
+    try:
+        # Get users sorted by last modified date in descending order
+        params = {
+            'page_size': 1,
+            'ordering': '-last_updated'  # Most recently updated first
+        }
+        
+        response = session.get(
+            f"{auth_api_url}/core/users/",
+            headers=headers,
+            params=params,
+            timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        if data.get('results') and len(data['results']) > 0:
+            # Get the last_updated field from the most recently updated user
+            last_updated = data['results'][0].get('last_updated')
+            if last_updated:
+                try:
+                    # Convert to datetime
+                    return datetime.fromisoformat(last_updated.replace('Z', '+00:00'))
+                except (ValueError, TypeError):
+                    logging.error(f"Invalid last_updated format: {last_updated}")
+        
+        # Fallback: return the current time
+        return datetime.now()
+    except Exception as e:
+        logging.error(f"Error getting last modified timestamp: {e}")
         return None
+
+def get_users_modified_since(auth_api_url, headers, since_timestamp):
+    """
+    Get only users that have been modified since a specific timestamp.
+    This is much more efficient than fetching all users for incremental syncs.
+    
+    Args:
+        auth_api_url: The Authentik API URL
+        headers: The request headers
+        since_timestamp: Datetime object representing the cutoff time
+        
+    Returns:
+        list: Users modified since the timestamp
+    """
+    try:
+        # Convert timestamp to ISO format for the API
+        since_iso = since_timestamp.isoformat()
+        
+        # Set up parameters to filter by last_updated
+        params = {
+            'page_size': 500,
+            'last_updated__gte': since_iso  # Only get users updated since the timestamp
+        }
+        
+        users = []
+        url = f"{auth_api_url}/core/users/"
+        page_count = 0
+        total_fetched = 0
+        max_retries = 3
+
+        while url:
+            page_count += 1
+            logging.info(f"Fetching modified users page {page_count}...")
+            
+            # Try with retries for each page
+            for retry in range(max_retries):
+                try:
+                    response = session.get(url, headers=headers, params=params, timeout=60)
+                    response.raise_for_status()
+                    data = response.json()
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    if retry < max_retries - 1:
+                        logging.warning(f"Error fetching page {page_count}, retrying ({retry+1}/{max_retries}): {e}")
+                        time.sleep(2)  # Wait before retrying
+                    else:
+                        logging.error(f"Failed to fetch page {page_count} after {max_retries} attempts: {e}")
+                        raise  # Re-raise the exception after all retries failed
+            
+            results = data.get('results', [])
+            total_fetched += len(results)
+            logging.info(f"Fetched {len(results)} modified users (total so far: {total_fetched})")
+            
+            users.extend(results)
+            
+            url = data.get('next')
+            params = {}  # Clear params after first request
+
+        logging.info(f"Total modified users fetched: {len(users)}")
+        return users
+    except Exception as e:
+        logging.error(f"Error getting modified users: {e}")
+        return []

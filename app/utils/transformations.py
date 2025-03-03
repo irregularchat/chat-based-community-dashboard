@@ -14,7 +14,7 @@ from utils.gpt_call import gpt_parse_input, gpt_check_api
 
 def simple_parse_input(input_text):
     """
-    This function works by removing numbers and any following periods from the input text
+    This function works by removing numbers and any following periods, hashes, or dashes, or asterisks, or bullets or parentheses from the input text
     then splitting the input text by newlines and stripping whitespace
     then initializing the dictionary with default values
     then searching for email in all lines first (IMPORTANT)
@@ -24,7 +24,7 @@ def simple_parse_input(input_text):
 
     """
     # Remove numbers and any following periods/characters from the input text
-    input_text = re.sub(r'^[\d\-#\.]+\s*', '', input_text, flags=re.MULTILINE)
+    input_text = re.sub(r'^[\d\-#\.*\•\(\)]+\s*', '', input_text, flags=re.MULTILINE)
 
     # Split the input text by newlines and strip whitespace
     lines = [line.strip() for line in input_text.split('\n') if line.strip()]

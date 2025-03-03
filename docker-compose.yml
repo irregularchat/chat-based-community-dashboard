@@ -35,8 +35,14 @@ services:
     image: bbernhard/signal-cli-rest-api:latest
     container_name: signal-cli
     environment:
-      - MODE=json-rpc # Using JSON-RPC mode for better API access
+      - MODE=json-rpc # Fastest mode with a persistent daemon process
       - SIGNAL_NUMBER=${SIGNAL_PHONE_NUMBER}
+      # Optional improved settings
+      - SIGNAL_CLI_CONFIG_DIR=/home/.local/share/signal-cli/
+      - SWAGGER_HOST=${BASE_DOMAIN:-localhost}
+      - SWAGGER_USE_HTTPS_AS_PREFERRED_SCHEME=true
+      # Only add this if you're not handling receiving messages in your app
+      # - AUTO_RECEIVE_SCHEDULE=*/15 * * * * # Check for messages every 15 minutes
     volumes:
       - ./signal-data:/home/.local/share/signal-cli # Persistent storage for signal data
     ports:

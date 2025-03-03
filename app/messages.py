@@ -6,7 +6,7 @@ from datetime import datetime
 import logging
 from utils.config import Config  # Ensure Config is imported
 
-def create_user_message(new_username, temp_password):
+def create_user_message(new_username, temp_password, discourse_post_url=None):
     """Generate and display the welcome message after user creation with temp password."""
     welcome_message = f"""
     🌟 Your First Step Into the IrregularChat! 🌟
@@ -25,9 +25,20 @@ def create_user_message(new_username, temp_password):
     - Update your email, important to be able to recover your account and verify your identity
     - Save your Login Username and New Password to a Password Manager
     - Visit the welcome page while logged in https://forum.irregularchat.com/t/84
-
+    """
+    
+    # Add Discourse post URL if available
+    if discourse_post_url:
+        welcome_message += f"""
+    3️⃣ Step 3:
+    - Check out your introduction post: {discourse_post_url}
+    - Feel free to update it with more information about yourself!
+        """
+    
+    welcome_message += """
     Please take a moment to learn about the community before you jump in.
     """
+    
     st.code(welcome_message)
     st.session_state['message'] = welcome_message
     st.session_state['user_list'] = None  # Clear user list if there was any

@@ -75,7 +75,13 @@ class Config:
         "DISCOURSE_API_USERNAME": DISCOURSE_API_USERNAME,
     }
     if DISCOURSE_URL:
-        DISCOURSE_API_URL = f"{DISCOURSE_URL}/api"
+        # check if DISCOURSE_URL ends with a slash or /api or nothing
+        if DISCOURSE_URL.endswith('/'):
+            DISCOURSE_API_URL = f"{DISCOURSE_URL}api"
+        elif DISCOURSE_URL.endswith('/api'):
+            DISCOURSE_API_URL = DISCOURSE_URL
+        else:
+            DISCOURSE_API_URL = f"{DISCOURSE_URL}/api"
     # Check if MAIN_GROUP_ID is a valid UUID
     try:
         uuid.UUID(MAIN_GROUP_ID)

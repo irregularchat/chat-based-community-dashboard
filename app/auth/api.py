@@ -10,9 +10,11 @@ from pytz import timezone
 import logging
 import os
 from sqlalchemy.orm import Session
-from db.operations import AdminEvent
+from db.operations import AdminEvent, sync_user_data
 from db.database import SessionLocal
 import time
+import json
+import streamlit as st
 # Initialize a session with retry strategy
 # auth/api.py
 
@@ -153,6 +155,7 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
     
     # Generate a temporary password using a secure passphrase
     temp_password = generate_secure_passphrase()
+    discourse_post_url = None  # Initialize post URL variable
 
     # Check for existing usernames and modify if necessary
     original_username = username
@@ -202,13 +205,13 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         # Ensure 'user' is a dictionary
         if not isinstance(new_user, dict):
             logging.error("Unexpected response format: user is not a dictionary.")
-            return None, 'default_pass_issue'
+            return None, 'default_pass_issue', None
 
         # Reset the user's password
         reset_result = reset_user_password(Config.AUTHENTIK_API_URL, headers, new_user['pk'], temp_password)
         if not reset_result:
             logging.error(f"Failed to reset the password for user {new_user.get('username')}.")
-            return new_user, 'default_pass_issue'
+            return new_user, 'default_pass_issue', None
 
         # Sync the new user with local database
         with SessionLocal() as db:
@@ -240,7 +243,34 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
                 logging.error(f"Error syncing after user creation: {e}")
                 # Note: We continue even if sync fails, as the user was created in Authentik
 
-        return new_user, temp_password
+        # Create a Discourse post for the user introduction if Discourse is configured
+        if all([Config.DISCOURSE_URL, Config.DISCOURSE_API_KEY, 
+                Config.DISCOURSE_API_USERNAME, Config.DISCOURSE_CATEGORY_ID]):
+            try:
+                post_title = f"Introduction: {full_name}"
+                success, post_url = create_discourse_post(
+                    headers=headers,
+                    title=post_title,
+                    content="",  # Not used, the function creates its own content
+                    username=username,
+                    intro=intro,
+                    invited_by=invited_by
+                )
+                
+                if success and post_url:
+                    logging.info(f"Successfully created Discourse post for user {username} at URL: {post_url}")
+                    discourse_post_url = post_url
+                elif success:
+                    logging.warning(f"Created Discourse post for user {username} but couldn't get the URL")
+                else:
+                    logging.warning(f"Failed to create Discourse post for user {username}")
+            except Exception as e:
+                logging.error(f"Error creating Discourse post for user {username}: {e}")
+                # Continue even if Discourse post creation fails
+        else:
+            logging.info("Discourse integration not configured. Skipping post creation.")
+
+        return new_user, temp_password, discourse_post_url
 
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred while creating user: {http_err}")
@@ -248,10 +278,10 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
             logging.error(f"Response: {response.text}")
         except Exception:
             pass
-        return None, 'default_pass_issue'
+        return None, 'default_pass_issue', None
     except requests.exceptions.RequestException as e:
         logging.error(f"Error creating user: {e}")
-        return None, 'default_pass_issue'
+        return None, 'default_pass_issue', None
 
 
 # List Users Function is needed and works better than the new methos session.get(f"{auth_api_url}/users/", headers=headers, timeout=10)
@@ -732,3 +762,118 @@ def get_users_modified_since(auth_api_url, headers, since_timestamp):
     except Exception as e:
         logging.error(f"Error getting modified users: {e}")
         return []
+
+
+def create_discourse_post(headers, title, content, username=None, intro=None, invited_by=None):
+    """Create a new post on Discourse for a new user.
+    
+    Args:
+        headers: Authentication headers for the API request (not used, we create our own)
+        title: Title of the post
+        content: Base content of the post (not used, we create our own)
+        username: Username of the new user
+        intro: User's introduction text (optional)
+        invited_by: Username of the person who invited the user (optional)
+    
+    Returns:
+        tuple: (success: bool, post_url: str) - A tuple with success status and the URL of the created post (or None if failed)
+    """
+    # Check if Discourse integration is configured
+    missing_configs = []
+    if not Config.DISCOURSE_URL:
+        missing_configs.append("DISCOURSE_URL")
+    if not Config.DISCOURSE_API_KEY:
+        missing_configs.append("DISCOURSE_API_KEY")
+    if not Config.DISCOURSE_API_USERNAME:
+        missing_configs.append("DISCOURSE_API_USERNAME")
+    if not Config.DISCOURSE_CATEGORY_ID:
+        missing_configs.append("DISCOURSE_CATEGORY_ID")
+    
+    if missing_configs:
+        logging.warning(f"Discourse integration not fully configured. Missing: {', '.join(missing_configs)}. Skipping post creation.")
+        return False, None
+    
+    logging.info(f"Starting Discourse post creation for user {username}")
+    logging.info(f"Using Discourse URL: {Config.DISCOURSE_URL}")
+    logging.info(f"Using Discourse category ID: {Config.DISCOURSE_CATEGORY_ID}")
+    logging.info(f"Using Discourse API username: {Config.DISCOURSE_API_USERNAME}")
+    logging.info(f"Discourse API key is {'configured' if Config.DISCOURSE_API_KEY else 'missing'}")
+        
+    try:
+        # Create the post content with the exact template format specified
+        formatted_content = f"""This is {username}
+
+Introduction:
+{intro or 'No introduction provided.'}
+
+Invited by: {invited_by or 'Not specified'}
+
+_Use this post to link to your introduction in the chats and have IrregularChat Members find you based on your interests or offerings._
+Notice that Login is required to view any of the Community posts. Please help maintain community privacy."""
+        
+        # Create completely new headers for the Discourse API
+        discourse_headers = {
+            "Api-Key": Config.DISCOURSE_API_KEY,
+            "Api-Username": Config.DISCOURSE_API_USERNAME,  # This should be an admin user in Discourse
+            "Content-Type": "application/json"
+        }
+        
+        # Construct the API URL
+        base_url = Config.DISCOURSE_URL
+        if not base_url.startswith('http'):
+            base_url = f"https://{base_url}"
+        
+        # Discourse API endpoint for creating posts
+        url = f"{base_url}/posts.json"
+            
+        data = {
+            "title": title,
+            "raw": formatted_content,
+            "category": int(Config.DISCOURSE_CATEGORY_ID),
+            "tags": [Config.DISCOURSE_INTRO_TAG] if Config.DISCOURSE_INTRO_TAG else []
+        }
+        
+        logging.info(f"Attempting to create Discourse post for {username} at URL: {url}")
+        logging.info(f"Request data: {json.dumps(data)}")
+        response = requests.post(url, headers=discourse_headers, json=data, timeout=10)
+        
+        logging.info(f"Discourse API response status code: {response.status_code}")
+        
+        if response.status_code >= 400:
+            error_detail = "Unknown error"
+            try:
+                error_detail = response.json().get('errors', response.text) if response.text else "Unknown error"
+            except:
+                error_detail = response.text if response.text else "Unknown error"
+                
+            logging.error(f"Error creating Discourse post: {error_detail}")
+            return False, None
+        
+        # Get the post's topic URL from the response
+        try:
+            response_data = response.json()
+            logging.info(f"Discourse API response data: {json.dumps(response_data)}")
+            
+            post_id = response_data.get('id')
+            topic_id = response_data.get('topic_id')
+            
+            # Construct the post URL
+            if topic_id:
+                post_url = f"{base_url}/t/{topic_id}"
+                logging.info(f"Successfully created Discourse post for {username} at URL: {post_url}")
+                
+                # Store success in session state for UI display
+                if hasattr(st, 'session_state'):
+                    st.session_state['discourse_post_created'] = True
+                    st.session_state['discourse_post_url'] = post_url
+                
+                return True, post_url
+            else:
+                logging.warning(f"Created post but couldn't get topic_id from response: {response_data}")
+                return True, None
+        except Exception as e:
+            logging.error(f"Error parsing post response: {e}")
+            return True, None
+    except Exception as e:
+        logging.error(f"Error creating Discourse post for {username}: {e}")
+        return False, None

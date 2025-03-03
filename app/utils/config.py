@@ -40,6 +40,14 @@ class Config:
     SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
     SMTP_FROM = os.getenv("SMTP_FROM")
     SMTP_BCC = os.getenv("SMTP_BCC")
+    
+    # Discourse integration (optional)
+    DISCOURSE_URL = os.getenv("DISCOURSE_URL")
+    DISCOURSE_CATEGORY_ID = os.getenv("DISCOURSE_CATEGORY_ID")
+    DISCOURSE_INTRO_TAG = os.getenv("DISCOURSE_INTRO_TAG", "introductions")
+    DISCOURSE_API_KEY = os.getenv("DISCOURSE_API_KEY")
+    DISCOURSE_API_USERNAME = os.getenv("DISCOURSE_API_USERNAME")
+    
     # Validate critical configurations
     required_vars = {
         "AUTHENTIK_API_TOKEN": AUTHENTIK_API_TOKEN,
@@ -60,8 +68,14 @@ class Config:
         "SMTP_PASSWORD": SMTP_PASSWORD,
         "SMTP_FROM": SMTP_FROM,
         "SMTP_BCC": SMTP_BCC,
+        "DISCOURSE_URL": DISCOURSE_URL,
+        "DISCOURSE_CATEGORY_ID": DISCOURSE_CATEGORY_ID,
+        "DISCOURSE_INTRO_TAG": DISCOURSE_INTRO_TAG,
+        "DISCOURSE_API_KEY": DISCOURSE_API_KEY,
+        "DISCOURSE_API_USERNAME": DISCOURSE_API_USERNAME,
     }
-    
+    if DISCOURSE_URL:
+        DISCOURSE_API_URL = f"{DISCOURSE_URL}/api"
     # Check if MAIN_GROUP_ID is a valid UUID
     try:
         uuid.UUID(MAIN_GROUP_ID)

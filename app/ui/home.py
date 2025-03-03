@@ -81,6 +81,42 @@ def render_home_page():
         'Content-Type': 'application/json'
     }
     
+    # Display Discourse integration status in the sidebar
+    with st.sidebar.expander("Discourse Integration Status", expanded=False):
+        # Check if Discourse integration is configured
+        if all([Config.DISCOURSE_URL, Config.DISCOURSE_API_KEY, 
+                Config.DISCOURSE_API_USERNAME, Config.DISCOURSE_CATEGORY_ID]):
+            st.success("✅ Discourse integration is fully configured")
+            st.write(f"URL: {Config.DISCOURSE_URL}")
+            st.write(f"API Username: {Config.DISCOURSE_API_USERNAME}")
+            st.write(f"Category ID: {Config.DISCOURSE_CATEGORY_ID}")
+            st.write(f"Intro Tag: {Config.DISCOURSE_INTRO_TAG or 'Not set (optional)'}")
+        else:
+            st.error("⚠️ Discourse integration is not fully configured")
+            st.write("The following settings are required for creating forum posts:")
+            
+            if not Config.DISCOURSE_URL:
+                st.warning("❌ DISCOURSE_URL is not set")
+            else:
+                st.success(f"✅ DISCOURSE_URL: {Config.DISCOURSE_URL}")
+                
+            if not Config.DISCOURSE_API_KEY:
+                st.warning("❌ DISCOURSE_API_KEY is not set")
+            else:
+                st.success("✅ DISCOURSE_API_KEY is set")
+                
+            if not Config.DISCOURSE_API_USERNAME:
+                st.warning("❌ DISCOURSE_API_USERNAME is not set")
+            else:
+                st.success(f"✅ DISCOURSE_API_USERNAME: {Config.DISCOURSE_API_USERNAME}")
+                
+            if not Config.DISCOURSE_CATEGORY_ID:
+                st.warning("❌ DISCOURSE_CATEGORY_ID is not set")
+            else:
+                st.success(f"✅ DISCOURSE_CATEGORY_ID: {Config.DISCOURSE_CATEGORY_ID}")
+                
+            st.info("Set these environment variables to enable Discourse integration")
+    
     # Add a button to force user synchronization
     if st.sidebar.button("Force User Sync"):
         # Check if sync is already in progress

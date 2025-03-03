@@ -11,11 +11,18 @@ from sqlalchemy.orm import Session
 from auth.api import (
     create_user,
     force_password_reset,
+    generate_secure_passphrase,
+    list_users_cached,
     update_user_status,
-    update_user_email,
+    delete_user,
+    reset_user_password,
     update_user_intro,
     update_user_invited_by,
-    delete_user
+    create_invite,
+    shorten_url,
+    list_users,
+    webhook_notification,
+    create_discourse_post
 )
 from messages import (
     create_user_message,
@@ -117,25 +124,22 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
             'Content-Type': 'application/json'
         }
         
-        # First get the user's ID
-        user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
-        response = requests.get(user_search_url, headers=headers, timeout=10)
-        response.raise_for_status()
-        users = response.json().get('results', [])
+        # Normalize action string (remove spaces, convert to lowercase)
+        normalized_action = action.lower().replace(' ', '_')
         
-        if not users:
-            st.error(f"User {username} not found")
-            return False
-            
-        user_id = users[0]['pk']
+        logging.info(f"Processing action: {action}, normalized to: {normalized_action}")
         
-        if action == "create_user":
+        if normalized_action == "create_user":
             # Get the full name from session state
             first_name = st.session_state.get('first_name_input', '')
             last_name = st.session_state.get('last_name_input', '')
             full_name = f"{first_name} {last_name}".strip()
             
-            result, temp_password = create_user(
+            logging.info(f"Creating user {username} with full name {full_name}")
+            
+            # For create_user, we don't need to check if the user exists first
+            # The create_user function will handle username uniqueness
+            result, temp_password, discourse_post_url = create_user(
                 username=username,
                 full_name=full_name,
                 email=email,
@@ -145,91 +149,117 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
             
             if result:
                 add_timeline_event(db, "user_created", username, f"User created by admin")
-                create_user_message(username, temp_password)
+                create_user_message(username, temp_password, discourse_post_url)
+                
+                # Show forum post creation status
+                if discourse_post_url:
+                    st.success(f"✅ Forum introduction post created successfully: {discourse_post_url}")
+                else:
+                    st.warning("⚠️ Forum introduction post could not be created. Please check Discourse configuration.")
                 
                 if email:
                     logging.info(f"Sending welcome email to {email} for user {username}")
                     topic_id = "84"
-                    community_intro_email(
+                    # Add forum post URL to the email if available
+                    email_result = community_intro_email(
                         to=email,
                         subject="Welcome to IrregularChat!",
                         full_name=full_name,
                         username=username,
                         password=temp_password,
-                        topic_id=topic_id
+                        topic_id=topic_id,
+                        discourse_post_url=discourse_post_url  # Pass the post URL to the email function
                     )
+                    if email_result:
+                        st.success(f"✅ Welcome email sent to {email}")
+                    else:
+                        st.warning(f"⚠️ Could not send welcome email to {email}")
                 
                 st.success(f"User {username} created successfully.")
-            return result
-
-        elif action == "reset_password":
-            result = force_password_reset(username)
-            if result:
-                add_timeline_event(db, "password_reset", username, f"Password reset by admin")
-                st.success(f"Password reset for {username} succeeded.")
-            return result
-
-        elif action in ["activate", "deactivate"]:
-            is_active = action == "activate"
-            result = update_user_status(Config.AUTHENTIK_API_URL, headers, user_id, is_active)
-            if result:
-                add_timeline_event(db, f"user_{action}", username, f"User {username} {action}d by admin")
-                st.success(f"User {username} {action}d successfully.")
             else:
-                st.error(f"User {username} could not be {action}d.")
+                st.error(f"Failed to create user {username}.")
             return result
-
-        elif action == "delete":
-            result = delete_user(Config.AUTHENTIK_API_URL, headers, user_id)
-            if result:
-                add_timeline_event(db, "user_deleted", username, f"User {username} deleted by admin")
-                
-                # Remove the user from the local database
-                try:
-                    # Delete the user from the local database
-                    db_user = db.query(User).filter_by(username=username).first()
-                    if db_user:
-                        db.delete(db_user)
-                        db.commit()
-                        logging.info(f"User {username} deleted from local database")
-                    
-                    # Force refresh of user list in session state
-                    if 'user_list' in st.session_state:
-                        st.session_state['user_list'] = [u for u in st.session_state['user_list'] 
-                                                        if u.get('username') != username]
-                except Exception as e:
-                    logging.error(f"Error removing user from local database: {e}")
-                
-                st.success(f"User {username} deleted successfully.")
-            return result
-
-        elif action == "add_intro":
-            if intro:
-                result = update_user_intro(Config.AUTHENTIK_API_URL, headers, user_id, intro)
-                if result:
-                    add_timeline_event(db, "user_intro_updated", username, f"Intro updated to: {intro}")
-                    st.success(f"Intro for {username} updated successfully.")
-                return result
-
-        elif action == "add_invited_by":
-            if invited_by:
-                result = update_user_invited_by(Config.AUTHENTIK_API_URL, headers, user_id, invited_by)
-                if result:
-                    add_timeline_event(db, "user_invited_by_updated", username, f"Invited by changed to: {invited_by}")
-                    st.success(f"Invited By for {username} updated successfully.")
-                return result
-
-        elif action == "update_email":
-            if email:
-                result = update_user_email(Config.AUTHENTIK_API_URL, headers, user_id, email)
-                if result:
-                    add_timeline_event(db, "user_email_updated", username, f"Email updated to: {email}")
-                    st.success(f"Email for {username} updated successfully.")
-                return result
-
         else:
-            st.error(f"Unrecognized action: {action}")
-            return False
+            # For all other actions, we need to get the user ID first
+            user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
+            response = requests.get(user_search_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            users = response.json().get('results', [])
+            
+            if not users:
+                st.error(f"User {username} not found")
+                return False
+                
+            user_id = users[0]['pk']
+            
+            if normalized_action == "reset_password":
+                result = force_password_reset(username)
+                if result:
+                    add_timeline_event(db, "password_reset", username, f"Password reset by admin")
+                    st.success(f"Password reset for {username} succeeded.")
+                return result
+
+            elif normalized_action in ["activate", "deactivate"]:
+                is_active = normalized_action == "activate"
+                result = update_user_status(Config.AUTHENTIK_API_URL, headers, user_id, is_active)
+                if result:
+                    add_timeline_event(db, f"user_{normalized_action}", username, f"User {username} {normalized_action}d by admin")
+                    st.success(f"User {username} {normalized_action}d successfully.")
+                else:
+                    st.error(f"User {username} could not be {normalized_action}d.")
+                return result
+
+            elif normalized_action == "delete":
+                result = delete_user(Config.AUTHENTIK_API_URL, headers, user_id)
+                if result:
+                    add_timeline_event(db, "user_deleted", username, f"User {username} deleted by admin")
+                    
+                    # Remove the user from the local database
+                    try:
+                        # Delete the user from the local database
+                        db_user = db.query(User).filter_by(username=username).first()
+                        if db_user:
+                            db.delete(db_user)
+                            db.commit()
+                            logging.info(f"User {username} deleted from local database")
+                        
+                        # Force refresh of user list in session state
+                        if 'user_list' in st.session_state:
+                            st.session_state['user_list'] = [u for u in st.session_state['user_list'] 
+                                                            if u.get('username') != username]
+                    except Exception as e:
+                        logging.error(f"Error removing user from local database: {e}")
+                    
+                    st.success(f"User {username} deleted successfully.")
+                return result
+
+            elif normalized_action == "add_intro":
+                if intro:
+                    result = update_user_intro(Config.AUTHENTIK_API_URL, headers, user_id, intro)
+                    if result:
+                        add_timeline_event(db, "user_intro_updated", username, f"Intro updated to: {intro}")
+                        st.success(f"Intro for {username} updated successfully.")
+                    return result
+
+            elif normalized_action == "add_invited_by":
+                if invited_by:
+                    result = update_user_invited_by(Config.AUTHENTIK_API_URL, headers, user_id, invited_by)
+                    if result:
+                        add_timeline_event(db, "user_invited_by_updated", username, f"Invited by changed to: {invited_by}")
+                        st.success(f"Invited By for {username} updated successfully.")
+                    return result
+
+            elif normalized_action == "update_email":
+                if email:
+                    result = update_user_email(Config.AUTHENTIK_API_URL, headers, user_id, email)
+                    if result:
+                        add_timeline_event(db, "user_email_updated", username, f"Email updated to: {email}")
+                        st.success(f"Email for {username} updated successfully.")
+                    return result
+
+            else:
+                st.error(f"Unrecognized action: {action}")
+                return False
             
     except Exception as e:
         logging.error(f"Error processing action {action} for user {username}: {e}")
@@ -285,7 +315,7 @@ def send_email(to, subject, body):
         logging.error(f"Error details: {str(e)}")
         return False
 
-def get_email_html_content(full_name, username, password, topic_id):
+def get_email_html_content(full_name, username, password, topic_id, discourse_post_url=None):
     """
     Generate the HTML content for the email.
 
@@ -294,10 +324,22 @@ def get_email_html_content(full_name, username, password, topic_id):
         username (str): Username of the user.
         password (str): Password for the user.
         topic_id (str): Topic ID for the introduction post.
+        discourse_post_url (str, optional): URL to the user's introduction post on Discourse.
 
     Returns:
         str: HTML content for the email.
     """
+    # Create Discourse post section if URL is available
+    discourse_section = ""
+    if discourse_post_url:
+        discourse_section = f"""
+            <div style="margin: 20px 0; padding: 15px; background-color: #e9f7ff; border-left: 4px solid #0077cc; border-radius: 3px;">
+                <h3 style="margin-top: 0; color: #0077cc;">Your Introduction Post</h3>
+                <p>We've created an introduction post for you on our forum. Visit it to introduce yourself to the community!</p>
+                <a href="{discourse_post_url}" style="display: inline-block; margin: 10px 0; padding: 10px 20px; background-color: #0077cc; color: white; text-decoration: none; border-radius: 5px;">View Your Introduction Post</a>
+            </div>
+        """
+    
     return f"""
     <!DOCTYPE html>
     <html>
@@ -319,75 +361,57 @@ def get_email_html_content(full_name, username, password, topic_id):
                 background-color: #f9f9f9;
             }}
             h1 {{
-                font-size: 24px;
-                color: #0056b3;
+                color: #2a6496;
+                border-bottom: 2px solid #eee;
+                padding-bottom: 10px;
             }}
-            h2 {{
-                font-size: 20px;
-                color: #333;
-            }}
-            p {{
-                margin: 10px 0;
-            }}
-            a {{
-                color: #0056b3;
-                text-decoration: none;
-            }}
-            a:hover {{
-                text-decoration: underline;
+            .credentials {{
+                background-color: #f5f5f5;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 20px 0;
+                border-left: 4px solid #2a6496;
             }}
             .button {{
                 display: inline-block;
                 padding: 10px 20px;
-                margin-top: 20px;
-                background-color: #0056b3;
-                color: #fff;
+                background-color: #2a6496;
+                color: white;
                 text-decoration: none;
-                border-radius: 4px;
-            }}
-            .button:hover {{
-                background-color: #003d80;
+                border-radius: 5px;
+                margin-top: 20px;
             }}
             .footer {{
-                font-size: 12px;
-                color: #666;
-                text-align: center;
-                margin-top: 20px;
+                margin-top: 30px;
+                padding-top: 15px;
+                border-top: 1px solid #eee;
+                font-size: 0.9em;
+                color: #777;
             }}
         </style>
     </head>
     <body>
         <div class="email-container">
-            <h1>Welcome, {full_name}!</h1>
-            <p>We're excited to have you join the IrregularChat community.</p>
-
-            <h2>Your Next Steps:</h2>
+            <h1>Welcome to IrregularChat, {full_name}!</h1>
             
-            <p><strong>1. Log In and Change Your Password:</strong><br>
-               <em>We highly recommend using a password manager for a strong, secure password. Check out our <a href="https://irregularpedia.org/index.php/Guide_to_Password_Managers#Getting_Started_with_Password_Managers">quick guide on password managers</a>.</em><br>
-               Use your login details below to access your account to see all the chats, services, and login only pages:<br>
-               <strong>Username:</strong> {username}<br>
-               <strong>Password:</strong> {password}<br>
-               <strong>Login Link:</strong> <a href="https://sso.irregularchat.com/if/user/#/settings">https://sso.irregularchat.com/if/user/#/settings</a>
-            </p>
-            <hr style="border: 1px solid #eee; margin: 20px 0;">
-            <p><strong>2. Learn the Community Rules:</strong><br>
-               Please read the <a href="https://forum.irregularchat.com/t/irregularchat-forum-start-here-faqs/84/3">Community Start Guide</a> to understand how to participate in our community.   
-            </p>
-            <p><strong>3. Introduce Yourself:</strong><br>
-                People are often looking for someone to start a project with, get mentorship from, hire or request a recommendation, etc. Introducing yourself is a great way to connect with other community members!<br>
-                <a href="https://forum.irregularchat.com/t/{topic_id}">
-                    Post Created for Your Introduction
-                </a>.
-                This is a great way to connect with other community members!
-             </p>
-             <p><strong>4. Explore Chats and Services:</strong><br>
-               Once you've introduced yourself, dive into our community! Access all of our chats and services here:<br>
-               <a href="https://forum.irregularchat.com/t/community-links-to-chats-and-services/229">
-                   Community Links to Chats and Services
-               </a>.
-            </p>
-
+            <p>Thank you for joining our community. Here are your account details to get started:</p>
+            
+            <div class="credentials">
+                <p><strong>Username:</strong> {username}</p>
+                <p><strong>Temporary Password:</strong> {password}</p>
+                <p><em>Please change your password after your first login.</em></p>
+            </div>
+            
+            {discourse_section}
+            
+            <p>Get started by logging in to our platform and exploring our community:</p>
+            
+            <ol>
+                <li>Log in at <a href="https://sso.irregularchat.com">https://sso.irregularchat.com</a></li>
+                <li>Change your temporary password to something secure</li>
+                <li>Visit the <a href="https://forum.irregularchat.com/t/{topic_id}">welcome page</a> to learn more about our community</li>
+            </ol>
+            
             <a href="https://sso.irregularchat.com" class="button">Log in Now</a>
 
             <div class="footer">
@@ -398,15 +422,27 @@ def get_email_html_content(full_name, username, password, topic_id):
     </html>
     """
 
-def community_intro_email(to, subject, full_name, username, password, topic_id):
+def community_intro_email(to, subject, full_name, username, password, topic_id, discourse_post_url=None):
     """
     Send a community introduction email to a new user.
+    
+    Args:
+        to (str): Email address to send to
+        subject (str): Email subject
+        full_name (str): User's full name
+        username (str): User's username
+        password (str): User's temporary password
+        topic_id (str): Topic ID for the welcome page
+        discourse_post_url (str, optional): URL to the user's introduction post
+        
+    Returns:
+        bool: True if email was sent successfully, False otherwise
     """
     try:
         logging.info(f"Preparing community intro email for {username}")
         
         # Get the HTML content for the email
-        html_content = get_email_html_content(full_name, username, password, topic_id)
+        html_content = get_email_html_content(full_name, username, password, topic_id, discourse_post_url)
         
         # Send the email and get the result
         result = send_email(to, subject, html_content)
@@ -417,9 +453,8 @@ def community_intro_email(to, subject, full_name, username, password, topic_id):
         else:
             logging.error(f"Failed to send community intro email to {to}")
             return False
-            
     except Exception as e:
-        logging.error(f"Error in community_intro_email: {e}")
+        logging.error(f"Error preparing or sending community intro email: {e}")
         return False
 
 def generate_unique_code(length=6):

@@ -16,6 +16,39 @@ setup_logging()
 # Initialize database tables
 init_db()
 
+# Log configuration status for Discourse integration
+logging.info("=== Checking Discourse Integration Configuration ===")
+if Config.DISCOURSE_URL:
+    logging.info(f"DISCOURSE_URL is configured: {Config.DISCOURSE_URL}")
+else:
+    logging.warning("DISCOURSE_URL is not configured")
+
+if Config.DISCOURSE_API_KEY:
+    logging.info("DISCOURSE_API_KEY is configured")
+else:
+    logging.warning("DISCOURSE_API_KEY is not configured")
+
+if Config.DISCOURSE_API_USERNAME:
+    logging.info(f"DISCOURSE_API_USERNAME is configured: {Config.DISCOURSE_API_USERNAME}")
+else:
+    logging.warning("DISCOURSE_API_USERNAME is not configured")
+
+if Config.DISCOURSE_CATEGORY_ID:
+    logging.info(f"DISCOURSE_CATEGORY_ID is configured: {Config.DISCOURSE_CATEGORY_ID}")
+else:
+    logging.warning("DISCOURSE_CATEGORY_ID is not configured")
+
+if Config.DISCOURSE_INTRO_TAG:
+    logging.info(f"DISCOURSE_INTRO_TAG is configured: {Config.DISCOURSE_INTRO_TAG}")
+else:
+    logging.info("DISCOURSE_INTRO_TAG is not configured (optional)")
+
+if all([Config.DISCOURSE_URL, Config.DISCOURSE_API_KEY, 
+        Config.DISCOURSE_API_USERNAME, Config.DISCOURSE_CATEGORY_ID]):
+    logging.info("✅ Discourse integration is fully configured")
+else:
+    logging.warning("⚠️ Discourse integration is not fully configured")
+
 # Set page config early
 st.set_page_config(
     page_title=Config.PAGE_TITLE,

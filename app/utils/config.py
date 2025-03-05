@@ -60,55 +60,51 @@ class Config:
     MATRIX_BOT_DISPLAY_NAME = os.getenv("MATRIX_BOT_DISPLAY_NAME")
     MATRIX_DEFAULT_ROOM_ID = os.getenv("MATRIX_DEFAULT_ROOM_ID")
     MATRIX_WELCOME_ROOM_ID = os.getenv("MATRIX_WELCOME_ROOM_ID")
+    MATRIX_ROOM_IDS_NAME_CATEGORY = os.getenv("MATRIX_ROOM_IDS_NAME_CATEGORY")
     
     @classmethod
     def get_matrix_rooms(cls):
         """
-        Parse the MATRIX_ROOM_IDS_NAME_CATEGORY environment variable.
-        
-        Returns:
-            List[Dict]: A list of dictionaries containing room details
+        Parse the MATRIX_ROOM_IDS_NAME_CATEGORY environment variable and return a list of room dictionaries.
+        Format: name|category|room_id separated by semicolons or newlines
+        Categories can be comma-separated for multiple categories
         """
-        if not cls.MATRIX_ACTIVE:
-            return []
+        rooms_str = cls.MATRIX_ROOM_IDS_NAME_CATEGORY or ""
+        rooms = []
+        
+        # Handle both semicolon-separated and newline-separated formats
+        if ";" in rooms_str:
+            room_entries = rooms_str.split(";")
+        else:
+            room_entries = rooms_str.splitlines()
+        
+        for entry in room_entries:
+            entry = entry.strip()
+            if not entry:
+                continue
             
-        try:
-            # First try to parse as JSON (for backward compatibility)
-            import json
-            rooms_str = os.getenv("MATRIX_ROOM_IDS_NAME_CATEGORY", "")
+            # Remove any leading pipe character that might be present
+            if entry.startswith("|"):
+                entry = entry[1:]
             
-            # If the string starts with '[', try to parse it as JSON
-            if rooms_str.strip().startswith('['):
-                try:
-                    rooms = json.loads(rooms_str)
-                    if isinstance(rooms, list):
-                        return rooms
-                except json.JSONDecodeError:
-                    logger.warning("Failed to parse MATRIX_ROOM_IDS_NAME_CATEGORY as JSON, trying alternative format")
-            
-            # Alternative format: name|category|room_id on separate lines
-            rooms = []
-            if rooms_str:
-                # Split by newlines or semicolons
-                entries = rooms_str.replace('\n', ';').split(';')
-                for entry in entries:
-                    entry = entry.strip()
-                    if not entry:
-                        continue
-                    
-                    parts = entry.split('|')
-                    if len(parts) >= 3:
-                        room = {
-                            "name": parts[0].strip(),
-                            "category": parts[1].strip(),
-                            "room_id": parts[2].strip()
-                        }
-                        rooms.append(room)
-            
-            return rooms
-        except Exception as e:
-            logger.error(f"Error parsing MATRIX_ROOM_IDS_NAME_CATEGORY: {e}")
-            return []
+            parts = entry.split("|")
+            if len(parts) >= 3:
+                name = parts[0].strip()
+                # Handle multiple categories separated by commas
+                categories_str = parts[1].strip()
+                categories = [cat.strip() for cat in categories_str.split(",")]
+                room_id = parts[2].strip()
+                
+                rooms.append({
+                    "name": name,
+                    "category": categories_str,  # Keep the original string for backward compatibility
+                    "categories": categories,    # Add a new field with the list of categories
+                    "room_id": room_id
+                })
+            else:
+                logging.warning(f"Invalid room entry format: {entry}")
+        
+        return rooms
     
     @classmethod
     def get_matrix_rooms_by_category(cls, category):
@@ -141,6 +137,17 @@ class Config:
         rooms = cls.get_matrix_rooms()
         categories = set(room.get("category", "") for room in rooms if "category" in room)
         return sorted(list(categories))
+    
+    @classmethod
+    def get_all_matrix_rooms(cls):
+        """
+        Get all Matrix rooms, including both configured rooms and rooms the bot has access to.
+        
+        Returns:
+            List[Dict]: Combined list of rooms with configuration data when available
+        """
+        from utils.matrix_actions import merge_room_data
+        return merge_room_data()
     
     # Validate critical configurations
     required_vars = {

@@ -18,3 +18,4 @@ sqlalchemy
 alembic
 openai
 email-validator
+matrix-nio

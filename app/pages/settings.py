@@ -613,6 +613,43 @@ def render_user_settings():
     """Render the user settings tab"""
     st.header("User Settings")
     
+    # Load current settings
+    webhook_enabled = os.getenv("WEBHOOK_ENABLED", "true").lower() == "true"
+    user_created_webhook = os.getenv("WEBHOOK_USER_CREATED", "true").lower() == "true"
+    password_reset_webhook = os.getenv("WEBHOOK_PASSWORD_RESET", "true").lower() == "true"
+    selected_theme = os.getenv("THEME", "light")
+    
+    # Authentication settings
+    st.subheader("Authentication Settings")
+    
+    authentik_api_url = st.text_input("Authentik API URL", value=Config.AUTHENTIK_API_URL or "", key="user_authentik_api_url")
+    authentik_api_token = st.text_input("Authentik API Token", value=Config.AUTHENTIK_API_TOKEN or "", type="password", key="user_authentik_api_token")
+    main_group_id = st.text_input("Main Group ID", value=Config.MAIN_GROUP_ID or "", key="user_main_group_id")
+    flow_id = st.text_input("Flow ID", value=Config.FLOW_ID or "", key="user_flow_id")
+    
+    # Auth0 settings
+    st.subheader("Auth0 Settings (Optional)")
+    auth0_domain = st.text_input("Auth0 Domain", value=os.getenv("AUTH0_DOMAIN", ""), key="user_auth0_domain")
+    auth0_callback_url = st.text_input("Auth0 Callback URL", value=os.getenv("AUTH0_CALLBACK_URL", ""), key="user_auth0_callback_url")
+    auth0_authorize_url = st.text_input("Auth0 Authorize URL", value=os.getenv("AUTH0_AUTHORIZE_URL", ""), key="user_auth0_authorize_url")
+    auth0_token_url = st.text_input("Auth0 Token URL", value=os.getenv("AUTH0_TOKEN_URL", ""), key="user_auth0_token_url")
+    
+    # Webhook settings
+    st.subheader("Webhook Settings")
+    webhook_enabled = st.checkbox("Enable Webhooks", value=webhook_enabled, key="user_webhook_enabled")
+    webhook_url = st.text_input("Webhook URL", value=Config.WEBHOOK_URL or "", key="user_webhook_url")
+    webhook_secret = st.text_input("Webhook Secret", value=Config.WEBHOOK_SECRET or "", type="password", key="user_webhook_secret")
+    
+    # Webhook events
+    st.write("Webhook Events:")
+    user_created_webhook = st.checkbox("User Created", value=user_created_webhook, key="user_webhook_user_created")
+    password_reset_webhook = st.checkbox("Password Reset", value=password_reset_webhook, key="user_webhook_password_reset")
+    
+    # URL Shortener settings
+    st.subheader("URL Shortener Settings")
+    shlink_url = st.text_input("Shlink URL", value=Config.SHLINK_URL or "", key="user_shlink_url")
+    shlink_api_token = st.text_input("Shlink API Token", value=Config.SHLINK_API_TOKEN or "", type="password", key="user_shlink_api_token")
+    
     # Security settings
     st.subheader("Security Settings")
     encryption_password = st.text_input("Encryption Password", value=os.getenv("ENCRYPTION_PASSWORD", ""), type="password", key="user_encryption_password")
@@ -668,42 +705,5 @@ def render_advanced_settings():
         else:
             st.error("There was an error saving some settings. Please check the logs for details.")
 
-    # Load current settings
-    webhook_enabled = os.getenv("WEBHOOK_ENABLED", "true").lower() == "true"
-    user_created_webhook = os.getenv("WEBHOOK_USER_CREATED", "true").lower() == "true"
-    password_reset_webhook = os.getenv("WEBHOOK_PASSWORD_RESET", "true").lower() == "true"
-    selected_theme = os.getenv("THEME", "light")
-    
-    # Authentication settings
-    st.subheader("Authentication Settings")
-    
-    authentik_api_url = st.text_input("Authentik API URL", value=Config.AUTHENTIK_API_URL or "", key="user_authentik_api_url")
-    authentik_api_token = st.text_input("Authentik API Token", value=Config.AUTHENTIK_API_TOKEN or "", type="password", key="user_authentik_api_token")
-    main_group_id = st.text_input("Main Group ID", value=Config.MAIN_GROUP_ID or "", key="user_main_group_id")
-    flow_id = st.text_input("Flow ID", value=Config.FLOW_ID or "", key="user_flow_id")
-    
-    # Auth0 settings
-    st.subheader("Auth0 Settings (Optional)")
-    auth0_domain = st.text_input("Auth0 Domain", value=os.getenv("AUTH0_DOMAIN", ""), key="user_auth0_domain")
-    auth0_callback_url = st.text_input("Auth0 Callback URL", value=os.getenv("AUTH0_CALLBACK_URL", ""), key="user_auth0_callback_url")
-    auth0_authorize_url = st.text_input("Auth0 Authorize URL", value=os.getenv("AUTH0_AUTHORIZE_URL", ""), key="user_auth0_authorize_url")
-    auth0_token_url = st.text_input("Auth0 Token URL", value=os.getenv("AUTH0_TOKEN_URL", ""), key="user_auth0_token_url")
-    
-    # Webhook settings
-    st.subheader("Webhook Settings")
-    webhook_enabled = st.checkbox("Enable Webhooks", value=webhook_enabled, key="user_webhook_enabled")
-    webhook_url = st.text_input("Webhook URL", value=Config.WEBHOOK_URL or "", key="user_webhook_url")
-    webhook_secret = st.text_input("Webhook Secret", value=Config.WEBHOOK_SECRET or "", type="password", key="user_webhook_secret")
-    
-    # Webhook events
-    st.write("Webhook Events:")
-    user_created_webhook = st.checkbox("User Created", value=user_created_webhook, key="user_webhook_user_created")
-    password_reset_webhook = st.checkbox("Password Reset", value=password_reset_webhook, key="user_webhook_password_reset")
-    
-    # URL Shortener settings
-    st.subheader("URL Shortener Settings")
-    shlink_url = st.text_input("Shlink URL", value=Config.SHLINK_URL or "", key="user_shlink_url")
-    shlink_api_token = st.text_input("Shlink API Token", value=Config.SHLINK_API_TOKEN or "", type="password", key="user_shlink_api_token")
-    
 # Main execution
 render_settings_page() 

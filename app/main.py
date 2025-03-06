@@ -71,7 +71,7 @@ def main():
         # Add a selectbox for navigation
         page = st.sidebar.selectbox(
             "Select Page",
-            ["Home", "Summary", "Matrix Messaging", "Help", "Prompts"]
+            ["Home", "Summary", "Matrix Messaging", "Help", "Prompts", "Settings"]
         )
 
         # Render the selected page
@@ -85,6 +85,10 @@ def main():
             render_help_page()
         elif page == "Prompts":
             render_prompts_page()
+        elif page == "Settings":
+            # The settings page is automatically loaded from the pages directory
+            # We don't need to import it explicitly
+            pass
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
         logging.error(f"Unexpected error in main: {e}")

@@ -566,22 +566,34 @@ def get_all_accessible_rooms() -> List[Dict]:
         
     client = MatrixClient()
     try:
+        # Create a new event loop for this function
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
         # Get all joined room IDs
-        async_client = asyncio.run(client._get_client())
-        room_ids = asyncio.run(get_joined_rooms_async(async_client))
+        async_client = loop.run_until_complete(client._get_client())
+        room_ids = loop.run_until_complete(get_joined_rooms_async(async_client))
         
         # Get details for each room
         rooms = []
         for room_id in room_ids:
-            room_details = asyncio.run(get_room_details_async(async_client, room_id))
-            rooms.append(room_details)
+            try:
+                room_details = loop.run_until_complete(get_room_details_async(async_client, room_id))
+                rooms.append(room_details)
+            except Exception as e:
+                logger.error(f"Error getting details for room {room_id}: {e}")
+                rooms.append({"room_id": room_id, "name": f"Error: {str(e)[:30]}...", "error": str(e)})
+        
+        # Close the client properly
+        loop.run_until_complete(client.close())
+        
+        # Close the event loop
+        loop.close()
         
         return rooms
     except Exception as e:
         logger.error(f"Error getting accessible rooms: {e}")
         return []
-    finally:
-        asyncio.run(client.close())
 
 def merge_room_data() -> List[Dict]:
     """

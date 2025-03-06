@@ -224,6 +224,45 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         if not reset_result:
             logging.error(f"Failed to reset the password for user {user.get('username')}. Returning default_pass_issue.")
             return user, 'default_pass_issue'
+
+        # Send webhook notification if webhook integration is active
+        if Config.WEBHOOK_ACTIVE:
+            try:
+                webhook_notification("user_created", username, full_name, email, intro, invited_by, temp_password)
+                logging.info(f"Webhook notification sent for user {username}")
+            except Exception as e:
+                logging.error(f"Failed to send webhook notification for user {username}: {e}")
+        else:
+            logging.info("Webhook integration is not active. Skipping webhook notification.")
+        
+        # Send Matrix welcome message if Matrix integration is active
+        if Config.MATRIX_ACTIVE:
+            try:
+                from utils.matrix_actions import send_welcome_message, announce_new_user, invite_user_to_rooms_by_interests
+                
+                # Construct Matrix user ID (this assumes the username is the same as Matrix username)
+                # You may need to adjust this based on your Matrix server configuration
+                matrix_user_id = f"@{username}:{os.getenv('BASE_DOMAIN', 'example.com')}"
+                
+                # Send welcome message to the user
+                send_welcome_message(matrix_user_id, username, full_name)
+                
+                # Announce the new user in the welcome room
+                announce_new_user(username, full_name, intro)
+                
+                # If user has interests in their attributes, invite them to relevant rooms
+                if 'attributes' in user and user['attributes'] and 'interests' in user['attributes']:
+                    interests = user['attributes']['interests']
+                    if isinstance(interests, list) and interests:
+                        invite_results = invite_user_to_rooms_by_interests(matrix_user_id, interests)
+                        logging.info(f"Invited user {username} to rooms based on interests: {', '.join(interests)}")
+                
+                logging.info(f"Matrix welcome messages sent for user {username}")
+            except Exception as e:
+                logging.error(f"Failed to send Matrix welcome messages for user {username}: {e}")
+        else:
+            logging.info("Matrix integration is not active. Skipping Matrix welcome messages.")
+        
         return user, temp_password  # Return the user and the temp password
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred while creating user: {http_err}")

@@ -1,5 +1,9 @@
 # app/ui/matrix.py
-
+"""
+This module provides a Streamlit interface for managing Matrix messaging.
+It allows administrators to send messages to users and rooms, invite users to rooms,
+and remove users from rooms. It uses a configured access token to authenticate with Matrix and uses room ids to identify rooms.
+"""
 import streamlit as st
 import logging
 from typing import List, Dict, Optional

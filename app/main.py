@@ -5,6 +5,7 @@ from ui.home import render_home_page
 from ui.summary import main as render_summary_page
 from ui.help_resources import main as render_help_page
 from ui.prompts import main as render_prompts_page
+from ui.matrix import render_matrix_messaging_page
 from utils.helpers import setup_logging
 import logging
 from db.database import get_db
@@ -70,7 +71,7 @@ def main():
         # Add a selectbox for navigation
         page = st.sidebar.selectbox(
             "Select Page",
-            ["Home", "Summary", "Help", "Prompts"]
+            ["Home", "Summary", "Matrix Messaging", "Help", "Prompts"]
         )
 
         # Render the selected page
@@ -78,6 +79,8 @@ def main():
             render_home_page()
         elif page == "Summary":
             render_summary_page()
+        elif page == "Matrix Messaging":
+            render_matrix_messaging_page()
         elif page == "Help":
             render_help_page()
         elif page == "Prompts":

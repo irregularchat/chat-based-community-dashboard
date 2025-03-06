@@ -1,5 +1,9 @@
 # app/utils/matrix_actions.py
-
+"""
+This module provides functions for interacting with Matrix messaging.
+It includes functions for sending messages, creating direct chats, inviting users to rooms,
+and getting room details. This module provides a synchronous wrapper for the matrix-nio library used in the streamlit app.
+"""
 import os
 import logging
 import asyncio
@@ -31,7 +35,7 @@ if MATRIX_ACTIVE:
             RoomMessageText
         )
     except ImportError:
-        logger.error("Failed to import matrix-nio. Make sure it's installed: pip install matrix-nio")
+        logger.error("Failed to import matrix-nio. Make sure it's installed from the requirements.txt: pip install matrix-nio")
         MATRIX_ACTIVE = False
 else:
     # Define dummy classes to avoid errors when Matrix is not active
@@ -44,9 +48,9 @@ else:
     class RoomMessageText: pass
 
 # Get Matrix configuration from environment variables
-MATRIX_URL = Config.MATRIX_URL or "https://matrix.example.com"
+MATRIX_URL = Config.MATRIX_URL or "https://matrix.org"
 MATRIX_ACCESS_TOKEN = Config.MATRIX_ACCESS_TOKEN or ""
-MATRIX_BOT_USERNAME = Config.MATRIX_BOT_USERNAME or "@bot:example.com"
+MATRIX_BOT_USERNAME = Config.MATRIX_BOT_USERNAME or "@bot:matrix.org"
 MATRIX_BOT_DISPLAY_NAME = Config.MATRIX_BOT_DISPLAY_NAME or "Service Bot"
 MATRIX_DEFAULT_ROOM_ID = Config.MATRIX_DEFAULT_ROOM_ID or ""
 MATRIX_WELCOME_ROOM_ID = Config.MATRIX_WELCOME_ROOM_ID or ""
@@ -57,7 +61,7 @@ HOMESERVER = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
 class MatrixClient:
     """
-    A client for interacting with Matrix servers using matrix-nio.
+    A client for interacting with Matrix servers using matrix-nio. This is a synchronous wrapper for the matrix-nio library used in the streamlit app.
     """
     def __init__(self, homeserver=HOMESERVER, access_token=MATRIX_ACCESS_TOKEN, user_id=MATRIX_BOT_USERNAME):
         """
@@ -104,7 +108,7 @@ class MatrixClient:
     
     async def send_message(self, room_id: str, message: str) -> bool:
         """
-        Send a text message to a Matrix room.
+        Send a message to a Matrix room.
         
         Args:
             room_id: The ID of the room to send the message to

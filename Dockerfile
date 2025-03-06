@@ -25,6 +25,12 @@ RUN pip install --upgrade pip && \
 # Copy the rest of the application code into the container
 COPY . .
 
+# Create a directory for data if it doesn't exist
+RUN mkdir -p /app/app/data && chmod 777 /app/app/data
+
+# Ensure the .env file is writable
+RUN touch /app/.env && chmod 666 /app/.env
+
 # Expose the port Streamlit will run on (optional)
 EXPOSE 8503
 

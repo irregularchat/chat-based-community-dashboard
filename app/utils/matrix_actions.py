@@ -282,24 +282,68 @@ def send_matrix_message(room_id: str, message: str) -> bool:
         return False
         
     client = MatrixClient()
-    return asyncio.run(client.send_message(room_id, message))
+    try:
+        # Check if there's an existing event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            # No event loop exists in this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        # Get the client and send the message
+        async_client = loop.run_until_complete(client._get_client())
+        result = loop.run_until_complete(client.send_message(room_id, message))
+        
+        # Close the client properly
+        loop.run_until_complete(client.close())
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error sending message to room {room_id}: {e}")
+        return False
 
 def create_matrix_direct_chat(user_id: str) -> Optional[str]:
     """
     Synchronous wrapper for creating a direct chat with another user.
     
     Args:
-        user_id: The Matrix ID of the user to chat with
+        user_id: The Matrix user ID to create a direct chat with
         
     Returns:
-        Optional[str]: The room ID of the created chat, or None if creation failed
+        Optional[str]: The room ID of the created direct chat, or None if it failed
     """
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping create_matrix_direct_chat.")
         return None
         
     client = MatrixClient()
-    return asyncio.run(client.create_direct_chat(user_id))
+    try:
+        # Check if there's an existing event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            # No event loop exists in this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        # Get the client and create the direct chat
+        async_client = loop.run_until_complete(client._get_client())
+        result = loop.run_until_complete(client.create_direct_chat(user_id))
+        
+        # Close the client properly
+        loop.run_until_complete(client.close())
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error creating direct chat with {user_id}: {e}")
+        return None
 
 def invite_to_matrix_room(room_id: str, user_id: str) -> bool:
     """
@@ -307,7 +351,7 @@ def invite_to_matrix_room(room_id: str, user_id: str) -> bool:
     
     Args:
         room_id: The ID of the room to invite the user to
-        user_id: The Matrix ID of the user to invite
+        user_id: The Matrix user ID to invite
         
     Returns:
         bool: True if the invitation was sent successfully, False otherwise
@@ -317,7 +361,29 @@ def invite_to_matrix_room(room_id: str, user_id: str) -> bool:
         return False
         
     client = MatrixClient()
-    return asyncio.run(client.invite_to_room(room_id, user_id))
+    try:
+        # Check if there's an existing event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            # No event loop exists in this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        # Get the client and invite the user
+        async_client = loop.run_until_complete(client._get_client())
+        result = loop.run_until_complete(client.invite_to_room(room_id, user_id))
+        
+        # Close the client properly
+        loop.run_until_complete(client.close())
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error inviting {user_id} to room {room_id}: {e}")
+        return False
 
 def send_matrix_message_to_multiple_rooms(room_ids: List[str], message: str) -> Dict[str, bool]:
     """
@@ -328,14 +394,36 @@ def send_matrix_message_to_multiple_rooms(room_ids: List[str], message: str) -> 
         message: The message content
         
     Returns:
-        Dict[str, bool]: A dictionary mapping room IDs to success status
+        Dict[str, bool]: Dictionary mapping room IDs to success status
     """
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping send_matrix_message_to_multiple_rooms.")
         return {room_id: False for room_id in room_ids}
         
     client = MatrixClient()
-    return asyncio.run(client.send_message_to_multiple_rooms(room_ids, message))
+    try:
+        # Check if there's an existing event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            # No event loop exists in this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        # Get the client and send the messages
+        async_client = loop.run_until_complete(client._get_client())
+        result = loop.run_until_complete(client.send_message_to_multiple_rooms(room_ids, message))
+        
+        # Close the client properly
+        loop.run_until_complete(client.close())
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error sending message to multiple rooms: {e}")
+        return {room_id: False for room_id in room_ids}
 
 def send_welcome_message(user_id: str, username: str, full_name: str = None) -> bool:
     """
@@ -504,9 +592,28 @@ def get_joined_rooms() -> List[str]:
         
     client = MatrixClient()
     try:
-        return asyncio.run(get_joined_rooms_async(client._get_client()))
-    finally:
-        asyncio.run(client.close())
+        # Check if there's an existing event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            # No event loop exists in this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        # Get the client and get joined rooms
+        async_client = loop.run_until_complete(client._get_client())
+        result = loop.run_until_complete(get_joined_rooms_async(async_client))
+        
+        # Close the client properly
+        loop.run_until_complete(client.close())
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error getting joined rooms: {e}")
+        return []
 
 async def get_room_details_async(client: AsyncClient, room_id: str) -> Dict:
     """
@@ -566,9 +673,16 @@ def get_all_accessible_rooms() -> List[Dict]:
         
     client = MatrixClient()
     try:
-        # Create a new event loop for this function
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Check if there's an existing event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            # No event loop exists in this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
         
         # Get all joined room IDs
         async_client = loop.run_until_complete(client._get_client())
@@ -587,8 +701,8 @@ def get_all_accessible_rooms() -> List[Dict]:
         # Close the client properly
         loop.run_until_complete(client.close())
         
-        # Close the event loop
-        loop.close()
+        # Don't close the loop if we didn't create it
+        # This prevents issues with other async code in the application
         
         return rooms
     except Exception as e:
@@ -675,11 +789,11 @@ def remove_from_matrix_room(room_id: str, user_id: str) -> bool:
     Synchronous wrapper for removing a user from a Matrix room.
     
     Args:
-        room_id: The ID of the room
-        user_id: The Matrix ID of the user to remove
+        room_id: The ID of the room to remove the user from
+        user_id: The Matrix user ID to remove
         
     Returns:
-        bool: True if the user was removed successfully, False otherwise
+        bool: True if successful, False otherwise
     """
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping remove_from_matrix_room.")
@@ -687,6 +801,25 @@ def remove_from_matrix_room(room_id: str, user_id: str) -> bool:
         
     client = MatrixClient()
     try:
-        return asyncio.run(remove_from_room(client._get_client(), room_id, user_id))
-    finally:
-        asyncio.run(client.close())
+        # Check if there's an existing event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            # No event loop exists in this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        # Get the client and remove the user
+        async_client = loop.run_until_complete(client._get_client())
+        result = loop.run_until_complete(remove_from_room(async_client, room_id, user_id))
+        
+        # Close the client properly
+        loop.run_until_complete(client.close())
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error removing user {user_id} from room {room_id}: {e}")
+        return False

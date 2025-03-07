@@ -68,27 +68,52 @@ def main():
 
         st.write("Database session is ready to use!")
 
-        # Add a selectbox for navigation
+        # Add a selectbox for navigation with action-focused options
         page = st.sidebar.selectbox(
-            "Select Page",
-            ["Home", "Summary", "Matrix Messaging", "Help", "Prompts", "Settings"]
+            "Select Action",
+            ["Dashboard", "Create User", "Matrix Messaging", "Create Invite", "List & Manage Users", "Settings"]
         )
 
+        # Set session state based on selected action
+        if page == "Dashboard":
+            # Clear form-specific session state
+            st.session_state['show_create_user'] = False
+            st.session_state['show_invite_form'] = False
+            st.session_state['show_user_list'] = False
+        elif page == "Create User":
+            st.session_state['show_create_user'] = True
+            st.session_state['show_invite_form'] = False
+            st.session_state['show_user_list'] = False
+        elif page == "Create Invite":
+            st.session_state['show_create_user'] = False
+            st.session_state['show_invite_form'] = True
+            st.session_state['show_user_list'] = False
+        elif page == "List & Manage Users":
+            st.session_state['show_create_user'] = False
+            st.session_state['show_invite_form'] = False
+            st.session_state['show_user_list'] = True
+        elif page == "Matrix Messaging":
+            # Clear form-specific session state
+            st.session_state['show_create_user'] = False
+            st.session_state['show_invite_form'] = False
+            st.session_state['show_user_list'] = False
+        elif page == "Settings":
+            # Clear form-specific session state
+            st.session_state['show_create_user'] = False
+            st.session_state['show_invite_form'] = False
+            st.session_state['show_user_list'] = False
+        
         # Render the selected page
-        if page == "Home":
+        if page == "Dashboard":
             render_home_page()
-        elif page == "Summary":
-            render_summary_page()
+        elif page in ["Create User", "Create Invite", "List & Manage Users"]:
+            render_home_page()
         elif page == "Matrix Messaging":
             render_matrix_messaging_page()
-        elif page == "Help":
-            render_help_page()
-        elif page == "Prompts":
-            render_prompts_page()
         elif page == "Settings":
-            # The settings page is automatically loaded from the pages directory
-            # We don't need to import it explicitly
-            pass
+            # Import and render the settings page
+            from pages.settings import render_settings_page
+            render_settings_page()
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
         logging.error(f"Unexpected error in main: {e}")

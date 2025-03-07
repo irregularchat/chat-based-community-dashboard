@@ -1,17 +1,14 @@
 import streamlit as st
+from ui.common import display_useful_links
 
 def main():
     st.title("Help & Resources")
 
     st.write("This page is designed to assist admins who are unfamiliar with Authentik and the administrative workflows in this platform. Below you'll find instructions, video tutorials, and copyable text snippets to use in signal messenger or other platforms.")
-    # Sidebar links
-    st.sidebar.markdown("""
-        ## Useful Links:
-        - [Login to IrregularChat SSO](https://sso.irregularchat.com)
-        - [Use Signal CopyPasta for Welcome Messages](https://irregularpedia.org/index.php/Signal_Welcome_Prompts)
-        - [Admin Prompts for Common Situations](https://irregularpedia.org/index.php/Admin)
-        - [Links to Community Chats and Services](https://irregularpedia.org/index.php/Links)
-    """)
+    
+    # Display Useful Links in the sidebar
+    display_useful_links()
+    
     st.header("Step-by-Step Instructions")
     st.subheader("1. How to Reset a Password")
     st.markdown("""

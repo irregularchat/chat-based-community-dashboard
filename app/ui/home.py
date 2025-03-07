@@ -46,6 +46,7 @@ from utils.transformations import parse_input
 from db.init_db import should_sync_users, sync_user_data, sync_user_data_incremental
 from db.init_db import AdminEvent
 from auth.api import get_users_modified_since
+from ui.common import display_useful_links
 
 # Set up session with retry logic
 session = requests.Session()
@@ -74,6 +75,9 @@ def reset_form():
 
 def render_home_page():
     st.title("Community Dashboard")
+    
+    # Display Useful Links in the sidebar
+    display_useful_links()
     
     # Define headers here to ensure they're available throughout the function
     headers = {
@@ -272,17 +276,41 @@ def render_home_page():
         if var not in st.session_state:
             st.session_state[var] = "" if var in ['message', 'prev_operation'] else []
 
-    # Operation selection
-    operation = st.selectbox(
-        "Select Operation",
-        ["Create User", "Create Invite", "List and Manage Users"],
-        key="operation_selection"
-    )
+    # Initialize show_* variables if they don't exist
+    if 'show_create_user' not in st.session_state:
+        st.session_state['show_create_user'] = False
+    if 'show_invite_form' not in st.session_state:
+        st.session_state['show_invite_form'] = False
+    if 'show_user_list' not in st.session_state:
+        st.session_state['show_user_list'] = False
 
-    # Only reset form if operation changes
-    if 'prev_operation' not in st.session_state or st.session_state['prev_operation'] != operation:
-        reset_form()
-        st.session_state['prev_operation'] = operation
+    # Operation selection - only show if none of the specific forms are requested
+    if not (st.session_state['show_create_user'] or st.session_state['show_invite_form'] or st.session_state['show_user_list']):
+        operation = st.selectbox(
+            "Select Operation",
+            ["Create User", "Create Invite", "List and Manage Users"],
+            key="operation_selection"
+        )
+
+        # Only reset form if operation changes
+        if 'prev_operation' not in st.session_state or st.session_state['prev_operation'] != operation:
+            reset_form()
+            st.session_state['prev_operation'] = operation
+    else:
+        # Set operation based on session state
+        if st.session_state['show_create_user']:
+            operation = "Create User"
+        elif st.session_state['show_invite_form']:
+            operation = "Create Invite"
+        elif st.session_state['show_user_list']:
+            operation = "List and Manage Users"
+        else:
+            operation = "Create User"  # Default
+        
+        # Reset form when switching operations
+        if 'prev_operation' not in st.session_state or st.session_state['prev_operation'] != operation:
+            reset_form()
+            st.session_state['prev_operation'] = operation
 
     # Render form based on operation
     if operation == "Create User":

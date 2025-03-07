@@ -1,4 +1,5 @@
 import streamlit as st
+from ui.common import display_useful_links
 
 def main():
     st.subheader("Helpful Links")
@@ -7,14 +8,10 @@ def main():
     - [Admin Prompts from the Wiki](https://irregularpedia.org/index.php/Admin)
     - [IrregularChat Forum (Mod Section)](https://forum.irregularchat.com/c/mods/3)
     """)
-    # Sidebar links
-    st.sidebar.markdown("""
-        ## Useful Links:
-        - [Login to IrregularChat SSO](https://sso.irregularchat.com)
-        - [Use Signal CopyPasta for Welcome Messages](https://irregularpedia.org/index.php/Signal_Welcome_Prompts)
-        - [Admin Prompts for Common Situations](https://irregularpedia.org/index.php/Admin)
-        - [Links to Community Chats and Services](https://irregularpedia.org/index.php/Links)
-    """)
+    
+    # Display Useful Links in the sidebar
+    display_useful_links()
+    
     st.header("Admin Prompts (Copy & Paste for Messenger)")
     st.markdown("""
     Below are various admin prompts copied from the wiki. You can directly copy and paste them into Signal or other messaging platforms to guide community members or handle specific situations.
@@ -161,7 +158,7 @@ def main():
     2. Have you identified capability gaps that might impact your unit or mission?
     3. How do you understand the process for submitting innovation requirements?
 
-    Beyond daily engagement, we’d now love to hear from you or others who may want to collaborate with your efforts.
+    Beyond daily engagement, we'd now love to hear from you or others who may want to collaborate with your efforts.
 
     Please remember that this chat is strictly for unclassified discussions. For CUI SOCOM Teams: https://go.intellink.gov/1sfc_g8
     ```
@@ -306,7 +303,7 @@ def main():
     - General Learning Resources: https://irregularpedia.org/index.php/Learning
     - Guides and Resources for Certification Pathways: https://irregularpedia.org/index.php/Certifications
 
-    💬 Introduce yourself! Share what certifications you’re pursuing, your learning methods, and any questions or insights.
+    💬 Introduce yourself! Share what certifications you're pursuing, your learning methods, and any questions or insights.
 
     See all the community chats: https://forum.irregularchat.com/t/229
     ```
@@ -325,7 +322,7 @@ def main():
        • Only those with a stated position may make arguments. All can ask questions that can be direct but may be answered by either party.
        • Each side will then engage in a constructive and respectful debate.
 
-    Let’s rumble!
+    Let's rumble!
     ```
     """)
 

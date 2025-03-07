@@ -7,6 +7,11 @@ from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv, set_key
 from utils.config import Config
 from utils.matrix_actions import get_all_accessible_rooms, merge_room_data
+# Import the modules for the new tabs
+from ui.summary import main as render_summary_page
+from ui.help_resources import main as render_help_page
+from ui.prompts import main as render_prompts_page
+from ui.common import display_useful_links
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -314,34 +319,49 @@ def render_settings_page():
     """Main function to render the settings page with all tabs and functionality"""
     # Set page title
     st.title("Dashboard Settings")
+    
+    # Display Useful Links in the sidebar
+    display_useful_links()
 
-    # Create tabs for different settings categories
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "Integration Settings", 
-        "Matrix Rooms", 
-        "Categories", 
-        "Welcome Messages",
-        "User Settings",
-        "Advanced Settings"
+    # Create tabs for different settings categories with descriptive variable names
+    integration_tab, matrix_rooms_tab, categories_tab, welcome_messages_tab, user_settings_tab, advanced_settings_tab, summary_tab, help_resources_tab, prompts_tab = st.tabs([
+        "Integration Settings",  # integration_tab
+        "Matrix Rooms",          # matrix_rooms_tab
+        "Categories",            # categories_tab
+        "Welcome Messages",      # welcome_messages_tab
+        "User Settings",         # user_settings_tab
+        "Advanced Settings",     # advanced_settings_tab
+        "Summary",               # summary_tab
+        "Help Resources",        # help_resources_tab
+        "Prompts"                # prompts_tab
     ])
 
-    with tab1:
+    with integration_tab:  # Tab 1: Integration Settings
         render_integration_settings()
 
-    with tab2:
+    with matrix_rooms_tab:  # Tab 2: Matrix Rooms
         render_matrix_rooms_settings()
 
-    with tab3:
+    with categories_tab:  # Tab 3: Categories
         render_categories_settings()
         
-    with tab4:
+    with welcome_messages_tab:  # Tab 4: Welcome Messages
         render_welcome_messages_settings()
         
-    with tab5:
+    with user_settings_tab:  # Tab 5: User Settings
         render_user_settings()
         
-    with tab6:
+    with advanced_settings_tab:  # Tab 6: Advanced Settings
         render_advanced_settings()
+        
+    with summary_tab:  # Tab 7: Summary
+        render_summary_page()
+        
+    with help_resources_tab:  # Tab 8: Help Resources
+        render_help_page()
+        
+    with prompts_tab:  # Tab 9: Prompts
+        render_prompts_page()
 
 def render_integration_settings():
     """Render the integration settings tab"""
@@ -656,7 +676,8 @@ def render_user_settings():
     
     # Theme settings
     st.subheader("Theme Settings")
-    selected_theme = st.selectbox("Theme", ["light", "dark"], index=0 if selected_theme == "light" else 1, key="user_theme")
+    theme_index = 0 if selected_theme == "light" else 1
+    selected_theme = st.selectbox("Theme", ["light", "dark"], index=theme_index, key="user_theme")
     
     # Save button
     if st.button("Save User Settings", key="user_save_button"):

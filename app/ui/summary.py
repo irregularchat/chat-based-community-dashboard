@@ -6,6 +6,8 @@ from utils.config import Config
 from db.database import get_db
 from db.operations import User, AdminEvent
 from sqlalchemy.orm import Session
+import logging
+from ui.common import display_useful_links
 
 def fetch_user_data():
     headers = {
@@ -73,14 +75,9 @@ def display_event_history(db: Session):
         )
 
 def main():
-    # Sidebar links
-    st.sidebar.markdown("""
-        ## Useful Links:
-        - [Login to IrregularChat SSO](https://sso.irregularchat.com)
-        - [Use Signal CopyPasta for Welcome Messages](https://irregularpedia.org/index.php/Signal_Welcome_Prompts)
-        - [Admin Prompts for Common Situations](https://irregularpedia.org/index.php/Admin)
-        - [Links to Community Chats and Services](https://irregularpedia.org/index.php/Links)
-    """)
+    # Display Useful Links in the sidebar
+    display_useful_links()
+    
     users = fetch_user_data()
     metrics = calculate_metrics(users)
     display_metrics(metrics)

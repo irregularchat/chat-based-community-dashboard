@@ -280,33 +280,47 @@ async def test_main_error_handling(mock_streamlit):
 @pytest.mark.asyncio
 async def test_session_state_modification_after_widget(mock_streamlit):
     """Test that session state cannot be modified after widget creation"""
-    # Set up the mock to return a value directly (not a coroutine)
-    mock_selectbox = Mock()
-    mock_selectbox.return_value = "Create User"
-    mock_streamlit.sidebar.selectbox = mock_selectbox
-    
-    # Set up the title mock as regular mock (not async)
-    mock_title = Mock()
-    mock_streamlit.sidebar.title = mock_title
-    
     # Create a custom session state that raises an exception when modified after widget creation
-    class MockSessionState:
-        def __init__(self):
-            self._state = {}
+    class MockSessionState(dict):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
             self._widget_created = False
         
         def __getitem__(self, key):
-            return self._state.get(key)
+            return super().get(key)
         
         def __setitem__(self, key, value):
             if self._widget_created and key == 'current_page':
                 raise Exception("`st.session_state.current_page` cannot be modified after the widget with key `current_page` is instantiated.")
-            self._state[key] = value
+            super().__setitem__(key, value)
+            
+        def get(self, key, default=None):
+            return super().get(key, default)
+        
+        def update(self, *args, **kwargs):
+            super().update(*args, **kwargs)
     
-    mock_streamlit.session_state = MockSessionState()
+    # Initialize the mock session state
+    session_state = MockSessionState()
+    session_state.update({
+        'current_page': 'Create User'
+    })
+    mock_streamlit.session_state = session_state
+    
+    # Set up the selectbox mock to return a value
+    mock_selectbox = Mock()
+    mock_selectbox.return_value = "Create User"
+    mock_streamlit.sidebar.selectbox = mock_selectbox
+    
+    # Set up the title mock
+    mock_title = Mock()
+    mock_streamlit.sidebar.title = mock_title
     
     # First render the sidebar to create the widget
-    await app.main.render_sidebar()
+    result = await app.main.render_sidebar()
+    
+    # Verify the result
+    assert result == "Create User"
     
     # Mark that the widget has been created
     mock_streamlit.session_state._widget_created = True
@@ -317,6 +331,24 @@ async def test_session_state_modification_after_widget(mock_streamlit):
     
     # Verify that the error is about modifying session state after widget creation
     assert "cannot be modified after the widget" in str(exc_info.value)
+    
+    # Verify that the title was called
+    mock_title.assert_called_once_with("Navigation")
+    
+    # Verify that the selectbox was called with the correct arguments
+    mock_selectbox.assert_called_once_with(
+        "Select Page",
+        [
+            "Create User",
+            "Create Invite",
+            "List & Manage Users",
+            "Matrix Messages and Rooms",
+            "Settings",
+            "Prompts Manager"
+        ],
+        index=0,
+        key='current_page'
+    )
 
 @pytest.mark.asyncio
 async def test_main_session_state_handling(mock_streamlit):

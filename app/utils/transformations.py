@@ -10,7 +10,7 @@ Typical Input is :
 """
 
 import re
-from utils.gpt_call import gpt_parse_input, gpt_check_api
+from app.utils.gpt_call import gpt_parse_input, gpt_check_api
 
 def simple_parse_input(input_text):
     """

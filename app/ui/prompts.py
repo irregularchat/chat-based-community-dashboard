@@ -1,5 +1,5 @@
 import streamlit as st
-from ui.common import display_useful_links
+from app.ui.common import display_useful_links
 
 def get_all_prompts():
     """

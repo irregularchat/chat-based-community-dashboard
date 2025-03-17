@@ -1,20 +1,24 @@
-# auth/api.py
 import requests
 import random
 from xkcdpass import xkcd_password as xp
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from utils.config import Config # This will import the Config class from the config module
+from app.utils.config import Config # This will import the Config class from the config module
 from datetime import datetime, timedelta
 from pytz import timezone  
 import logging
 import os
 from sqlalchemy.orm import Session
-from db.operations import AdminEvent, sync_user_data
-from db.database import SessionLocal
+from app.db.operations import AdminEvent, sync_user_data, User, VerificationCode
+from app.db.database import SessionLocal
 import time
 import json
 import streamlit as st
+import hmac
+import hashlib
+from typing import Optional, List, Dict, Any
+import string
+
 # Initialize a session with retry strategy
 # auth/api.py
 
@@ -30,45 +34,77 @@ adapter = HTTPAdapter(max_retries=retry)
 session.mount("http://", adapter)
 session.mount("https://", adapter)
 
-# This function sends a webhook notification to the webhook url with the user and event type
-def webhook_notification(event_type, username=None, full_name=None, email=None, intro=None, invited_by=None, password=None):
+def generate_webhook_signature(payload: dict) -> str:
     """
-    This function sends a webhook notification to the webhook url with the user and event type
-    The required parameters are event_type, send_signal_notification
-    The optional parameters are username, full_name, email, intro, invited_by, password
-    Example: webhook_notification(event_type)
-    to run with only partial of the optional parameters, use None for the missing parameters:
-    webhook_notification(event_type, username, full_name, None, None, invited_by, None)
+    Generate a signature for webhook payload.
+    
+    Args:
+        payload (dict): The webhook payload
+        
+    Returns:
+        str: The generated signature
     """
-    WEBHOOK_URL = Config.WEBHOOK_URL
-    WEBHOOK_SECRET = Config.WEBHOOK_SECRET
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {WEBHOOK_SECRET}"  # Added testing authentication header
-    }
-    data = {
-        "event": event_type,
-        "full_name": full_name or '',
-        "username": username or '',
-        "email": email or '',
-        "intro": intro or '',
-        "invited_by": invited_by or '',
-        "password": password or ''
-    }
-    logging.debug(f"Preparing to send POST request to {WEBHOOK_URL} with headers: {headers} and data: {data}")
+    if not Config.WEBHOOK_SECRET:
+        return ""
+        
+    # Convert payload to string and encode
+    payload_str = json.dumps(payload, sort_keys=True)
+    message = payload_str.encode('utf-8')
+    
+    # Generate HMAC signature
+    signature = hmac.new(
+        Config.WEBHOOK_SECRET.encode('utf-8'),
+        message,
+        hashlib.sha256
+    ).hexdigest()
+    
+    return signature
+
+async def webhook_notification(event_type: str, username: str = None, **kwargs) -> dict:
+    """
+    Send a webhook notification.
+    
+    Args:
+        event_type (str): Type of event (e.g., "user_created")
+        username (str): Username associated with the event
+        **kwargs: Additional data to include in webhook
+        
+    Returns:
+        dict: Response containing success status
+    """
+    if not Config.WEBHOOK_ACTIVE or not Config.WEBHOOK_URL:
+        logging.info("Webhook integration not active")
+        return {"success": False, "error": "Webhook not configured"}
+
     try:
-        # Use session.post instead of requests.post to utilize the retry configuration
-        response = requests.post(WEBHOOK_URL, json=data, headers=headers)
+        # Clean up None values from kwargs
+        cleaned_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        
+        payload = {
+            "event_type": event_type,
+            "username": username,
+            "timestamp": datetime.now().isoformat(),
+            **cleaned_kwargs
+        }
+        
+        headers = {
+            "Content-Type": "application/json",
+            "X-Webhook-Signature": generate_webhook_signature(payload)
+        }
+        
+        response = requests.post(
+            Config.WEBHOOK_URL,
+            json=payload,
+            headers=headers,
+            timeout=10
+        )
         response.raise_for_status()
         
-        logging.info("Webhook notification sent successfully.")
-    except requests.exceptions.HTTPError as http_err:
-        logging.error(f"HTTP error occurred while sending webhook: {http_err}")
-        logging.error(f"Response status code: {response.status_code}")
-        logging.error(f"Response content: {response.text}")
-    except requests.exceptions.RequestException as e:
+        return {"success": True}
+        
+    except Exception as e:
         logging.error(f"Error sending webhook notification: {e}")
-        print(f"Final Webhook URL: '{WEBHOOK_URL}'")
+        return {"success": False, "error": str(e)}
 
 
 def shorten_url(long_url, url_type, name=None):
@@ -150,9 +186,8 @@ def reset_user_password(auth_api_url, headers, user_id, new_password):
         logging.error(f"Error resetting password for user {user_id}: {e}")
         return False
 
-def create_user(username, full_name, email, invited_by=None, intro=None):
-    """Create a new user in Authentik and sync with local database."""
-    
+async def create_user(username, full_name, email, invited_by=None, intro=None):
+    """Create a new user in Authentik."""
     # Generate a temporary password using a secure passphrase
     temp_password = generate_secure_passphrase()
     discourse_post_url = None  # Initialize post URL variable
@@ -204,18 +239,31 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         # API request to create the user
         response = requests.post(user_api_url, headers=headers, json=user_data, timeout=10)
         response.raise_for_status()
-        new_user = response.json()
+        user = response.json()
 
         # Ensure 'user' is a dictionary
-        if not isinstance(new_user, dict):
+        if not isinstance(user, dict):
             logging.error("Unexpected response format: user is not a dictionary.")
-            return None, 'default_pass_issue', None
+            return False, username, 'default_pass_issue', None
+
+        logging.info(f"User created: {user.get('username')}")
 
         # Reset the user's password
-        reset_result = reset_user_password(Config.AUTHENTIK_API_URL, headers, new_user['pk'], temp_password)
+        reset_result = reset_user_password(Config.AUTHENTIK_API_URL, headers, user['pk'], temp_password)
         if not reset_result:
-            logging.error(f"Failed to reset the password for user {new_user.get('username')}.")
-            return new_user, 'default_pass_issue', None
+            logging.error(f"Failed to reset the password for user {user.get('username')}. Returning default_pass_issue.")
+            return False, username, 'default_pass_issue', None
+
+        # Send webhook notification if webhook integration is active
+        if Config.WEBHOOK_ACTIVE:
+            try:
+                # Use asyncio.create_task to handle the coroutine
+                await webhook_notification("user_created", username, full_name, email, intro, invited_by, temp_password)
+                logging.info(f"Webhook notification sent for user {username}")
+            except Exception as e:
+                logging.error(f"Failed to send webhook notification for user {username}: {e}")
+        else:
+            logging.info("Webhook integration is not active. Skipping webhook notification.")
 
         # Sync the new user with local database
         with SessionLocal() as db:
@@ -282,10 +330,10 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
             logging.error(f"Response: {response.text}")
         except Exception:
             pass
-        return None, 'default_pass_issue', None
+        return False, username, 'default_pass_issue', None
     except requests.exceptions.RequestException as e:
         logging.error(f"Error creating user: {e}")
-        return None, 'default_pass_issue', None
+        return False, username, 'default_pass_issue', None
 
 
 # List Users Function is needed and works better than the new methos session.get(f"{auth_api_url}/users/", headers=headers, timeout=10)
@@ -881,3 +929,380 @@ Notice that Login is required to view any of the Community posts. Please help ma
     except Exception as e:
         logging.error(f"Error creating Discourse post for {username}: {e}")
         return False, None
+
+async def verify_email(verification_code: str, db: Session) -> dict:
+    """
+    Verify a user's email using the verification code.
+    
+    Args:
+        verification_code (str): The verification code sent to the user's email
+        db (Session): Database session
+        
+    Returns:
+        dict: Response containing success status and any error messages
+    """
+    try:
+        # Get the verification code details
+        code_details = await get_verification_code(verification_code, db)
+        if not code_details:
+            return {"success": False, "error": "Invalid verification code"}
+            
+        # Mark the email as verified
+        user_id = code_details["user_id"]
+        if await mark_email_verified(user_id, db):
+            return {
+                "success": True,
+                "message": "Email verified successfully"
+            }
+        return {"success": False, "error": "Failed to verify email"}
+        
+    except Exception as e:
+        logging.error(f"Error verifying email: {e}")
+        return {"success": False, "error": str(e)}
+
+async def reset_password(email: str, db: Session) -> dict:
+    """
+    Initiate password reset process for a user.
+    
+    Args:
+        email (str): User's email address
+        db (Session): Database session
+        
+    Returns:
+        dict: Response containing success status and any messages
+    """
+    try:
+        # Get user by email
+        user = await get_user_by_email(email, db)
+        if not user:
+            return {
+                "success": False,
+                "error": "No user found with this email address"
+            }
+            
+        # Generate and send reset code
+        reset_code = await send_reset_code(user["id"], user["email"], db)
+        if reset_code:
+            return {
+                "success": True,
+                "reset_code_sent": True,
+                "message": "Password reset code has been sent to your email"
+            }
+            
+        return {
+            "success": False,
+            "error": "Failed to send reset code"
+        }
+        
+    except Exception as e:
+        logging.error(f"Error in reset_password: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+async def process_auth_webhook(webhook_data: dict) -> dict:
+    """Process authentication webhook data."""
+    try:
+        user_data = webhook_data.get('data', {})
+        username = user_data.get('username')
+        
+        if not username:
+            return {
+                "success": False,
+                "error": "Missing username in webhook data"
+            }
+            
+        # Update user data in local database
+        with SessionLocal() as db:
+            success = await update_user_data(username, user_data, db)
+            if success:
+                return {
+                    "success": True,
+                    "message": f"Successfully updated user {username}"
+                }
+                
+        return {
+            "success": False,
+            "error": f"Failed to update user {username}"
+        }
+        
+    except Exception as e:
+        logging.error(f"Error processing auth webhook: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+def validate_webhook_signature(signature: str, body: bytes) -> bool:
+    """
+    Validate the webhook signature against the request body.
+    
+    Args:
+        signature (str): The signature from the webhook header
+        body (bytes): The raw request body
+        
+    Returns:
+        bool: True if signature is valid, False otherwise
+    """
+    try:
+        if not Config.WEBHOOK_SECRET:
+            logging.warning("Webhook secret not configured")
+            return False
+            
+        # Calculate expected signature
+        expected = hmac.new(
+            Config.WEBHOOK_SECRET.encode(),
+            body,
+            hashlib.sha256
+        ).hexdigest()
+        
+        # Compare signatures using constant time comparison
+        return hmac.compare_digest(signature, expected)
+        
+    except Exception as e:
+        logging.error(f"Error validating webhook signature: {e}")
+        return False
+
+async def handle_webhook(request) -> dict:
+    """
+    Handle incoming webhook request.
+    
+    Args:
+        request: The webhook request object
+        
+    Returns:
+        dict: Response containing success status and any messages
+    """
+    try:
+        # Validate signature
+        signature = request.headers.get('X-Webhook-Signature')
+        if not signature:
+            return {
+                "success": False,
+                "error": "Missing webhook signature"
+            }
+            
+        # Get request body
+        body = await request.get_data() if hasattr(request.get_data, '__await__') else request.get_data()
+        if isinstance(body, str):
+                body = body.encode('utf-8')
+            
+        # Validate signature
+        if not validate_webhook_signature(signature, body):
+            return {
+                "success": False,
+                "error": "Invalid webhook signature"
+            }
+            
+        # Parse webhook data
+        try:
+                webhook_data = json.loads(body.decode('utf-8'))
+        except json.JSONDecodeError as e:
+            logging.error(f"Error parsing webhook data: {e}")
+            return {
+                "success": False,
+                "error": "Invalid JSON data"
+            }
+            
+        # Process webhook
+        result = await process_auth_webhook(webhook_data)
+        return result
+        
+    except Exception as e:
+        logging.error(f"Error handling webhook: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+async def send_verification_email(email: str, code: str) -> bool:
+    """Send verification email to user."""
+    try:
+        subject = "Verify your email"
+        body = f"Your verification code is: {code}"
+        
+        # Use your email sending logic here
+        # For now, just log it
+        logging.info(f"Would send verification email to {email} with code {code}")
+        return True
+    except Exception as e:
+        logging.error(f"Error sending verification email: {e}")
+        return False
+
+async def get_user_by_email(email: str, db: Session) -> Optional[User]:
+    """Get user by email address."""
+    try:
+        return db.query(User).filter(User.email == email).first()
+    except Exception as e:
+        logging.error(f"Error getting user by email: {e}")
+        return None
+
+async def send_reset_code(email: str, code: str) -> bool:
+    """Send password reset code to user."""
+    try:
+        subject = "Reset your password"
+        body = f"Your password reset code is: {code}"
+        
+        # Use your email sending logic here
+        # For now, just log it
+        logging.info(f"Would send reset code to {email}: {code}")
+        return True
+    except Exception as e:
+        logging.error(f"Error sending reset code: {e}")
+        return False
+
+async def update_user_data(username: str, data: dict, db: Session) -> bool:
+    """Update user data in local database."""
+    try:
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            return False
+            
+        # Update user fields
+        for key, value in data.items():
+            if hasattr(user, key):
+                setattr(user, key, value)
+                
+        db.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Error updating user data: {e}")
+        db.rollback()
+        return False
+
+def generate_verification_code(length: int = 6) -> str:
+    """Generate a random verification code."""
+    return ''.join(random.choices(string.digits, k=length))
+
+async def get_verification_code(code: str, db: Session) -> Optional[dict]:
+    """Get verification code details from database."""
+    try:
+        verification = db.query(VerificationCode).filter(
+            VerificationCode.code == code
+        ).first()
+        
+        if not verification:
+            return None
+            
+        return {
+            "user_id": verification.user_id,
+            "code": verification.code
+        }
+    except Exception as e:
+        logging.error(f"Error getting verification code: {e}")
+        return None
+
+async def mark_email_verified(user_id: int, db: Session) -> bool:
+    """Mark user's email as verified."""
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return False
+            
+        user.email_verified = True
+        db.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Error marking email as verified: {e}")
+        db.rollback()
+        return False
+
+async def process_webhook(webhook_data: dict) -> dict:
+    """
+    Process a webhook notification.
+    
+    Args:
+        webhook_data (dict): The webhook payload
+        
+    Returns:
+        dict: Response containing success status and any messages
+    """
+    try:
+        event = webhook_data.get('event')
+        if not event:
+            return {
+                "success": False,
+                "error": "Missing event type"
+            }
+            
+        # Handle different event types
+        if event == "user.created":
+            return await process_auth_webhook(webhook_data)
+        elif event == "user.updated":
+            return await process_auth_webhook(webhook_data)
+        else:
+            return {
+                "success": False,
+                "error": f"Unsupported event type: {event}"
+            }
+            
+    except Exception as e:
+        logging.error(f"Error processing webhook: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+async def handle_registration(user_data: dict, db: Session) -> dict:
+    """
+    Handle user registration process.
+    
+    Args:
+        user_data (dict): User registration data
+        db (Session): Database session
+        
+    Returns:
+        dict: Response containing success status and any messages
+    """
+    try:
+        # Extract user data
+        username = user_data['username']
+        email = user_data['email']
+        full_name = user_data.get('full_name', '')
+        organization = user_data.get('organization', '')
+        invited_by = user_data.get('invited_by')
+        
+        # Create user in Authentik
+        success, created_username, temp_password, error = await create_user(
+            username=username,
+            full_name=full_name,
+            email=email,
+            invited_by=invited_by,
+            intro=organization
+        )
+        
+        if not success:
+            return {
+                "success": False,
+                "error": error or "Failed to create user"
+            }
+            
+        # Generate and store verification code
+        verification_code = generate_verification_code()
+        verification = VerificationCode(
+            user_id=created_username,
+            code=verification_code,
+            expires_at=datetime.utcnow() + timedelta(hours=24)
+        )
+        db.add(verification)
+        db.commit()
+        
+        # Send verification email
+        verification_sent = await send_verification_email(email, verification_code)
+        
+        return {
+            "success": True,
+            "username": created_username,
+            "verification_sent": verification_sent,
+            "temp_password": temp_password  # Include temporary password in response
+        }
+        
+    except Exception as e:
+        logging.error(f"Error handling registration: {e}")
+        if hasattr(db, 'rollback'):
+            db.rollback()
+        return {
+            "success": False,
+            "error": str(e)
+        }

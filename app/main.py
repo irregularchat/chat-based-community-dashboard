@@ -68,52 +68,66 @@ def main():
 
         st.write("Database session is ready to use!")
 
+        # Check if we should navigate to the prompts manager
+        if st.query_params.get("page") == "prompts_manager":
+            from pages.prompts_manager import render_prompts_manager
+            render_prompts_manager()
+            return
+
         # Add a selectbox for navigation with action-focused options
         page = st.sidebar.selectbox(
             "Select Action",
-            ["Dashboard", "Create User", "Matrix Messaging", "Create Invite", "List & Manage Users", "Settings"]
+            ["Create User", "Create Invite", "Matrix Messages and Rooms", "List & Manage Users", "Settings", "Prompts Manager"]
         )
 
         # Set session state based on selected action
-        if page == "Dashboard":
-            # Clear form-specific session state
-            st.session_state['show_create_user'] = False
-            st.session_state['show_invite_form'] = False
-            st.session_state['show_user_list'] = False
-        elif page == "Create User":
+        if page == "Create User":
             st.session_state['show_create_user'] = True
             st.session_state['show_invite_form'] = False
             st.session_state['show_user_list'] = False
+            st.session_state['show_operation_selector'] = False
         elif page == "Create Invite":
             st.session_state['show_create_user'] = False
             st.session_state['show_invite_form'] = True
             st.session_state['show_user_list'] = False
+            st.session_state['show_operation_selector'] = False
         elif page == "List & Manage Users":
             st.session_state['show_create_user'] = False
             st.session_state['show_invite_form'] = False
             st.session_state['show_user_list'] = True
-        elif page == "Matrix Messaging":
+            st.session_state['show_operation_selector'] = False
+        elif page == "Matrix Messages and Rooms":
             # Clear form-specific session state
             st.session_state['show_create_user'] = False
             st.session_state['show_invite_form'] = False
             st.session_state['show_user_list'] = False
+            st.session_state['show_operation_selector'] = False
         elif page == "Settings":
             # Clear form-specific session state
             st.session_state['show_create_user'] = False
             st.session_state['show_invite_form'] = False
             st.session_state['show_user_list'] = False
+            st.session_state['show_operation_selector'] = False
+        elif page == "Prompts Manager":
+            # Clear form-specific session state
+            st.session_state['show_create_user'] = False
+            st.session_state['show_invite_form'] = False
+            st.session_state['show_user_list'] = False
+            st.session_state['show_operation_selector'] = False
         
         # Render the selected page
-        if page == "Dashboard":
+        if page in ["Create User", "Create Invite", "List & Manage Users"]:
             render_home_page()
-        elif page in ["Create User", "Create Invite", "List & Manage Users"]:
-            render_home_page()
-        elif page == "Matrix Messaging":
+        elif page == "Matrix Messages and Rooms":
             render_matrix_messaging_page()
         elif page == "Settings":
             # Import and render the settings page
             from pages.settings import render_settings_page
             render_settings_page()
+        elif page == "Prompts Manager":
+            # Import and render the prompts manager page
+            from pages.prompts_manager import render_prompts_manager
+            render_prompts_manager()
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
         logging.error(f"Unexpected error in main: {e}")

@@ -37,6 +37,33 @@ from email.mime.text import MIMEText
 import random
 import string
 from utils.config import Config
+import os
+from datetime import timedelta
+from typing import Dict, Any, Union
+from db.operations import AdminEvent
+
+# Import the reset_create_user_form_fields function from ui.forms
+# Use a try/except block to handle potential circular imports
+try:
+    from ui.forms import reset_create_user_form_fields
+except ImportError:
+    # Define a fallback function in case of circular import
+    def reset_create_user_form_fields():
+        """Fallback function to reset form fields in case of circular import"""
+        if 'first_name_input' in st.session_state:
+            st.session_state['first_name_input'] = ""
+        if 'last_name_input' in st.session_state:
+            st.session_state['last_name_input'] = ""
+        if 'username_input' in st.session_state:
+            st.session_state['username_input'] = ""
+        if 'email_input' in st.session_state:
+            st.session_state['email_input'] = ""
+        if 'invited_by_input' in st.session_state:
+            st.session_state['invited_by_input'] = ""
+        if 'intro_input' in st.session_state:
+            st.session_state['intro_input'] = ""
+        if 'data_to_parse_input' in st.session_state:
+            st.session_state['data_to_parse_input'] = ""
 
 def setup_logging():
     logging.basicConfig(
@@ -139,7 +166,7 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
             
             # For create_user, we don't need to check if the user exists first
             # The create_user function will handle username uniqueness
-            result, temp_password, discourse_post_url = create_user(
+            result, final_username, temp_password, discourse_post_url = create_user(
                 username=username,
                 full_name=full_name,
                 email=email,
@@ -148,8 +175,9 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
             )
             
             if result:
-                add_timeline_event(db, "user_created", username, f"User created by admin")
-                create_user_message(username, temp_password, discourse_post_url)
+                # Use the final_username which may have been modified for uniqueness
+                add_timeline_event(db, "user_created", final_username, f"User created by admin")
+                create_user_message(final_username, temp_password, discourse_post_url)
                 
                 # Show forum post creation status
                 if discourse_post_url:
@@ -158,26 +186,52 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
                     st.warning("⚠️ Forum introduction post could not be created. Please check Discourse configuration.")
                 
                 if email:
-                    logging.info(f"Sending welcome email to {email} for user {username}")
+                    logging.info(f"Sending welcome email to {email} for user {final_username}")
                     topic_id = "84"
                     # Add forum post URL to the email if available
                     email_result = community_intro_email(
                         to=email,
                         subject="Welcome to IrregularChat!",
                         full_name=full_name,
-                        username=username,
+                        username=final_username,
                         password=temp_password,
                         topic_id=topic_id,
-                        discourse_post_url=discourse_post_url  # Pass the post URL to the email function
+                        discourse_post_url=discourse_post_url
                     )
+                    
                     if email_result:
                         st.success(f"✅ Welcome email sent to {email}")
                     else:
-                        st.warning(f"⚠️ Could not send welcome email to {email}")
+                        st.warning(f"⚠️ Failed to send welcome email to {email}. Please check SMTP configuration.")
                 
-                st.success(f"User {username} created successfully.")
+                # If username was modified, inform the admin
+                if final_username != username:
+                    st.info(f"⚠️ Username was modified for uniqueness: {username} → {final_username}")
+                
+                # Clear the form
+                try:
+                    reset_create_user_form_fields()
+                except Exception as e:
+                    logging.error(f"Error resetting form fields: {e}")
+                    # Attempt to reset fields directly
+                    if 'first_name_input' in st.session_state:
+                        st.session_state['first_name_input'] = ""
+                    if 'last_name_input' in st.session_state:
+                        st.session_state['last_name_input'] = ""
+                    if 'username_input' in st.session_state:
+                        st.session_state['username_input'] = ""
+                    if 'email_input' in st.session_state:
+                        st.session_state['email_input'] = ""
+                    if 'invited_by_input' in st.session_state:
+                        st.session_state['invited_by_input'] = ""
+                    if 'intro_input' in st.session_state:
+                        st.session_state['intro_input'] = ""
+                    if 'data_to_parse_input' in st.session_state:
+                        st.session_state['data_to_parse_input'] = ""
+                
+                st.success(f"User {final_username} created successfully.")
             else:
-                st.error(f"Failed to create user {username}.")
+                st.error(f"Failed to create user {final_username}.")
             return result
         else:
             # For all other actions, we need to get the user ID first
@@ -329,15 +383,11 @@ def get_email_html_content(full_name, username, password, topic_id, discourse_po
     Returns:
         str: HTML content for the email.
     """
-    # Create Discourse post section if URL is available
+    # Create Discourse post link section if URL is available
     discourse_section = ""
     if discourse_post_url:
         discourse_section = f"""
-            <div style="margin: 20px 0; padding: 15px; background-color: #e9f7ff; border-left: 4px solid #0077cc; border-radius: 3px;">
-                <h3 style="margin-top: 0; color: #0077cc;">Your Introduction Post</h3>
-                <p>We've created an introduction post for you on our forum. Visit it to introduce yourself to the community!</p>
-                <a href="{discourse_post_url}" style="display: inline-block; margin: 10px 0; padding: 10px 20px; background-color: #0077cc; color: white; text-decoration: none; border-radius: 5px;">View Your Introduction Post</a>
-            </div>
+            <p>Your introduction post: <a href="{discourse_post_url}">View your introduction post</a></p>
         """
     
     return f"""
@@ -394,7 +444,7 @@ def get_email_html_content(full_name, username, password, topic_id, discourse_po
         <div class="email-container">
             <h1>Welcome to IrregularChat, {full_name}!</h1>
             
-            <p>Thank you for joining our community. Here are your account details to get started:</p>
+            <p>Thank you for joining our community. We're excited to have you with us!</p>
             
             <div class="credentials">
                 <p><strong>Username:</strong> {username}</p>
@@ -402,17 +452,26 @@ def get_email_html_content(full_name, username, password, topic_id, discourse_po
                 <p><em>Please change your password after your first login.</em></p>
             </div>
             
-            {discourse_section}
-            
-            <p>Get started by logging in to our platform and exploring our community:</p>
+            <h3>Next Steps:</h3>
             
             <ol>
                 <li>Log in at <a href="https://sso.irregularchat.com">https://sso.irregularchat.com</a></li>
                 <li>Change your temporary password to something secure</li>
-                <li>Visit the <a href="https://forum.irregularchat.com/t/{topic_id}">welcome page</a> to learn more about our community</li>
+                <li>Join our Signal groups to connect with the community</li>
+                <li>Explore our community resources and events</li>
             </ol>
             
+            <h3>Community Resources:</h3>
+            
+            <ul>
+                <li><a href="https://forum.irregularchat.com">Community Forum</a> - Discussions, announcements, and resources</li>
+                <li><a href="https://wiki.irregularchat.com">Community Wiki</a> - Knowledge base and documentation</li>
+                <li><a href="https://calendar.irregularchat.com">Community Calendar</a> - Upcoming events and activities</li>
+            </ul>
+            
             <a href="https://sso.irregularchat.com" class="button">Log in Now</a>
+
+            {discourse_section}
 
             <div class="footer">
                  If you have any questions, feel free to reach out to our <a href="https://signal.group/#CjQKIL5qhTG80gnMDHO4u7gyArJm2VXkKmRlyWorGQFif8n_EhCIsKoPI0FBFas5ujyH2Uve">admin signal group</a>

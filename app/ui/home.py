@@ -283,9 +283,13 @@ def render_home_page():
         st.session_state['show_invite_form'] = False
     if 'show_user_list' not in st.session_state:
         st.session_state['show_user_list'] = False
+    if 'show_operation_selector' not in st.session_state:
+        st.session_state['show_operation_selector'] = True
 
     # Operation selection - only show if none of the specific forms are requested
-    if not (st.session_state['show_create_user'] or st.session_state['show_invite_form'] or st.session_state['show_user_list']):
+    # or if show_operation_selector is True
+    if (not (st.session_state['show_create_user'] or st.session_state['show_invite_form'] or 
+             st.session_state['show_user_list']) and st.session_state['show_operation_selector']):
         operation = st.selectbox(
             "Select Operation",
             ["Create User", "Create Invite", "List and Manage Users"],

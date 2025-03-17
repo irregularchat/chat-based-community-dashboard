@@ -186,6 +186,10 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         else:
             username = f"{original_username}{counter}"
             counter += 1
+    
+    # Log if username was modified
+    if username != original_username:
+        logging.info(f"Username modified for uniqueness: {original_username} -> {username}")
 
     user_data = {
         "username": username,
@@ -215,7 +219,7 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         # Ensure 'user' is a dictionary
         if not isinstance(user, dict):
             logging.error("Unexpected response format: user is not a dictionary.")
-            return None, 'default_pass_issue'
+            return False, username, 'default_pass_issue', None
 
         logging.info(f"User created: {user.get('username')}")
 
@@ -223,7 +227,7 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         reset_result = reset_user_password(Config.AUTHENTIK_API_URL, headers, user['pk'], temp_password)
         if not reset_result:
             logging.error(f"Failed to reset the password for user {user.get('username')}. Returning default_pass_issue.")
-            return user, 'default_pass_issue'
+            return False, username, 'default_pass_issue', None
 
         # Send webhook notification if webhook integration is active
         if Config.WEBHOOK_ACTIVE:
@@ -263,17 +267,17 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         else:
             logging.info("Matrix integration is not active. Skipping Matrix welcome messages.")
         
-        return user, temp_password  # Return the user and the temp password
+        return True, username, temp_password, None  # Return success, username, temp password, and no discourse URL
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred while creating user: {http_err}")
         try:
             logging.error(f"Response: {response.text}")
         except Exception:
             pass
-        return None, 'default_pass_issue'
+        return False, username, 'default_pass_issue', None
     except requests.exceptions.RequestException as e:
         logging.error(f"Error creating user: {e}")
-        return None, 'default_pass_issue'
+        return False, username, 'default_pass_issue', None
 
 
 # List Users Function is needed and works better than the new methos session.get(f"{auth_api_url}/users/", headers=headers, timeout=10)

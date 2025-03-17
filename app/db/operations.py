@@ -1,11 +1,15 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON, cast, String, func, ForeignKey
-from sqlalchemy.orm import Session
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON, cast, String, func, ForeignKey, Table, Text
+from sqlalchemy.orm import Session, relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from app.db.database import Base, get_db
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import logging
 from app.utils.config import Config
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Index
+
+Base = declarative_base()
 
 class User(Base):
     __tablename__ = 'users'
@@ -61,6 +65,26 @@ class VerificationCode(Base):
     code = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
+
+class MatrixRoomMember(Base):
+    """Model for storing Matrix room member information"""
+    __tablename__ = 'matrix_room_members'
+
+    id = Column(Integer, primary_key=True)
+    room_id = Column(String, nullable=False)
+    user_id = Column(String, nullable=False)
+    display_name = Column(String)
+    avatar_url = Column(String)
+    membership = Column(String)  # join, leave, invite, etc.
+    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Index for faster lookups
+    __table_args__ = (
+        Index('idx_matrix_room_member_room_user', 'room_id', 'user_id', unique=True),
+    )
+
+    def __repr__(self):
+        return f"<MatrixRoomMember(room_id='{self.room_id}', user_id='{self.user_id}')>"
 
 def sync_user_data(db: Session, authentik_users: List[Dict[str, Any]]):
     """
@@ -472,3 +496,99 @@ def get_user(db: Session, user_id: int = None, username: str = None) -> Optional
     except Exception as e:
         logging.error(f"Error getting user: {e}")
         return None 
+
+def update_matrix_room_members(db: Session, room_id: str, members: List[Dict[str, Any]]):
+    """
+    Update the cached members for a Matrix room.
+    
+    Args:
+        db: Database session
+        room_id: Matrix room ID
+        members: List of member dictionaries from Matrix API
+    """
+    try:
+        # Delete existing members for this room
+        db.query(MatrixRoomMember).filter(MatrixRoomMember.room_id == room_id).delete()
+        
+        # Add new members
+        for member in members:
+            db_member = MatrixRoomMember(
+                room_id=room_id,
+                user_id=member.get('user_id'),
+                display_name=member.get('display_name'),
+                avatar_url=member.get('avatar_url'),
+                membership=member.get('membership')
+            )
+            db.add(db_member)
+        
+        db.commit()
+        logging.info(f"Updated {len(members)} members for room {room_id}")
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Error updating room members for {room_id}: {str(e)}")
+        raise
+
+def get_matrix_room_members(db: Session, room_id: str) -> List[Dict[str, Any]]:
+    """
+    Get cached members for a Matrix room.
+    
+    Args:
+        db: Database session
+        room_id: Matrix room ID
+        
+    Returns:
+        List of member dictionaries
+    """
+    try:
+        members = db.query(MatrixRoomMember).filter(MatrixRoomMember.room_id == room_id).all()
+        return [
+            {
+                'user_id': member.user_id,
+                'display_name': member.display_name,
+                'avatar_url': member.avatar_url,
+                'membership': member.membership
+            }
+            for member in members
+        ]
+    except Exception as e:
+        logging.error(f"Error getting room members for {room_id}: {str(e)}")
+        return []
+
+def get_matrix_room_member_count(db: Session, room_id: str) -> int:
+    """
+    Get the count of members in a Matrix room from cache.
+    
+    Args:
+        db: Database session
+        room_id: Matrix room ID
+        
+    Returns:
+        Number of members in the room
+    """
+    try:
+        return db.query(MatrixRoomMember).filter(MatrixRoomMember.room_id == room_id).count()
+    except Exception as e:
+        logging.error(f"Error getting member count for room {room_id}: {str(e)}")
+        return 0
+
+def is_matrix_room_member(db: Session, room_id: str, user_id: str) -> bool:
+    """
+    Check if a user is a member of a Matrix room.
+    
+    Args:
+        db: Database session
+        room_id: Matrix room ID
+        user_id: Matrix user ID
+        
+    Returns:
+        True if the user is a member, False otherwise
+    """
+    try:
+        return db.query(MatrixRoomMember).filter(
+            MatrixRoomMember.room_id == room_id,
+            MatrixRoomMember.user_id == user_id,
+            MatrixRoomMember.membership == 'join'
+        ).count() > 0
+    except Exception as e:
+        logging.error(f"Error checking room membership for {user_id} in {room_id}: {str(e)}")
+        return False 

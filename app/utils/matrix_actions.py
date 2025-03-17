@@ -7,7 +7,7 @@ and getting room details. This module provides a synchronous wrapper for the mat
 import os
 import logging
 import asyncio
-from typing import List, Dict, Optional, Union, Set
+from typing import List, Dict, Optional, Union, Set, Any
 from urllib.parse import urlparse
 import json
 from nio import AsyncClient, AsyncClientConfig
@@ -912,68 +912,60 @@ def remove_from_matrix_room(room_id: str, user_id: str) -> bool:
         logger.error(f"Error removing user {user_id} from room {room_id}: {e}")
         return False
 
-async def get_room_members_async(client: AsyncClient, room_id: str) -> List[Dict]:
+async def get_room_members_async(client, room_id: str) -> List[Dict[str, Any]]:
     """
-    Get all members of a Matrix room.
+    Get all members of a Matrix room asynchronously.
+    First tries to get from cache, then falls back to Matrix API.
     
     Args:
-        client: The Matrix client
-        room_id: The ID of the room
+        client: Matrix client
+        room_id: Matrix room ID
         
     Returns:
-        List[Dict]: List of user details including user_id and display_name
+        List of member dictionaries
     """
     try:
-        # Get the room members
-        logger.info(f"Fetching members for room {room_id}")
+        # Get database connection
+        db = next(get_db())
         
-        # Try using room_get_state first
-        try:
-            response = await client.room_get_state(room_id)
+        # Try to get from cache first
+        cached_members = get_matrix_room_members(db, room_id)
+        if cached_members:
+            logging.info(f"Using cached members for room {room_id}")
+            return cached_members
             
-            if response:
-                members = []
-                for event in response.events:
-                    if event.get("type") == "m.room.member":
-                        content = event.get("content", {})
-                        state_key = event.get("state_key", "")
-                        if content.get("membership") in ["join", "invite"] and state_key:
-                            members.append({
-                                "user_id": state_key,
-                                "display_name": content.get("displayname", state_key.split(":")[0][1:]),
-                                "avatar_url": content.get("avatar_url", ""),
-                                "membership": content.get("membership", "")
-                            })
+        # If not in cache, fetch from Matrix
+        logging.info(f"Fetching members for room {room_id}")
+        
+        # Try room_get_state first
+        try:
+            state_response = await client.room_get_state(room_id)
+            if state_response and hasattr(state_response, 'members'):
+                members = state_response.members
+                logging.info(f"Found {len(members)} members in room {room_id} using room_get_state")
                 
-                logger.info(f"Found {len(members)} members in room {room_id} using room_get_state")
+                # Cache the results
+                update_matrix_room_members(db, room_id, members)
                 return members
         except Exception as e:
-            logger.warning(f"Error getting room state for {room_id}: {e}, trying alternative method")
+            logging.warning(f"Failed to get members using room_get_state: {str(e)}")
         
-        # If room_get_state fails, try using room_get_joined_members
+        # Fallback to room_get_joined_members
         try:
-            response = await client.room_get_joined_members(room_id)
-            
-            if hasattr(response, "joined") and response.joined:
-                members = []
-                for user_id, user_info in response.joined.items():
-                    members.append({
-                        "user_id": user_id,
-                        "display_name": user_info.get("display_name", user_id.split(":")[0][1:]),
-                        "avatar_url": user_info.get("avatar_url", ""),
-                        "membership": "join"
-                    })
+            members_response = await client.room_get_joined_members(room_id)
+            if members_response and hasattr(members_response, 'members'):
+                members = members_response.members
+                logging.info(f"Found {len(members)} members in room {room_id} using room_get_joined_members")
                 
-                logger.info(f"Found {len(members)} members in room {room_id} using room_get_joined_members")
+                # Cache the results
+                update_matrix_room_members(db, room_id, members)
                 return members
         except Exception as e:
-            logger.warning(f"Error getting joined members for {room_id}: {e}")
+            logging.error(f"Failed to get members using room_get_joined_members: {str(e)}")
         
-        # If all else fails, return an empty list
-        logger.warning(f"Could not retrieve members for room {room_id}")
         return []
     except Exception as e:
-        logger.error(f"Error getting room members for {room_id}: {e}")
+        logging.error(f"Error getting room members for {room_id}: {str(e)}")
         return []
 
 def get_all_accessible_users() -> List[Dict]:

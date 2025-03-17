@@ -1,6 +1,6 @@
 from app.db.database import engine, Base, SessionLocal
 import requests
-from app.db.operations import User, AdminEvent, sync_user_data, sync_user_data_incremental
+from app.db.operations import User, AdminEvent, sync_user_data, sync_user_data_incremental, MatrixRoomMember
 from sqlalchemy import inspect
 import logging
 from app.utils.config import Config
@@ -58,7 +58,9 @@ def should_sync_users(db: SessionLocal) -> bool:
         return False
 
 def init_db():
-    """Initialize database tables and sync with Authentik users if needed."""
+    """Initialize the database by creating all tables"""
+    Base.metadata.create_all(bind=engine)
+
     try:
         # Ensure models are registered with Base.metadata
         from app.db.operations import User, AdminEvent

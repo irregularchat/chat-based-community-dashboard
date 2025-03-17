@@ -29,7 +29,7 @@ def render_matrix_messaging_page():
     Render the Matrix messaging page in the Streamlit UI.
     This page allows administrators to send messages to users and rooms.
     """
-    st.title("Matrix Messaging")
+    st.title("Matrix Messages and Rooms")
     
     if not Config.MATRIX_ACTIVE:
         st.warning("Matrix integration is not active. Set MATRIX_ACTIVE=True in your .env file to enable Matrix functionality.")
@@ -238,13 +238,19 @@ def render_matrix_messaging_page():
         # Get the room IDs
         room_ids = [room.get('room_id') for room in rooms_in_categories if room.get('room_id')]
         
+        # Get username for welcome message
+        username = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+        
+        # Option to send welcome message
+        send_welcome = st.checkbox("Send welcome message after inviting", value=True)
+        
         if st.button("Invite User to All Selected Rooms"):
             if user_id and room_ids:
                 from utils.matrix_actions import invite_to_matrix_room
                 
                 results = {}
                 for room_id in room_ids:
-                    success = invite_to_matrix_room(room_id, user_id)
+                    success = invite_to_matrix_room(room_id, user_id, username=username, send_welcome=send_welcome)
                     results[room_id] = success
                 
                 # Display results

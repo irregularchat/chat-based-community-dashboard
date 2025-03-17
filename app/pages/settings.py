@@ -5,13 +5,13 @@ import json
 import logging
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv, set_key
-from utils.config import Config
-from utils.matrix_actions import get_all_accessible_rooms, merge_room_data, get_all_accessible_users, invite_to_matrix_room, send_direct_message, send_room_message
+from app.utils.config import Config
+from app.utils.matrix_actions import get_all_accessible_rooms, merge_room_data, get_all_accessible_users, invite_to_matrix_room, send_direct_message, send_room_message
 # Import the modules for the new tabs
-from ui.summary import main as render_summary_page
-from ui.help_resources import main as render_help_page
-from ui.prompts import main as render_prompts_page, get_all_prompts
-from ui.common import display_useful_links
+from app.ui.summary import main as render_summary_page
+from app.ui.help_resources import main as render_help_page
+from app.ui.prompts import main as render_prompts_page, get_all_prompts
+from app.ui.common import display_useful_links
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

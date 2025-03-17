@@ -31,3 +31,4 @@ app/db/postgres/
 # postgres data directory
 app/db/postgres_data/
 app/db/postgres_data/*
+data/matrix_rooms.json

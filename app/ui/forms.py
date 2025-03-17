@@ -1,17 +1,19 @@
 # ui/forms.py
 import streamlit as st
-from utils.transformations import parse_input
+from app.utils.transformations import parse_input
 from datetime import datetime, timedelta
-from utils.helpers import (
+from app.utils.helpers import (
     update_username, 
     get_eastern_time, 
     add_timeline_event,
     handle_form_submission,
-    safety_number_change_email
+    safety_number_change_email,
+    create_unique_username
 )
-from db.operations import AdminEvent, search_users, User
-from db.database import get_db
-from db.init_db import should_sync_users
+from app.utils.config import Config
+from app.db.operations import AdminEvent, search_users, User
+from app.db.database import get_db
+from app.db.init_db import should_sync_users
 import re
 import pandas as pd
 import json
@@ -22,9 +24,11 @@ import warnings
 import requests
 from pytz import timezone
 import numpy as np
-from auth.api import (
-    update_user_status, delete_user, update_user_email, 
-    update_user_intro, update_user_invited_by
+from app.auth.api import (
+    update_user_status,
+    delete_user,
+    update_user_intro,
+    update_user_invited_by
 )
 
 def reset_create_user_form_fields():
@@ -80,66 +84,37 @@ def parse_and_rerun():
     # Rerun so the text inputs see the updated session state
     st.rerun()
 
-def render_create_user_form():
-    # 1. Check if we need to clear fields (do this before any widgets are created)
-    if st.session_state.get('clear_fields', False):
-        # Clear all the fields
-        for key in [
-            "username_input",
-            "first_name_input",
-            "last_name_input",
-            "email_input",
-            "invited_by_input",
-            "data_to_parse_input",
-            "intro_input"
-        ]:
-            if key in st.session_state:
-                del st.session_state[key]
-        
-        # Reset the clear flag
-        del st.session_state['clear_fields']
-        # Rerun to start fresh
-        st.rerun()
-
-    # 2. Initialize session state keys
-    for key in [
-        "username_input",
-        "first_name_input",
-        "last_name_input",
-        "invited_by_input",
-        "email_input",
-        "data_to_parse_input",
-        "intro_input"
-    ]:
+async def render_create_user_form():
+    """Render the create user form"""
+    # Initialize session state variables if they don't exist
+    for key in ['first_name_input', 'last_name_input', 'username_input', 
+                'email_input', 'invited_by_input', 'intro_input']:
         if key not in st.session_state:
             st.session_state[key] = ""
 
-    # 3. Update username whenever first/last name changes
-    def update_username_callback():
-        update_username()
+    # Get database connection
+    db = next(get_db())
 
-    # 4. Update username *before* widgets are created
-    update_username()
-
-    # 5. Inputs outside the form to allow the on_change callbacks
-    col1, col2 = st.columns(2)
-    with col1:
-        st.text_input(
-            "Enter First Name",
-            key="first_name_input",
-            placeholder="e.g., John",
-            on_change=update_username_callback
-        )
-    with col2:
-        st.text_input(
-            "Enter Last Name",
-            key="last_name_input",
-            placeholder="e.g., Doe",
-            on_change=update_username_callback
-        )
+    # Update username based on first and last name before form
+    if st.session_state.get('first_name_input') and st.session_state.get('last_name_input'):
+        # Create a base username from first and last name
+        base_username = f"{st.session_state['first_name_input'].lower()}{st.session_state['last_name_input'].lower()}"
+        suggested_username = create_unique_username(db, base_username)
+        if not st.session_state.get('username_input'):
+            st.session_state['username_input'] = suggested_username
 
     with st.form("create_user_form"):
         # Text inputs
+        st.text_input(
+            "Enter First Name",
+            key="first_name_input",
+            placeholder="e.g., John"
+        )
+        st.text_input(
+            "Enter Last Name",
+            key="last_name_input",
+            placeholder="e.g., Doe"
+        )
         st.text_input(
             "Enter Username",
             key="username_input",
@@ -163,13 +138,6 @@ def render_create_user_form():
         )
         
         # Text area for data parsing
-        # the concept of the data to parse is that it is a list of users with their intro info
-        # the user will paste the intro info into the text area and then click parse
-        # the parse function will parse the intro info into a list of users
-        # the list of users will be displayed in the user grid
-        # the user can then select users to apply actions to
-        # the actions will be applied to the selected users
-        
         st.markdown("""
             <style>
             .data-to-parse {
@@ -199,19 +167,28 @@ def render_create_user_form():
         )
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # 6. Bind parse button to the parse_and_rerun callback
+        # Submit buttons
         parse_button = st.form_submit_button("Parse", on_click=parse_and_rerun)
-
-        # 7. Submit and clear
         submit_button = st.form_submit_button("Submit")
         clear_button = st.form_submit_button("Clear All Fields")
+
+    # Handle form submission
+    if submit_button:
+        # Update username one last time before submission
+        if st.session_state.get('first_name_input') and st.session_state.get('last_name_input'):
+            # Create a base username from first and last name
+            base_username = f"{st.session_state['first_name_input'].lower()}{st.session_state['last_name_input'].lower()}"
+            suggested_username = create_unique_username(db, base_username)
+            if not st.session_state.get('username_input'):
+                st.session_state['username_input'] = suggested_username
+                st.rerun()
 
     # Reset fields on Clear
     if clear_button:
         reset_create_user_form_fields()
         st.rerun()
 
-    # Return the final values from session state
+    # Return the form values
     return (
         st.session_state["first_name_input"],
         st.session_state["last_name_input"],
@@ -222,21 +199,35 @@ def render_create_user_form():
         submit_button
     )
 
-def render_invite_form():
-    invite_label = st.text_input("Invite Label", key="invite_label")
-    
-    # Get the current Eastern Time
-    eastern = timezone('US/Eastern')
-    eastern_now = datetime.now(eastern)
-    expires_default = eastern_now + timedelta(hours=2)
-    
-    # Use the Eastern time values for the date/time inputs
-    expires_date = st.date_input("Enter Expiration Date", value=expires_default.date(), key="expires_date")
-    expires_time = st.time_input("Enter Expiration Time", value=expires_default.time(), key="expires_time")
-    
-    return invite_label, expires_date, expires_time
+async def render_invite_form():
+    """Render the invite form"""
+    # Initialize session state
+    if 'invite_email' not in st.session_state:
+        st.session_state['invite_email'] = ""
+    if 'invite_message' not in st.session_state:
+        st.session_state['invite_message'] = ""
 
-def display_user_list(auth_api_url=None, headers=None):
+    with st.form("invite_form"):
+        invite_label = st.text_input("Invite Label", key="invite_label")
+        
+        # Get the current Eastern Time
+        eastern = timezone('US/Eastern')
+        eastern_now = datetime.now(eastern)
+        expires_default = eastern_now + timedelta(hours=2)
+        
+        # Use the Eastern time values for the date/time inputs
+        expires_date = st.date_input("Enter Expiration Date", value=expires_default.date(), key="expires_date")
+        expires_time = st.time_input("Enter Expiration Time", value=expires_default.time(), key="expires_time")
+        
+        submit_button = st.form_submit_button("Send Invite")
+
+    return (
+        st.session_state['invite_email'],
+        st.session_state['invite_message'],
+        submit_button
+    )
+
+async def display_user_list(auth_api_url=None, headers=None):
     """Display the list of users in a grid."""
     if auth_api_url is None:
         auth_api_url = Config.AUTHENTIK_API_URL

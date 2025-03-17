@@ -4,7 +4,7 @@ import random
 from xkcdpass import xkcd_password as xp
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from utils.config import Config # This will import the Config class from the config module
+from app.utils.config import Config # This will import the Config class from the config module
 from datetime import datetime, timedelta, date
 import logging
 import os

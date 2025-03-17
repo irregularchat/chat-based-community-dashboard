@@ -80,8 +80,7 @@ def force_sync(incremental=False):
                     sync_event = AdminEvent(
                         timestamp=datetime.now(),
                         event_type='system_sync',
-                        username='system',
-                        description='Manual check - no modified users found since last sync'
+                        username='system'
                     )
                     db.add(sync_event)
                     db.commit()
@@ -107,8 +106,7 @@ def force_sync(incremental=False):
             sync_event = AdminEvent(
                 timestamp=datetime.now(),
                 event_type='system_sync',
-                username='system',
-                description=f'{"Incremental" if incremental else "Full"} sync of {total_users} users from Authentik'
+                username='system'
             )
             db.add(sync_event)
             db.commit()

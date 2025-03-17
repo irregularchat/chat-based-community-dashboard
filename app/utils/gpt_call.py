@@ -4,7 +4,7 @@ This file is for calling the GPT API and returning the response
 """
 
 from openai import OpenAI
-from utils.config import Config
+from app.utils.config import Config
 
 # initialize the OpenAI client and check if it is initialized from the config file
 client = OpenAI(api_key=Config.OPENAI_API_KEY)

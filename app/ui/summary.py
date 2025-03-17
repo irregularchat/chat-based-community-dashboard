@@ -1,13 +1,14 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-from auth.api import list_users_cached, list_events_cached
-from utils.config import Config
-from db.database import get_db
-from db.operations import User, AdminEvent
+from app.auth.api import list_users_cached, list_events_cached
+from app.utils.config import Config
+from app.db.database import get_db
+from app.db.operations import User, AdminEvent
 from sqlalchemy.orm import Session
 import logging
-from ui.common import display_useful_links
+from app.ui.common import display_useful_links
+from app.db.operations import get_user_metrics
 
 def fetch_user_data():
     headers = {
@@ -17,26 +18,39 @@ def fetch_user_data():
     return list_users_cached(Config.AUTHENTIK_API_URL, headers)
 
 def calculate_metrics(users):
+    """Calculate user metrics"""
+    now = datetime.now().astimezone()
+    thirty_days_ago = now - timedelta(days=30)
+    one_year_ago = now - timedelta(days=365)
+
     total_users = len(users)
     active_users = sum(user.get('is_active', False) for user in users)
-    
-    # FIXME: Ensure timezone handling is consistent across all datetime operations
-    now = datetime.now().astimezone()
 
+    # Users who joined in the last 30 days
     recently_joined = [
         user for user in users 
         if 'date_joined' in user and isinstance(user['date_joined'], str) and
-        datetime.fromisoformat(user['date_joined']).astimezone() > now - timedelta(days=30)
+        datetime.fromisoformat(user['date_joined']).astimezone() > thirty_days_ago
     ]
+
+    # Users who were deactivated in the last 30 days
     recently_deactivated = [
         user for user in users 
-        if not user.get('is_active', False) and 'last_login' in user and isinstance(user['last_login'], str) and
-        datetime.fromisoformat(user['last_login']).astimezone() > now - timedelta(days=30)
+        if (not user.get('is_active', False) and  # Must be inactive
+            'last_login' in user and 
+            isinstance(user['last_login'], str) and
+            datetime.fromisoformat(user['last_login']).astimezone() > thirty_days_ago)  # Last login within 30 days
     ]
+
+    # Users are considered inactive if any of these conditions are met:
+    # 1. No last_login timestamp
+    # 2. Last login more than a year ago
+    # Note: We don't count all inactive users here, only those meeting the time criteria
     inactive_users = [
         user for user in users 
-        if 'last_login' not in user or (isinstance(user['last_login'], str) and
-        datetime.fromisoformat(user['last_login']).astimezone() < now - timedelta(days=365))
+        if ('last_login' not in user or  # No last login timestamp
+            (isinstance(user['last_login'], str) and
+             datetime.fromisoformat(user['last_login']).astimezone() < one_year_ago))  # Last login more than a year ago
     ]
 
     return {

@@ -9,7 +9,7 @@ import logging
 from typing import List, Dict, Optional
 import os
 
-from utils.matrix_actions import (
+from app.utils.matrix_actions import (
     send_matrix_message,
     create_matrix_direct_chat,
     invite_to_matrix_room,
@@ -18,13 +18,13 @@ from utils.matrix_actions import (
     invite_user_to_rooms_by_interests,
     remove_from_matrix_room
 )
-from utils.config import Config
+from app.utils.config import Config
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def render_matrix_messaging_page():
+async def render_matrix_messaging_page():
     """
     Render the Matrix messaging page in the Streamlit UI.
     This page allows administrators to send messages to users and rooms.
@@ -87,10 +87,9 @@ def render_matrix_messaging_page():
         message = st.text_area("Message", height=150, key="direct_message")
         if st.button("Send Direct Message"):
             if user_id and message:
-                from utils.matrix_actions import create_matrix_direct_chat, send_matrix_message
-                room_id = create_matrix_direct_chat(user_id)
+                room_id = await create_matrix_direct_chat(user_id)
                 if room_id:
-                    success = send_matrix_message(room_id, message)
+                    success = await send_matrix_message(room_id, message)
                     if success:
                         st.success(f"Message sent to {user_id}")
                     else:
@@ -130,8 +129,7 @@ def render_matrix_messaging_page():
             message = st.text_area("Message", height=150, key="room_message")
             if st.button("Send Room Message"):
                 if message:
-                    from utils.matrix_actions import send_matrix_message
-                    success = send_matrix_message(room_id, message)
+                    success = await send_matrix_message(room_id, message)
                     if success:
                         st.success(f"Message sent to room {room_id}")
                     else:
@@ -179,8 +177,7 @@ def render_matrix_messaging_page():
         message = st.text_area("Message", height=150, key="bulk_message")
         if st.button("Send to All Selected Rooms"):
             if room_ids and message:
-                from utils.matrix_actions import send_matrix_message_to_multiple_rooms
-                results = send_matrix_message_to_multiple_rooms(room_ids, message)
+                results = await send_matrix_message_to_multiple_rooms(room_ids, message)
                 
                 # Display results
                 success_count = sum(1 for success in results.values() if success)
@@ -246,29 +243,24 @@ def render_matrix_messaging_page():
         
         if st.button("Invite User to All Selected Rooms"):
             if user_id and room_ids:
-                from utils.matrix_actions import invite_to_matrix_room
-                
-                results = {}
+                success_count = 0
                 for room_id in room_ids:
-                    success = invite_to_matrix_room(room_id, user_id, username=username, send_welcome=send_welcome)
-                    results[room_id] = success
+                    success = await invite_to_matrix_room(room_id, user_id)
+                    if success:
+                        success_count += 1
                 
-                # Display results
-                success_count = sum(1 for success in results.values() if success)
-                st.success(f"User invited to {success_count} out of {len(room_ids)} rooms in the selected categories")
-                
-                # Show details for failed invitations
-                failed_rooms = [room_id for room_id, success in results.items() if not success]
-                if failed_rooms:
-                    st.error(f"Failed to invite user to {len(failed_rooms)} rooms")
-                    with st.expander("Show failed rooms"):
-                        for room_id in failed_rooms:
-                            st.write(room_id)
+                if success_count > 0:
+                    st.success(f"User invited to {success_count} out of {len(room_ids)} rooms")
+                    
+                    if send_welcome:
+                        # Send welcome message to each room
+                        welcome_message = f"Welcome {username} to the room! 👋"
+                        for room_id in room_ids:
+                            await send_matrix_message(room_id, welcome_message)
+                else:
+                    st.error("Failed to invite user to any rooms")
             else:
-                if not user_id:
-                    st.warning("Please enter a user ID")
-                elif not room_ids:
-                    st.warning(f"No rooms found in the selected categories")
+                st.warning("Please enter a user ID and select at least one room")
     
     with tab5:
         st.header("Remove User from Rooms")
@@ -311,29 +303,18 @@ def render_matrix_messaging_page():
         
         if st.button("Remove User from All Selected Rooms"):
             if user_id and room_ids:
-                from utils.matrix_actions import remove_from_matrix_room
-                
-                results = {}
+                success_count = 0
                 for room_id in room_ids:
-                    success = remove_from_matrix_room(room_id, user_id)
-                    results[room_id] = success
+                    success = await remove_from_matrix_room(room_id, user_id)
+                    if success:
+                        success_count += 1
                 
-                # Display results
-                success_count = sum(1 for success in results.values() if success)
-                st.success(f"User removed from {success_count} out of {len(room_ids)} rooms in the selected categories")
-                
-                # Show details for failed removals
-                failed_rooms = [room_id for room_id, success in results.items() if not success]
-                if failed_rooms:
-                    st.error(f"Failed to remove user from {len(failed_rooms)} rooms")
-                    with st.expander("Show failed rooms"):
-                        for room_id in failed_rooms:
-                            st.write(room_id)
+                if success_count > 0:
+                    st.success(f"User removed from {success_count} out of {len(room_ids)} rooms")
+                else:
+                    st.error("Failed to remove user from any rooms")
             else:
-                if not user_id:
-                    st.warning("Please enter a user ID")
-                elif not room_ids:
-                    st.warning(f"No rooms found in the selected categories")
+                st.warning("Please enter a user ID and select at least one room")
 
 def filter_rooms_by_category(rooms, selected_categories):
     """

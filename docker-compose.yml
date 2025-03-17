@@ -1,35 +1,41 @@
 services:
-  streamlit-app:
+  streamlit:
     build: .
     ports:
-      - "${PORT}:${PORT}"
-    environment:
-      - AUTHENTIK_API_TOKEN=${AUTHENTIK_API_TOKEN}
-      - MAIN_GROUP_ID=${MAIN_GROUP_ID}
-      - BASE_DOMAIN=${BASE_DOMAIN}
-      - PORT=${PORT}
-      - DATABASE_URL=${DATABASE_URL}
+      - "${PORT:-8503}:8502"  # Map container's 8502 to host's PORT (default 8503)
     volumes:
-      - ./app:/app/app
-      - ./.env:/app/.env
-    env_file:
-      - .env
-    restart: unless-stopped
+      - .:/app
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1  # Enable unbuffered output
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8502"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   db:
     image: postgres:15
     volumes:
-      - ./app/db/postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     environment:
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_PORT=${POSTGRES_PORT}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432" # Default to port 5432 if POSTGRES_PORT not set
+      - "${POSTGRES_PORT:-5436}:5432" # Default to port 5432 if POSTGRES_PORT not set
       # it will still work on the new port 
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   postgres_data:

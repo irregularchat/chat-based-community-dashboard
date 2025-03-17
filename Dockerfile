@@ -1,5 +1,5 @@
 # Use the official Python image as the base image
-FROM python:3.12-slim
+FROM python:3.11-slim
 
 # Set environment variables for non-interactive installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -12,7 +12,7 @@ WORKDIR /app
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential gcc libssl-dev libffi-dev \
-    libxml2-dev libxslt1-dev zlib1g-dev && \
+    libxml2-dev libxslt1-dev zlib1g-dev curl dos2unix && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy the requirements.txt first to leverage Docker cache
@@ -20,7 +20,12 @@ COPY requirements.txt .
 
 # Split pip commands and add verbose logging
 RUN pip install --upgrade pip && \
-    pip install --verbose -r requirements.txt || (cat /root/.cache/pip/log/* && exit 1)
+    pip install --verbose -r requirements.txt
+
+# Copy the entrypoint script first and set it up
+COPY entrypoint.sh /app/
+RUN dos2unix /app/entrypoint.sh && \
+    chmod +x /app/entrypoint.sh
 
 # Copy the rest of the application code into the container
 COPY . .
@@ -28,11 +33,14 @@ COPY . .
 # Create a directory for data if it doesn't exist
 RUN mkdir -p /app/app/data && chmod 777 /app/app/data
 
-# Ensure the .env file is writable
+# Ensure the .env file is writable and load it if it exists
 RUN touch /app/.env && chmod 666 /app/.env
 
-# Expose the port Streamlit will run on (optional)
-EXPOSE 8503
+# Install the package in development mode
+RUN pip install -e .
 
-# Command to run the Streamlit app using a shell to handle environment variable substitution
-CMD ["sh", "-c", "streamlit run /app/app/main.py --server.port=${PORT:-8503} --server.enableCORS=false"]
+# Set Python path
+ENV PYTHONPATH=/app
+
+# Use the entrypoint script
+ENTRYPOINT ["/app/entrypoint.sh"]

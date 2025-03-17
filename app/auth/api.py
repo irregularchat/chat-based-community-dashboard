@@ -177,6 +177,10 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         else:
             username = f"{original_username}{counter}"
             counter += 1
+    
+    # Log if username was modified
+    if username != original_username:
+        logging.info(f"Username modified for uniqueness: {original_username} -> {username}")
 
     user_data = {
         "username": username,
@@ -247,7 +251,7 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         if all([Config.DISCOURSE_URL, Config.DISCOURSE_API_KEY, 
                 Config.DISCOURSE_API_USERNAME, Config.DISCOURSE_CATEGORY_ID]):
             try:
-                post_title = f"Introduction: {full_name}"
+                post_title = f"Introduction: {username}"
                 success, post_url = create_discourse_post(
                     headers=headers,
                     title=post_title,
@@ -270,7 +274,7 @@ def create_user(username, full_name, email, invited_by=None, intro=None):
         else:
             logging.info("Discourse integration not configured. Skipping post creation.")
 
-        return new_user, temp_password, discourse_post_url
+        return (True, username, temp_password, discourse_post_url)
 
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred while creating user: {http_err}")

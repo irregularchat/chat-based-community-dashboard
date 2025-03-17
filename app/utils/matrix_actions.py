@@ -282,7 +282,7 @@ async def get_matrix_client() -> Optional[AsyncClient]:
     )
     
     client = AsyncClient(
-        homeserver_url=Config.MATRIX_URL,
+        homeserver=Config.MATRIX_URL,
         token=Config.MATRIX_ACCESS_TOKEN,
         config=client_config,
     )

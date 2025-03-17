@@ -1,6 +1,134 @@
 import streamlit as st
 from ui.common import display_useful_links
 
+def get_all_prompts():
+    """
+    Returns a dictionary of all prompts organized by category.
+    
+    Returns:
+        dict: A dictionary where keys are categories and values are dictionaries of prompt titles and content.
+    """
+    return {
+        "User Management": {
+            "Individual Requests to Join Chat": """You've requested to join the Irregular Chat. 
+
+Bonafides: Everyone in the chat has been invited by another who they personally know. So that we can add you to the right groups, we need to know:
+1. Who you are
+2. Where you are from
+3. Who invited you
+
+As you send your intro, feel free to ask any questions about the community.""",
+            
+            "Bonafides": """You've requested to join the Irregular Chat. 
+
+Bonafides: Everyone in the chat has been invited by another who they personally know. So that we can add you to the right groups, we need to know:
+1. Who you are
+2. Where you are from
+3. Who invited you
+
+As you send your intro, feel free to ask any questions about the community""",
+            
+            "Safety Number Change": """It shows that your safety number has changed. For the privacy and security of all, we ask that you provide one of the following:
+- Your details. Name, organization, and who added you
+- Your IrregularChat Element Messenger username that we can verify
+
+If you don't reply to this message in 24 hours, your account will be removed from the chats, and you can request to join again when you are ready.""",
+            
+            "Removal due to not verifying a safety number": """NAME is being removed for not verifying themselves after their safety number changed. This is done to maintain the integrity of the community. This could mean the number was assigned to a different person or their SIM was put into a different device."""
+        },
+        
+        "Moderation": {
+            "Encourage NIPR/SIPR/JWICS for Knowledge Management": """Are you on the NIPR or higher Milsuite or Chatsurfer?
+
+🍀 Direct NIPR Link Chatsurfer: https://url.irregular.chat/chatsurfer
+Direct NIPR Link Milsuite: https://url.irregular.chat/msuite
+👹 Direct SIPR Link Chatsurfer: https://chatsurfer.proj.nro.smil.mil
+
+or search "irregular chat" on chatsurfer NIPR SIPR or higher
+
+Perfect for sharing on the appropriate level while still breaking down silos and being found by others working on these same topics.""",
+            
+            "Send Off Topic": """🌟Community Reminder🌟
+
+Hey everyone! Our group thrives on technical discussions, sharing knowledge, and building cool projects together. We're all about creating a focused and supportive environment for these activities.
+
+We understand everyone likes a good laugh or a casual chat now and then, which is why we've got a special place just for that! 
+
+If you're itching for off-topic banter or to share the latest meme, head over to our off-topic chat: http://url.irregular.chat/go-off-topic. 
+
+It's the perfect spot for when you want to relax and diverge from specific topic talk.
+
+If you're not interested in the technical aspects, no worries! We want everyone to find their best fit, and there are no hard feelings if this isn't the place for you.
+
+Let's keep our main chat focused on tech to ensure it remains a valuable resource for everyone. 
+
+Thanks for being such an awesome part of our journey. Let's keep pushing the boundaries of what we can achieve together! 🚀""",
+            
+            "Reminder to Stay on Topic": """Hey everyone! Just a friendly reminder to keep discussions in this channel focused on [TOPIC]. 
+
+For off-topic conversations, please use our dedicated off-topic channel: http://url.irregular.chat/go-off-topic
+
+Thanks for helping maintain the quality and focus of our community discussions!"""
+        },
+        
+        "Announcements": {
+            "New Feature Announcement": """🎉 New Feature Alert! 🎉
+
+We're excited to announce that we've just launched [FEATURE NAME]!
+
+This new addition will allow you to:
+• [Benefit 1]
+• [Benefit 2]
+• [Benefit 3]
+
+To try it out, go to [LOCATION/INSTRUCTIONS].
+
+We'd love to hear your feedback! Please share your thoughts and suggestions in the [FEEDBACK CHANNEL].
+
+Happy exploring!""",
+            
+            "Community Event": """📅 Upcoming Community Event 📅
+
+Join us for [EVENT NAME] on [DATE] at [TIME]!
+
+What to expect:
+• [Activity/Topic 1]
+• [Activity/Topic 2]
+• [Activity/Topic 3]
+
+Location: [PHYSICAL LOCATION OR VIRTUAL LINK]
+
+Please RSVP by [DEADLINE] by [RSVP METHOD].
+
+We look forward to seeing you there!"""
+        },
+        
+        "Welcome Messages": {
+            "New User Welcome": """Welcome to IrregularChat, {name}!
+
+We're thrilled to have you join our community. Here are a few things to help you get started:
+
+1. Please introduce yourself in the #introductions channel
+2. Check out our community guidelines at [LINK]
+3. Join channels that interest you - we have groups for various topics
+
+If you have any questions, feel free to ask in #help or message any of our moderators.
+
+Happy chatting!""",
+            
+            "Technical Channel Welcome": """Welcome to the {room_name} channel, {name}!
+
+This space is dedicated to discussions about [TOPIC]. Feel free to ask questions, share resources, or join ongoing conversations.
+
+A few channel-specific guidelines:
+• [Guideline 1]
+• [Guideline 2]
+• [Guideline 3]
+
+Enjoy the discussions!"""
+        }
+    }
+
 def main():
     st.subheader("Helpful Links")
     st.markdown("""
@@ -12,6 +140,27 @@ def main():
     # Display Useful Links in the sidebar
     display_useful_links()
     
+    st.header("Admin Prompts (Copy & Paste for Messenger)")
+    st.markdown("""
+    Below are various admin prompts copied from the wiki. You can directly copy and paste them into Signal or other messaging platforms to guide community members or handle specific situations.
+    """)
+
+    # Get all prompts
+    prompts = get_all_prompts()
+    
+    # Display prompts by category
+    for category, category_prompts in prompts.items():
+        st.subheader(category)
+        
+        for title, content in category_prompts.items():
+            with st.expander(title):
+                st.text_area(
+                    "Copy this prompt",
+                    value=content,
+                    height=200,
+                    key=f"prompt_{category}_{title.replace(' ', '_').lower()}"
+                )
+
     st.header("Admin Prompts (Copy & Paste for Messenger)")
     st.markdown("""
     Below are various admin prompts copied from the wiki. You can directly copy and paste them into Signal or other messaging platforms to guide community members or handle specific situations.

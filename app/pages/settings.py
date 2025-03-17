@@ -6,11 +6,11 @@ import logging
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv, set_key
 from utils.config import Config
-from utils.matrix_actions import get_all_accessible_rooms, merge_room_data
+from utils.matrix_actions import get_all_accessible_rooms, merge_room_data, get_all_accessible_users, invite_to_matrix_room, send_direct_message, send_room_message
 # Import the modules for the new tabs
 from ui.summary import main as render_summary_page
 from ui.help_resources import main as render_help_page
-from ui.prompts import main as render_prompts_page
+from ui.prompts import main as render_prompts_page, get_all_prompts
 from ui.common import display_useful_links
 
 # Set up logging
@@ -121,49 +121,31 @@ def save_env_variable(key: str, value: str) -> bool:
         st.error(f"Error saving setting: {e}")
         return False
 
-def save_matrix_rooms(rooms: List[Dict[str, Any]]) -> bool:
+def save_matrix_rooms(rooms_data):
     """
-    Save Matrix rooms to the .env file.
+    Save the matrix rooms data to a JSON file.
     
     Args:
-        rooms: List of room dictionaries with name, categories, and room_id
+        rooms_data (list): List of room data dictionaries
         
     Returns:
         bool: True if successful, False otherwise
     """
     try:
-        # Log what we're about to do
-        logging.info(f"Saving {len(rooms)} matrix rooms to .env file")
+        # Create the data directory if it doesn't exist
+        data_dir = os.path.join(ROOT_DIR, 'data')
+        if not os.path.exists(data_dir):
+            os.makedirs(data_dir)
         
-        # Convert rooms to the string format
-        room_entries = []
-        for room in rooms:
-            name = room.get('name', '')
-            categories = room.get('categories', [])
-            category_str = ','.join(categories)
-            room_id = room.get('room_id', '')
-            
-            if name and room_id:
-                room_entries.append(f"{name}|{category_str}|{room_id}")
-                logging.debug(f"Added room: {name} with categories: {category_str}")
-            else:
-                logging.warning(f"Skipping room with missing name or ID: {room}")
+        # Save the rooms data to a JSON file
+        rooms_file = os.path.join(data_dir, 'matrix_rooms.json')
+        with open(rooms_file, 'w') as f:
+            json.dump(rooms_data, f, indent=2)
         
-        # Join with semicolons
-        rooms_str = ';'.join(room_entries)
-        
-        # Save to .env
-        result = save_env_variable('MATRIX_ROOM_IDS_NAME_CATEGORY', rooms_str)
-        if result:
-            logging.info("Successfully saved matrix rooms to .env file")
-        else:
-            logging.error("Failed to save matrix rooms to .env file")
-            st.error("Failed to save matrix rooms. Please check the logs for details.")
-        
-        return result
+        logging.info(f"Successfully saved matrix rooms data to {rooms_file}")
+        return True
     except Exception as e:
-        logging.error(f"Error saving matrix rooms: {e}")
-        st.error(f"Error saving matrix rooms: {e}")
+        logging.error(f"Error saving matrix rooms data: {e}")
         return False
 
 def save_welcome_messages(messages: Dict[str, str]) -> bool:
@@ -223,20 +205,32 @@ def load_welcome_messages() -> Dict[str, str]:
         messages_path = os.path.join(os.getcwd(), 'app', 'data', 'welcome_messages.json')
         if os.path.exists(messages_path):
             with open(messages_path, 'r') as f:
-                return json.load(f)
+                messages = json.load(f)
+                
+                # Ensure the room_specific and category_specific fields exist
+                if "room_specific" not in messages:
+                    messages["room_specific"] = {}
+                if "category_specific" not in messages:
+                    messages["category_specific"] = {}
+                    
+                return messages
         else:
             # Default messages
             return {
                 "direct_welcome": "Welcome to our community, {name}! 👋\n\nI'm the community bot, here to help you get started. Feel free to explore our community rooms and reach out if you have any questions.",
                 "room_announcement": "🎉 Please welcome our new community member: **{name}** (@{username})!\n\n{intro}",
-                "invite_message": "You've been invited to join this room based on your interests. We hope you'll find the discussions valuable!"
+                "invite_message": "You've been invited to join this room based on your interests. We hope you'll find the discussions valuable!",
+                "room_specific": {},  # Messages specific to room IDs
+                "category_specific": {}  # Messages specific to categories
             }
     except Exception as e:
         logging.error(f"Error loading welcome messages: {e}")
         return {
             "direct_welcome": "Welcome to our community, {name}! 👋",
             "room_announcement": "🎉 Please welcome our new community member: **{name}** (@{username})!",
-            "invite_message": "You've been invited to join this room based on your interests."
+            "invite_message": "You've been invited to join this room based on your interests.",
+            "room_specific": {},
+            "category_specific": {}
         }
 
 def save_user_settings(
@@ -316,52 +310,32 @@ def save_user_settings(
         return False
 
 def render_settings_page():
-    """Main function to render the settings page with all tabs and functionality"""
-    # Set page title
-    st.title("Dashboard Settings")
+    """Render the settings page with tabs for different settings categories"""
+    st.title("Settings")
     
-    # Display Useful Links in the sidebar
-    display_useful_links()
-
-    # Create tabs for different settings categories with descriptive variable names
-    integration_tab, matrix_rooms_tab, categories_tab, welcome_messages_tab, user_settings_tab, advanced_settings_tab, summary_tab, help_resources_tab, prompts_tab = st.tabs([
-        "Integration Settings",  # integration_tab
-        "Matrix Rooms",          # matrix_rooms_tab
-        "Categories",            # categories_tab
-        "Welcome Messages",      # welcome_messages_tab
-        "User Settings",         # user_settings_tab
-        "Advanced Settings",     # advanced_settings_tab
-        "Summary",               # summary_tab
-        "Help Resources",        # help_resources_tab
-        "Prompts"                # prompts_tab
+    # Create tabs for different settings categories
+    user_tab, integration_tab, matrix_rooms_tab, message_users_tab, advanced_tab = st.tabs([
+        "User Settings",
+        "Integration Settings",
+        "Matrix Rooms",
+        "Message Users",
+        "Advanced Settings"
     ])
-
-    with integration_tab:  # Tab 1: Integration Settings
-        render_integration_settings()
-
-    with matrix_rooms_tab:  # Tab 2: Matrix Rooms
-        render_matrix_rooms_settings()
-
-    with categories_tab:  # Tab 3: Categories
-        render_categories_settings()
-        
-    with welcome_messages_tab:  # Tab 4: Welcome Messages
-        render_welcome_messages_settings()
-        
-    with user_settings_tab:  # Tab 5: User Settings
+    
+    with user_tab:
         render_user_settings()
         
-    with advanced_settings_tab:  # Tab 6: Advanced Settings
+    with integration_tab:
+        render_integration_settings()
+        
+    with matrix_rooms_tab:
+        render_matrix_rooms_settings()
+        
+    with message_users_tab:
+        render_message_users_settings()
+        
+    with advanced_tab:
         render_advanced_settings()
-        
-    with summary_tab:  # Tab 7: Summary
-        render_summary_page()
-        
-    with help_resources_tab:  # Tab 8: Help Resources
-        render_help_page()
-        
-    with prompts_tab:  # Tab 9: Prompts
-        render_prompts_page()
 
 def render_integration_settings():
     """Render the integration settings tab"""
@@ -436,6 +410,24 @@ def render_matrix_rooms_settings():
     """Render the Matrix rooms settings tab"""
     st.header("Matrix Rooms")
     
+    # Create tabs for different sections
+    rooms_tab, user_management_tab, categories_tab = st.tabs([
+        "Room Management",
+        "User Management",
+        "Categories"
+    ])
+    
+    with rooms_tab:
+        render_room_management()
+        
+    with user_management_tab:
+        render_user_management()
+        
+    with categories_tab:
+        render_categories_management()
+
+def render_room_management():
+    """Render the room management section"""
     # Initialize session state for rooms
     if 'matrix_rooms' not in st.session_state:
         st.session_state.matrix_rooms = merge_room_data()
@@ -549,19 +541,162 @@ def render_matrix_rooms_settings():
         else:
             st.error("Failed to save rooms. Please check the logs for details.")
 
-def render_categories_settings():
-    """Render the categories settings tab"""
-    st.header("Categories")
-    st.info("This section allows you to manage categories for organizing rooms and content.")
+def render_user_management():
+    """Render the user management section"""
+    st.subheader("Add Users to Rooms")
+    
+    # Get all accessible users
+    all_users = get_all_accessible_users()
+    
+    # User selection
+    st.write("**Select User:**")
+    
+    # Option to select from accessible users
+    user_options = ["-- Select a user --"]
+    if all_users:
+        for user in all_users:
+            display_name = user.get('display_name', user.get('user_id', '').split(':')[0][1:])
+            user_id = user.get('user_id', '')
+            user_options.append(f"{display_name} - {user_id}")
+        
+        st.info(f"Found {len(all_users)} users from Matrix rooms.")
+    else:
+        st.warning("No Matrix users found. You can still add users manually below.")
+    
+    selected_user = st.selectbox("Select User", user_options, key="matrix_user_select")
+    
+    # Manual user ID entry
+    st.write("**Or enter user ID manually:**")
+    manual_user_id = st.text_input("User ID (e.g., @username:matrix.org)", key="matrix_manual_user_id")
+    
+    # Get the user ID to use
+    user_id_to_use = None
+    username_to_use = None
+    
+    if selected_user and selected_user != "-- Select a user --":
+        # Extract user ID from selection
+        display_name, user_id = selected_user.rsplit(" - ", 1)
+        user_id_to_use = user_id
+        username_to_use = display_name
+    elif manual_user_id:
+        user_id_to_use = manual_user_id
+        # Ensure the user ID has the correct format
+        if not manual_user_id.startswith('@'):
+            manual_user_id = f"@{manual_user_id}"
+        if ':' not in manual_user_id:
+            # Add default domain if not specified
+            domain = os.getenv("BASE_DOMAIN", "matrix.org")
+            manual_user_id = f"{manual_user_id}:{domain}"
+            
+        user_id_to_use = manual_user_id
+        username_to_use = manual_user_id.split(':')[0][1:] if ':' in manual_user_id else manual_user_id.lstrip('@')
+    
+    if user_id_to_use:
+        # Room selection
+        st.write("**Select Room(s):**")
+        
+        # Get all rooms
+        all_rooms = st.session_state.matrix_rooms
+        
+        # Option to select by category
+        st.write("Select by category:")
+        all_categories = set()
+        for room in all_rooms:
+            if 'categories' in room:
+                all_categories.update(room['categories'])
+        
+        selected_categories = st.multiselect("Categories", sorted(all_categories), key="user_categories_select")
+        
+        # Filter rooms by selected categories
+        rooms_in_categories = []
+        if selected_categories:
+            for room in all_rooms:
+                room_categories = room.get('categories', [])
+                if any(category in room_categories for category in selected_categories):
+                    rooms_in_categories.append(room)
+        
+        # Option to select specific rooms
+        st.write("Or select specific rooms:")
+        room_options = []
+        for room in all_rooms:
+            if room.get('name') and room.get('room_id'):
+                room_options.append(f"{room.get('name')} - {room.get('room_id')}")
+        
+        selected_rooms = st.multiselect("Rooms", room_options, key="user_rooms_select")
+        
+        # Get room IDs from selections
+        room_ids = []
+        
+        # Add rooms from categories
+        for room in rooms_in_categories:
+            room_id = room.get('room_id')
+            if room_id and room_id not in room_ids:
+                room_ids.append(room_id)
+        
+        # Add specifically selected rooms
+        for selected_room in selected_rooms:
+            room_name, room_id = selected_room.rsplit(" - ", 1)
+            if room_id not in room_ids:
+                room_ids.append(room_id)
+        
+        # Invite button
+        if room_ids:
+            st.write(f"**Selected Rooms:** {len(room_ids)}")
+            
+            # Option to send welcome message
+            send_welcome = st.checkbox("Send welcome message", value=True, key="send_welcome_message")
+            
+            if st.button("Invite User to Selected Rooms", key="invite_user_button"):
+                success_count = 0
+                failed_rooms = []
+                
+                for room_id in room_ids:
+                    # Find room name for display
+                    room_name = "Unknown Room"
+                    for room in all_rooms:
+                        if room.get('room_id') == room_id:
+                            room_name = room.get('name', "Unknown Room")
+                            break
+                    
+                    # Invite user to room
+                    success = invite_to_matrix_room(room_id, user_id_to_use, username=username_to_use, send_welcome=send_welcome)
+                    
+                    if success:
+                        success_count += 1
+                    else:
+                        failed_rooms.append(f"{room_name} ({room_id})")
+                
+                # Display results
+                if success_count > 0:
+                    st.success(f"User invited to {success_count} out of {len(room_ids)} rooms")
+                
+                if failed_rooms:
+                    st.error(f"Failed to invite user to {len(failed_rooms)} rooms")
+                    with st.expander("Show failed rooms"):
+                        for room in failed_rooms:
+                            st.write(f"- {room}")
+        else:
+            st.warning("Please select at least one room or category")
+    else:
+        st.info("Please select a user or enter a user ID")
+
+def render_categories_management():
+    """Render the categories management section"""
+    st.subheader("Room Categories")
+    st.info("Categories help organize rooms and can be used for bulk invitations and messaging.")
+    
+    # Initialize session state for rooms
+    if 'matrix_rooms' not in st.session_state:
+        st.session_state.matrix_rooms = merge_room_data()
     
     # Get all existing categories
     all_categories = set()
-    for room in st.session_state.get('matrix_rooms', []):
+    for room in st.session_state.matrix_rooms:
         if 'categories' in room:
             all_categories.update(room['categories'])
     
     # Display existing categories
-    st.subheader("Existing Categories")
+    st.write("**Existing Categories:**")
     if all_categories:
         for category in sorted(all_categories):
             st.write(f"- {category}")
@@ -569,28 +704,99 @@ def render_categories_settings():
         st.write("No categories defined yet.")
     
     # Add new category
-    st.subheader("Add New Category")
-    new_category = st.text_input("Category Name", key="categories_new_category")
+    st.write("**Add New Category:**")
+    new_category = st.text_input("New Category Name", key="new_category_name")
     
-    if st.button("Add Category", key="categories_add_button"):
-        if new_category:
-            # We don't actually need to save categories separately,
-            # they're saved with rooms. This just adds it to the list
-            # for selection in the room editor.
-            st.success(f"Category '{new_category}' added. You can now assign it to rooms.")
-            st.rerun()
-        else:
+    # Select rooms to apply the category to
+    room_options = []
+    for room in st.session_state.matrix_rooms:
+        if room.get('name') and room.get('room_id'):
+            room_options.append(f"{room.get('name')} - {room.get('room_id')}")
+    
+    selected_rooms = st.multiselect("Apply to Rooms", room_options, key="category_rooms_select")
+    
+    if st.button("Add Category to Selected Rooms", key="add_category_button"):
+        if not new_category:
             st.error("Please enter a category name.")
+        elif not selected_rooms:
+            st.error("Please select at least one room.")
+        else:
+            updated_count = 0
+            for selected_room in selected_rooms:
+                room_name, room_id = selected_room.rsplit(" - ", 1)
+                
+                # Find the room in the session state
+                for i, room in enumerate(st.session_state.matrix_rooms):
+                    if room.get('room_id') == room_id:
+                        # Add the category if it doesn't exist
+                        if 'categories' not in room:
+                            st.session_state.matrix_rooms[i]['categories'] = []
+                        
+                        if new_category not in st.session_state.matrix_rooms[i]['categories']:
+                            st.session_state.matrix_rooms[i]['categories'].append(new_category)
+                            updated_count += 1
+            
+            if updated_count > 0:
+                # Save the updated room data
+                if save_matrix_rooms(st.session_state.matrix_rooms):
+                    st.success(f"Added category '{new_category}' to {updated_count} rooms.")
+                else:
+                    st.error("Failed to save room data.")
+            else:
+                st.info("No rooms were updated. The category may already be applied to all selected rooms.")
+    
+    # Remove category
+    st.write("**Remove Category:**")
+    category_to_remove = st.selectbox("Select Category to Remove", ["-- Select a category --"] + sorted(list(all_categories)), key="remove_category_select")
+    
+    if category_to_remove and category_to_remove != "-- Select a category --":
+        if st.button("Remove Category from All Rooms", key="remove_category_button"):
+            removed_count = 0
+            for i, room in enumerate(st.session_state.matrix_rooms):
+                if 'categories' in room and category_to_remove in room['categories']:
+                    st.session_state.matrix_rooms[i]['categories'].remove(category_to_remove)
+                    removed_count += 1
+            
+            if removed_count > 0:
+                # Save the updated room data
+                if save_matrix_rooms(st.session_state.matrix_rooms):
+                    st.success(f"Removed category '{category_to_remove}' from {removed_count} rooms.")
+                else:
+                    st.error("Failed to save room data.")
+            else:
+                st.info("No rooms were updated.")
 
-def render_welcome_messages_settings():
-    """Render the welcome messages settings tab"""
-    st.header("Welcome Messages")
+def render_message_users_settings():
+    """Render the message users settings tab"""
+    st.header("Message Users")
+    
+    # Create tabs for different sections
+    welcome_tab, direct_message_tab, mod_announcement_tab, prompt_library_tab = st.tabs([
+        "Welcome Templates",
+        "Direct Message",
+        "Mod Announcement",
+        "Prompt Library"
+    ])
+    
+    with welcome_tab:
+        render_welcome_templates()
+        
+    with direct_message_tab:
+        render_direct_message()
+        
+    with mod_announcement_tab:
+        render_mod_announcement()
+        
+    with prompt_library_tab:
+        render_prompt_library()
+
+def render_welcome_templates():
+    """Render the welcome templates section"""
+    st.subheader("Welcome Message Templates")
+    st.info("These messages are used when welcoming new users. You can use placeholders like {name}, {username}, and {intro}.")
     
     # Load current welcome messages
     welcome_messages = load_welcome_messages()
-    
-    st.subheader("Message Templates")
-    st.info("These messages are used when welcoming new users. You can use placeholders like {name}, {username}, and {intro}.")
     
     # Direct welcome message
     direct_welcome = st.text_area(
@@ -610,24 +816,300 @@ def render_welcome_messages_settings():
     
     # Invite message
     invite_message = st.text_area(
-        "Room Invite Message", 
+        "Default Room Invite Message", 
         value=welcome_messages.get("invite_message", ""),
-        help="Sent when inviting users to rooms based on their interests.",
+        help="Default message sent when inviting users to rooms. Placeholders: {name}, {username}",
         key="welcome_invite_message"
     )
     
-    # Save button
-    if st.button("Save Welcome Messages", key="welcome_save_button"):
+    # Room-specific messages
+    st.subheader("Room-Specific Welcome Messages")
+    st.info("These messages will be sent when a user is added to a specific room. If not specified, the default invite message will be used.")
+    
+    # Get all rooms from Matrix
+    all_rooms = merge_room_data()
+    room_options = ["-- Select a room --"] + [f"{room.get('name', 'Unknown')} - {room.get('room_id')}" for room in all_rooms if 'room_id' in room]
+    
+    # Room selection
+    selected_room = st.selectbox("Select Room", room_options, key="room_specific_select")
+    
+    room_id = None
+    if selected_room and selected_room != "-- Select a room --":
+        # Extract room ID
+        room_name, room_id = selected_room.rsplit(" - ", 1)
+        
+        # Get existing message for this room or use default
+        room_message = welcome_messages.get("room_specific", {}).get(room_id, welcome_messages.get("invite_message", ""))
+        
+        # Edit message
+        room_specific_message = st.text_area(
+            f"Welcome Message for {room_name}", 
+            value=room_message,
+            help="Message sent when a user is added to this room. Placeholders: {name}, {username}",
+            key=f"room_message_{room_id}"
+        )
+        
+        # Add/Update button
+        if st.button("Save Room Message", key="save_room_message"):
+            room_specific = welcome_messages.get("room_specific", {})
+            room_specific[room_id] = room_specific_message
+            welcome_messages["room_specific"] = room_specific
+            
+            if save_welcome_messages(welcome_messages):
+                st.success(f"Welcome message for room '{room_name}' saved successfully!")
+            else:
+                st.error("Failed to save room-specific welcome message.")
+    
+    # Category-specific messages
+    st.subheader("Category-Specific Welcome Messages")
+    st.info("These messages will be sent when a user is added to a room in a specific category. Room-specific messages take precedence.")
+    
+    # Get all categories
+    all_categories = set()
+    for room in all_rooms:
+        if 'categories' in room:
+            all_categories.update(room['categories'])
+    
+    # Category selection
+    category_options = ["-- Select a category --"] + sorted(list(all_categories))
+    selected_category = st.selectbox("Select Category", category_options, key="category_specific_select")
+    
+    if selected_category and selected_category != "-- Select a category --":
+        # Get existing message for this category or use default
+        category_message = welcome_messages.get("category_specific", {}).get(selected_category, welcome_messages.get("invite_message", ""))
+        
+        # Edit message
+        category_specific_message = st.text_area(
+            f"Welcome Message for {selected_category} category", 
+            value=category_message,
+            help="Message sent when a user is added to a room in this category. Placeholders: {name}, {username}",
+            key=f"category_message_{selected_category}"
+        )
+        
+        # Add/Update button
+        if st.button("Save Category Message", key="save_category_message"):
+            category_specific = welcome_messages.get("category_specific", {})
+            category_specific[selected_category] = category_specific_message
+            welcome_messages["category_specific"] = category_specific
+            
+            if save_welcome_messages(welcome_messages):
+                st.success(f"Welcome message for category '{selected_category}' saved successfully!")
+            else:
+                st.error("Failed to save category-specific welcome message.")
+    
+    # Save all global messages button
+    st.subheader("Save Global Messages")
+    if st.button("Save All Global Messages", key="welcome_save_button"):
+        # Preserve room and category specific messages
+        room_specific = welcome_messages.get("room_specific", {})
+        category_specific = welcome_messages.get("category_specific", {})
+        
         updated_messages = {
             "direct_welcome": direct_welcome,
             "room_announcement": room_announcement,
-            "invite_message": invite_message
+            "invite_message": invite_message,
+            "room_specific": room_specific,
+            "category_specific": category_specific
         }
         
         if save_welcome_messages(updated_messages):
             st.success("Welcome messages saved successfully!")
         else:
             st.error("Failed to save welcome messages. Please check the logs for details.")
+
+def render_direct_message():
+    """Render the direct message section"""
+    st.subheader("Send Direct Message to User")
+    st.info("Send a direct message to a specific Matrix user.")
+    
+    # Get all Matrix users
+    all_users = get_all_accessible_users()
+    
+    # Create user options
+    user_options = ["-- Select a user --"]
+    if all_users:
+        for user in all_users:
+            display_name = user.get('display_name', user.get('user_id', 'Unknown'))
+            user_id = user.get('user_id', '')
+            if user_id:
+                user_options.append(f"{display_name} - {user_id}")
+        
+        st.info(f"Found {len(all_users)} users from Matrix rooms.")
+    else:
+        st.warning("No Matrix users found. You can still add users manually below.")
+    
+    selected_user = st.selectbox("Select User", user_options, key="direct_message_user_select")
+    
+    # Manual user ID entry
+    st.write("**Or enter user ID manually:**")
+    manual_user_id = st.text_input("User ID (e.g., @username:matrix.org)", key="direct_message_manual_user_id")
+    
+    # Get the user ID to use
+    user_id_to_use = None
+    username_to_use = None
+    
+    if selected_user and selected_user != "-- Select a user --":
+        # Extract user ID from selection
+        display_name, user_id = selected_user.rsplit(" - ", 1)
+        user_id_to_use = user_id
+        username_to_use = display_name
+    elif manual_user_id:
+        user_id_to_use = manual_user_id
+        # Ensure the user ID has the correct format
+        if not manual_user_id.startswith('@'):
+            manual_user_id = f"@{manual_user_id}"
+        if ':' not in manual_user_id:
+            # Add default domain if not specified
+            domain = os.getenv("BASE_DOMAIN", "matrix.org")
+            manual_user_id = f"{manual_user_id}:{domain}"
+            
+        user_id_to_use = manual_user_id
+        username_to_use = manual_user_id.split(':')[0][1:] if ':' in manual_user_id else manual_user_id.lstrip('@')
+    
+    if user_id_to_use:
+        # Message input
+        st.write("**Message:**")
+        message = st.text_area("Enter your message", key="direct_message_text")
+        
+        # Send button
+        if st.button("Send Direct Message", key="send_direct_message_button"):
+            if not message:
+                st.error("Please enter a message to send.")
+            else:
+                try:
+                    # Send the message
+                    success = send_direct_message(user_id_to_use, message)
+                    
+                    if success:
+                        st.success(f"Message sent to {username_to_use} successfully!")
+                    else:
+                        st.error(f"Failed to send message to {username_to_use}.")
+                except Exception as e:
+                    st.error(f"Error sending message: {e}")
+
+def render_mod_announcement():
+    """Render the mod announcement section"""
+    st.subheader("Send Mod Announcement")
+    st.info("Send an announcement to one or more Matrix rooms.")
+    
+    # Get all rooms from Matrix
+    all_rooms = merge_room_data()
+    room_options = []
+    for room in all_rooms:
+        if room.get('name') and room.get('room_id'):
+            room_options.append(f"{room.get('name')} - {room.get('room_id')}")
+    
+    # Room selection
+    selected_rooms = st.multiselect("Select Room(s)", room_options, key="mod_announcement_rooms")
+    
+    # Option to select by category
+    st.write("**Or select rooms by category:**")
+    all_categories = set()
+    for room in all_rooms:
+        if 'categories' in room:
+            all_categories.update(room['categories'])
+    
+    selected_categories = st.multiselect("Categories", sorted(all_categories), key="mod_announcement_categories")
+    
+    # Get room IDs from selections
+    room_ids = []
+    
+    # Add specifically selected rooms
+    for selected_room in selected_rooms:
+        room_name, room_id = selected_room.rsplit(" - ", 1)
+        if room_id not in room_ids:
+            room_ids.append(room_id)
+    
+    # Add rooms from categories
+    if selected_categories:
+        for room in all_rooms:
+            room_categories = room.get('categories', [])
+            if any(category in room_categories for category in selected_categories):
+                room_id = room.get('room_id')
+                if room_id and room_id not in room_ids:
+                    room_ids.append(room_id)
+    
+    # Message input
+    st.write("**Announcement Message:**")
+    announcement = st.text_area("Enter your announcement", key="mod_announcement_text", height=200)
+    
+    # Send button
+    if room_ids:
+        st.write(f"**Selected Rooms:** {len(room_ids)}")
+        
+        if st.button("Send Announcement", key="send_announcement_button"):
+            if not announcement:
+                st.error("Please enter an announcement message.")
+            else:
+                try:
+                    # Send the message
+                    success_count = 0
+                    failed_rooms = []
+                    
+                    for room_id in room_ids:
+                        # Find room name for display
+                        room_name = "Unknown Room"
+                        for room in all_rooms:
+                            if room.get('room_id') == room_id:
+                                room_name = room.get('name', "Unknown Room")
+                                break
+                        
+                        # Send the message
+                        success = send_room_message(room_id, announcement)
+                        
+                        if success:
+                            success_count += 1
+                        else:
+                            failed_rooms.append(room_name)
+                    
+                    if success_count == len(room_ids):
+                        st.success(f"Announcement sent to all {success_count} rooms successfully!")
+                    elif success_count > 0:
+                        st.warning(f"Announcement sent to {success_count} rooms. Failed to send to: {', '.join(failed_rooms)}")
+                    else:
+                        st.error("Failed to send announcement to any rooms.")
+                except Exception as e:
+                    st.error(f"Error sending announcement: {e}")
+    else:
+        st.warning("Please select at least one room or category.")
+
+def render_prompt_library():
+    """Render the prompt library section"""
+    st.subheader("Admin Prompt Library")
+    st.info("Copy and paste these pre-written prompts for common moderation scenarios.")
+    
+    # Get all prompts
+    prompts = get_all_prompts()
+    
+    # Create a dropdown for prompt categories
+    categories = list(prompts.keys())
+    selected_category = st.selectbox("Select Prompt Category", categories, key="prompt_category_select")
+    
+    if selected_category:
+        # Display prompts in the selected category
+        category_prompts = prompts.get(selected_category, {})
+        
+        for title, content in category_prompts.items():
+            with st.expander(title):
+                st.text_area(
+                    "Copy this prompt",
+                    value=content,
+                    height=200,
+                    key=f"prompt_{title.replace(' ', '_').lower()}"
+                )
+                
+                # Add buttons to send the prompt
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if st.button("Send to Selected User", key=f"send_user_{title.replace(' ', '_').lower()}"):
+                        st.session_state['direct_message_text'] = content
+                        st.info("Prompt copied to Direct Message tab. Please go there to select a user and send.")
+                
+                with col2:
+                    if st.button("Send as Announcement", key=f"send_announcement_{title.replace(' ', '_').lower()}"):
+                        st.session_state['mod_announcement_text'] = content
+                        st.info("Prompt copied to Mod Announcement tab. Please go there to select rooms and send.")
 
 def render_user_settings():
     """Render the user settings tab"""

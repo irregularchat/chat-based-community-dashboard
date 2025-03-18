@@ -51,15 +51,15 @@ else:
     class RoomMessageText: pass
 
 # Get Matrix configuration from environment variables
-MATRIX_URL = Config.MATRIX_URL or "https://matrix.org"
+MATRIX_HOMESERVER_URL = Config.MATRIX_HOMESERVER_URL or "https://matrix.org"
 MATRIX_ACCESS_TOKEN = Config.MATRIX_ACCESS_TOKEN or ""
 MATRIX_BOT_USERNAME = Config.MATRIX_BOT_USERNAME or "@bot:matrix.org"
 MATRIX_BOT_DISPLAY_NAME = Config.MATRIX_BOT_DISPLAY_NAME or "Service Bot"
 MATRIX_DEFAULT_ROOM_ID = Config.MATRIX_DEFAULT_ROOM_ID or ""
 MATRIX_WELCOME_ROOM_ID = Config.MATRIX_WELCOME_ROOM_ID or ""
 
-# Parse the homeserver URL from MATRIX_URL
-parsed_url = urlparse(MATRIX_URL)
+# Parse the homeserver URL from MATRIX_HOMESERVER_URL
+parsed_url = urlparse(MATRIX_HOMESERVER_URL)
 HOMESERVER = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
 class MatrixClient:
@@ -240,30 +240,21 @@ class MatrixClient:
         
         try:
             for room_id in room_ids:
-                response = await client.room_send(
-                    room_id=room_id,
-                    message_type="m.room.message",
-                    content={
-                        "msgtype": "m.text",
-                        "body": message
-                    }
-                )
-                
-                if isinstance(response, RoomSendResponse) and response.event_id:
-                    logger.info(f"Message sent to room {room_id} with event_id {response.event_id}")
-                    results[room_id] = True
-                else:
-                    logger.error(f"Failed to send message to room {room_id}: {response}")
-                    results[room_id] = False
-                    
-        except Exception as e:
-            logger.error(f"Error in send_message_to_multiple_rooms: {e}")
-            # Mark remaining rooms as failed
-            for room_id in room_ids:
-                if room_id not in results:
+                try:
+                    response = await client.room_send(
+                        room_id=room_id,
+                        message_type="m.room.message",
+                        content={
+                            "msgtype": "m.text",
+                            "body": message
+                        }
+                    )
+                    results[room_id] = isinstance(response, RoomSendResponse) and response.event_id is not None
+                except Exception as e:
+                    logger.error(f"Error sending message to room {room_id}: {e}")
                     results[room_id] = False
         finally:
-            await self.close()
+            await client.close()
             
         return results
 
@@ -271,27 +262,27 @@ class MatrixClient:
 
 async def get_matrix_client() -> Optional[AsyncClient]:
     """Get Matrix client instance"""
-    if not Config.MATRIX_ACTIVE:
+    if not MATRIX_ACTIVE:
         return None
-    
+
     client_config = AsyncClientConfig(
         max_limit_exceeded=0,
         max_timeouts=0,
         store_sync_tokens=False,
         encryption_enabled=False,
     )
-    
+
     client = AsyncClient(
-        homeserver=Config.MATRIX_URL,
-        token=Config.MATRIX_ACCESS_TOKEN,
+        homeserver=MATRIX_HOMESERVER_URL,
         config=client_config,
     )
-    
+    client.access_token = MATRIX_ACCESS_TOKEN
+    client.user_id = MATRIX_BOT_USERNAME
     return client
 
 async def send_matrix_message(room_id: str, message: str) -> bool:
     """Send a message to a Matrix room"""
-    if not Config.MATRIX_ACTIVE:
+    if not MATRIX_ACTIVE:
         logging.warning("Matrix integration is disabled")
         return False
 
@@ -313,7 +304,7 @@ async def send_matrix_message(room_id: str, message: str) -> bool:
 
 async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
     """Create a direct chat with a user"""
-    if not Config.MATRIX_ACTIVE:
+    if not MATRIX_ACTIVE:
         logging.warning("Matrix integration is disabled")
         return None
 
@@ -375,45 +366,43 @@ async def invite_to_matrix_room(room_id: str, user_id: str) -> bool:
         if client:
             await client.close()
 
-def send_matrix_message_to_multiple_rooms(room_ids: List[str], message: str) -> Dict[str, bool]:
+async def send_matrix_message_to_multiple_rooms(room_ids: List[str], message: str) -> Dict[str, bool]:
     """
-    Synchronous wrapper for sending a message to multiple Matrix rooms.
+    Send a message to multiple Matrix rooms.
     
     Args:
         room_ids: List of room IDs to send the message to
         message: The message content
         
     Returns:
-        Dict[str, bool]: Dictionary mapping room IDs to success status
+        Dict[str, bool]: A dictionary mapping room IDs to success status
     """
     if not MATRIX_ACTIVE:
-        logger.warning("Matrix integration is not active. Skipping send_matrix_message_to_multiple_rooms.")
+        logger.warning("Matrix integration is not active. Skipping send_message_to_multiple_rooms.")
         return {room_id: False for room_id in room_ids}
         
-    client = MatrixClient()
+    results = {}
+    client = await get_matrix_client()
+    
     try:
-        # Check if there's an existing event loop
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-        except RuntimeError:
-            # No event loop exists in this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-        # Get the client and send the messages
-        async_client = loop.run_until_complete(client._get_client())
-        result = loop.run_until_complete(client.send_message_to_multiple_rooms(room_ids, message))
-        
-        # Close the client properly
-        loop.run_until_complete(client.close())
-        
-        return result
-    except Exception as e:
-        logger.error(f"Error sending message to multiple rooms: {e}")
-        return {room_id: False for room_id in room_ids}
+        for room_id in room_ids:
+            try:
+                response = await client.room_send(
+                    room_id=room_id,
+                    message_type="m.room.message",
+                    content={
+                        "msgtype": "m.text",
+                        "body": message
+                    }
+                )
+                results[room_id] = isinstance(response, RoomSendResponse) and response.event_id is not None
+            except Exception as e:
+                logger.error(f"Error sending message to room {room_id}: {e}")
+                results[room_id] = False
+    finally:
+        await client.close()
+    
+    return results
 
 def send_welcome_message(user_id: str, username: str, full_name: str = None) -> bool:
     """

@@ -6,10 +6,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import logging
 from app.utils.config import Config
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Index
-
-Base = declarative_base()
 
 class User(Base):
     __tablename__ = 'users'
@@ -20,10 +17,20 @@ class User(Base):
     first_name = Column(String)
     last_name = Column(String)
     is_active = Column(Boolean, default=True)
+    is_admin = Column(Boolean, default=False)
     date_joined = Column(DateTime, default=datetime.utcnow)
     last_login = Column(DateTime)
     attributes = Column(JSON)
     authentik_id = Column(String)  # Link with Authentik user ID
+
+    def __init__(self, **kwargs):
+        if 'full_name' in kwargs:
+            full_name = kwargs.pop('full_name')
+            if full_name:
+                names = full_name.split(' ', 1)
+                kwargs['first_name'] = names[0]
+                kwargs['last_name'] = names[1] if len(names) > 1 else ''
+        super().__init__(**kwargs)
 
     def to_dict(self):
         return {
@@ -32,6 +39,7 @@ class User(Base):
             'name': f"{self.first_name} {self.last_name}",
             'email': self.email,
             'is_active': self.is_active,
+            'is_admin': self.is_admin,
             'date_joined': self.date_joined.isoformat() if self.date_joined else None,
             'last_login': self.last_login.isoformat() if self.last_login else None,
             'attributes': self.attributes,
@@ -110,7 +118,14 @@ def sync_user_data(db: Session, authentik_users: List[Dict[str, Any]]):
             except Exception as e:
                 logging.warning(f"Error querying for existing user: {e}")
 
-            if not existing_user:
+            if existing_user:
+                # Update existing user
+                existing_user.email = auth_user.get('email', existing_user.email)
+                existing_user.first_name = auth_user.get('first_name', existing_user.first_name)
+                existing_user.last_name = auth_user.get('last_name', existing_user.last_name)
+                existing_user.is_active = auth_user.get('is_active', existing_user.is_active)
+                existing_user.authentik_id = str(auth_user.get('pk', existing_user.authentik_id))
+            else:
                 # Create new user
                 new_user = User(
                     username=username,
@@ -202,7 +217,7 @@ def add_admin_event(db: Session, event_type: str, username: str, details: str, t
     db.commit()
     return event
 
-def create_admin_event(db: Session, event_type: str, username: str, details: str) -> AdminEvent:
+def create_admin_event(db: Session, event_type: str, username: str, details: str = None, description: str = None) -> AdminEvent:
     """
     Create a new admin event in the database.
     Alias for add_admin_event for backward compatibility.
@@ -211,12 +226,13 @@ def create_admin_event(db: Session, event_type: str, username: str, details: str
         db (Session): Database session
         event_type (str): Type of admin event
         username (str): Username associated with the event
-        details (str): Event details
+        details (str, optional): Event details
+        description (str, optional): Alternative to details parameter for backward compatibility
         
     Returns:
         AdminEvent: The created admin event
     """
-    return add_admin_event(db, event_type, username, details, datetime.now())
+    return add_admin_event(db, event_type, username, description or details or "", datetime.now())
 
 def sync_user_data_incremental(db: Session, authentik_users: List[Dict[str, Any]], full_sync=False):
     """
@@ -592,3 +608,88 @@ def is_matrix_room_member(db: Session, room_id: str, user_id: str) -> bool:
     except Exception as e:
         logging.error(f"Error checking room membership for {user_id} in {room_id}: {str(e)}")
         return False 
+
+def create_user(db: Session, username: str, email: str = None, first_name: str = None, last_name: str = None, attributes: Dict = None) -> User:
+    """
+    Create a new user in the database.
+    
+    Args:
+        db (Session): Database session
+        username (str): Username for the new user
+        email (str, optional): Email address
+        first_name (str, optional): First name
+        last_name (str, optional): Last name
+        attributes (Dict, optional): Additional user attributes
+        
+    Returns:
+        User: The created user object
+    """
+    user = User(
+        username=username,
+        email=email,
+        first_name=first_name,
+        last_name=last_name,
+        attributes=attributes or {},
+        date_joined=datetime.utcnow()
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user 
+
+def get_user_by_username(db: Session, username: str) -> Optional[User]:
+    """
+    Get a user by their username.
+    
+    Args:
+        db (Session): Database session
+        username (str): Username to look up
+        
+    Returns:
+        Optional[User]: The user if found, None otherwise
+    """
+    try:
+        return db.query(User).filter(User.username == username).first()
+    except Exception as e:
+        logging.error(f"Error getting user by username {username}: {e}")
+        return None 
+
+def get_user_by_email(db: Session, email: str) -> Optional[User]:
+    """
+    Get a user by their email address.
+    
+    Args:
+        db (Session): Database session
+        email (str): Email address to look up
+        
+    Returns:
+        Optional[User]: The user if found, None otherwise
+    """
+    try:
+        return db.query(User).filter(User.email == email).first()
+    except Exception as e:
+        logging.error(f"Error getting user by email {email}: {e}")
+        return None 
+
+def get_admin_events(db: Session, limit: int = None, offset: int = None) -> List[AdminEvent]:
+    """
+    Get admin events from the database, optionally with pagination.
+    
+    Args:
+        db (Session): Database session
+        limit (int, optional): Maximum number of events to return
+        offset (int, optional): Number of events to skip
+        
+    Returns:
+        List[AdminEvent]: List of admin events
+    """
+    try:
+        query = db.query(AdminEvent).order_by(AdminEvent.timestamp.desc())
+        if limit is not None:
+            query = query.limit(limit)
+        if offset is not None:
+            query = query.offset(offset)
+        return query.all()
+    except Exception as e:
+        logging.error(f"Error getting admin events: {e}")
+        return []

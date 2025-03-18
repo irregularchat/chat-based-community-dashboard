@@ -1,6 +1,7 @@
 import os
 import sys
 from pathlib import Path
+from datetime import datetime
 
 # Get the project root directory (parent of tests directory)
 ROOT_DIR = Path(__file__).parent.parent
@@ -27,7 +28,7 @@ def setup_test_env():
         "DATABASE_URL": "sqlite:///test.db",
         "SMTP_SERVER": "test.smtp.com",
         "SMTP_PORT": "587",
-        "SMTP_USER": "test@test.com",
+        "SMTP_USERNAME": "test@test.com",
         "SMTP_PASSWORD": "test_password",
     })
     yield
@@ -50,6 +51,9 @@ def test_db(test_db_engine):
     Session = sessionmaker(bind=connection)
     session = Session()
     
+    # Create all tables
+    Base.metadata.create_all(bind=connection)
+    
     yield session
     
     session.close()
@@ -62,9 +66,11 @@ def test_user(test_db):
     user = User(
         username="testuser",
         email="test@example.com",
-        full_name="Test User",
+        first_name="Test",
+        last_name="User",
         is_active=True,
-        is_admin=False
+        is_admin=False,
+        date_joined=datetime.now()
     )
     test_db.add(user)
     test_db.commit()
@@ -76,9 +82,11 @@ def test_admin(test_db):
     admin = User(
         username="admin",
         email="admin@example.com",
-        full_name="Admin User",
+        first_name="Admin",
+        last_name="User",
         is_active=True,
-        is_admin=True
+        is_admin=True,
+        date_joined=datetime.now()
     )
     test_db.add(admin)
     test_db.commit()

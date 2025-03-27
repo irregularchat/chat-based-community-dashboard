@@ -59,8 +59,6 @@ def should_sync_users(db: SessionLocal) -> bool:
 
 def init_db():
     """Initialize the database by creating all tables"""
-    Base.metadata.create_all(bind=engine)
-
     try:
         # Ensure models are registered with Base.metadata
         from app.db.operations import User, AdminEvent
@@ -116,7 +114,7 @@ def init_db():
                                     timestamp=datetime.now(),
                                     event_type='system_sync',
                                     username='system',
-                                    description=f'Full sync of {len(authentik_users)} users from Authentik'
+                                    details=f'Full sync of {len(authentik_users)} users from Authentik'
                                 )
                                 db.add(sync_event)
                                 db.commit()
@@ -149,7 +147,7 @@ def init_db():
                                     timestamp=datetime.now(),
                                     event_type='system_sync',
                                     username='system',
-                                    description=f'Incremental sync of {len(modified_users)} modified users from Authentik'
+                                    details=f'Incremental sync of {len(modified_users)} modified users from Authentik'
                                 )
                                 db.add(sync_event)
                                 db.commit()
@@ -165,7 +163,7 @@ def init_db():
                                 timestamp=datetime.now(),
                                 event_type='system_sync',
                                 username='system',
-                                description='No modified users found since last sync'
+                                details='No modified users found since last sync'
                             )
                             db.add(sync_event)
                             db.commit()

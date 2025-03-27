@@ -5,8 +5,10 @@ It allows administrators to send messages to users and rooms, invite users to ro
 and remove users from rooms. It uses a configured access token to authenticate with Matrix and uses room ids to identify rooms.
 """
 import streamlit as st
+import asyncio
 import logging
-from typing import List, Dict, Optional
+from datetime import datetime
+from typing import List, Dict, Any
 import os
 
 from app.utils.matrix_actions import (
@@ -16,8 +18,16 @@ from app.utils.matrix_actions import (
     send_matrix_message_to_multiple_rooms,
     get_room_ids_by_category,
     invite_user_to_rooms_by_interests,
-    remove_from_matrix_room
+    get_all_accessible_rooms,
+    get_joined_rooms,
+    get_room_name,
+    remove_from_matrix_room,
+    get_all_accessible_users,
+    send_direct_message,
+    send_room_message
 )
+from app.db.session import get_db
+from app.db.operations import User, AdminEvent, MatrixRoomMember, get_matrix_room_members
 from app.utils.config import Config
 
 # Set up logging

@@ -28,8 +28,10 @@ from app.auth.api import (
     update_user_status,
     delete_user,
     update_user_intro,
-    update_user_invited_by
+    update_user_invited_by,
+    create_invite
 )
+from app.messages import create_invite_message
 
 def reset_create_user_form_fields():
     """Helper function to reset all fields related to create user."""
@@ -208,7 +210,8 @@ async def render_invite_form():
         st.session_state['invite_message'] = ""
 
     with st.form("invite_form"):
-        invite_label = st.text_input("Invite Label", key="invite_label")
+        invite_label = st.text_input("Invite Label", key="invite_label", 
+                                    help="A label to identify this invite (e.g., 'event-august-2025')")
         
         # Get the current Eastern Time
         eastern = timezone('US/Eastern')
@@ -218,12 +221,60 @@ async def render_invite_form():
         # Use the Eastern time values for the date/time inputs
         expires_date = st.date_input("Enter Expiration Date", value=expires_default.date(), key="expires_date")
         expires_time = st.time_input("Enter Expiration Time", value=expires_default.time(), key="expires_time")
+        #TODO: Add option to send invite to user directly , still show the invite code. 
+        #TODO: Add option for single use or the default of time expiration.   
+        custom_message = st.text_area("Custom Message (Optional)", key="custom_message",
+                                     help="Add any additional instructions or context for the invite")
         
-        submit_button = st.form_submit_button("Send Invite")
-
+        submit_button = st.form_submit_button("Create Invite")
+    
+    # Handle the invite creation when submit is pressed
+    if submit_button:
+        try:
+            # Combine date and time into a datetime object
+            expires_datetime = datetime.combine(expires_date, expires_time)
+            
+            # Localize to Eastern time
+            eastern = timezone('US/Eastern')
+            expires_datetime = eastern.localize(expires_datetime)
+            
+            # Convert to ISO format for the API
+            expires_iso = expires_datetime.isoformat()
+            
+            # Get headers for API request
+            headers = {
+                'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                'Content-Type': 'application/json'
+            }
+            
+            # Create the invite
+            invite_url, expires = create_invite(
+                headers=headers,
+                label=invite_label,
+                expires=expires_iso
+            )
+            
+            if invite_url:
+                # Create and display the invite message
+                create_invite_message(
+                    label=invite_label,
+                    invite_url=invite_url,
+                    expires_datetime=expires_datetime
+                )
+                
+                # Add custom message if provided
+                if st.session_state.get("custom_message"):
+                    st.markdown("### Additional Message:")
+                    st.markdown(st.session_state.get("custom_message"))
+            else:
+                st.error("Failed to create invite. Please check your settings and try again.")
+                
+        except Exception as e:
+            logging.error(f"Error creating invite: {e}")
+            st.error(f"An error occurred: {str(e)}")
+    
     return (
-        st.session_state['invite_email'],
-        st.session_state['invite_message'],
+        st.session_state.get('invite_message', ''),
         submit_button
     )
 

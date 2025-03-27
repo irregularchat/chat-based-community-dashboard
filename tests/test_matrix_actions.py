@@ -115,10 +115,26 @@ async def test_send_matrix_message_to_multiple_rooms_failure():
 @pytest.mark.asyncio
 async def test_get_matrix_client():
     """Test creating a Matrix client"""
-    with patch("app.utils.matrix_actions.MATRIX_HOMESERVER_URL", "https://matrix.org"), \
+    mock_sync_response = AsyncMock()
+    mock_sync_response.next_batch = "test_batch"
+    
+    mock_client = AsyncMock()
+    mock_client.sync.return_value = mock_sync_response
+    mock_client.homeserver = "https://matrix.org"  # Set the homeserver attribute
+    mock_client.access_token = "test_token"  # Set the access token attribute
+    
+    with patch("app.utils.matrix_actions.AsyncClient", return_value=mock_client), \
+         patch("app.utils.matrix_actions.MATRIX_ACTIVE", True), \
+         patch("app.utils.matrix_actions.MATRIX_HOMESERVER_URL", "https://matrix.org"), \
          patch("app.utils.matrix_actions.MATRIX_ACCESS_TOKEN", "test_token"):
+        
         client = await get_matrix_client()
         assert client is not None
         assert client.homeserver == "https://matrix.org"
         assert client.access_token == "test_token"
-        assert isinstance(client.config, AsyncClientConfig)
+        
+        # Verify sync was called
+        client.sync.assert_called_once_with(timeout=3000, full_state=True)
+        
+        # Verify client was not closed (since sync was successful)
+        client.close.assert_not_called()

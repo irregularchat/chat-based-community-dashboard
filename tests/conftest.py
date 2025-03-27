@@ -16,7 +16,7 @@ from sqlalchemy.orm import sessionmaker
 
 # Import app modules
 from app.db.database import Base
-from app.db.operations import User, AdminEvent, MatrixRoomMember
+from app.db.operations import *  # Import all models to ensure they're registered
 from app.utils.config import Config
 
 # Set up test environment variables
@@ -30,6 +30,13 @@ def setup_test_env():
         "SMTP_PORT": "587",
         "SMTP_USERNAME": "test@test.com",
         "SMTP_PASSWORD": "test_password",
+        "MATRIX_HOMESERVER_URL": "https://matrix.example.com",
+        "MATRIX_BOT_USERNAME": "testbot",
+        "MATRIX_ACCESS_TOKEN": "test_token",
+        "MATRIX_DEFAULT_ROOM_ID": "test_room",
+        "MATRIX_WELCOME_ROOM_ID": "welcome_room",
+        "MATRIX_BOT_DISPLAY_NAME": "Test Bot",
+        "MATRIX_ACTIVE": "true"
     })
     yield
     # Clean up after tests

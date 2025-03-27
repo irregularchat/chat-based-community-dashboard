@@ -12,7 +12,7 @@ from app.utils.helpers import (
 )
 from app.utils.config import Config
 from app.db.operations import AdminEvent, search_users, User
-from app.db.database import get_db
+from app.db.session import get_db
 from app.db.init_db import should_sync_users
 import re
 import pandas as pd

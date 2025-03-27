@@ -30,7 +30,7 @@ from app.utils.helpers import (
     add_timeline_event,
     handle_form_submission
 )
-from app.db.database import get_db
+from app.db.session import get_db
 from app.db.operations import search_users, User
 from app.messages import (
     create_user_message,

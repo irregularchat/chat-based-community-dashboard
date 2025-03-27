@@ -60,51 +60,52 @@ def generate_webhook_signature(payload: dict) -> str:
     
     return signature
 
-async def webhook_notification(event_type: str, username: str = None, **kwargs) -> dict:
-    """
-    Send a webhook notification.
-    
-    Args:
-        event_type (str): Type of event (e.g., "user_created")
-        username (str): Username associated with the event
-        **kwargs: Additional data to include in webhook
-        
-    Returns:
-        dict: Response containing success status
-    """
-    if not Config.WEBHOOK_ACTIVE or not Config.WEBHOOK_URL:
-        logging.info("Webhook integration not active")
-        return {"success": False, "error": "Webhook not configured"}
-
-    try:
-        # Clean up None values from kwargs
-        cleaned_kwargs = {k: v for k, v in kwargs.items() if v is not None}
-        
-        payload = {
-            "event_type": event_type,
-            "username": username,
-            "timestamp": datetime.now().isoformat(),
-            **cleaned_kwargs
-        }
-        
-        headers = {
-            "Content-Type": "application/json",
-            "X-Webhook-Signature": generate_webhook_signature(payload)
-        }
-        
-        response = requests.post(
-            Config.WEBHOOK_URL,
-            json=payload,
-            headers=headers,
-            timeout=10
-        )
-        response.raise_for_status()
-        
-        return {"success": True}
-        
-    except Exception as e:
-        logging.error(f"Error sending webhook notification: {e}")
-        return {"success": False, "error": str(e)}
+# Comment out webhook_notification as it's no longer used
+# async def webhook_notification(event_type: str, username: str = None, **kwargs) -> dict:
+#     """
+#     Send a webhook notification.
+#     
+#     Args:
+#         event_type (str): Type of event (e.g., "user_created")
+#         username (str): Username associated with the event
+#         **kwargs: Additional data to include in webhook
+#         
+#     Returns:
+#         dict: Response containing success status
+#     """
+#     if not Config.WEBHOOK_ACTIVE or not Config.WEBHOOK_URL:
+#         logging.info("Webhook integration not active")
+#         return {"success": False, "error": "Webhook not configured"}
+# 
+#     try:
+#         # Clean up None values from kwargs
+#         cleaned_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+#         
+#         payload = {
+#             "event_type": event_type,
+#             "username": username,
+#             "timestamp": datetime.now().isoformat(),
+#             **cleaned_kwargs
+#         }
+#         
+#         headers = {
+#             "Content-Type": "application/json",
+#             "X-Webhook-Signature": generate_webhook_signature(payload)
+#         }
+#         
+#         response = requests.post(
+#             Config.WEBHOOK_URL,
+#             json=payload,
+#             headers=headers,
+#             timeout=10
+#         )
+#         response.raise_for_status()
+#         
+#         return {"success": True}
+#         
+#     except Exception as e:
+#         logging.error(f"Error sending webhook notification: {e}")
+#         return {"success": False, "error": str(e)}
 
 
 def shorten_url(long_url, url_type, name=None):
@@ -187,153 +188,139 @@ def reset_user_password(auth_api_url, headers, user_id, new_password):
         return False
 
 async def create_user(username, full_name, email, invited_by=None, intro=None):
-    """Create a new user in Authentik."""
-    # Generate a temporary password using a secure passphrase
-    temp_password = generate_secure_passphrase()
-    discourse_post_url = None  # Initialize post URL variable
-
-    # Check for existing usernames and modify if necessary
-    original_username = username
-    counter = 1
-    headers = {
-        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-        'Content-Type': 'application/json'
-    }
+    """
+    Create a new user in Authentik.
     
-    while True:
-        user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
-        response = session.get(user_search_url, headers=headers, timeout=10)
-        response.raise_for_status()
-        users = response.json().get('results', [])
+    Args:
+        username (str): Username for the new user
+        full_name (str): Full name of the user
+        email (str, optional): Email address
+        invited_by (str, optional): Who invited this user
+        intro (str, optional): Introduction information
         
-        # Explicitly check for exact username match
-        if not any(user['username'] == username for user in users):
-            break  # Unique username found
-        else:
-            username = f"{original_username}{counter}"
-            counter += 1
-    
-    # Log if username was modified
-    if username != original_username:
-        logging.info(f"Username modified for uniqueness: {original_username} -> {username}")
-
-    user_data = {
-        "username": username,
-        "name": full_name,
-        "is_active": True,
-        "email": email,
-        "groups": [Config.MAIN_GROUP_ID],
-        "attributes": {}
-    }
-
-    # Add 'invited_by' and 'intro' to attributes if provided
-    if invited_by:
-        user_data['attributes']['invited_by'] = invited_by
-    if intro:
-        user_data['attributes']['intro'] = intro
-
-    # Generate API URL
-    user_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
-
+    Returns:
+        tuple: (success, username, password/error_message, optional_discourse_url)
+    """
     try:
-        # API request to create the user
-        response = requests.post(user_api_url, headers=headers, json=user_data, timeout=10)
-        response.raise_for_status()
-        user = response.json()
-
-        # Ensure 'user' is a dictionary
-        if not isinstance(user, dict):
-            logging.error("Unexpected response format: user is not a dictionary.")
-            return False, username, 'default_pass_issue', None
-
-        logging.info(f"User created: {user.get('username')}")
-
-        # Reset the user's password
-        reset_result = reset_user_password(Config.AUTHENTIK_API_URL, headers, user['pk'], temp_password)
-        if not reset_result:
-            logging.error(f"Failed to reset the password for user {user.get('username')}. Returning default_pass_issue.")
-            return False, username, 'default_pass_issue', None
-
-        # Send webhook notification if webhook integration is active
-        if Config.WEBHOOK_ACTIVE:
+        # Generate a secure passphrase for the user
+        password = generate_secure_passphrase()
+        
+        # Configure the headers for the API request
+        headers = {
+            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+            'Content-Type': 'application/json'
+        }
+        
+        # Prepare the user data
+        user_data = {
+            'username': username,
+            'name': full_name,
+            'password': password,
+            'path': 0,  # Standard users group
+            'groups': [Config.MAIN_GROUP_ID] if Config.MAIN_GROUP_ID else []
+        }
+        
+        # Add email if provided
+        if email:
+            user_data['email'] = email
+        
+        # Add custom attributes if provided
+        custom_attributes = {}
+        if invited_by:
+            custom_attributes['invited_by'] = invited_by
+        if intro:
+            custom_attributes['intro'] = intro
+        
+        if custom_attributes:
+            user_data['attributes'] = custom_attributes
+        
+        # Create the user
+        logging.info(f"Creating user: {username}")
+        
+        user_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
+        response = requests.post(user_url, json=user_data, headers=headers)
+        
+        if response.status_code == 201:
+            user_id = response.json().get('pk')
+            
+            # Update user data if needed (e.g. reset password, etc.)
+            result = reset_user_password(Config.AUTHENTIK_API_URL, headers, user_id, password)
+            
+            if not result:
+                logging.warning(f"Failed to reset password for user {username}")
+            
+            # Send welcome email
             try:
-                # Use asyncio.create_task to handle the coroutine
-                await webhook_notification("user_created", username, full_name, email, intro, invited_by, temp_password)
-                logging.info(f"Webhook notification sent for user {username}")
+                if Config.MATRIX_ACTIVE:
+                    from app.utils.matrix_actions import send_welcome_message
+                    matrix_welcome_sent = send_welcome_message(
+                        f"@{username}:{Config.MATRIX_BOT_USERNAME.split(':')[1]}" if "@" not in username else username,
+                        username, 
+                        full_name
+                    )
+                    
+                    if matrix_welcome_sent:
+                        logging.info(f"Matrix welcome message sent to user {username}")
+                    else:
+                        logging.warning(f"Failed to send Matrix welcome message to user {username}")
+                    
+                    # Announce the new user if introduction is provided
+                    if intro:
+                        from app.utils.matrix_actions import announce_new_user
+                        announcement_sent = announce_new_user(username, full_name, intro)
+                        
+                        if announcement_sent:
+                            logging.info(f"New user announcement sent for {username}")
+                        else:
+                            logging.warning(f"Failed to send new user announcement for {username}")
             except Exception as e:
-                logging.error(f"Failed to send webhook notification for user {username}: {e}")
+                logging.error(f"Error with Matrix notifications for new user {username}: {e}")
+            
+            # Create Discourse post
+            discourse_url = None
+            if Config.DISCOURSE_ACTIVE and Config.DISCOURSE_URL and Config.DISCOURSE_API_KEY:
+                try:
+                    discourse_headers = {
+                        'Api-Key': Config.DISCOURSE_API_KEY,
+                        'Api-Username': Config.DISCOURSE_API_USERNAME,
+                        'Content-Type': 'application/json'
+                    }
+                    
+                    # Create a Discourse announcement post
+                    result = create_discourse_post(
+                        discourse_headers,
+                        f"Welcome new member: {full_name} (@{username})",
+                        intro or f"Please welcome {full_name} to the community!",
+                        username=username,
+                        intro=intro,
+                        invited_by=invited_by
+                    )
+                    
+                    if result and result.get('success'):
+                        discourse_url = result.get('post_url')
+                        logging.info(f"Created Discourse post for new user {username}: {discourse_url}")
+                    else:
+                        error_msg = result.get('error') if result else "Unknown error"
+                        logging.warning(f"Failed to create Discourse post for user {username}: {error_msg}")
+                except Exception as e:
+                    logging.error(f"Error creating Discourse post for new user {username}: {e}")
+            
+            # Success response with optional Discourse URL
+            return True, username, password, discourse_url
         else:
-            logging.info("Webhook integration is not active. Skipping webhook notification.")
-
-        # Sync the new user with local database
-        with SessionLocal() as db:
+            error_message = f"Error: {response.status_code}"
             try:
-                # Fetch all users to ensure complete sync
-                all_users_request = requests.get(
-                    f"{Config.AUTHENTIK_API_URL}/core/users/",
-                    headers=headers,
-                    timeout=10
-                )
-                all_users_request.raise_for_status()
-                all_users = all_users_request.json().get('results', [])
-
-                # Sync users with local database
-                sync_user_data(db, all_users)
-
-                # Add creation event to admin events
-                admin_event = AdminEvent(
-                    timestamp=datetime.now(),
-                    event_type='user_created',
-                    username=username,
-                    description=f'User created and synced to local database'
-                )
-                db.add(admin_event)
-                db.commit()
-
-                logging.info(f"Successfully created and synced user {username}")
-            except Exception as e:
-                logging.error(f"Error syncing after user creation: {e}")
-                # Note: We continue even if sync fails, as the user was created in Authentik
-
-        # Create a Discourse post for the user introduction if Discourse is configured
-        if all([Config.DISCOURSE_URL, Config.DISCOURSE_API_KEY, 
-                Config.DISCOURSE_API_USERNAME, Config.DISCOURSE_CATEGORY_ID]):
-            try:
-                post_title = f"Introduction: {username}"
-                success, post_url = create_discourse_post(
-                    headers=headers,
-                    title=post_title,
-                    content="",  # Not used, the function creates its own content
-                    username=username,
-                    intro=intro,
-                    invited_by=invited_by
-                )
-                
-                if success and post_url:
-                    logging.info(f"Successfully created Discourse post for user {username} at URL: {post_url}")
-                    discourse_post_url = post_url
-                elif success:
-                    logging.warning(f"Created Discourse post for user {username} but couldn't get the URL")
-                else:
-                    logging.warning(f"Failed to create Discourse post for user {username}")
-            except Exception as e:
-                logging.error(f"Error creating Discourse post for user {username}: {e}")
-                # Continue even if Discourse post creation fails
-        else:
-            logging.info("Discourse integration not configured. Skipping post creation.")
-
-        return (True, username, temp_password, discourse_post_url)
-
-    except requests.exceptions.HTTPError as http_err:
-        logging.error(f"HTTP error occurred while creating user: {http_err}")
-        try:
-            logging.error(f"Response: {response.text}")
-        except Exception:
-            pass
-        return False, username, 'default_pass_issue', None
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error creating user: {e}")
-        return False, username, 'default_pass_issue', None
+                error_data = response.json()
+                error_message = "\n".join([f"{k}: {', '.join(v)}" for k, v in error_data.items() if isinstance(v, list)])
+            except:
+                pass
+            
+            logging.error(f"Failed to create user {username}: {error_message}")
+            return False, username, error_message, None
+            
+    except Exception as e:
+        logging.error(f"Error creating user {username}: {e}")
+        return False, username, str(e), None
 
 
 # List Users Function is needed and works better than the new methos session.get(f"{auth_api_url}/users/", headers=headers, timeout=10)
@@ -432,11 +419,13 @@ def create_invite(headers, label, expires=None):
         expires (str, optional): The expiration time for the invite.
 
     Returns:
-        tuple: The invite URL and expiration time, if successful.
+        dict: Dictionary containing 'link', 'expiry', 'success' and error message if applicable.
     """
+    logging.info(f"Creating invite with label: {label}")
     eastern = timezone('US/Eastern')
     if not label:
         label = datetime.now(eastern).strftime('%H-%M')
+        logging.info(f"No label provided, using timestamp: {label}")
 
     # Fix the label to ensure it is a valid slug:
     # - Convert to lowercase
@@ -446,12 +435,17 @@ def create_invite(headers, label, expires=None):
     fixed_label = label.strip().lower()
     fixed_label = re.sub(r'\s+', '_', fixed_label)
     fixed_label = re.sub(r'[^a-z0-9_-]', '', fixed_label)
+    
+    if fixed_label != label:
+        logging.info(f"Label modified for validity: {label} -> {fixed_label}")
+        label = fixed_label
 
     if expires is None:
         expires = (datetime.now(eastern) + timedelta(hours=2)).isoformat()
+        logging.info(f"No expiry provided, using default: {expires}")
 
     data = {
-        "name": fixed_label,
+        "name": label,
         "expires": expires,
         "fixed_data": {},
         "single_use": True,
@@ -459,35 +453,57 @@ def create_invite(headers, label, expires=None):
     }
 
     invite_api_url = f"{Config.AUTHENTIK_API_URL}/stages/invitation/invitations/"
-
+    logging.info(f"Sending request to: {invite_api_url}")
+    
     try:
         response = requests.post(invite_api_url, headers=headers, json=data, timeout=10)
         response.raise_for_status()
         response_data = response.json()
+        logging.info(f"Received response data: {response_data}")
 
         # Get the invite ID from the API response
         invite_id = response_data.get('pk')
         if not invite_id:
-            raise ValueError("API response missing 'pk' field.")
+            logging.error("API response missing 'pk' field.")
+            return {
+                'success': False,
+                'error': "API response missing 'pk' field."
+            }
 
-        # Construct the full invite URL without shortening it
+        # Construct the full invite URL
         invite_link = f"https://sso.{Config.BASE_DOMAIN}/if/flow/{Config.INVITE_LABEL}/?itoken={invite_id}"
-        return invite_link, expires
+        logging.info(f"Created invite link: {invite_link}")
+        
+        # Return as dictionary with success flag
+        return {
+            'success': True,
+            'link': invite_link,
+            'expiry': expires
+        }
 
     except requests.exceptions.HTTPError as http_err:
         logging.error(f"HTTP error occurred: {http_err}")
+        error_detail = ""
         try:
-            logging.info("API Response: %s", response.json())
+            error_detail = response.json()
         except Exception:
-            logging.info("API Response: %s", response.text)
+            try:
+                error_detail = response.text
+            except Exception:
+                error_detail = "Unknown error"
+        logging.error(f"API Error response: {error_detail}")
+        
+        return {
+            'success': False,
+            'error': f"HTTP error: {http_err}",
+            'details': error_detail
+        }
     except Exception as err:
         logging.error(f"An error occurred: {err}")
-        try:
-            logging.info("API Response: %s", response.text)
-        except Exception:
-            pass
-
-    return None, None
+        return {
+            'success': False,
+            'error': f"Error: {err}"
+        }
 
 
 def update_user_status(auth_api_url, headers, user_id, is_active):

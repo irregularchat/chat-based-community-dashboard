@@ -160,122 +160,130 @@ def reset_user_password(auth_api_url, headers, user_id, new_password):
         logging.error(f"Error resetting password for user {user_id}: {e}")
         return False
 
-def create_user(username, full_name, email, invited_by=None, intro=None):
+async def create_user(username, full_name, email, invited_by=None, intro=None):
     """Create a new user in Authentik."""
-    
-    # Generate a temporary password using a secure passphrase
-    temp_password = generate_secure_passphrase()
-
-    # Check for existing usernames and modify if necessary
-    original_username = username
-    counter = 1
-    headers = {
-        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-        'Content-Type': 'application/json'
-    }
-    
-    while True:
-        user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
-        response = session.get(user_search_url, headers=headers, timeout=10)
-        response.raise_for_status()
-        users = response.json().get('results', [])
-        
-        # Explicitly check for exact username match
-        if not any(user['username'] == username for user in users):
-            break  # Unique username found
-        else:
-            username = f"{original_username}{counter}"
-            counter += 1
-    
-    # Log if username was modified
-    if username != original_username:
-        logging.info(f"Username modified for uniqueness: {original_username} -> {username}")
-
-    user_data = {
-        "username": username,
-        "name": full_name,
-        "is_active": True,
-        "email": email,
-        "groups": [Config.MAIN_GROUP_ID],
-        # Removed "password" from the user_data
-        "attributes": {}
-    }
-
-    # Add 'invited_by' and 'intro' to attributes if provided
-    if invited_by:
-        user_data['attributes']['invited_by'] = invited_by
-    if intro:
-        user_data['attributes']['intro'] = intro
-
-    # Generate API URL and headers
-    user_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
-
     try:
-        # API request to create the user
-        response = requests.post(user_api_url, headers=headers, json=user_data, timeout=10)
-        response.raise_for_status()
-        user = response.json()
+        # Generate a temporary password using a secure passphrase
+        temp_password = generate_secure_passphrase()
+        discourse_post_url = None  # Initialize post URL variable
 
-        # Ensure 'user' is a dictionary
-        if not isinstance(user, dict):
-            logging.error("Unexpected response format: user is not a dictionary.")
+        # Check for existing usernames and modify if necessary
+        original_username = username
+        counter = 1
+        headers = {
+            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+            'Content-Type': 'application/json'
+        }
+        
+        try:
+            # Check for existing username
+            while True:
+                user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
+                response = session.get(user_search_url, headers=headers, timeout=10)
+                response.raise_for_status()
+                users = response.json().get('results', [])
+                
+                # Explicitly check for exact username match
+                if not any(user['username'] == username for user in users):
+                    break  # Unique username found
+                else:
+                    username = f"{original_username}{counter}"
+                    counter += 1
+            
+            # Log if username was modified
+            if username != original_username:
+                logging.info(f"Username modified for uniqueness: {original_username} -> {username}")
+
+            user_data = {
+                "username": username,
+                "name": full_name,
+                "is_active": True,
+                "email": email,
+                "groups": [Config.MAIN_GROUP_ID],
+                "attributes": {}
+            }
+
+            # Add 'invited_by' and 'intro' to attributes if provided
+            if invited_by:
+                user_data['attributes']['invited_by'] = invited_by
+            if intro:
+                user_data['attributes']['intro'] = intro
+
+            # Create user in Authentik
+            user_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
+            response = requests.post(user_api_url, headers=headers, json=user_data, timeout=10)
+            response.raise_for_status()
+            user = response.json()
+
+            if not isinstance(user, dict):
+                logging.error("Unexpected response format: user is not a dictionary.")
+                return False, username, 'default_pass_issue', None
+
+            logging.info(f"User created: {user.get('username')}")
+
+            # Reset the user's password
+            reset_result = reset_user_password(Config.AUTHENTIK_API_URL, headers, user['pk'], temp_password)
+            if not reset_result:
+                logging.error(f"Failed to reset password for user {user.get('username')}")
+                return False, username, 'default_pass_issue', None
+
+            # Send webhook notification if webhook integration is active
+            if Config.WEBHOOK_ACTIVE:
+                try:
+                    await webhook_notification("user_created", username, full_name, email, intro, invited_by, temp_password)
+                    logging.info(f"Webhook notification sent for user {username}")
+                except Exception as e:
+                    logging.error(f"Failed to send webhook notification: {e}")
+                    # Continue even if webhook fails
+
+            # Sync the new user with local database
+            with SessionLocal() as db:
+                try:
+                    # Fetch all users to ensure complete sync
+                    all_users_request = requests.get(
+                        f"{Config.AUTHENTIK_API_URL}/core/users/",
+                        headers=headers,
+                        timeout=10
+                    )
+                    all_users_request.raise_for_status()
+                    all_users = all_users_request.json().get('results', [])
+
+                    # Sync users with local database
+                    sync_user_data(db, all_users)
+
+                    # Add creation event to admin events
+                    admin_event = AdminEvent(
+                        timestamp=datetime.now(),
+                        event_type='user_created',
+                        username=username,
+                        details=f'User created and synced to local database'
+                    )
+                    db.add(admin_event)
+                    db.commit()
+
+                    logging.info(f"Successfully created and synced user {username}")
+                except Exception as e:
+                    logging.error(f"Error syncing after user creation: {e}")
+                    # Continue even if sync fails
+
+            return True, username, temp_password, discourse_post_url
+
+        except requests.exceptions.HTTPError as http_err:
+            logging.error(f"HTTP error occurred while creating user: {http_err}")
+            logging.error(f"Response: {response.text}")  # Log the response text for more context
+            return False, username, 'default_pass_issue', None
+        except Exception as e:
+            logging.error(f"Error creating user: {e}")
             return False, username, 'default_pass_issue', None
 
-        logging.info(f"User created: {user.get('username')}")
-
-        # Reset the user's password
-        reset_result = reset_user_password(Config.AUTHENTIK_API_URL, headers, user['pk'], temp_password)
-        if not reset_result:
-            logging.error(f"Failed to reset the password for user {user.get('username')}. Returning default_pass_issue.")
-            return False, username, 'default_pass_issue', None
-
-        # Send webhook notification if webhook integration is active
-        if Config.WEBHOOK_ACTIVE:
-            try:
-                webhook_notification("user_created", username, full_name, email, intro, invited_by, temp_password)
-                logging.info(f"Webhook notification sent for user {username}")
-            except Exception as e:
-                logging.error(f"Failed to send webhook notification for user {username}: {e}")
-        else:
-            logging.info("Webhook integration is not active. Skipping webhook notification.")
-        
-        # Send Matrix welcome message if Matrix integration is active
-        if Config.MATRIX_ACTIVE:
-            try:
-                from utils.matrix_actions import send_welcome_message, announce_new_user, invite_user_to_rooms_by_interests
-                
-                # Construct Matrix user ID (this assumes the username is the same as Matrix username)
-                # You may need to adjust this based on your Matrix server configuration
-                matrix_user_id = f"@{username}:{os.getenv('BASE_DOMAIN', 'example.com')}"
-                
-                # Send welcome message to the user
-                send_welcome_message(matrix_user_id, username, full_name)
-                
-                # Announce the new user in the welcome room
-                announce_new_user(username, full_name, intro)
-                
-                # If user has interests in their attributes, invite them to relevant rooms
-                if 'attributes' in user and user['attributes'] and 'interests' in user['attributes']:
-                    interests = user['attributes']['interests']
-                    if isinstance(interests, list) and interests:
-                        invite_results = invite_user_to_rooms_by_interests(matrix_user_id, interests)
-                        logging.info(f"Invited user {username} to rooms based on interests: {', '.join(interests)}")
-                
-                logging.info(f"Matrix welcome messages sent for user {username}")
-            except Exception as e:
-                logging.error(f"Failed to send Matrix welcome messages for user {username}: {e}")
-        else:
-            logging.info("Matrix integration is not active. Skipping Matrix welcome messages.")
-        
-        return True, username, temp_password, None  # Return success, username, temp password, and no discourse URL
     except requests.exceptions.HTTPError as http_err:
-        logging.error(f"HTTP error occurred while creating user: {http_err}")
+        logging.error(f"HTTP error occurred: {http_err}")
         try:
             logging.error(f"Response: {response.text}")
         except Exception:
             pass
         return False, username, 'default_pass_issue', None
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         logging.error(f"Error creating user: {e}")
         return False, username, 'default_pass_issue', None
 

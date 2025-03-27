@@ -13,22 +13,17 @@ Options:
 import os
 import sys
 import logging
-from datetime import datetime
-import argparse
-
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-
-# Import our modules
+from datetime import datetime, timedelta
+import asyncio
+import json
+import aiohttp
+import time
+import streamlit as st
+from typing import List, Dict, Any, Optional
+from sqlalchemy.orm import Session
+from app.auth.api import list_users, get_users_modified_since
 from app.db.database import SessionLocal, get_db
 from app.db.operations import User, AdminEvent, sync_user_data_incremental
-from app.auth.api import list_users, get_users_modified_since
 from app.utils.config import Config
 
 def force_sync(incremental=False):
@@ -80,7 +75,8 @@ def force_sync(incremental=False):
                     sync_event = AdminEvent(
                         timestamp=datetime.now(),
                         event_type='system_sync',
-                        username='system'
+                        username='system',
+                        details='No modified users found since last sync'
                     )
                     db.add(sync_event)
                     db.commit()
@@ -106,7 +102,8 @@ def force_sync(incremental=False):
             sync_event = AdminEvent(
                 timestamp=datetime.now(),
                 event_type='system_sync',
-                username='system'
+                username='system',
+                details=f'{"Incremental" if incremental else "Full"} sync completed successfully'
             )
             db.add(sync_event)
             db.commit()

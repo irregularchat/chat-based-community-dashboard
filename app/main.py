@@ -3,7 +3,7 @@ import streamlit as st
 from datetime import datetime, timedelta
 import logging
 from app.utils.config import Config
-from app.db.database import get_db
+from app.db.session import get_db
 from app.db.operations import User, AdminEvent
 from app.ui.home import render_home_page
 from app.ui.forms import (
@@ -24,6 +24,7 @@ from app.utils.helpers import (
 )
 from app.db.init_db import init_db
 from app.utils.helpers import setup_logging
+from app.db.models import *  # Import models to ensure tables are created
 
 # Initialize logging first
 setup_logging()

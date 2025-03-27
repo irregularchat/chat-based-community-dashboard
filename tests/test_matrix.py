@@ -70,7 +70,7 @@ async def test_create_matrix_direct_chat(mock_matrix_client):
         result = await create_matrix_direct_chat(user_id)
         assert result is not None
         mock_matrix_client.room_create.assert_called_once_with(
-            visibility=0,
+            visibility="private",
             is_direct=True,
             invite=[user_id],
             preset="trusted_private_chat"

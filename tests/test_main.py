@@ -61,9 +61,6 @@ def mock_config():
         'DISCOURSE_CATEGORY_ID': None,
         'DISCOURSE_INTRO_TAG': None,
         'DISCOURSE_ACTIVE': False,
-        'WEBHOOK_URL': None,
-        'WEBHOOK_SECRET': None,
-        'WEBHOOK_ACTIVE': False,
         'DATABASE_URL': "sqlite:///test.db"
     }
     

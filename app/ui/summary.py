@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from app.auth.api import list_users_cached, list_events_cached
 from app.utils.config import Config
-from app.db.database import get_db
+from app.db.session import get_db
 from app.db.operations import User, AdminEvent
 from sqlalchemy.orm import Session
 import logging
@@ -85,7 +85,7 @@ def display_event_history(db: Session):
         return
     for event in events:
         st.write(
-            f"{event.timestamp}: [{event.event_type}] {event.username} - {event.description}"
+            f"{event.timestamp}: [{event.event_type}] {event.username} - {event.details}"
         )
 
 def main():

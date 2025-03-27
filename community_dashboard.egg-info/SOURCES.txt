@@ -5,6 +5,7 @@ app/__init__.py
 app/force_sync.py
 app/main.py
 app/messages.py
+app/streamlit_app.py
 app/auth/__init__.py
 app/auth/api.py
 app/auth/encryption.py
@@ -12,7 +13,9 @@ app/auth/session_init.py
 app/db/__init__.py
 app/db/database.py
 app/db/init_db.py
+app/db/models.py
 app/db/operations.py
+app/db/session.py
 app/pages/__init__.py
 app/pages/prompts_manager.py
 app/pages/settings.py
@@ -50,5 +53,6 @@ tests/test_init_db.py
 tests/test_input_format.py
 tests/test_main.py
 tests/test_matrix.py
+tests/test_matrix_actions.py
 tests/test_summary.py
 tests/test_transformations.py

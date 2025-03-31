@@ -32,3 +32,10 @@ app/db/postgres/
 app/db/postgres_data/
 app/db/postgres_data/*
 data/matrix_rooms.json
+test_env/bin/*
+test_env/lib/*
+test_env/lib64/*
+test_env/Scripts/*
+test_env/share/*
+test_env/include/*
+test_env/man/*

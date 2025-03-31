@@ -15,5 +15,6 @@ grep -v '^#' /app/.env | grep '=' | cut -d= -f1 | while read -r var; do
     fi
 done
 
-# Always use 8502 for the internal port
-exec streamlit run app/main.py --server.port=8502 --server.address=0.0.0.0 
+# Use PORT from environment variable or default to 8503
+PORT="${PORT:-8503}"
+exec streamlit run app/main.py --server.port=$PORT --server.address=0.0.0.0 

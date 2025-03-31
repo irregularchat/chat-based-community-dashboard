@@ -184,6 +184,15 @@ def init_db():
             logging.info("Creating database tables...")
             Base.metadata.create_all(bind=engine)
             logging.info("Database tables created successfully")
+        
+        # Run database migrations
+        try:
+            logging.info("Running database migrations...")
+            from app.db.migrations.add_signal_identity import migrate as add_signal_identity_migration
+            add_signal_identity_migration()
+            logging.info("Database migrations completed")
+        except Exception as e:
+            logging.error(f"Error running database migrations: {e}")
 
         # Create a database session
         db = SessionLocal()

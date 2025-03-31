@@ -877,3 +877,79 @@ def sync_admin_status(db: Session) -> bool:
         logging.error(f"Error syncing admin status: {e}")
         db.rollback()
         return False
+
+def update_signal_identity(db: Session, username: str, signal_identity: str) -> bool:
+    """
+    Update a user's Signal identity.
+    
+    Args:
+        db (Session): Database session
+        username (str): Username of the user to update
+        signal_identity (str): Signal name or phone number to associate with the user
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            logging.error(f"User {username} not found")
+            return False
+            
+        # Check if this is the first time setting signal_identity
+        is_new_association = user.signal_identity is None or user.signal_identity == ""
+        
+        # Update the signal identity
+        user.signal_identity = signal_identity
+        db.commit()
+        
+        # Log the update
+        create_admin_event(
+            db, 
+            "signal_identity_updated", 
+            username, 
+            f"Signal identity updated to: {signal_identity}"
+        )
+        
+        return True, is_new_association
+    except Exception as e:
+        logging.error(f"Error updating Signal identity for {username}: {e}")
+        db.rollback()
+        return False, False
+
+def get_signal_identity(db: Session, username: str) -> Optional[str]:
+    """
+    Get a user's Signal identity.
+    
+    Args:
+        db (Session): Database session
+        username (str): Username of the user
+        
+    Returns:
+        Optional[str]: The user's Signal identity if found, None otherwise
+    """
+    try:
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            return None
+        return user.signal_identity
+    except Exception as e:
+        logging.error(f"Error getting Signal identity for {username}: {e}")
+        return None
+
+def get_user_by_signal_identity(db: Session, signal_identity: str) -> Optional[User]:
+    """
+    Get a user by their Signal identity.
+    
+    Args:
+        db (Session): Database session
+        signal_identity (str): Signal identity to look up
+        
+    Returns:
+        Optional[User]: The user if found, None otherwise
+    """
+    try:
+        return db.query(User).filter(User.signal_identity == signal_identity).first()
+    except Exception as e:
+        logging.error(f"Error getting user by Signal identity {signal_identity}: {e}")
+        return None

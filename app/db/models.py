@@ -18,6 +18,7 @@ class User(Base):
     last_login = Column(DateTime)
     attributes = Column(JSON)
     authentik_id = Column(String)  # Link with Authentik user ID
+    signal_identity = Column(String)  # Store Signal name or phone number
 
     def __init__(self, **kwargs):
         if 'full_name' in kwargs:
@@ -40,6 +41,7 @@ class User(Base):
             'last_login': self.last_login.isoformat() if self.last_login else None,
             'attributes': self.attributes,
             'authentik_id': self.authentik_id,
+            'signal_identity': self.signal_identity,
         }
 
 class AdminEvent(Base):
@@ -88,4 +90,4 @@ class MatrixRoomMember(Base):
     )
 
     def __repr__(self):
-        return f"<MatrixRoomMember(room_id='{self.room_id}', user_id='{self.user_id}')>" 
+        return f"<MatrixRoomMember(room_id='{self.room_id}', user_id='{self.user_id}')>"

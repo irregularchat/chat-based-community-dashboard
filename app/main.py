@@ -16,6 +16,7 @@ from app.ui.help_resources import main as render_help_page
 from app.ui.prompts import main as render_prompts_page
 from app.ui.matrix import render_matrix_messaging_page
 from app.ui.admin import render_admin_dashboard
+from app.ui.signal_association import render_signal_association
 from app.utils.helpers import (
     create_unique_username,
     update_username,
@@ -75,6 +76,7 @@ async def render_sidebar():
             "Create Invite",
             "List & Manage Users",
             "Matrix Messages and Rooms",
+            "Signal Association",
             "Settings",
             "Prompts Manager",
             "Admin Dashboard"
@@ -111,6 +113,10 @@ async def render_main_content():
             # Protect with authentication
             if require_authentication(page):
                 await render_matrix_messaging_page()
+        elif page == "Signal Association":
+            # Protect with authentication
+            if require_authentication(page):
+                render_signal_association()
         elif page == "Settings":
             # Protect with authentication and admin check
             if require_authentication(page) and st.session_state.get('is_admin', False):

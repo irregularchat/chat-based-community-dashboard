@@ -109,12 +109,12 @@ async def render_create_user_form():
     db = next(get_db())
 
     # Update username based on first and last name before form
-    if st.session_state.get('first_name_input') and st.session_state.get('last_name_input'):
+    # IMPORTANT: Moved username generation to happen before the form widgets are created
+    if st.session_state.get('first_name_input') and st.session_state.get('last_name_input') and not st.session_state.get('username_input'):
         # Create a base username from first and last name
         base_username = f"{st.session_state['first_name_input'].lower()}{st.session_state['last_name_input'].lower()}"
         suggested_username = create_unique_username(db, base_username)
-        if not st.session_state.get('username_input'):
-            st.session_state['username_input'] = suggested_username
+        st.session_state['username_input'] = suggested_username
 
     # Create tabs for different input methods
     create_tabs = st.tabs(["Basic Info", "Advanced Options", "Bulk Import"])
@@ -298,15 +298,6 @@ async def render_create_user_form():
         if not st.session_state.get('username_input'):
             st.error("Username is required.")
             return
-        
-        # Update username one last time before submission
-        if st.session_state.get('first_name_input') and st.session_state.get('last_name_input'):
-            # Create a base username from first and last name
-            base_username = f"{st.session_state['first_name_input'].lower()}{st.session_state['last_name_input'].lower()}"
-            suggested_username = create_unique_username(db, base_username)
-            if not st.session_state.get('username_input'):
-                st.session_state['username_input'] = suggested_username
-                st.rerun()
         
         # Get admin status from checkbox
         is_admin = st.session_state.get('is_admin_checkbox', False)

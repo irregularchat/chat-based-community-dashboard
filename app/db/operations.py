@@ -608,3 +608,115 @@ def get_admin_events(db: Session, limit: int = None, offset: int = None) -> List
     except Exception as e:
         logging.error(f"Error getting admin events: {e}")
         return []
+
+def is_admin(db: Session, username: str) -> bool:
+    """
+    Check if a user is an admin.
+    
+    Args:
+        db (Session): Database session
+        username (str): Username to check
+        
+    Returns:
+        bool: True if the user is an admin, False otherwise
+    """
+    try:
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            return False
+        return user.is_admin
+    except Exception as e:
+        logging.error(f"Error checking admin status for {username}: {e}")
+        return False
+
+def update_admin_status(db: Session, username: str, is_admin: bool) -> bool:
+    """
+    Update a user's admin status.
+    
+    Args:
+        db (Session): Database session
+        username (str): Username to update
+        is_admin (bool): New admin status
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            return False
+            
+        user.is_admin = is_admin
+        db.commit()
+        
+        # Log the admin status change
+        event_type = "admin_granted" if is_admin else "admin_revoked"
+        create_admin_event(
+            db, 
+            event_type, 
+            username, 
+            f"Admin status {'granted to' if is_admin else 'revoked from'} {username}"
+        )
+        
+        return True
+    except Exception as e:
+        logging.error(f"Error updating admin status for {username}: {e}")
+        db.rollback()
+        return False
+
+def get_admin_users(db: Session) -> List[User]:
+    """
+    Get all admin users.
+    
+    Args:
+        db (Session): Database session
+        
+    Returns:
+        List[User]: List of admin users
+    """
+    try:
+        return db.query(User).filter(User.is_admin == True).all()
+    except Exception as e:
+        logging.error(f"Error getting admin users: {e}")
+        return []
+
+def sync_admin_status(db: Session) -> bool:
+    """
+    Sync admin status from configuration to database.
+    This ensures that users listed in ADMIN_USERNAMES are marked as admins in the database.
+    
+    Args:
+        db (Session): Database session
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        from app.utils.config import Config
+        
+        # Get all users from the database
+        users = db.query(User).all()
+        
+        # Update admin status based on configuration
+        for user in users:
+            should_be_admin = user.username in Config.ADMIN_USERNAMES
+            
+            # Only update if the status needs to change
+            if user.is_admin != should_be_admin:
+                user.is_admin = should_be_admin
+                
+                # Log the admin status change
+                event_type = "admin_granted" if should_be_admin else "admin_revoked"
+                create_admin_event(
+                    db, 
+                    event_type, 
+                    user.username, 
+                    f"Admin status {'granted to' if should_be_admin else 'revoked from'} {user.username} during sync"
+                )
+        
+        db.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Error syncing admin status: {e}")
+        db.rollback()
+        return False

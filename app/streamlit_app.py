@@ -33,6 +33,19 @@ def setup_logging():
     
     logging.info("Logging configured")
 
+def load_custom_css():
+    """Load custom CSS styles."""
+    css_path = os.path.join(os.path.dirname(__file__), 'static/custom.css')
+    
+    if os.path.exists(css_path):
+        with open(css_path, 'r') as f:
+            css = f.read()
+            
+        import streamlit as st
+        st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
+    else:
+        logging.warning(f"Custom CSS file not found at {css_path}")
+
 if __name__ == "__main__":
     # Configure logging before the app starts
     setup_logging()
@@ -56,6 +69,9 @@ if __name__ == "__main__":
             layout="wide",
             initial_sidebar_state="expanded",
         )
+        
+        # Load custom CSS
+        load_custom_css()
         
         # Run the application
         main()

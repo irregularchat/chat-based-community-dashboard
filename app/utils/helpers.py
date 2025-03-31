@@ -128,7 +128,7 @@ def get_eastern_time(expires_date, expires_time):
     
     return eastern_time
 
-def handle_form_submission(action, username, email=None, invited_by=None, intro=None, verification_context=None):
+def handle_form_submission(action, username, email=None, invited_by=None, intro=None, verification_context=None, is_admin=False):
     """
     Handle form submissions for user management actions.
     
@@ -139,6 +139,7 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
         invited_by (str, optional): Who invited the user
         intro (str, optional): User's introduction/organization
         verification_context (str, optional): Context for safety number verification
+        is_admin (bool, optional): Whether the user should be an admin
     """
     try:
         db = next(get_db())
@@ -175,7 +176,8 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
                         full_name=full_name,
                         email=email,
                         invited_by=invited_by,
-                        intro=intro
+                        intro=intro,
+                        is_admin=is_admin
                     )
                 )
                 
@@ -606,4 +608,3 @@ def test_email_connection():
     except Exception as e:
         logging.error(f"SMTP connection test failed: {e}")
         return False
-

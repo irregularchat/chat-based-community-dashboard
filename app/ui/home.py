@@ -19,8 +19,7 @@ from app.auth.api import (
     update_user_invited_by,
     create_invite,
     shorten_url,
-    list_users,
-    webhook_notification
+    list_users
 )
 from app.ui.forms import render_create_user_form, render_invite_form, display_user_list
 from app.utils.helpers import (

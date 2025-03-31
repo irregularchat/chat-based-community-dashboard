@@ -187,7 +187,7 @@ def reset_user_password(auth_api_url, headers, user_id, new_password):
         logging.error(f"Error resetting password for user {user_id}: {e}")
         return False
 
-async def create_user(username, full_name, email, invited_by=None, intro=None):
+async def create_user(username, full_name, email, invited_by=None, intro=None, is_admin=False):
     """
     Create a new user in Authentik.
     
@@ -197,6 +197,7 @@ async def create_user(username, full_name, email, invited_by=None, intro=None):
         email (str, optional): Email address
         invited_by (str, optional): Who invited this user
         intro (str, optional): Introduction information
+        is_admin (bool, optional): Whether the user should be an admin
         
     Returns:
         tuple: (success, username, password/error_message, optional_discourse_url)
@@ -248,6 +249,43 @@ async def create_user(username, full_name, email, invited_by=None, intro=None):
             
             if not result:
                 logging.warning(f"Failed to reset password for user {username}")
+            
+            # Set admin status in local database
+            try:
+                with SessionLocal() as db:
+                    # Check if user exists in local database
+                    db_user = db.query(User).filter(User.username == username).first()
+                    
+                    if db_user:
+                        # Update existing user
+                        db_user.is_admin = is_admin
+                    else:
+                        # Create new user in local database
+                        db_user = User(
+                            username=username,
+                            email=email,
+                            first_name=full_name.split(' ')[0] if full_name else '',
+                            last_name=' '.join(full_name.split(' ')[1:]) if full_name and ' ' in full_name else '',
+                            is_active=True,
+                            is_admin=is_admin,
+                            authentik_id=user_id,
+                            attributes=custom_attributes
+                        )
+                        db.add(db_user)
+                    
+                    db.commit()
+                    
+                    # Log admin status if applicable
+                    if is_admin:
+                        from app.db.operations import create_admin_event
+                        create_admin_event(
+                            db, 
+                            "admin_granted", 
+                            username, 
+                            f"Admin status granted to {username} during creation"
+                        )
+            except Exception as e:
+                logging.error(f"Error setting admin status for {username}: {e}")
             
             # Send welcome email
             try:
@@ -1322,3 +1360,94 @@ async def handle_registration(user_data: dict, db: Session) -> dict:
             "success": False,
             "error": str(e)
         }
+
+async def grant_admin_privileges(username: str) -> bool:
+    """
+    Grant admin privileges to a user.
+    
+    Args:
+        username (str): Username to grant admin privileges to
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        with SessionLocal() as db:
+            from app.db.operations import update_admin_status
+            return update_admin_status(db, username, True)
+    except Exception as e:
+        logging.error(f"Error granting admin privileges to {username}: {e}")
+        return False
+
+async def revoke_admin_privileges(username: str) -> bool:
+    """
+    Revoke admin privileges from a user.
+    
+    Args:
+        username (str): Username to revoke admin privileges from
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        with SessionLocal() as db:
+            from app.db.operations import update_admin_status
+            return update_admin_status(db, username, False)
+    except Exception as e:
+        logging.error(f"Error revoking admin privileges from {username}: {e}")
+        return False
+
+async def is_admin(username: str) -> bool:
+    """
+    Check if a user is an admin.
+    
+    Args:
+        username (str): Username to check
+        
+    Returns:
+        bool: True if the user is an admin, False otherwise
+    """
+    try:
+        # First check if the user is in the admin list in the configuration
+        from app.utils.config import Config
+        if Config.is_admin(username):
+            return True
+            
+        # Then check the database
+        with SessionLocal() as db:
+            from app.db.operations import is_admin as db_is_admin
+            return db_is_admin(db, username)
+    except Exception as e:
+        logging.error(f"Error checking admin status for {username}: {e}")
+        return False
+
+async def get_admin_users() -> List[Dict[str, Any]]:
+    """
+    Get all admin users.
+    
+    Returns:
+        List[Dict[str, Any]]: List of admin users
+    """
+    try:
+        with SessionLocal() as db:
+            from app.db.operations import get_admin_users as db_get_admin_users
+            admin_users = db_get_admin_users(db)
+            return [user.to_dict() for user in admin_users]
+    except Exception as e:
+        logging.error(f"Error getting admin users: {e}")
+        return []
+
+async def sync_admin_status() -> bool:
+    """
+    Sync admin status from configuration to database.
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        with SessionLocal() as db:
+            from app.db.operations import sync_admin_status as db_sync_admin_status
+            return db_sync_admin_status(db)
+    except Exception as e:
+        logging.error(f"Error syncing admin status: {e}")
+        return False

@@ -66,6 +66,23 @@ class Config:
     MATRIX_WELCOME_ROOM_ID = os.getenv("MATRIX_WELCOME_ROOM_ID")
     MATRIX_ROOM_IDS_NAME_CATEGORY = os.getenv("MATRIX_ROOM_IDS_NAME_CATEGORY")
     
+    # Authentik OIDC configuration
+    OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID")
+    OIDC_CLIENT_SECRET = os.getenv("OIDC_CLIENT_SECRET")
+    OIDC_AUTHORIZATION_ENDPOINT = os.getenv("OIDC_AUTHORIZATION_ENDPOINT")
+    OIDC_TOKEN_ENDPOINT = os.getenv("OIDC_TOKEN_ENDPOINT")
+    OIDC_USERINFO_ENDPOINT = os.getenv("OIDC_USERINFO_ENDPOINT")
+    OIDC_END_SESSION_ENDPOINT = os.getenv("OIDC_END_SESSION_ENDPOINT")
+    OIDC_SCOPES = os.getenv("OIDC_SCOPES", "openid,profile,email").split(",")
+    OIDC_REDIRECT_URI = os.getenv("OIDC_REDIRECT_URI")
+    
+    # Admin configuration
+    ADMIN_USERNAMES = [username.strip() for username in os.getenv("ADMIN_USERNAMES", "").split(",") if username.strip()]
+    
+    # Default admin user credentials
+    DEFAULT_ADMIN_USERNAME = os.getenv("DEFAULT_ADMIN_USERNAME", "adminuser")
+    DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "Admin_Password123!")
+    
     # Application configuration
     DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
     SECRET_KEY = os.getenv('SECRET_KEY', 'your-secret-key-here')
@@ -162,6 +179,21 @@ class Config:
         return merge_room_data()
     
     @classmethod
+    def is_admin(cls, username: str) -> bool:
+        """
+        Check if a username is in the admin list.
+        
+        Args:
+            username (str): The username to check
+            
+        Returns:
+            bool: True if the user is an admin, False otherwise
+        """
+        if not username:
+            return False
+        return username in cls.ADMIN_USERNAMES
+    
+    @classmethod
     def get_required_vars(cls) -> List[str]:
         """Get a list of required environment variables."""
         required_vars = []
@@ -221,6 +253,12 @@ class Config:
           "MATRIX_DEFAULT_ROOM_ID": cls.MATRIX_DEFAULT_ROOM_ID,
           "MATRIX_WELCOME_ROOM_ID": cls.MATRIX_WELCOME_ROOM_ID,
           "WEBHOOK_ACTIVE": cls.WEBHOOK_ACTIVE,
+          "OIDC_CLIENT_ID": cls.OIDC_CLIENT_ID,
+          "OIDC_AUTHORIZATION_ENDPOINT": cls.OIDC_AUTHORIZATION_ENDPOINT,
+          "OIDC_TOKEN_ENDPOINT": cls.OIDC_TOKEN_ENDPOINT,
+          "OIDC_USERINFO_ENDPOINT": cls.OIDC_USERINFO_ENDPOINT,
+          "OIDC_END_SESSION_ENDPOINT": cls.OIDC_END_SESSION_ENDPOINT,
+          "OIDC_REDIRECT_URI": cls.OIDC_REDIRECT_URI,
           "DEBUG": cls.DEBUG,
           "SECRET_KEY": cls.SECRET_KEY,
           "LOG_LEVEL": cls.LOG_LEVEL,

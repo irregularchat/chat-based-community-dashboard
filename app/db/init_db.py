@@ -7,6 +7,7 @@ from app.utils.config import Config
 from app.auth.api import list_users, session, get_last_modified_timestamp, get_users_modified_since
 from datetime import datetime, timedelta
 import streamlit as st
+from app.auth.admin import init_admin_users
 
 def should_sync_users(db: SessionLocal) -> bool:
     """
@@ -57,6 +58,117 @@ def should_sync_users(db: SessionLocal) -> bool:
         logging.error(f"Error checking sync status: {e}")
         return False
 
+def create_admin_event(db, event_type, username, details):
+    """Helper function to create admin events"""
+    event = AdminEvent(
+        timestamp=datetime.now(),
+        event_type=event_type,
+        username=username,
+        details=details
+    )
+    db.add(event)
+    db.commit()
+    return event
+
+def create_default_admin_user(db):
+    """
+    Create the default admin user if it doesn't exist.
+    This ensures there's always at least one admin account for first-time setup.
+    
+    Args:
+        db: Database session
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Check if default admin user exists
+        default_username = Config.DEFAULT_ADMIN_USERNAME
+        default_password = Config.DEFAULT_ADMIN_PASSWORD
+        
+        if not default_username or not default_password:
+            logging.warning("Default admin credentials not configured, skipping default admin creation")
+            return False
+            
+        # Check if user already exists in database
+        existing_user = db.query(User).filter(User.username == default_username).first()
+        if existing_user:
+            logging.info(f"Default admin user '{default_username}' already exists")
+            
+            # Ensure the user has admin privileges
+            if not existing_user.is_admin:
+                existing_user.is_admin = True
+                db.commit()
+                logging.info(f"Updated '{default_username}' to have admin privileges")
+                
+            return True
+            
+        # User doesn't exist, check if we can create it in Authentik
+        if not Config.AUTHENTIK_API_TOKEN or not Config.AUTHENTIK_API_URL:
+            logging.warning("Authentik API not configured, cannot create default admin user")
+            return False
+            
+        # Create the user in Authentik
+        headers = {
+            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+            'Content-Type': 'application/json'
+        }
+        
+        user_data = {
+            'username': default_username,
+            'name': 'Default Admin',
+            'password': default_password,
+            'path': 0,  # Standard users group
+            'groups': [Config.MAIN_GROUP_ID] if Config.MAIN_GROUP_ID else []
+        }
+        
+        logging.info(f"Creating default admin user: {default_username}")
+        
+        user_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
+        response = requests.post(user_url, json=user_data, headers=headers)
+        
+        if response.status_code == 201:
+            user_id = response.json().get('pk')
+            
+            # Create user in local database
+            db_user = User(
+                username=default_username,
+                email=f"{default_username}@{Config.BASE_DOMAIN}" if Config.BASE_DOMAIN else None,
+                first_name='Default',
+                last_name='Admin',
+                is_active=True,
+                is_admin=True,
+                authentik_id=user_id
+            )
+            db.add(db_user)
+            db.commit()
+            
+            logging.info(f"Default admin user '{default_username}' created successfully")
+            
+            # Log the admin creation
+            create_admin_event(
+                db, 
+                "admin_created", 
+                "system", 
+                f"Default admin user '{default_username}' created during initialization"
+            )
+            
+            return True
+        else:
+            error_message = f"Error: {response.status_code}"
+            try:
+                error_data = response.json()
+                error_message = "\n".join([f"{k}: {', '.join(v)}" for k, v in error_data.items() if isinstance(v, list)])
+            except:
+                pass
+            
+            logging.error(f"Failed to create default admin user: {error_message}")
+            return False
+            
+    except Exception as e:
+        logging.error(f"Error creating default admin user: {e}")
+        return False
+
 def init_db():
     """Initialize the database by creating all tables"""
     try:
@@ -76,6 +188,21 @@ def init_db():
         # Create a database session
         db = SessionLocal()
         try:
+            # Create default admin user if needed
+            try:
+                logging.info("Checking for default admin user...")
+                create_default_admin_user(db)
+            except Exception as e:
+                logging.error(f"Error checking/creating default admin user: {e}")
+            
+            # Initialize admin users from configuration
+            try:
+                logging.info("Initializing admin users from configuration...")
+                init_admin_users()
+                logging.info("Admin users initialized successfully")
+            except Exception as e:
+                logging.error(f"Error initializing admin users: {e}")
+
             # Check if we need to sync
             if should_sync_users(db):
                 # Set sync in progress flag
@@ -194,4 +321,4 @@ def init_db():
         logging.error(f"Error initializing database: {e}")
         # Clear sync in progress flag in case of error
         if 'sync_in_progress' in st.session_state:
-            st.session_state['sync_in_progress'] = False 
+            st.session_state['sync_in_progress'] = False

@@ -42,7 +42,8 @@ def reset_create_user_form_fields():
         "email_input",
         "invited_by_input",
         "data_to_parse_input",
-        "intro_input"
+        "intro_input",
+        "is_admin_checkbox"
     ]
     
     # Set a flag in session state to indicate we should clear fields
@@ -139,6 +140,15 @@ async def render_create_user_form():
             placeholder="e.g., Software Engineer at TechCorp"
         )
         
+        # Add admin checkbox (only visible to admins)
+        is_admin = False
+        # Check if current user is an admin
+        from app.auth.admin import check_admin_permission
+        current_username = st.session_state.get("username", "")
+        if current_username and check_admin_permission(current_username):
+            is_admin = st.checkbox("Grant Admin Privileges", key="is_admin_checkbox", 
+                                  help="Make this user an administrator with full access to all features")
+        
         # Text area for data parsing
         st.markdown("""
             <style>
@@ -184,6 +194,44 @@ async def render_create_user_form():
             if not st.session_state.get('username_input'):
                 st.session_state['username_input'] = suggested_username
                 st.rerun()
+        
+        # Get admin status from checkbox
+        is_admin = st.session_state.get('is_admin_checkbox', False)
+        
+        # Handle the form submission with admin status
+        from app.auth.api import create_user
+        import asyncio
+        
+        # Get form values
+        username = st.session_state.get('username_input', '')
+        full_name = f"{st.session_state.get('first_name_input', '')} {st.session_state.get('last_name_input', '')}".strip()
+        email = st.session_state.get('email_input', '')
+        invited_by = st.session_state.get('invited_by_input', '')
+        intro = st.session_state.get('intro_input', '')
+        
+        if username and full_name:
+            with st.spinner("Creating user..."):
+                # Call create_user with admin status
+                success, username, password, discourse_url = asyncio.run(
+                    create_user(
+                        username=username,
+                        full_name=full_name,
+                        email=email,
+                        invited_by=invited_by,
+                        intro=intro,
+                        is_admin=is_admin
+                    )
+                )
+                
+                if success:
+                    from app.messages import create_user_message
+                    create_user_message(username, password, discourse_url)
+                    # Reset form fields after successful submission
+                    reset_create_user_form_fields()
+                else:
+                    st.error(f"Failed to create user: {password}")  # password contains error message on failure
+        else:
+            st.error("Username and full name are required.")
 
     # Reset fields on Clear
     if clear_button:
@@ -198,6 +246,7 @@ async def render_create_user_form():
         st.session_state["email_input"],
         st.session_state["invited_by_input"],
         st.session_state["intro_input"],
+        st.session_state.get("is_admin_checkbox", False),
         submit_button
     )
 
@@ -758,4 +807,3 @@ def format_date(date_str):
     except Exception as e:
         logging.error(f"Error formatting date {date_str}: {e}")
         return ""  # Return empty string instead of the error-causing value
-

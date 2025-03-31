@@ -15,6 +15,7 @@ from app.ui.summary import main as render_summary_page
 from app.ui.help_resources import main as render_help_page
 from app.ui.prompts import main as render_prompts_page
 from app.ui.matrix import render_matrix_messaging_page
+from app.ui.admin import render_admin_dashboard
 from app.utils.helpers import (
     create_unique_username,
     update_username,
@@ -25,6 +26,9 @@ from app.utils.helpers import (
 from app.db.init_db import init_db
 from app.utils.helpers import setup_logging
 from app.db.models import *  # Import models to ensure tables are created
+from app.auth.callback import auth_callback
+from app.auth.auth_middleware import auth_middleware, admin_middleware
+from app.auth.authentication import is_authenticated, require_authentication
 
 # Initialize logging first
 setup_logging()
@@ -41,6 +45,10 @@ def initialize_session_state():
         st.session_state['user_count'] = 0
     if 'active_users' not in st.session_state:
         st.session_state['active_users'] = 0
+    if 'is_authenticated' not in st.session_state:
+        st.session_state['is_authenticated'] = False
+    if 'is_admin' not in st.session_state:
+        st.session_state['is_admin'] = False
 
 def setup_page_config():
     """Set up the Streamlit page configuration"""
@@ -68,7 +76,8 @@ async def render_sidebar():
             "List & Manage Users",
             "Matrix Messages and Rooms",
             "Settings",
-            "Prompts Manager"
+            "Prompts Manager",
+            "Admin Dashboard"
         ],
         index=0 if current_page not in st.session_state else None,
         key='current_page'
@@ -80,6 +89,9 @@ async def render_main_content():
     """Render the main content area"""
     st.title("Community Dashboard")
     
+    # Process authentication callback if present
+    auth_callback()
+    
     # Get the current page from session state
     page = st.session_state.get('current_page', 'Create User')
     
@@ -88,17 +100,35 @@ async def render_main_content():
         if page == "Create User":
             await render_create_user_form()
         elif page == "Create Invite":
-            await render_invite_form()
+            # Protect with authentication
+            if require_authentication(page):
+                await render_invite_form()
         elif page == "List & Manage Users":
-            await display_user_list()
+            # Protect with authentication
+            if require_authentication(page):
+                await display_user_list()
         elif page == "Matrix Messages and Rooms":
-            await render_matrix_messaging_page()
+            # Protect with authentication
+            if require_authentication(page):
+                await render_matrix_messaging_page()
         elif page == "Settings":
-            from app.pages.settings import render_settings_page
-            render_settings_page()
+            # Protect with authentication and admin check
+            if require_authentication(page) and st.session_state.get('is_admin', False):
+                from app.pages.settings import render_settings_page
+                render_settings_page()
+            elif is_authenticated() and not st.session_state.get('is_admin', False):
+                st.error("You need administrator privileges to access this page.")
         elif page == "Prompts Manager":
-            from app.pages.prompts_manager import render_prompts_manager
-            render_prompts_manager()
+            # Protect with authentication
+            if require_authentication(page):
+                from app.pages.prompts_manager import render_prompts_manager
+                render_prompts_manager()
+        elif page == "Admin Dashboard":
+            # Protect with authentication and admin check
+            if require_authentication(page) and st.session_state.get('is_admin', False):
+                render_admin_dashboard()
+            elif is_authenticated() and not st.session_state.get('is_admin', False):
+                st.error("You need administrator privileges to access this page.")
     except Exception as e:
         st.error(f"Error rendering content: {str(e)}")
         logging.error(f"Error in render_main_content: {str(e)}", exc_info=True)

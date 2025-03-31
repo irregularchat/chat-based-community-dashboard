@@ -187,7 +187,7 @@ def reset_user_password(auth_api_url, headers, user_id, new_password):
         logging.error(f"Error resetting password for user {user_id}: {e}")
         return False
 
-async def create_user(username, full_name, email, invited_by=None, intro=None, is_admin=False):
+async def create_user(username, full_name, email, invited_by=None, intro=None, is_admin=False, groups=None):
     """
     Create a new user in Authentik.
     
@@ -198,6 +198,7 @@ async def create_user(username, full_name, email, invited_by=None, intro=None, i
         invited_by (str, optional): Who invited this user
         intro (str, optional): Introduction information
         is_admin (bool, optional): Whether the user should be an admin
+        groups (list, optional): List of group IDs to assign the user to
         
     Returns:
         tuple: (success, username, password/error_message, optional_discourse_url)
@@ -218,8 +219,13 @@ async def create_user(username, full_name, email, invited_by=None, intro=None, i
             'name': full_name,
             'password': password,
             'path': 0,  # Standard users group
-            'groups': [Config.MAIN_GROUP_ID] if Config.MAIN_GROUP_ID else []
         }
+        
+        # Add groups if provided, otherwise use the main group if configured
+        if groups:
+            user_data['groups'] = groups
+        elif Config.MAIN_GROUP_ID:
+            user_data['groups'] = [Config.MAIN_GROUP_ID]
         
         # Add email if provided
         if email:
@@ -237,6 +243,7 @@ async def create_user(username, full_name, email, invited_by=None, intro=None, i
         
         # Create the user
         logging.info(f"Creating user: {username}")
+        logging.info(f"User data: {user_data}")
         
         user_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
         response = requests.post(user_url, json=user_data, headers=headers)
@@ -283,6 +290,29 @@ async def create_user(username, full_name, email, invited_by=None, intro=None, i
                             "admin_granted", 
                             username, 
                             f"Admin status granted to {username} during creation"
+                        )
+                    
+                    # Log group assignments if applicable
+                    if groups:
+                        from app.db.operations import create_admin_event
+                        group_names = []
+                        for group_id in groups:
+                            # Get group name
+                            group_url = f"{Config.AUTHENTIK_API_URL}/core/groups/{group_id}/"
+                            try:
+                                group_response = requests.get(group_url, headers=headers)
+                                if group_response.status_code == 200:
+                                    group_name = group_response.json().get('name', f"Group {group_id}")
+                                    group_names.append(group_name)
+                            except Exception as e:
+                                logging.error(f"Error getting group name for {group_id}: {e}")
+                                group_names.append(f"Group {group_id}")
+                        
+                        create_admin_event(
+                            db, 
+                            "user_added_to_groups", 
+                            username, 
+                            f"User {username} assigned to groups: {', '.join(group_names)} during creation"
                         )
             except Exception as e:
                 logging.error(f"Error setting admin status for {username}: {e}")

@@ -70,53 +70,106 @@ def sync_user_data(db: Session, authentik_users: List[Dict[str, Any]]):
             db.rollback()
         return False
 
-def search_users(db: Session, search_term: str) -> List[User]:
-    """Search users in the database"""
-    if not search_term:
-        return db.query(User).all()
+def search_users(db: Session, search_term: str, filters: Dict[str, Any] = None) -> List[User]:
+    """
+    Search users in the database with enhanced filtering options.
     
-    # Parse search terms
-    search_filters = {}
-    terms = search_term.split()
-    general_terms = []
+    Args:
+        db (Session): Database session
+        search_term (str): Text to search for in user fields
+        filters (Dict[str, Any], optional): Additional filters to apply
+            - status: 'active', 'inactive', or None for all
+            - group_id: Filter by group membership
+            - admin_only: True to only return admin users
+            - sort_by: Field to sort by
+            - sort_order: 'asc' or 'desc'
     
-    for term in terms:
-        if ':' in term:
-            column, value = term.split(':', 1)
-            search_filters[column.lower()] = value.lower()
-        else:
-            general_terms.append(term.lower())
-
+    Returns:
+        List[User]: List of matching users
+    """
+    # Initialize filters if not provided
+    if filters is None:
+        filters = {}
+    
     # Build the query
     query = db.query(User)
     
-    # Apply column-specific filters
-    for column, value in search_filters.items():
-        if column == 'username':
-            query = query.filter(User.username.ilike(f'%{value}%'))
-        elif column == 'name':
-            query = query.filter(User.first_name.ilike(f'%{value}%') | User.last_name.ilike(f'%{value}%'))
-        elif column == 'email':
-            query = query.filter(User.email.ilike(f'%{value}%'))
-        elif column in ['intro', 'invited_by']:
-            # Cast JSON to string before searching
+    # Apply search term if provided
+    if search_term:
+        # Parse search terms
+        search_filters = {}
+        terms = search_term.split()
+        general_terms = []
+        
+        for term in terms:
+            if ':' in term:
+                column, value = term.split(':', 1)
+                search_filters[column.lower()] = value.lower()
+            else:
+                general_terms.append(term.lower())
+
+        # Apply column-specific filters
+        for column, value in search_filters.items():
+            if column == 'username':
+                query = query.filter(User.username.ilike(f'%{value}%'))
+            elif column == 'name':
+                query = query.filter(User.first_name.ilike(f'%{value}%') | User.last_name.ilike(f'%{value}%'))
+            elif column == 'email':
+                query = query.filter(User.email.ilike(f'%{value}%'))
+            elif column in ['intro', 'invited_by']:
+                # Cast JSON to string before searching
+                query = query.filter(
+                    cast(User.attributes[column], String).ilike(f'%{value}%')
+                )
+
+        # Apply general search terms across all fields
+        for term in general_terms:
             query = query.filter(
-                cast(User.attributes[column], String).ilike(f'%{value}%')
+                (User.username.ilike(f'%{term}%')) |
+                (User.first_name.ilike(f'%{term}%')) |
+                (User.last_name.ilike(f'%{term}%')) |
+                (User.email.ilike(f'%{term}%')) |
+                # Cast JSON to string before searching
+                (cast(User.attributes['intro'], String).ilike(f'%{term}%')) |
+                (cast(User.attributes['invited_by'], String).ilike(f'%{term}%'))
             )
-
-    # Apply general search terms across all fields
-    for term in general_terms:
-        query = query.filter(
-            (User.username.ilike(f'%{term}%')) |
-            (User.first_name.ilike(f'%{term}%')) |
-            (User.last_name.ilike(f'%{term}%')) |
-            (User.email.ilike(f'%{term}%')) |
-            # Cast JSON to string before searching
-            (cast(User.attributes['intro'], String).ilike(f'%{term}%')) |
-            (cast(User.attributes['invited_by'], String).ilike(f'%{term}%'))
-        )
-
-    return query.all()
+    
+    # Apply status filter
+    if 'status' in filters:
+        if filters['status'] == 'active':
+            query = query.filter(User.is_active == True)
+        elif filters['status'] == 'inactive':
+            query = query.filter(User.is_active == False)
+    
+    # Apply admin filter
+    if filters.get('admin_only'):
+        query = query.filter(User.is_admin == True)
+    
+    # Apply sorting
+    sort_by = filters.get('sort_by', 'username')
+    sort_order = filters.get('sort_order', 'asc')
+    
+    if sort_by == 'username':
+        query = query.order_by(User.username.asc() if sort_order == 'asc' else User.username.desc())
+    elif sort_by == 'name':
+        query = query.order_by(User.first_name.asc() if sort_order == 'asc' else User.first_name.desc())
+    elif sort_by == 'email':
+        query = query.order_by(User.email.asc() if sort_order == 'asc' else User.email.desc())
+    elif sort_by == 'date_joined':
+        query = query.order_by(User.date_joined.asc() if sort_order == 'asc' else User.date_joined.desc())
+    elif sort_by == 'last_login':
+        query = query.order_by(User.last_login.asc() if sort_order == 'asc' else User.last_login.desc())
+    
+    # Execute the query
+    users = query.all()
+    
+    # Apply group filter if provided (this can't be done directly in the query)
+    if 'group_id' in filters and filters['group_id']:
+        # This would require integration with Authentik API to check group membership
+        # For now, we'll return all users and let the caller filter by group
+        pass
+    
+    return users
 
 def add_admin_event(db: Session, event_type: str, username: str, details: str, timestamp: datetime) -> AdminEvent:
     """Add a new admin event to the database"""
@@ -428,6 +481,57 @@ def get_user(db: Session, user_id: int = None, username: str = None) -> Optional
         logging.error(f"Error getting user: {e}")
         return None 
 
+def get_user_by_criteria(db: Session, **criteria) -> Optional[User]:
+    """
+    Get a user by various criteria.
+    
+    Args:
+        db (Session): Database session
+        **criteria: Criteria to filter by (e.g., username, email, authentik_id)
+        
+    Returns:
+        Optional[User]: User object if found, None otherwise
+    """
+    try:
+        query = db.query(User)
+        
+        for key, value in criteria.items():
+            if hasattr(User, key):
+                query = query.filter(getattr(User, key) == value)
+        
+        return query.first()
+    except Exception as e:
+        logging.error(f"Error getting user by criteria {criteria}: {e}")
+        return None
+
+def update_user(db: Session, user_id: int, **updates) -> bool:
+    """
+    Update a user's details in the database.
+    
+    Args:
+        db (Session): Database session
+        user_id (int): User ID
+        **updates: Fields to update
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return False
+        
+        for key, value in updates.items():
+            if hasattr(user, key):
+                setattr(user, key, value)
+        
+        db.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Error updating user {user_id}: {e}")
+        db.rollback()
+        return False
+
 def update_matrix_room_members(db: Session, room_id: str, members: List[Dict[str, Any]]):
     """
     Update the cached members for a Matrix room.
@@ -609,6 +713,40 @@ def get_admin_events(db: Session, limit: int = None, offset: int = None) -> List
         logging.error(f"Error getting admin events: {e}")
         return []
 
+def get_admin_events_filtered(db: Session, event_type: str = None, username: str = None, limit: int = None, offset: int = None) -> List[AdminEvent]:
+    """
+    Get admin events from the database with filtering options.
+    
+    Args:
+        db (Session): Database session
+        event_type (str, optional): Filter by event type
+        username (str, optional): Filter by username
+        limit (int, optional): Maximum number of events to return
+        offset (int, optional): Number of events to skip
+        
+    Returns:
+        List[AdminEvent]: List of admin events
+    """
+    try:
+        query = db.query(AdminEvent).order_by(AdminEvent.timestamp.desc())
+        
+        if event_type:
+            query = query.filter(AdminEvent.event_type == event_type)
+        
+        if username:
+            query = query.filter(AdminEvent.username.ilike(f'%{username}%'))
+        
+        if limit is not None:
+            query = query.limit(limit)
+        
+        if offset is not None:
+            query = query.offset(offset)
+        
+        return query.all()
+    except Exception as e:
+        logging.error(f"Error getting filtered admin events: {e}")
+        return []
+
 def is_admin(db: Session, username: str) -> bool:
     """
     Check if a user is an admin.
@@ -678,6 +816,25 @@ def get_admin_users(db: Session) -> List[User]:
         return db.query(User).filter(User.is_admin == True).all()
     except Exception as e:
         logging.error(f"Error getting admin users: {e}")
+        return []
+
+def get_users_by_group(db: Session, group_id: str) -> List[User]:
+    """
+    Get all users in a specific group.
+    
+    Args:
+        db (Session): Database session
+        group_id (str): Authentik group ID
+        
+    Returns:
+        List[User]: List of users in the group
+    """
+    try:
+        # This requires integration with Authentik API to get group members
+        # For now, we'll return an empty list
+        return []
+    except Exception as e:
+        logging.error(f"Error getting users by group {group_id}: {e}")
         return []
 
 def sync_admin_status(db: Session) -> bool:

@@ -1,6 +1,6 @@
 import streamlit as st
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from app.auth.admin import (
     check_admin_permission,
     get_authentik_groups,
@@ -11,11 +11,13 @@ from app.auth.admin import (
     grant_admin_privileges,
     revoke_admin_privileges
 )
-from app.auth.api import list_users
+from app.auth.api import list_users, update_user_status, update_user_email
 from app.utils.config import Config
 from app.db.database import SessionLocal
-from app.db.operations import get_admin_users, create_admin_event
+from app.db.operations import get_admin_users, create_admin_event, search_users
 import pandas as pd
+from datetime import datetime
+import time
 
 def render_admin_dashboard():
     """
@@ -57,57 +59,359 @@ def render_user_management():
     """Render the user management section of the admin dashboard."""
     st.header("User Management")
     
-    # Get all users
+    # Initialize session state for filters if not exists
+    if 'user_filters' not in st.session_state:
+        st.session_state['user_filters'] = {
+            'search_term': '',
+            'status_filter': 'All',
+            'group_filter': 'All',
+            'sort_by': 'Username',
+            'sort_order': 'Ascending'
+        }
+    
+    # Create filter section with columns for better layout
+    st.subheader("Filter Users")
+    filter_col1, filter_col2 = st.columns(2)
+    
+    with filter_col1:
+        # Search by name, username, or email
+        search_term = st.text_input(
+            "Search by name, username, or email", 
+            value=st.session_state['user_filters']['search_term'],
+            key="user_search"
+        )
+        st.session_state['user_filters']['search_term'] = search_term
+        
+        # Filter by status
+        status_options = ['All', 'Active', 'Inactive']
+        status_filter = st.selectbox(
+            "Filter by status",
+            options=status_options,
+            index=status_options.index(st.session_state['user_filters']['status_filter']),
+            key="status_filter"
+        )
+        st.session_state['user_filters']['status_filter'] = status_filter
+    
+    with filter_col2:
+        # Get all groups for filtering
+        all_groups = get_authentik_groups()
+        group_options = ['All'] + [g.get('name') for g in all_groups]
+        
+        # Filter by group membership
+        group_filter = st.selectbox(
+            "Filter by group membership",
+            options=group_options,
+            index=group_options.index(st.session_state['user_filters']['group_filter']) 
+                if st.session_state['user_filters']['group_filter'] in group_options else 0,
+            key="group_filter"
+        )
+        st.session_state['user_filters']['group_filter'] = group_filter
+        
+        # Sorting options
+        sort_options = ['Username', 'Name', 'Email', 'Last Login', 'Status']
+        sort_by = st.selectbox(
+            "Sort by",
+            options=sort_options,
+            index=sort_options.index(st.session_state['user_filters']['sort_by']),
+            key="sort_by"
+        )
+        st.session_state['user_filters']['sort_by'] = sort_by
+        
+        # Sort order
+        order_options = ['Ascending', 'Descending']
+        sort_order = st.selectbox(
+            "Sort order",
+            options=order_options,
+            index=order_options.index(st.session_state['user_filters']['sort_order']),
+            key="sort_order"
+        )
+        st.session_state['user_filters']['sort_order'] = sort_order
+    
+    # Get headers for API requests
     headers = {
         'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
         'Content-Type': 'application/json'
     }
     
-    # Add search functionality
-    search_term = st.text_input("Search Users", key="user_search")
-    
     # Get users from Authentik
-    users = list_users(Config.AUTHENTIK_API_URL, headers, search_term)
+    with st.spinner("Loading users..."):
+        users = list_users(Config.AUTHENTIK_API_URL, headers, search_term)
     
     if not users:
         st.info("No users found.")
         return
     
-    # Convert to DataFrame for easier display
+    # Apply filters
+    filtered_users = users
+    
+    # Filter by status
+    if status_filter != 'All':
+        is_active = status_filter == 'Active'
+        filtered_users = [u for u in filtered_users if u.get('is_active', False) == is_active]
+    
+    # Filter by group membership
+    if group_filter != 'All':
+        # Find the group ID for the selected group name
+        group_id = next((g.get('pk') for g in all_groups if g.get('name') == group_filter), None)
+        
+        if group_id:
+            # This is a more complex filter that requires checking each user's group membership
+            users_in_group = []
+            for user in filtered_users:
+                user_id = user.get('pk')
+                if user_id:
+                    user_groups = get_user_groups(user_id)
+                    if any(g.get('pk') == group_id for g in user_groups):
+                        users_in_group.append(user)
+            filtered_users = users_in_group
+    
+    # Convert to DataFrame for easier display and sorting
     user_data = []
-    for user in users:
+    for user in filtered_users:
+        # Format last login date
+        last_login = user.get('last_login', 'Never')
+        if last_login and last_login != 'Never':
+            try:
+                last_login_dt = datetime.fromisoformat(last_login.replace('Z', '+00:00'))
+                last_login = last_login_dt.strftime('%Y-%m-%d %H:%M')
+            except (ValueError, TypeError):
+                last_login = 'Invalid date'
+        
         user_data.append({
             'ID': user.get('pk'),
             'Username': user.get('username'),
             'Name': user.get('name'),
             'Email': user.get('email'),
-            'Active': user.get('is_active', False),
-            'Last Login': user.get('last_login', 'Never')
+            'Status': '✅ Active' if user.get('is_active', False) else '❌ Inactive',
+            'Last Login': last_login
         })
     
     df = pd.DataFrame(user_data)
     
-    # Display users in a table with selection
-    st.subheader("Select User to Manage")
-    selected_indices = st.multiselect(
-        "Select users",
-        options=list(range(len(df))),
-        format_func=lambda i: f"{df.iloc[i]['Username']} ({df.iloc[i]['Name']})"
-    )
+    # Apply sorting
+    sort_column_map = {
+        'Username': 'Username',
+        'Name': 'Name',
+        'Email': 'Email',
+        'Last Login': 'Last Login',
+        'Status': 'Status'
+    }
     
-    if selected_indices:
-        selected_users = [df.iloc[i] for i in selected_indices]
+    sort_column = sort_column_map.get(sort_by, 'Username')
+    ascending = sort_order == 'Ascending'
+    
+    if not df.empty:
+        df = df.sort_values(by=sort_column, ascending=ascending)
+    
+    # Display user count
+    st.write(f"Found {len(df)} users matching your filters")
+    
+    # Create tabs for different user management views
+    user_tabs = st.tabs(["User List", "Bulk Operations", "User Details"])
+    
+    # Tab 1: User List
+    with user_tabs[0]:
+        if not df.empty:
+            # Display users in a table with selection
+            st.subheader("Select Users to Manage")
+            
+            # Use Streamlit's data editor for better interaction
+            selection = st.data_editor(
+                df,
+                column_config={
+                    "ID": st.column_config.TextColumn(
+                        "ID",
+                        width="small",
+                        required=True,
+                    ),
+                    "Username": st.column_config.TextColumn(
+                        "Username",
+                        width="medium",
+                    ),
+                    "Name": st.column_config.TextColumn(
+                        "Name",
+                        width="medium",
+                    ),
+                    "Email": st.column_config.TextColumn(
+                        "Email",
+                        width="medium",
+                    ),
+                    "Status": st.column_config.TextColumn(
+                        "Status",
+                        width="small",
+                    ),
+                    "Last Login": st.column_config.TextColumn(
+                        "Last Login",
+                        width="medium",
+                    ),
+                },
+                hide_index=True,
+                key="user_table",
+                use_container_width=True,
+                disabled=["ID", "Username", "Name", "Email", "Status", "Last Login"],
+                selection="multiple",
+                height=400
+            )
+            
+            # Get selected rows
+            selected_rows = selection.get("selected_rows", [])
+            
+            if selected_rows:
+                st.success(f"Selected {len(selected_rows)} users")
+                
+                # Store selected users in session state for other tabs
+                st.session_state['selected_users'] = selected_rows
+                
+                # Quick actions for selected users
+                st.subheader("Quick Actions")
+                
+                # Create columns for action buttons
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    if st.button("View Details", key="view_details_btn"):
+                        # Switch to User Details tab
+                        user_tabs[2].active = True
+                
+                with col2:
+                    if st.button("Manage Groups", key="manage_groups_btn"):
+                        # Switch to Bulk Operations tab
+                        user_tabs[1].active = True
+                
+                with col3:
+                    # Toggle active status
+                    all_active = all(row.get('Status', '').startswith('✅') for row in selected_rows)
+                    status_action = "Deactivate" if all_active else "Activate"
+                    
+                    if st.button(f"{status_action} Selected", key="toggle_status_btn"):
+                        success_count = 0
+                        for row in selected_rows:
+                            user_id = row.get('ID')
+                            result = update_user_status(
+                                Config.AUTHENTIK_API_URL,
+                                headers,
+                                user_id,
+                                not all_active  # Activate if not all active, otherwise deactivate
+                            )
+                            if result:
+                                success_count += 1
+                        
+                        if success_count == len(selected_rows):
+                            st.success(f"Successfully {status_action.lower()}d {success_count} users")
+                        else:
+                            st.warning(f"Partially successful: {status_action.lower()}d {success_count} out of {len(selected_rows)} users")
+                        
+                        # Refresh the page to show updated status
+                        time.sleep(1)
+                        st.rerun()
+            else:
+                st.info("Select one or more users to perform actions")
+        else:
+            st.warning("No users match the filter criteria.")
+    
+    # Tab 2: Bulk Operations
+    with user_tabs[1]:
+        st.subheader("Bulk Group Management")
         
-        # Display selected users
-        st.subheader("Selected Users")
-        for user in selected_users:
-            with st.expander(f"{user['Username']} ({user['Name']})"):
-                st.write(f"Email: {user['Email']}")
-                st.write(f"Active: {user['Active']}")
-                st.write(f"Last Login: {user['Last Login']}")
+        # Check if users are selected
+        selected_users = st.session_state.get('selected_users', [])
+        
+        if not selected_users:
+            st.info("Please select users from the User List tab first")
+        else:
+            st.write(f"Managing groups for {len(selected_users)} selected users:")
+            
+            # Display selected usernames
+            st.write(", ".join([user.get('Username', 'Unknown') for user in selected_users]))
+            
+            # Get all available groups
+            all_groups = get_authentik_groups()
+            
+            if not all_groups:
+                st.warning("No groups found. Please create groups first.")
+            else:
+                # Create two columns for add/remove operations
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("Add to Groups")
+                    groups_to_add = st.multiselect(
+                        "Select groups to add users to",
+                        options=[g.get('pk') for g in all_groups],
+                        format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
+                        key="bulk_add_groups"
+                    )
+                    
+                    if groups_to_add and st.button("Add to Selected Groups", key="bulk_add_btn"):
+                        success_count = 0
+                        for user in selected_users:
+                            user_id = user.get('ID')
+                            result = manage_user_groups(
+                                st.session_state.get("username"),
+                                user_id,
+                                groups_to_add=groups_to_add
+                            )
+                            
+                            if result.get('success'):
+                                success_count += 1
+                        
+                        if success_count == len(selected_users):
+                            st.success(f"Successfully added {success_count} users to the selected groups")
+                        else:
+                            st.warning(f"Partially successful: Added {success_count} out of {len(selected_users)} users to the selected groups")
+                
+                with col2:
+                    st.subheader("Remove from Groups")
+                    groups_to_remove = st.multiselect(
+                        "Select groups to remove users from",
+                        options=[g.get('pk') for g in all_groups],
+                        format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
+                        key="bulk_remove_groups"
+                    )
+                    
+                    if groups_to_remove and st.button("Remove from Selected Groups", key="bulk_remove_btn"):
+                        success_count = 0
+                        for user in selected_users:
+                            user_id = user.get('ID')
+                            result = manage_user_groups(
+                                st.session_state.get("username"),
+                                user_id,
+                                groups_to_remove=groups_to_remove
+                            )
+                            
+                            if result.get('success'):
+                                success_count += 1
+                        
+                        if success_count == len(selected_users):
+                            st.success(f"Successfully removed {success_count} users from the selected groups")
+                        else:
+                            st.warning(f"Partially successful: Removed {success_count} out of {len(selected_users)} users from the selected groups")
+    
+    # Tab 3: User Details
+    with user_tabs[2]:
+        st.subheader("User Details")
+        
+        # Check if users are selected
+        selected_users = st.session_state.get('selected_users', [])
+        
+        if not selected_users:
+            st.info("Please select users from the User List tab first")
+        elif len(selected_users) > 1:
+            st.info("Multiple users selected. Please select only one user to view details.")
+        else:
+            user = selected_users[0]
+            
+            # Create columns for user info and actions
+            info_col, action_col = st.columns([2, 1])
+            
+            with info_col:
+                st.subheader(f"{user.get('Name')} (@{user.get('Username')})")
+                st.write(f"**Email:** {user.get('Email')}")
+                st.write(f"**Status:** {user.get('Status')}")
+                st.write(f"**Last Login:** {user.get('Last Login')}")
                 
                 # Get user groups
-                user_groups = get_user_groups(user['ID'])
+                user_groups = get_user_groups(user.get('ID'))
                 
                 st.subheader("Group Membership")
                 if user_groups:
@@ -120,212 +424,431 @@ def render_user_management():
                         })
                     
                     group_df = pd.DataFrame(group_data)
-                    st.dataframe(group_df)
+                    st.dataframe(group_df, hide_index=True)
                 else:
                     st.info("User is not a member of any groups.")
+            
+            with action_col:
+                st.subheader("User Actions")
                 
-                # Group management
-                st.subheader("Manage Groups")
+                # Toggle active status
+                is_active = user.get('Status', '').startswith('✅')
+                status_action = "Deactivate" if is_active else "Activate"
                 
-                # Get all available groups
-                all_groups = get_authentik_groups()
-                
-                # Create options for adding to groups
-                available_groups = [g for g in all_groups if g.get('pk') not in [group.get('pk') for group in user_groups]]
-                
-                if available_groups:
-                    groups_to_add = st.multiselect(
-                        "Add to groups",
-                        options=[g.get('pk') for g in available_groups],
-                        format_func=lambda pk: next((g.get('name') for g in available_groups if g.get('pk') == pk), pk)
+                if st.button(f"{status_action} User", key="toggle_user_status"):
+                    result = update_user_status(
+                        Config.AUTHENTIK_API_URL,
+                        headers,
+                        user.get('ID'),
+                        not is_active
                     )
                     
-                    if groups_to_add and st.button(f"Add {user['Username']} to Selected Groups", key=f"add_groups_{user['ID']}"):
-                        result = manage_user_groups(
-                            st.session_state.get("username"),
-                            user['ID'],
-                            groups_to_add=groups_to_add
-                        )
-                        
-                        if result.get('success'):
-                            st.success(f"Successfully added {user['Username']} to groups.")
-                            st.rerun()
-                        else:
-                            st.error(f"Failed to add {user['Username']} to groups: {result.get('error')}")
-                else:
-                    st.info("User is already a member of all available groups.")
+                    if result:
+                        st.success(f"Successfully {status_action.lower()}d user {user.get('Username')}")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error(f"Failed to {status_action.lower()} user {user.get('Username')}")
                 
-                # Remove from groups
-                if user_groups:
-                    groups_to_remove = st.multiselect(
-                        "Remove from groups",
-                        options=[g.get('pk') for g in user_groups],
-                        format_func=lambda pk: next((g.get('name') for g in user_groups if g.get('pk') == pk), pk)
-                    )
-                    
-                    if groups_to_remove and st.button(f"Remove {user['Username']} from Selected Groups", key=f"remove_groups_{user['ID']}"):
-                        result = manage_user_groups(
-                            st.session_state.get("username"),
-                            user['ID'],
-                            groups_to_remove=groups_to_remove
+                # Update email
+                st.subheader("Update Email")
+                new_email = st.text_input("New Email Address", value=user.get('Email', ''), key="new_email")
+                
+                if st.button("Update Email", key="update_email_btn"):
+                    if new_email != user.get('Email', ''):
+                        result = update_user_email(
+                            Config.AUTHENTIK_API_URL,
+                            headers,
+                            user.get('ID'),
+                            new_email
                         )
                         
-                        if result.get('success'):
-                            st.success(f"Successfully removed {user['Username']} from groups.")
+                        if result:
+                            st.success(f"Successfully updated email for {user.get('Username')}")
+                            time.sleep(1)
                             st.rerun()
                         else:
-                            st.error(f"Failed to remove {user['Username']} from groups: {result.get('error')}")
+                            st.error(f"Failed to update email for {user.get('Username')}")
+                    else:
+                        st.info("Email address unchanged")
                 
                 # Admin privileges
                 st.subheader("Admin Privileges")
                 
                 # Check if user is an admin
                 with SessionLocal() as db:
-                    is_admin = db.query(db.query(db.model.User).filter_by(username=user['Username']).first().is_admin).scalar()
+                    try:
+                        db_user = db.query(db.model.User).filter_by(username=user.get('Username')).first()
+                        is_admin = db_user.is_admin if db_user else False
+                    except Exception as e:
+                        logging.error(f"Error checking admin status: {e}")
+                        is_admin = False
                 
                 if is_admin:
-                    if st.button(f"Revoke Admin Privileges from {user['Username']}", key=f"revoke_admin_{user['ID']}"):
+                    if st.button(f"Revoke Admin Privileges", key=f"revoke_admin_detail"):
                         result = revoke_admin_privileges(
                             st.session_state.get("username"),
-                            user['Username']
+                            user.get('Username')
                         )
                         
                         if result.get('success'):
-                            st.success(f"Successfully revoked admin privileges from {user['Username']}.")
+                            st.success(f"Successfully revoked admin privileges from {user.get('Username')}.")
+                            time.sleep(1)
                             st.rerun()
                         else:
-                            st.error(f"Failed to revoke admin privileges from {user['Username']}: {result.get('error')}")
+                            st.error(f"Failed to revoke admin privileges: {result.get('error')}")
                 else:
-                    if st.button(f"Grant Admin Privileges to {user['Username']}", key=f"grant_admin_{user['ID']}"):
+                    if st.button(f"Grant Admin Privileges", key=f"grant_admin_detail"):
                         result = grant_admin_privileges(
                             st.session_state.get("username"),
-                            user['Username']
+                            user.get('Username')
                         )
                         
                         if result.get('success'):
-                            st.success(f"Successfully granted admin privileges to {user['Username']}.")
+                            st.success(f"Successfully granted admin privileges to {user.get('Username')}.")
+                            time.sleep(1)
                             st.rerun()
                         else:
-                            st.error(f"Failed to grant admin privileges to {user['Username']}: {result.get('error')}")
+                            st.error(f"Failed to grant admin privileges: {result.get('error')}")
 
 def render_group_management():
     """Render the group management section of the admin dashboard."""
     st.header("Group Management")
     
     # Get all groups
-    groups = get_authentik_groups()
+    with st.spinner("Loading groups..."):
+        groups = get_authentik_groups()
     
-    # Create new group
-    with st.expander("Create New Group"):
-        group_name = st.text_input("Group Name", key="new_group_name")
-        group_description = st.text_area("Group Description", key="new_group_description")
-        
-        if st.button("Create Group", key="create_group_button"):
-            if not group_name:
-                st.error("Group name is required.")
-            else:
-                result = create_group(
-                    st.session_state.get("username"),
-                    group_name,
-                    group_description
-                )
-                
-                if result.get('success'):
-                    st.success(f"Successfully created group '{group_name}'.")
-                    st.rerun()
+    # Create two columns for the layout
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.subheader("Create New Group")
+        with st.form("create_group_form"):
+            group_name = st.text_input("Group Name", key="new_group_name")
+            group_description = st.text_area("Group Description", key="new_group_description", height=100)
+            
+            submit_button = st.form_submit_button("Create Group")
+            
+            if submit_button:
+                if not group_name:
+                    st.error("Group name is required.")
                 else:
-                    st.error(f"Failed to create group: {result.get('error')}")
-    
-    # Display existing groups
-    st.subheader("Existing Groups")
-    
-    if not groups:
-        st.info("No groups found.")
-        return
-    
-    # Convert to DataFrame for easier display
-    group_data = []
-    for group in groups:
-        group_data.append({
-            'ID': group.get('pk'),
-            'Name': group.get('name'),
-            'Description': group.get('attributes', {}).get('description', ''),
-            'Member Count': group.get('member_count', 0)
-        })
-    
-    df = pd.DataFrame(group_data)
-    
-    # Display groups in a table with selection
-    selected_indices = st.multiselect(
-        "Select groups to manage",
-        options=list(range(len(df))),
-        format_func=lambda i: f"{df.iloc[i]['Name']} ({df.iloc[i]['Member Count']} members)"
-    )
-    
-    if selected_indices:
-        selected_groups = [df.iloc[i] for i in selected_indices]
-        
-        # Display selected groups
-        for group in selected_groups:
-            with st.expander(f"{group['Name']} ({group['Member Count']} members)"):
-                st.write(f"Description: {group['Description']}")
-                
-                # Delete group button
-                if st.button(f"Delete Group '{group['Name']}'", key=f"delete_group_{group['ID']}"):
-                    result = delete_group(
+                    result = create_group(
                         st.session_state.get("username"),
-                        group['ID']
+                        group_name,
+                        group_description
                     )
                     
                     if result.get('success'):
-                        st.success(f"Successfully deleted group '{group['Name']}'.")
+                        st.success(f"Successfully created group '{group_name}'.")
+                        time.sleep(1)
                         st.rerun()
                     else:
-                        st.error(f"Failed to delete group: {result.get('error')}")
+                        st.error(f"Failed to create group: {result.get('error')}")
+    
+    with col2:
+        # Display existing groups
+        st.subheader("Existing Groups")
+        
+        if not groups:
+            st.info("No groups found.")
+        else:
+            # Add search filter for groups
+            search_group = st.text_input("Search groups", key="group_search")
+            
+            # Convert to DataFrame for easier display
+            group_data = []
+            for group in groups:
+                group_data.append({
+                    'ID': group.get('pk'),
+                    'Name': group.get('name'),
+                    'Description': group.get('attributes', {}).get('description', ''),
+                    'Member Count': group.get('member_count', 0)
+                })
+            
+            df = pd.DataFrame(group_data)
+            
+            # Apply search filter
+            if search_group:
+                df = df[df['Name'].str.contains(search_group, case=False) | 
+                        df['Description'].str.contains(search_group, case=False)]
+            
+            # Sort by name
+            df = df.sort_values(by='Name')
+            
+            if df.empty:
+                st.warning("No groups match your search.")
+            else:
+                # Display groups in a table with selection
+                st.write(f"Showing {len(df)} groups")
+                
+                # Use data editor for better interaction
+                selection = st.data_editor(
+                    df,
+                    column_config={
+                        "ID": st.column_config.TextColumn(
+                            "ID",
+                            width="small",
+                            required=True,
+                        ),
+                        "Name": st.column_config.TextColumn(
+                            "Name",
+                            width="medium",
+                        ),
+                        "Description": st.column_config.TextColumn(
+                            "Description",
+                            width="large",
+                        ),
+                        "Member Count": st.column_config.NumberColumn(
+                            "Members",
+                            width="small",
+                        ),
+                    },
+                    hide_index=True,
+                    key="group_table",
+                    use_container_width=True,
+                    disabled=["ID", "Name", "Description", "Member Count"],
+                    selection="single",
+                    height=400
+                )
+                
+                # Get selected row
+                selected_rows = selection.get("selected_rows", [])
+                
+                if selected_rows:
+                    group = selected_rows[0]
+                    
+                    st.subheader(f"Manage Group: {group['Name']}")
+                    
+                    # Create tabs for group management
+                    group_tabs = st.tabs(["Group Details", "Group Members", "Delete Group"])
+                    
+                    # Tab 1: Group Details
+                    with group_tabs[0]:
+                        st.write(f"**ID:** {group['ID']}")
+                        st.write(f"**Name:** {group['Name']}")
+                        st.write(f"**Description:** {group['Description']}")
+                        st.write(f"**Member Count:** {group['Member Count']}")
+                    
+                    # Tab 2: Group Members
+                    with group_tabs[1]:
+                        st.subheader("Group Members")
+                        
+                        # This would require an API to get group members
+                        # For now, just show a placeholder
+                        st.info("Group member management will be implemented in a future update.")
+                    
+                    # Tab 3: Delete Group
+                    with group_tabs[2]:
+                        st.subheader("Delete Group")
+                        st.warning(f"Are you sure you want to delete the group '{group['Name']}'? This action cannot be undone.")
+                        
+                        # Require confirmation
+                        confirm_delete = st.checkbox("I understand that this action cannot be undone", key="confirm_delete")
+                        
+                        if confirm_delete and st.button(f"Delete Group '{group['Name']}'", key=f"delete_group_{group['ID']}"):
+                            result = delete_group(
+                                st.session_state.get("username"),
+                                group['ID']
+                            )
+                            
+                            if result.get('success'):
+                                st.success(f"Successfully deleted group '{group['Name']}'.")
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error(f"Failed to delete group: {result.get('error')}")
 
 def render_admin_users():
     """Render the admin users section of the admin dashboard."""
     st.header("Admin Users")
     
-    # Get admin users from configuration
-    config_admins = Config.ADMIN_USERNAMES
+    # Create tabs for different views
+    admin_tabs = st.tabs(["Current Admins", "Grant Admin Access"])
     
-    st.subheader("Configured Admin Users")
-    if config_admins:
-        st.write("The following users are configured as administrators in the .env file:")
-        for admin in config_admins:
-            st.write(f"- {admin}")
-    else:
-        st.info("No administrators are configured in the .env file.")
-    
-    # Get admin users from database
-    with SessionLocal() as db:
-        db_admins = get_admin_users(db)
-    
-    st.subheader("Database Admin Users")
-    if db_admins:
-        admin_data = []
-        for admin in db_admins:
-            admin_data.append({
-                'Username': admin.username,
-                'Name': f"{admin.first_name} {admin.last_name}",
-                'Email': admin.email,
-                'Date Joined': admin.date_joined
-            })
+    # Tab 1: Current Admins
+    with admin_tabs[0]:
+        # Get admin users from configuration
+        config_admins = Config.ADMIN_USERNAMES
         
-        df = pd.DataFrame(admin_data)
-        st.dataframe(df)
-    else:
-        st.info("No administrators found in the database.")
+        st.subheader("Configured Admin Users")
+        if config_admins:
+            st.write("The following users are configured as administrators in the .env file:")
+            for admin in config_admins:
+                st.write(f"- {admin}")
+        else:
+            st.info("No administrators are configured in the .env file.")
+        
+        # Get admin users from database
+        with SessionLocal() as db:
+            db_admins = get_admin_users(db)
+        
+        st.subheader("Database Admin Users")
+        if db_admins:
+            admin_data = []
+            for admin in db_admins:
+                admin_data.append({
+                    'Username': admin.username,
+                    'Name': f"{admin.first_name} {admin.last_name}",
+                    'Email': admin.email,
+                    'Date Joined': admin.date_joined.strftime('%Y-%m-%d %H:%M') if admin.date_joined else 'Unknown',
+                    'Is Config Admin': admin.username in config_admins
+                })
+            
+            df = pd.DataFrame(admin_data)
+            
+            # Display admins in a table
+            st.dataframe(
+                df,
+                column_config={
+                    "Username": st.column_config.TextColumn(
+                        "Username",
+                        width="medium",
+                    ),
+                    "Name": st.column_config.TextColumn(
+                        "Name",
+                        width="medium",
+                    ),
+                    "Email": st.column_config.TextColumn(
+                        "Email",
+                        width="medium",
+                    ),
+                    "Date Joined": st.column_config.TextColumn(
+                        "Date Joined",
+                        width="medium",
+                    ),
+                    "Is Config Admin": st.column_config.CheckboxColumn(
+                        "Config Admin",
+                        help="Whether this admin is defined in the configuration file",
+                        width="small",
+                    ),
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+            
+            # Allow revoking admin privileges
+            st.subheader("Revoke Admin Privileges")
+            
+            # Filter out config admins as they can't be revoked
+            revokable_admins = [admin for admin in db_admins if admin.username not in config_admins]
+            
+            if revokable_admins:
+                admin_to_revoke = st.selectbox(
+                    "Select admin to revoke privileges from",
+                    options=[admin.username for admin in revokable_admins],
+                    key="admin_to_revoke"
+                )
+                
+                if st.button("Revoke Admin Privileges", key="revoke_admin_btn"):
+                    result = revoke_admin_privileges(
+                        st.session_state.get("username"),
+                        admin_to_revoke
+                    )
+                    
+                    if result.get('success'):
+                        st.success(f"Successfully revoked admin privileges from {admin_to_revoke}.")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error(f"Failed to revoke admin privileges: {result.get('error')}")
+            else:
+                st.info("No database admins available to revoke privileges from. Config admins cannot be revoked through the UI.")
+        else:
+            st.info("No administrators found in the database.")
+    
+    # Tab 2: Grant Admin Access
+    with admin_tabs[1]:
+        st.subheader("Grant Admin Privileges")
+        
+        # Get headers for API requests
+        headers = {
+            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+            'Content-Type': 'application/json'
+        }
+        
+        # Search for users
+        search_term = st.text_input("Search for users", key="admin_user_search")
+        
+        if search_term:
+            with st.spinner("Searching users..."):
+                users = list_users(Config.AUTHENTIK_API_URL, headers, search_term)
+            
+            if not users:
+                st.info("No users found matching your search.")
+            else:
+                # Filter out users who are already admins
+                with SessionLocal() as db:
+                    # Get existing admin usernames
+                    existing_admins = [admin.username for admin in get_admin_users(db)]
+                    
+                    # Filter users
+                    non_admin_users = [user for user in users if user.get('username') not in existing_admins]
+                
+                if not non_admin_users:
+                    st.info("All users matching your search are already admins.")
+                else:
+                    # Convert to DataFrame for display
+                    user_data = []
+                    for user in non_admin_users:
+                        user_data.append({
+                            'ID': user.get('pk'),
+                            'Username': user.get('username'),
+                            'Name': user.get('name'),
+                            'Email': user.get('email')
+                        })
+                    
+                    df = pd.DataFrame(user_data)
+                    
+                    # Display users
+                    st.subheader("Select User to Grant Admin Privileges")
+                    
+                    # Use radio buttons for selection
+                    selected_username = st.radio(
+                        "Select user",
+                        options=df['Username'].tolist(),
+                        format_func=lambda username: f"{username} ({df[df['Username'] == username]['Name'].iloc[0]})",
+                        key="admin_user_select"
+                    )
+                    
+                    if st.button("Grant Admin Privileges", key="grant_admin_btn"):
+                        result = grant_admin_privileges(
+                            st.session_state.get("username"),
+                            selected_username
+                        )
+                        
+                        if result.get('success'):
+                            st.success(f"Successfully granted admin privileges to {selected_username}.")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error(f"Failed to grant admin privileges: {result.get('error')}")
 
 def render_admin_logs():
     """Render the admin logs section of the admin dashboard."""
     st.header("Admin Event Logs")
     
+    # Add filtering options
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Filter by event type
+        event_types = ["All", "user_created", "user_updated", "admin_granted", "admin_revoked", 
+                      "group_created", "group_deleted", "user_added_to_group", "user_removed_from_group"]
+        event_filter = st.selectbox("Filter by event type", options=event_types, key="event_filter")
+    
+    with col2:
+        # Filter by username
+        username_filter = st.text_input("Filter by username", key="username_filter")
+    
+    # Limit control
+    limit = st.slider("Number of events to show", min_value=10, max_value=500, value=100, step=10, key="event_limit")
+    
     # Get admin events from database
     with SessionLocal() as db:
         from app.db.operations import get_admin_events
-        events = get_admin_events(db, limit=100)  # Get the last 100 events
+        events = get_admin_events(db, limit=limit)  # Get events with the specified limit
     
     if events:
         event_data = []
@@ -338,6 +861,61 @@ def render_admin_logs():
             })
         
         df = pd.DataFrame(event_data)
-        st.dataframe(df)
+        
+        # Apply filters
+        if event_filter != "All":
+            df = df[df['Event Type'] == event_filter]
+        
+        if username_filter:
+            df = df[df['Username'].str.contains(username_filter, case=False)]
+        
+        # Sort by timestamp (newest first)
+        df = df.sort_values(by='Timestamp', ascending=False)
+        
+        if df.empty:
+            st.info("No events match your filters.")
+        else:
+            # Format timestamp
+            df['Timestamp'] = df['Timestamp'].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S'))
+            
+            # Display events in a table
+            st.write(f"Showing {len(df)} events")
+            st.dataframe(
+                df,
+                column_config={
+                    "Timestamp": st.column_config.TextColumn(
+                        "Timestamp",
+                        width="medium",
+                    ),
+                    "Event Type": st.column_config.TextColumn(
+                        "Event Type",
+                        width="medium",
+                    ),
+                    "Username": st.column_config.TextColumn(
+                        "Username",
+                        width="medium",
+                    ),
+                    "Details": st.column_config.TextColumn(
+                        "Details",
+                        width="large",
+                    ),
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+            
+            # Add export option
+            if st.button("Export to CSV", key="export_logs"):
+                # Convert DataFrame to CSV
+                csv = df.to_csv(index=False)
+                
+                # Create a download button
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name="admin_logs.csv",
+                    mime="text/csv",
+                    key="download_logs"
+                )
     else:
         st.info("No admin events found in the database.")

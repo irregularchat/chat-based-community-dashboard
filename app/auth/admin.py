@@ -46,10 +46,13 @@ def require_admin(func):
         return func(username, *args, **kwargs)
     return wrapper
 
-def get_authentik_groups():
+def get_authentik_groups(search_term: str = None) -> List[Dict[str, Any]]:
     """
-    Get all groups from Authentik.
+    Get all groups from Authentik with optional filtering.
     
+    Args:
+        search_term (str, optional): Term to filter groups by name
+        
     Returns:
         List[Dict[str, Any]]: List of groups
     """
@@ -59,11 +62,20 @@ def get_authentik_groups():
             'Content-Type': 'application/json'
         }
         
+        params = {}
+        if search_term:
+            params['search'] = search_term
+        
         url = f"{Config.AUTHENTIK_API_URL}/core/groups/"
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, params=params)
         response.raise_for_status()
         
-        return response.json().get('results', [])
+        groups = response.json().get('results', [])
+        
+        # Sort groups by name
+        groups.sort(key=lambda g: g.get('name', '').lower())
+        
+        return groups
     except Exception as e:
         logging.error(f"Error getting Authentik groups: {e}")
         return []
@@ -91,6 +103,112 @@ def get_user_groups(user_id: str):
         return response.json()
     except Exception as e:
         logging.error(f"Error getting user groups for {user_id}: {e}")
+        return []
+
+def get_user_details(user_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get detailed information about a user from Authentik.
+    
+    Args:
+        user_id (str): Authentik user ID
+        
+    Returns:
+        Optional[Dict[str, Any]]: User details or None if not found
+    """
+    try:
+        headers = {
+            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+            'Content-Type': 'application/json'
+        }
+        
+        url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/"
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        
+        return response.json()
+    except Exception as e:
+        logging.error(f"Error getting user details for {user_id}: {e}")
+        return None
+
+def search_users_by_criteria(criteria: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Search for users in Authentik based on various criteria.
+    
+    Args:
+        criteria (Dict[str, Any]): Search criteria (e.g., {'username': 'john', 'is_active': True})
+        
+    Returns:
+        List[Dict[str, Any]]: List of matching users
+    """
+    try:
+        headers = {
+            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+            'Content-Type': 'application/json'
+        }
+        
+        # Build query parameters
+        params = {}
+        for key, value in criteria.items():
+            if key == 'username':
+                params['username__icontains'] = value
+            elif key == 'name':
+                params['name__icontains'] = value
+            elif key == 'email':
+                params['email__icontains'] = value
+            elif key == 'is_active':
+                params['is_active'] = value
+            elif key == 'group':
+                # This requires a different approach - we'll filter results later
+                pass
+        
+        url = f"{Config.AUTHENTIK_API_URL}/core/users/"
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        
+        users = response.json().get('results', [])
+        
+        # Filter by group if specified
+        if 'group' in criteria and criteria['group']:
+            group_id = criteria['group']
+            filtered_users = []
+            
+            for user in users:
+                user_id = user.get('pk')
+                user_groups = get_user_groups(user_id)
+                
+                if any(g.get('pk') == group_id for g in user_groups):
+                    filtered_users.append(user)
+            
+            return filtered_users
+        
+        return users
+    except Exception as e:
+        logging.error(f"Error searching users by criteria: {e}")
+        return []
+
+def get_group_members(group_id: str) -> List[Dict[str, Any]]:
+    """
+    Get all members of a specific group.
+    
+    Args:
+        group_id (str): Authentik group ID
+        
+    Returns:
+        List[Dict[str, Any]]: List of users in the group
+    """
+    try:
+        headers = {
+            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+            'Content-Type': 'application/json'
+        }
+        
+        url = f"{Config.AUTHENTIK_API_URL}/core/groups/{group_id}/users/"
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        
+        return response.json().get('results', [])
+    except Exception as e:
+        logging.error(f"Error getting members for group {group_id}: {e}")
         return []
 
 def add_user_to_group(user_id: str, group_id: str):
@@ -265,6 +383,8 @@ def manage_user_groups(admin_username: str, user_id: str, groups_to_add: List[st
     try:
         success = True
         errors = []
+        added_groups = []
+        removed_groups = []
         
         # Get user details for logging
         headers = {
@@ -280,17 +400,26 @@ def manage_user_groups(admin_username: str, user_id: str, groups_to_add: List[st
         # Add user to groups
         if groups_to_add:
             for group_id in groups_to_add:
-                if not add_user_to_group(user_id, group_id):
+                # Get group name for logging
+                group_url = f"{Config.AUTHENTIK_API_URL}/core/groups/{group_id}/"
+                group_response = requests.get(group_url, headers=headers)
+                
+                if group_response.status_code != 200:
+                    errors.append(f"Group {group_id} not found")
                     success = False
-                    errors.append(f"Failed to add user to group {group_id}")
-                else:
-                    # Get group name for logging
-                    group_url = f"{Config.AUTHENTIK_API_URL}/core/groups/{group_id}/"
-                    response = requests.get(group_url, headers=headers)
-                    if response.status_code == 200:
-                        group_name = response.json().get('name', 'Unknown group')
-                    else:
-                        group_name = f"Group {group_id}"
+                    continue
+                    
+                group_name = group_response.json().get('name', f"Group {group_id}")
+                
+                # Check if user is already in the group
+                user_groups = get_user_groups(user_id)
+                if any(g.get('pk') == group_id for g in user_groups):
+                    logging.info(f"User {username} is already a member of group {group_name}")
+                    continue
+                
+                # Add user to group
+                if add_user_to_group(user_id, group_id):
+                    added_groups.append(group_name)
                     
                     # Log the group addition
                     with SessionLocal() as db:
@@ -300,21 +429,33 @@ def manage_user_groups(admin_username: str, user_id: str, groups_to_add: List[st
                             admin_username,
                             f"User '{username}' added to group '{group_name}'"
                         )
+                else:
+                    errors.append(f"Failed to add user to group {group_name}")
+                    success = False
         
         # Remove user from groups
         if groups_to_remove:
             for group_id in groups_to_remove:
-                if not remove_user_from_group(user_id, group_id):
+                # Get group name for logging
+                group_url = f"{Config.AUTHENTIK_API_URL}/core/groups/{group_id}/"
+                group_response = requests.get(group_url, headers=headers)
+                
+                if group_response.status_code != 200:
+                    errors.append(f"Group {group_id} not found")
                     success = False
-                    errors.append(f"Failed to remove user from group {group_id}")
-                else:
-                    # Get group name for logging
-                    group_url = f"{Config.AUTHENTIK_API_URL}/core/groups/{group_id}/"
-                    response = requests.get(group_url, headers=headers)
-                    if response.status_code == 200:
-                        group_name = response.json().get('name', 'Unknown group')
-                    else:
-                        group_name = f"Group {group_id}"
+                    continue
+                    
+                group_name = group_response.json().get('name', f"Group {group_id}")
+                
+                # Check if user is in the group
+                user_groups = get_user_groups(user_id)
+                if not any(g.get('pk') == group_id for g in user_groups):
+                    logging.info(f"User {username} is not a member of group {group_name}")
+                    continue
+                
+                # Remove user from group
+                if remove_user_from_group(user_id, group_id):
+                    removed_groups.append(group_name)
                     
                     # Log the group removal
                     with SessionLocal() as db:
@@ -324,10 +465,15 @@ def manage_user_groups(admin_username: str, user_id: str, groups_to_add: List[st
                             admin_username,
                             f"User '{username}' removed from group '{group_name}'"
                         )
+                else:
+                    errors.append(f"Failed to remove user from group {group_name}")
+                    success = False
         
         return {
             "success": success,
-            "errors": errors if errors else None
+            "errors": errors if errors else None,
+            "added_groups": added_groups,
+            "removed_groups": removed_groups
         }
     except Exception as e:
         logging.error(f"Error managing groups for user {user_id}: {e}")

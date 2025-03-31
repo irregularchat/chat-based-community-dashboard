@@ -39,3 +39,9 @@ test_env/Scripts/*
 test_env/share/*
 test_env/include/*
 test_env/man/*
+app/db/init_db.py
+app/db/migrations/__init__.py
+app/db/migrations/add_signal_identity.py
+app/db/init_db.py
+test_env/pyvenv.cfg
+test_env/etc/jupyter/nbconfig/notebook.d/pydeck.json

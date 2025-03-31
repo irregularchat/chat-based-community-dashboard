@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import logging
 from app.utils.config import Config
-from app.db.models import User, AdminEvent, MatrixRoomMember, VerificationCode
+from app.db.models import User, AdminEvent, MatrixRoomMember, VerificationCode, UserNote
 from app.db.database import get_db
 
 def sync_user_data(db: Session, authentik_users: List[Dict[str, Any]]):
@@ -953,3 +953,184 @@ def get_user_by_signal_identity(db: Session, signal_identity: str) -> Optional[U
     except Exception as e:
         logging.error(f"Error getting user by Signal identity {signal_identity}: {e}")
         return None
+
+def create_user_note(db: Session, user_id: int, content: str, created_by: str) -> Optional[UserNote]:
+    """
+    Create a new note for a user.
+    
+    Args:
+        db (Session): Database session
+        user_id (int): ID of the user the note is about
+        content (str): Content of the note
+        created_by (str): Username of the moderator creating the note
+        
+    Returns:
+        Optional[UserNote]: The created note if successful, None otherwise
+    """
+    try:
+        # Check if user exists
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            logging.error(f"Cannot create note: User with ID {user_id} not found")
+            return None
+            
+        # Create the note
+        note = UserNote(
+            user_id=user_id,
+            content=content,
+            created_by=created_by,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        
+        db.add(note)
+        db.commit()
+        db.refresh(note)
+        
+        # Log the note creation
+        create_admin_event(
+            db,
+            "user_note_created",
+            created_by,
+            f"Note created for user {user.username}"
+        )
+        
+        return note
+    except Exception as e:
+        logging.error(f"Error creating user note: {e}")
+        db.rollback()
+        return None
+
+def get_user_notes(db: Session, user_id: int) -> List[UserNote]:
+    """
+    Get all notes for a specific user.
+    
+    Args:
+        db (Session): Database session
+        user_id (int): ID of the user to get notes for
+        
+    Returns:
+        List[UserNote]: List of notes for the user
+    """
+    try:
+        return db.query(UserNote).filter(UserNote.user_id == user_id).order_by(UserNote.created_at.desc()).all()
+    except Exception as e:
+        logging.error(f"Error getting notes for user {user_id}: {e}")
+        return []
+
+def get_note_by_id(db: Session, note_id: int) -> Optional[UserNote]:
+    """
+    Get a specific note by ID.
+    
+    Args:
+        db (Session): Database session
+        note_id (int): ID of the note to get
+        
+    Returns:
+        Optional[UserNote]: The note if found, None otherwise
+    """
+    try:
+        return db.query(UserNote).filter(UserNote.id == note_id).first()
+    except Exception as e:
+        logging.error(f"Error getting note {note_id}: {e}")
+        return None
+
+def update_user_note(db: Session, note_id: int, content: str, edited_by: str) -> Optional[UserNote]:
+    """
+    Update an existing user note.
+    
+    Args:
+        db (Session): Database session
+        note_id (int): ID of the note to update
+        content (str): New content for the note
+        edited_by (str): Username of the moderator editing the note
+        
+    Returns:
+        Optional[UserNote]: The updated note if successful, None otherwise
+    """
+    try:
+        note = db.query(UserNote).filter(UserNote.id == note_id).first()
+        if not note:
+            logging.error(f"Cannot update note: Note with ID {note_id} not found")
+            return None
+            
+        # Get the user for logging
+        user = db.query(User).filter(User.id == note.user_id).first()
+        
+        # Update the note
+        note.content = content
+        note.last_edited_by = edited_by
+        note.updated_at = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(note)
+        
+        # Log the note update
+        create_admin_event(
+            db,
+            "user_note_updated",
+            edited_by,
+            f"Note updated for user {user.username if user else 'unknown'}"
+        )
+        
+        return note
+    except Exception as e:
+        logging.error(f"Error updating note {note_id}: {e}")
+        db.rollback()
+        return None
+
+def delete_user_note(db: Session, note_id: int, deleted_by: str) -> bool:
+    """
+    Delete a user note.
+    
+    Args:
+        db (Session): Database session
+        note_id (int): ID of the note to delete
+        deleted_by (str): Username of the moderator deleting the note
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        note = db.query(UserNote).filter(UserNote.id == note_id).first()
+        if not note:
+            logging.error(f"Cannot delete note: Note with ID {note_id} not found")
+            return False
+            
+        # Get the user for logging
+        user = db.query(User).filter(User.id == note.user_id).first()
+        
+        # Delete the note
+        db.delete(note)
+        db.commit()
+        
+        # Log the note deletion
+        create_admin_event(
+            db,
+            "user_note_deleted",
+            deleted_by,
+            f"Note deleted for user {user.username if user else 'unknown'}"
+        )
+        
+        return True
+    except Exception as e:
+        logging.error(f"Error deleting note {note_id}: {e}")
+        db.rollback()
+        return False
+
+def get_user_note_count(db: Session, user_id: int) -> int:
+    """
+    Get the number of notes for a specific user.
+    
+    Args:
+        db (Session): Database session
+        user_id (int): ID of the user to get note count for
+        
+    Returns:
+        int: Number of notes for the user
+    """
+    try:
+        return db.query(UserNote).filter(UserNote.user_id == user_id).count()
+    except Exception as e:
+        logging.error(f"Error getting note count for user {user_id}: {e}")
+        return 0

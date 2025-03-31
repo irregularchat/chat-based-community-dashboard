@@ -14,7 +14,16 @@ from app.auth.admin import (
 from app.auth.api import list_users, update_user_status, update_user_email
 from app.utils.config import Config
 from app.db.database import SessionLocal
-from app.db.operations import get_admin_users, create_admin_event, search_users
+from app.db.operations import (
+    get_admin_users, 
+    create_admin_event, 
+    search_users,
+    create_user_note,
+    get_user_notes,
+    update_user_note,
+    delete_user_note,
+    get_note_by_id
+)
 import pandas as pd
 from datetime import datetime
 import time
@@ -177,13 +186,27 @@ def render_user_management():
             except (ValueError, TypeError):
                 last_login = 'Invalid date'
         
+        # Get note count for this user
+        note_count = 0
+        with SessionLocal() as db:
+            try:
+                db_user = db.query(db.model.User).filter_by(username=user.get('username')).first()
+                if db_user:
+                    note_count = len(db_user.notes) if hasattr(db_user, 'notes') else 0
+            except Exception as e:
+                logging.error(f"Error getting note count: {e}")
+        
+        # Add note indicator if there are notes
+        notes_indicator = f"📝 {note_count}" if note_count > 0 else ""
+        
         user_data.append({
             'ID': user.get('pk'),
             'Username': user.get('username'),
             'Name': user.get('name'),
             'Email': user.get('email'),
             'Status': '✅ Active' if user.get('is_active', False) else '❌ Inactive',
-            'Last Login': last_login
+            'Last Login': last_login,
+            'Notes': notes_indicator
         })
     
     df = pd.DataFrame(user_data)
@@ -244,11 +267,16 @@ def render_user_management():
                         "Last Login",
                         width="medium",
                     ),
+                    "Notes": st.column_config.TextColumn(
+                        "Notes",
+                        width="small",
+                        help="Number of moderator notes for this user"
+                    ),
                 },
                 hide_index=True,
                 key="user_table",
                 use_container_width=True,
-                disabled=["ID", "Username", "Name", "Email", "Status", "Last Login"],
+                disabled=["ID", "Username", "Name", "Email", "Status", "Last Login", "Notes"],
                 selection="multiple",
                 height=400
             )
@@ -510,6 +538,147 @@ def render_user_management():
                             st.rerun()
                         else:
                             st.error(f"Failed to grant admin privileges: {result.get('error')}")
+            
+            # Create tabs for different user detail sections
+            detail_tabs = st.tabs(["User Notes", "Activity"])
+            
+            # Tab 1: User Notes
+            with detail_tabs[0]:
+                st.subheader("Moderator Notes")
+                
+                # Get the user ID from the database
+                with SessionLocal() as db:
+                    try:
+                        db_user = db.query(db.model.User).filter_by(username=user.get('Username')).first()
+                        if db_user:
+                            user_id = db_user.id
+                            
+                            # Add a new note
+                            with st.form("add_note_form"):
+                                st.write("Add a new note")
+                                note_content = st.text_area("Note Content", key="new_note_content", height=100)
+                                submit_note = st.form_submit_button("Add Note")
+                                
+                                if submit_note and note_content:
+                                    result = create_user_note(
+                                        db,
+                                        user_id,
+                                        note_content,
+                                        st.session_state.get("username", "unknown")
+                                    )
+                                    
+                                    if result:
+                                        st.success(f"Note added for {user.get('Username')}")
+                                        # Clear the form
+                                        st.session_state["new_note_content"] = ""
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        st.error(f"Failed to add note for {user.get('Username')}")
+                            
+                            # Display existing notes
+                            notes = get_user_notes(db, user_id)
+                            
+                            if notes:
+                                st.write(f"### Notes for {user.get('Username')} ({len(notes)})")
+                                
+                                for i, note in enumerate(notes):
+                                    with st.expander(f"Note {i+1} - {note.created_at.strftime('%Y-%m-%d %H:%M')} by {note.created_by}", expanded=i==0):
+                                        # Initialize session state for editing
+                                        edit_key = f"edit_note_{note.id}"
+                                        if edit_key not in st.session_state:
+                                            st.session_state[edit_key] = False
+                                        
+                                        # Display note content or edit form
+                                        if st.session_state[edit_key]:
+                                            # Edit form
+                                            edited_content = st.text_area(
+                                                "Edit Note", 
+                                                value=note.content, 
+                                                key=f"edit_content_{note.id}",
+                                                height=100
+                                            )
+                                            
+                                            col1, col2 = st.columns(2)
+                                            with col1:
+                                                if st.button("Save Changes", key=f"save_note_{note.id}"):
+                                                    result = update_user_note(
+                                                        db,
+                                                        note.id,
+                                                        edited_content,
+                                                        st.session_state.get("username", "unknown")
+                                                    )
+                                                    
+                                                    if result:
+                                                        st.success("Note updated successfully")
+                                                        st.session_state[edit_key] = False
+                                                        time.sleep(1)
+                                                        st.rerun()
+                                                    else:
+                                                        st.error("Failed to update note")
+                                            
+                                            with col2:
+                                                if st.button("Cancel", key=f"cancel_edit_{note.id}"):
+                                                    st.session_state[edit_key] = False
+                                                    st.rerun()
+                                        else:
+                                            # Display note
+                                            st.markdown(note.content)
+                                            
+                                            # Show edit history if available
+                                            if note.last_edited_by:
+                                                st.caption(f"Last edited by {note.last_edited_by} on {note.updated_at.strftime('%Y-%m-%d %H:%M')}")
+                                            
+                                            # Edit and delete buttons
+                                            col1, col2 = st.columns(2)
+                                            with col1:
+                                                if st.button("Edit", key=f"edit_btn_{note.id}"):
+                                                    st.session_state[edit_key] = True
+                                                    st.rerun()
+                                            
+                                            with col2:
+                                                if st.button("Delete", key=f"delete_note_{note.id}"):
+                                                    # Confirm deletion
+                                                    confirm_key = f"confirm_delete_{note.id}"
+                                                    st.session_state[confirm_key] = True
+                                                    st.rerun()
+                                        
+                                        # Handle deletion confirmation
+                                        confirm_key = f"confirm_delete_{note.id}"
+                                        if st.session_state.get(confirm_key, False):
+                                            st.warning("Are you sure you want to delete this note? This action cannot be undone.")
+                                            col1, col2 = st.columns(2)
+                                            with col1:
+                                                if st.button("Yes, Delete", key=f"confirm_yes_{note.id}"):
+                                                    result = delete_user_note(
+                                                        db,
+                                                        note.id,
+                                                        st.session_state.get("username", "unknown")
+                                                    )
+                                                    
+                                                    if result:
+                                                        st.success("Note deleted successfully")
+                                                        st.session_state[confirm_key] = False
+                                                        time.sleep(1)
+                                                        st.rerun()
+                                                    else:
+                                                        st.error("Failed to delete note")
+                                            
+                                            with col2:
+                                                if st.button("Cancel", key=f"confirm_no_{note.id}"):
+                                                    st.session_state[confirm_key] = False
+                                                    st.rerun()
+                            else:
+                                st.info(f"No notes found for {user.get('Username')}")
+                        else:
+                            st.error(f"User {user.get('Username')} not found in the database")
+                    except Exception as e:
+                        logging.error(f"Error loading user notes: {e}")
+                        st.error(f"Error loading user notes: {str(e)}")
+            
+            # Tab 2: Activity (placeholder for future expansion)
+            with detail_tabs[1]:
+                st.info("User activity tracking will be available in a future update.")
 
 def render_group_management():
     """Render the group management section of the admin dashboard."""
@@ -835,7 +1004,8 @@ def render_admin_logs():
     with col1:
         # Filter by event type
         event_types = ["All", "user_created", "user_updated", "admin_granted", "admin_revoked", 
-                      "group_created", "group_deleted", "user_added_to_group", "user_removed_from_group"]
+                      "group_created", "group_deleted", "user_added_to_group", "user_removed_from_group",
+                      "user_note_created", "user_note_updated", "user_note_deleted"]
         event_filter = st.selectbox("Filter by event type", options=event_types, key="event_filter")
     
     with col2:

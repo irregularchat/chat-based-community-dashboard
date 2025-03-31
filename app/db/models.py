@@ -19,6 +19,9 @@ class User(Base):
     attributes = Column(JSON)
     authentik_id = Column(String)  # Link with Authentik user ID
     signal_identity = Column(String)  # Store Signal name or phone number
+    
+    # Relationship to UserNote model
+    notes = relationship("UserNote", back_populates="user", cascade="all, delete-orphan")
 
     def __init__(self, **kwargs):
         if 'full_name' in kwargs:
@@ -42,6 +45,7 @@ class User(Base):
             'attributes': self.attributes,
             'authentik_id': self.authentik_id,
             'signal_identity': self.signal_identity,
+            'note_count': len(self.notes) if hasattr(self, 'notes') else 0,
         }
 
 class AdminEvent(Base):
@@ -91,3 +95,32 @@ class MatrixRoomMember(Base):
 
     def __repr__(self):
         return f"<MatrixRoomMember(room_id='{self.room_id}', user_id='{self.user_id}')>"
+
+class UserNote(Base):
+    """Model for storing moderator notes about users"""
+    __tablename__ = 'user_notes'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_by = Column(String, nullable=False)  # Username of the moderator who created the note
+    last_edited_by = Column(String, nullable=True)  # Username of the moderator who last edited the note
+
+    # Relationship to User model
+    user = relationship("User", back_populates="notes")
+
+    def __repr__(self):
+        return f"<UserNote(id={self.id}, user_id={self.user_id}, created_by='{self.created_by}')>"
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'content': self.content,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'created_by': self.created_by,
+            'last_edited_by': self.last_edited_by
+        }

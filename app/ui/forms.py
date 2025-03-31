@@ -222,57 +222,21 @@ async def render_create_user_form():
             
             # Display required fields note
             st.markdown("**Note:** Fields marked with * are required")
-            
-            # Handle form submission
-            if submit_button:
-                # Get form data
-                username = st.session_state.get('username_input', '').strip()
-                first_name = st.session_state.get('first_name_input', '').strip()
-                last_name = st.session_state.get('last_name_input', '').strip()
-                email = st.session_state.get('email_input', '').strip()
-                invited_by = st.session_state.get('invited_by_input', '').strip()
-                intro = st.session_state.get('intro_input', '').strip()
-                selected_groups = st.session_state.get('selected_groups', [])
-                
-                # Validate required fields
-                if not all([username, first_name, last_name]):
-                    st.error("Please fill in all required fields (First Name, Last Name, and Username)")
-                    return
-                
-                # Create user
-                try:
-                    from app.auth.api import create_user
-                    success, username, password, discourse_url = await create_user(
-                        username=username,
-                        full_name=f"{first_name} {last_name}",
-                        email=email,
-                        invited_by=invited_by,
-                        intro=intro,
-                        is_admin=is_admin,
-                        groups=selected_groups
-                    )
-                    
-                    if success:
-                        st.success(f"User {username} created successfully!")
-                        # Clear form
-                        reset_create_user_form_fields()
-                    else:
-                        st.error(f"Failed to create user: {username}")
-                except Exception as e:
-                    st.error(f"Error creating user: {str(e)}")
-                    logging.error(f"Error in create_user: {str(e)}", exc_info=True)
-            
-            # Handle clear button
-            if clear_button:
-                reset_create_user_form_fields()
-                st.rerun()
     
     with create_tabs[1]:
         st.subheader("Advanced User Options")
+        
+        # This section could include additional options like:
+        # - Custom attributes
+        # - User expiration
+        # - Initial password settings
+        # - Notification preferences
+        
         st.info("Advanced user options will be available in a future update.")
     
     with create_tabs[2]:
         st.subheader("Bulk Import Users")
+        
         st.markdown("""
         ### Instructions
         Enter user details in the text area below. Each user should be in the following format:
@@ -283,19 +247,146 @@ async def render_create_user_form():
         4. Email Address
         5. Interests or additional information
         ```
+        
+        The system will attempt to parse this information and create user accounts automatically.
         """)
         
-        # Add text area for bulk import
+        st.markdown("""
+        <style>
+        .data-to-parse {
+            background-color: #e0e0e0; 
+            padding: 10px;
+            border-radius: 5px;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        st.markdown('<div class="data-to-parse">', unsafe_allow_html=True)
         st.text_area(
-            "User Data",
+            "User Data to Parse",
             key="data_to_parse_input",
             height=200,
-            help="Enter user data in the specified format"
+            placeholder=("Please enter user details (each on a new line):\n"
+                         "1. What's Your Name\n"
+                         "2. What org are you with\n"
+                         "3. Who invited you (add and mention them in this chat)\n"
+                         "4. Your Email or Email-Alias/Mask (for password resets and safety number verifications)\n"
+                         "5. Your Interests (so we can get you to the right chats)")
         )
+        st.markdown('</div>', unsafe_allow_html=True)
         
-        # Add parse button
-        if st.button("Parse Data"):
-            parse_and_rerun()
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Parse Data", key="parse_button", on_click=parse_and_rerun):
+                pass  # The on_click handler will handle this
+        with col2:
+            if st.button("Clear Data", key="clear_data_button"):
+                st.session_state["data_to_parse_input"] = ""
+                st.rerun()
+
+    # Handle form submission
+    if submit_button:
+        # Validate required fields
+        if not st.session_state.get('first_name_input'):
+            st.error("First name is required.")
+            return
+        
+        if not st.session_state.get('last_name_input'):
+            st.error("Last name is required.")
+            return
+        
+        if not st.session_state.get('username_input'):
+            st.error("Username is required.")
+            return
+        
+        # Update username one last time before submission
+        if st.session_state.get('first_name_input') and st.session_state.get('last_name_input'):
+            # Create a base username from first and last name
+            base_username = f"{st.session_state['first_name_input'].lower()}{st.session_state['last_name_input'].lower()}"
+            suggested_username = create_unique_username(db, base_username)
+            if not st.session_state.get('username_input'):
+                st.session_state['username_input'] = suggested_username
+                st.rerun()
+        
+        # Get admin status from checkbox
+        is_admin = st.session_state.get('is_admin_checkbox', False)
+        
+        # Handle the form submission with admin status
+        from app.auth.api import create_user
+        
+        # Get form values
+        username = st.session_state.get('username_input', '')
+        full_name = f"{st.session_state.get('first_name_input', '')} {st.session_state.get('last_name_input', '')}".strip()
+        email = st.session_state.get('email_input', '')
+        invited_by = st.session_state.get('invited_by_input', '')
+        intro = st.session_state.get('intro_input', '')
+        selected_groups = st.session_state.get('selected_groups', [])
+        
+        if username and full_name:
+            with st.spinner("Creating user..."):
+                # Call create_user with admin status
+                # Directly await the create_user function instead of using asyncio.run()
+                success, username, password, discourse_url = await create_user(
+                    username=username,
+                    full_name=full_name,
+                    email=email,
+                    invited_by=invited_by,
+                    intro=intro,
+                    is_admin=is_admin,
+                    groups=selected_groups
+                )
+                
+                if success:
+                    from app.messages import create_user_message
+                    create_user_message(username, password, discourse_url)
+                    
+                    # Add user to selected groups if not already handled in create_user
+                    if selected_groups and not Config.MAIN_GROUP_ID:
+                        from app.auth.admin import manage_user_groups
+                        
+                        # Get the user ID from the API response
+                        headers = {
+                            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                            'Content-Type': 'application/json'
+                        }
+                        
+                        # Search for the newly created user
+                        users = list_users(Config.AUTHENTIK_API_URL, headers, username)
+                        user_id = next((user.get('pk') for user in users if user.get('username') == username), None)
+                        
+                        if user_id:
+                            # Add user to selected groups
+                            manage_user_groups(
+                                st.session_state.get("username", "system"),
+                                user_id,
+                                groups_to_add=selected_groups
+                            )
+                    
+                    # Reset form fields after successful submission
+                    reset_create_user_form_fields()
+                    st.rerun()
+                else:
+                    st.error(f"Failed to create user: {password}")  # password contains error message on failure
+        else:
+            st.error("Username and full name are required.")
+
+    # Reset fields on Clear
+    if clear_button:
+        reset_create_user_form_fields()
+        st.rerun()
+
+    # Return the form values
+    return (
+        st.session_state["first_name_input"],
+        st.session_state["last_name_input"],
+        st.session_state["username_input"],
+        st.session_state["email_input"],
+        st.session_state["invited_by_input"],
+        st.session_state["intro_input"],
+        st.session_state.get("is_admin_checkbox", False),
+        st.session_state.get("selected_groups", []),
+        submit_button
+    )
 
 async def render_invite_form():
     """Render the invite form"""

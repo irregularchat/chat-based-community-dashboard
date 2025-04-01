@@ -19,8 +19,7 @@ from app.auth.api import (
     update_user_invited_by,
     create_invite,
     shorten_url,
-    list_users,
-    webhook_notification
+    list_users
 )
 from app.ui.forms import render_create_user_form, render_invite_form, display_user_list
 from app.utils.helpers import (
@@ -30,7 +29,7 @@ from app.utils.helpers import (
     add_timeline_event,
     handle_form_submission
 )
-from app.db.database import get_db
+from app.db.session import get_db
 from app.db.operations import search_users, User
 from app.messages import (
     create_user_message,

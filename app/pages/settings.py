@@ -3,15 +3,30 @@ import streamlit as st
 import os
 import json
 import logging
+import asyncio
+import threading
+import time
+from datetime import datetime
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv, set_key
 from app.utils.config import Config
-from app.utils.matrix_actions import get_all_accessible_rooms, merge_room_data, get_all_accessible_users, invite_to_matrix_room, send_direct_message, send_room_message
+from app.utils.matrix_actions import (
+    get_all_accessible_rooms_sync,
+    invite_to_matrix_room,
+    send_direct_message,
+    send_room_message,
+    send_matrix_message_async,
+    announce_new_user_async,
+    merge_room_data
+)
 # Import the modules for the new tabs
 from app.ui.summary import main as render_summary_page
 from app.ui.help_resources import main as render_help_page
 from app.ui.prompts import main as render_prompts_page, get_all_prompts
 from app.ui.common import display_useful_links
+from app.db.session import get_db
+from app.db.operations import search_users
+from app.auth.api import create_user, create_invite, shorten_url
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -234,9 +249,6 @@ def load_welcome_messages() -> Dict[str, str]:
         }
 
 def save_user_settings(
-    webhook_enabled: bool, 
-    user_created_webhook: bool, 
-    password_reset_webhook: bool, 
     selected_theme: str, 
     shlink_url: str,
     auth0_domain: str, 
@@ -244,13 +256,11 @@ def save_user_settings(
     auth0_authorize_url: str, 
     auth0_token_url: str, 
     authentik_api_url: str,
-    webhook_url: str, 
     authentik_api_token: str, 
     shlink_api_token: str, 
     main_group_id: str, 
     flow_id: str, 
     encryption_password: str, 
-    webhook_secret: str
 ) -> bool:
     """
     Save user settings to the .env file.
@@ -268,9 +278,6 @@ def save_user_settings(
         # Update environment variables
         success = True
         settings = {
-            "WEBHOOK_ENABLED": str(webhook_enabled).lower(),
-            "WEBHOOK_USER_CREATED": str(user_created_webhook).lower(),
-            "WEBHOOK_PASSWORD_RESET": str(password_reset_webhook).lower(),
             "THEME": selected_theme,
             "SHLINK_URL": shlink_url,
             "AUTH0_DOMAIN": auth0_domain,
@@ -278,13 +285,11 @@ def save_user_settings(
             "AUTH0_AUTHORIZE_URL": auth0_authorize_url,
             "AUTH0_TOKEN_URL": auth0_token_url,
             "AUTHENTIK_API_URL": authentik_api_url,
-            "WEBHOOK_URL": webhook_url,
             "AUTHENTIK_API_TOKEN": authentik_api_token,
             "SHLINK_API_TOKEN": shlink_api_token,
             "MAIN_GROUP_ID": main_group_id,
             "FLOW_ID": flow_id,
             "ENCRYPTION_PASSWORD": encryption_password,
-            "WEBHOOK_SECRET": webhook_secret
         }
         
         # Save each setting
@@ -314,11 +319,12 @@ def render_settings_page():
     st.title("Settings")
     
     # Create tabs for different settings categories
-    user_tab, integration_tab, matrix_rooms_tab, message_users_tab, advanced_tab = st.tabs([
+    user_tab, integration_tab, matrix_rooms_tab, message_users_tab, prompts_tab, advanced_tab = st.tabs([
         "User Settings",
         "Integration Settings",
         "Matrix Rooms",
         "Message Users",
+        "Prompts",
         "Advanced Settings"
     ])
     
@@ -334,6 +340,9 @@ def render_settings_page():
     with message_users_tab:
         render_message_users_settings()
         
+    with prompts_tab:
+        render_prompts_settings()
+        
     with advanced_tab:
         render_advanced_settings()
 
@@ -343,51 +352,52 @@ def render_integration_settings():
     
     # Matrix Integration
     st.subheader("Matrix Integration")
-    matrix_active = st.checkbox("Enable Matrix Integration", value=Config.MATRIX_ACTIVE, key="integration_matrix_active")
-    matrix_url = st.text_input("Matrix Server URL", value=Config.MATRIX_URL or "", key="integration_matrix_url")
-    matrix_token = st.text_input("Matrix Access Token", value=Config.MATRIX_ACCESS_TOKEN or "", type="password", key="integration_matrix_token")
-    matrix_bot_username = st.text_input("Matrix Bot Username", value=Config.MATRIX_BOT_USERNAME or "", key="integration_matrix_bot_username")
+    matrix_active = st.checkbox("Enable Matrix Integration", value=getattr(Config, "MATRIX_ACTIVE", False), key="integration_matrix_active")
+    matrix_url = st.text_input("Matrix Server URL", value=getattr(Config, "MATRIX_HOMESERVER_URL", "") or "", key="integration_matrix_url")
+    matrix_bot_username = st.text_input("Matrix Bot Username", value=getattr(Config, "MATRIX_BOT_USERNAME", "") or "", key="integration_matrix_bot_username")
+    matrix_bot_display_name = st.text_input("Matrix Bot Display Name", value=getattr(Config, "MATRIX_BOT_DISPLAY_NAME", "") or "", key="integration_matrix_bot_display_name")
+    matrix_access_token = st.text_input("Matrix Access Token", value=getattr(Config, "MATRIX_ACCESS_TOKEN", "") or "", type="password", key="integration_matrix_access_token")
+    matrix_default_room_id = st.text_input("Matrix Default Room ID", value=getattr(Config, "MATRIX_DEFAULT_ROOM_ID", "") or "", key="integration_matrix_default_room_id")
+    matrix_welcome_room_id = st.text_input("Matrix Welcome Room ID", value=getattr(Config, "MATRIX_WELCOME_ROOM_ID", "") or "", key="integration_matrix_welcome_room_id")
     
     # SMTP Integration
     st.subheader("Email (SMTP) Integration")
-    smtp_active = st.checkbox("Enable Email Integration", value=Config.SMTP_ACTIVE, key="integration_smtp_active")
-    smtp_server = st.text_input("SMTP Server", value=Config.SMTP_SERVER or "", key="integration_smtp_server")
-    smtp_port = st.number_input("SMTP Port", value=int(Config.SMTP_PORT or 587), min_value=1, max_value=65535, key="integration_smtp_port")
-    smtp_user = st.text_input("SMTP Username", value=Config.SMTP_USER or "", key="integration_smtp_user")
-    smtp_password = st.text_input("SMTP Password", value=Config.SMTP_PASSWORD or "", type="password", key="integration_smtp_password")
-    smtp_from = st.text_input("From Email Address", value=Config.SMTP_FROM or "", key="integration_smtp_from")
+    smtp_active = st.checkbox("Enable Email Integration", value=getattr(Config, "SMTP_ACTIVE", False), key="integration_smtp_active")
+    smtp_server = st.text_input("SMTP Server", value=getattr(Config, "SMTP_SERVER", "") or "", key="integration_smtp_server")
+    smtp_port = st.number_input("SMTP Port", value=int(getattr(Config, "SMTP_PORT", 587) or 587), min_value=1, max_value=65535, key="integration_smtp_port")
+    smtp_user = st.text_input("SMTP Username", value=getattr(Config, "SMTP_USERNAME", "") or "", key="integration_smtp_user")
+    smtp_password = st.text_input("SMTP Password", value=getattr(Config, "SMTP_PASSWORD", "") or "", type="password", key="integration_smtp_password")
+    smtp_from = st.text_input("From Email Address", value=getattr(Config, "SMTP_FROM_EMAIL", "") or "", key="integration_smtp_from")
     
     # Discourse Integration
     st.subheader("Discourse Integration")
-    discourse_active = st.checkbox("Enable Discourse Integration", value=Config.DISCOURSE_ACTIVE, key="integration_discourse_active")
-    discourse_url = st.text_input("Discourse URL", value=Config.DISCOURSE_URL or "", key="integration_discourse_url")
-    discourse_api_key = st.text_input("Discourse API Key", value=Config.DISCOURSE_API_KEY or "", type="password", key="integration_discourse_api_key")
-    discourse_api_username = st.text_input("Discourse API Username", value=Config.DISCOURSE_API_USERNAME or "", key="integration_discourse_api_username")
-    discourse_category_id = st.text_input("Discourse Category ID", value=Config.DISCOURSE_CATEGORY_ID or "", key="integration_discourse_category_id")
+    discourse_active = st.checkbox("Enable Discourse Integration", value=getattr(Config, "DISCOURSE_ACTIVE", False), key="integration_discourse_active")
+    discourse_url = st.text_input("Discourse URL", value=getattr(Config, "DISCOURSE_URL", "") or "", key="integration_discourse_url")
+    discourse_api_key = st.text_input("Discourse API Key", value=getattr(Config, "DISCOURSE_API_KEY", "") or "", type="password", key="integration_discourse_api_key")
+    discourse_api_username = st.text_input("Discourse API Username", value=getattr(Config, "DISCOURSE_API_USERNAME", "") or "", key="integration_discourse_api_username")
+    discourse_category_id = st.text_input("Discourse Category ID", value=getattr(Config, "DISCOURSE_CATEGORY_ID", "") or "", key="integration_discourse_category_id")
     
-    # Webhook Integration
-    st.subheader("Webhook Integration")
-    webhook_active = st.checkbox("Enable Webhook Integration", value=Config.WEBHOOK_ACTIVE, key="integration_webhook_active")
-    webhook_url = st.text_input("Webhook URL", value=Config.WEBHOOK_URL or "", key="integration_webhook_url")
-    webhook_secret = st.text_input("Webhook Secret", value=Config.WEBHOOK_SECRET or "", type="password", key="integration_webhook_secret")
-    
+
     # Save Integration Settings
     if st.button("Save Integration Settings", key="integration_save_button"):
         success = True
         
         # Save Matrix settings
         success &= save_env_variable("MATRIX_ACTIVE", str(matrix_active))
-        success &= save_env_variable("MATRIX_URL", matrix_url)
-        success &= save_env_variable("MATRIX_ACCESS_TOKEN", matrix_token)
+        success &= save_env_variable("MATRIX_HOMESERVER_URL", matrix_url)
+        success &= save_env_variable("MATRIX_ACCESS_TOKEN", matrix_access_token)
         success &= save_env_variable("MATRIX_BOT_USERNAME", matrix_bot_username)
+        success &= save_env_variable("MATRIX_BOT_DISPLAY_NAME", matrix_bot_display_name)
+        success &= save_env_variable("MATRIX_DEFAULT_ROOM_ID", matrix_default_room_id)
+        success &= save_env_variable("MATRIX_WELCOME_ROOM_ID", matrix_welcome_room_id)
         
         # Save SMTP settings
         success &= save_env_variable("SMTP_ACTIVE", str(smtp_active))
         success &= save_env_variable("SMTP_SERVER", smtp_server)
         success &= save_env_variable("SMTP_PORT", str(smtp_port))
-        success &= save_env_variable("SMTP_USER", smtp_user)
+        success &= save_env_variable("SMTP_USERNAME", smtp_user)
         success &= save_env_variable("SMTP_PASSWORD", smtp_password)
-        success &= save_env_variable("SMTP_FROM", smtp_from)
+        success &= save_env_variable("SMTP_FROM_EMAIL", smtp_from)
         
         # Save Discourse settings
         success &= save_env_variable("DISCOURSE_ACTIVE", str(discourse_active))
@@ -396,10 +406,6 @@ def render_integration_settings():
         success &= save_env_variable("DISCOURSE_API_USERNAME", discourse_api_username)
         success &= save_env_variable("DISCOURSE_CATEGORY_ID", discourse_category_id)
         
-        # Save Webhook settings
-        success &= save_env_variable("WEBHOOK_ACTIVE", str(webhook_active))
-        success &= save_env_variable("WEBHOOK_URL", webhook_url)
-        success &= save_env_variable("WEBHOOK_SECRET", webhook_secret)
         
         if success:
             st.success("Integration settings saved successfully! Please restart the application for changes to take effect.")
@@ -468,7 +474,7 @@ def render_room_management():
     
     # Option to select from accessible rooms
     st.write("Select from accessible rooms:")
-    accessible_rooms = get_all_accessible_rooms()
+    accessible_rooms = get_all_accessible_rooms_sync()  # Use the sync version
     room_options = ["-- Select a room --"]
     for room in accessible_rooms:
         if room.get('name') and room.get('room_id'):
@@ -542,143 +548,208 @@ def render_room_management():
             st.error("Failed to save rooms. Please check the logs for details.")
 
 def render_user_management():
-    """Render the user management section"""
-    st.subheader("Add Users to Rooms")
+    """Render the user management section."""
+    st.subheader("User Management")
     
-    # Get all accessible users
-    all_users = get_all_accessible_users()
+    # Create tabs for different user management functions
+    create_tab, invite_tab, manage_tab = st.tabs([
+        "Create User", 
+        "Invite User", 
+        "Manage Users"
+    ])
     
-    # User selection
-    st.write("**Select User:**")
-    
-    # Option to select from accessible users
-    user_options = ["-- Select a user --"]
-    if all_users:
-        for user in all_users:
-            display_name = user.get('display_name', user.get('user_id', '').split(':')[0][1:])
-            user_id = user.get('user_id', '')
-            user_options.append(f"{display_name} - {user_id}")
+    with create_tab:
+        st.header("Create New User")
         
-        st.info(f"Found {len(all_users)} users from Matrix rooms.")
-    else:
-        st.warning("No Matrix users found. You can still add users manually below.")
-    
-    selected_user = st.selectbox("Select User", user_options, key="matrix_user_select")
-    
-    # Manual user ID entry
-    st.write("**Or enter user ID manually:**")
-    manual_user_id = st.text_input("User ID (e.g., @username:matrix.org)", key="matrix_manual_user_id")
-    
-    # Get the user ID to use
-    user_id_to_use = None
-    username_to_use = None
-    
-    if selected_user and selected_user != "-- Select a user --":
-        # Extract user ID from selection
-        display_name, user_id = selected_user.rsplit(" - ", 1)
-        user_id_to_use = user_id
-        username_to_use = display_name
-    elif manual_user_id:
-        user_id_to_use = manual_user_id
-        # Ensure the user ID has the correct format
-        if not manual_user_id.startswith('@'):
-            manual_user_id = f"@{manual_user_id}"
-        if ':' not in manual_user_id:
-            # Add default domain if not specified
-            domain = os.getenv("BASE_DOMAIN", "matrix.org")
-            manual_user_id = f"{manual_user_id}:{domain}"
+        # Create form for user creation
+        with st.form("create_user_form"):
+            username = st.text_input("Username", help="Enter the username for the new user")
+            full_name = st.text_input("Full Name", help="Enter the full name of the user")
+            email = st.text_input("Email", help="Enter the user's email address")
+            intro = st.text_area("Introduction", help="Provide information about the user that will be shared in the welcome announcement")
+            invited_by = st.text_input("Invited By", help="Who invited this user to the community?")
             
-        user_id_to_use = manual_user_id
-        username_to_use = manual_user_id.split(':')[0][1:] if ':' in manual_user_id else manual_user_id.lstrip('@')
+            submitted = st.form_submit_button("Create User")
+            
+            if submitted:
+                if not username or not full_name:
+                    st.error("Username and Full Name are required fields")
+                else:
+                    # Create an event loop to run the async function
+                    try:
+                        # Use thread-based approach to avoid event loop issues
+                        import threading
+                        
+                        # Define function to run in background thread
+                        def create_user_thread():
+                            try:
+                                # Create new event loop
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                
+                                # Import here to avoid circular imports
+                                from app.auth.api import create_user
+                                
+                                # Run the create_user function
+                                st.session_state['create_user_result'] = loop.run_until_complete(
+                                    create_user(username, full_name, email, invited_by, intro)
+                                )
+                                
+                                # Clean up
+                                loop.close()
+                            except Exception as thread_error:
+                                st.session_state['create_user_error'] = str(thread_error)
+                                logging.error(f"Error in create_user thread: {thread_error}", exc_info=True)
+                            finally:
+                                st.session_state['create_user_finished'] = True
+                        
+                        # Set up state and start thread
+                        if 'create_user_thread_started' not in st.session_state:
+                            st.session_state['create_user_thread_started'] = True
+                            st.session_state['create_user_finished'] = False
+                            thread = threading.Thread(target=create_user_thread)
+                            thread.start()
+                            st.info("Creating user, please wait...")
+                            st.rerun()
+                        
+                        # Check if thread is done
+                        if 'create_user_finished' in st.session_state and st.session_state['create_user_finished']:
+                            # Handle error case
+                            if 'create_user_error' in st.session_state:
+                                st.error(f"Error creating user: {st.session_state['create_user_error']}")
+                                # Clean up state
+                                if 'create_user_error' in st.session_state:
+                                    del st.session_state['create_user_error']
+                                if 'create_user_thread_started' in st.session_state:
+                                    del st.session_state['create_user_thread_started']
+                                if 'create_user_finished' in st.session_state:
+                                    del st.session_state['create_user_finished']
+                            
+                            # Handle success case
+                            elif 'create_user_result' in st.session_state:
+                                success, created_username, temp_password, post_url = st.session_state['create_user_result']
+                                
+                                if success:
+                                    st.success(f"User {created_username} created successfully!")
+                                    st.info(f"Temporary password: {temp_password}")
+                                    if post_url:
+                                        st.info(f"Discourse post created: {post_url}")
+                                else:
+                                    st.error(f"Failed to create user. Error: {temp_password}")
+                                
+                                # Clean up state
+                                if 'create_user_result' in st.session_state:
+                                    del st.session_state['create_user_result']
+                                if 'create_user_thread_started' in st.session_state:
+                                    del st.session_state['create_user_thread_started']
+                                if 'create_user_finished' in st.session_state:
+                                    del st.session_state['create_user_finished']
+                        else:
+                            # Still running
+                            st.info("Still creating user, please wait...")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Error creating user: {str(e)}")
+                        logging.error(f"Error in create_user: {str(e)}", exc_info=True)
     
-    if user_id_to_use:
-        # Room selection
-        st.write("**Select Room(s):**")
-        
-        # Get all rooms
-        all_rooms = st.session_state.matrix_rooms
-        
-        # Option to select by category
-        st.write("Select by category:")
-        all_categories = set()
-        for room in all_rooms:
-            if 'categories' in room:
-                all_categories.update(room['categories'])
-        
-        selected_categories = st.multiselect("Categories", sorted(all_categories), key="user_categories_select")
-        
-        # Filter rooms by selected categories
-        rooms_in_categories = []
-        if selected_categories:
-            for room in all_rooms:
-                room_categories = room.get('categories', [])
-                if any(category in room_categories for category in selected_categories):
-                    rooms_in_categories.append(room)
-        
-        # Option to select specific rooms
-        st.write("Or select specific rooms:")
-        room_options = []
-        for room in all_rooms:
-            if room.get('name') and room.get('room_id'):
-                room_options.append(f"{room.get('name')} - {room.get('room_id')}")
-        
-        selected_rooms = st.multiselect("Rooms", room_options, key="user_rooms_select")
-        
-        # Get room IDs from selections
-        room_ids = []
-        
-        # Add rooms from categories
-        for room in rooms_in_categories:
-            room_id = room.get('room_id')
-            if room_id and room_id not in room_ids:
-                room_ids.append(room_id)
-        
-        # Add specifically selected rooms
-        for selected_room in selected_rooms:
-            room_name, room_id = selected_room.rsplit(" - ", 1)
-            if room_id not in room_ids:
-                room_ids.append(room_id)
-        
-        # Invite button
-        if room_ids:
-            st.write(f"**Selected Rooms:** {len(room_ids)}")
+    with invite_tab:
+        st.header("Create Invite Link")
+        # Create a form for invite creation
+        with st.form("create_invite_form"):
+            invite_label = st.text_input("Invite Label", help="A label to identify this invite")
             
-            # Option to send welcome message
-            send_welcome = st.checkbox("Send welcome message", value=True, key="send_welcome_message")
+            # Set default expiration to 2 hours from now
+            from datetime import datetime, timedelta
+            from pytz import timezone
+            eastern = timezone('US/Eastern')
+            eastern_now = datetime.now(eastern)
+            expires_default = eastern_now + timedelta(hours=2)
             
-            if st.button("Invite User to Selected Rooms", key="invite_user_button"):
-                success_count = 0
-                failed_rooms = []
-                
-                for room_id in room_ids:
-                    # Find room name for display
-                    room_name = "Unknown Room"
-                    for room in all_rooms:
-                        if room.get('room_id') == room_id:
-                            room_name = room.get('name', "Unknown Room")
-                            break
+            expires_date = st.date_input("Expiration Date", value=expires_default.date())
+            expires_time = st.time_input("Expiration Time", value=expires_default.time())
+            
+            submitted = st.form_submit_button("Create Invite")
+            
+            if submitted:
+                if not invite_label:
+                    st.error("Invite Label is required")
+                else:
+                    # Combine date and time into a datetime
+                    import pytz
+                    from datetime import datetime
+                    expires = datetime.combine(expires_date, expires_time)
+                    expires = pytz.timezone('US/Eastern').localize(expires)
                     
-                    # Invite user to room
-                    success = invite_to_matrix_room(room_id, user_id_to_use, username=username_to_use, send_welcome=send_welcome)
-                    
-                    if success:
-                        success_count += 1
+                    # Call the create_invite function
+                    from app.auth.api import create_invite
+                    headers = {
+                        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                        'Content-Type': 'application/json'
+                    }
+                    try:
+                        result = create_invite(headers, invite_label, expires.isoformat())
+                        logging.info(f"Create invite result: {result}")
+                        
+                        if result and isinstance(result, dict) and result.get('success', False):
+                            st.success("Invite created successfully!")
+                            invite_link = result.get('link')
+                            st.code(invite_link)
+                            
+                            # Add shorten URL option if Shlink is configured
+                            if Config.SHLINK_URL and Config.SHLINK_API_TOKEN:
+                                if st.button("Create Shortened URL", key="invite_shorten_button"):
+                                    try:
+                                        from app.auth.api import shorten_url
+                                        short_url = shorten_url(invite_link, "invite", invite_label)
+                                        if short_url:
+                                            st.success(f"Shortened URL: {short_url}")
+                                        else:
+                                            st.error("Failed to create shortened URL")
+                                    except Exception as e:
+                                        st.error(f"Error creating shortened URL: {str(e)}")
+                                        logging.error(f"Error in shorten_url: {str(e)}", exc_info=True)
+                            else:
+                                st.info("URL shortening is not configured. Set SHLINK_URL and SHLINK_API_TOKEN to enable this feature.")
+                        else:
+                            error_msg = "Unknown error"
+                            if isinstance(result, dict):
+                                error_msg = result.get('error', 'Unknown error')
+                                if 'details' in result:
+                                    error_details = result.get('details')
+                                    st.error(f"Error details: {error_details}")
+                            elif isinstance(result, tuple) and len(result) == 2:
+                                # Handle old tuple format (invite_link, expires)
+                                invite_link, expiry = result
+                                if invite_link:
+                                    st.success("Invite created successfully!")
+                                    st.code(invite_link)
+                                    return
+                                    
+                            st.error(f"Failed to create invite: {error_msg}")
+                    except Exception as e:
+                        st.error(f"Error creating invite: {str(e)}")
+                        logging.error(f"Error in create_invite: {str(e)}", exc_info=True)
+    
+    with manage_tab:
+        st.header("Manage Existing Users")
+        st.info("This section will allow you to manage existing users, reset passwords, and more.")
+        
+        # Add more user management functionality here
+        # You could add a data editor for users, password reset buttons, etc.
+        if st.button("List Users"):
+            # Show a list of users from the database
+            try:
+                with next(get_db()) as db:
+                    users = search_users(db, "")
+                    if users:
+                        st.write("Users in the database:")
+                        for user in users:
+                            st.write(f"• {user.username} ({user.name}) - {user.email}")
                     else:
-                        failed_rooms.append(f"{room_name} ({room_id})")
-                
-                # Display results
-                if success_count > 0:
-                    st.success(f"User invited to {success_count} out of {len(room_ids)} rooms")
-                
-                if failed_rooms:
-                    st.error(f"Failed to invite user to {len(failed_rooms)} rooms")
-                    with st.expander("Show failed rooms"):
-                        for room in failed_rooms:
-                            st.write(f"- {room}")
-        else:
-            st.warning("Please select at least one room or category")
-    else:
-        st.info("Please select a user or enter a user ID")
+                        st.warning("No users found in the database.")
+            except Exception as e:
+                st.error(f"Error listing users: {str(e)}")
+                logging.error(f"Error listing users: {str(e)}", exc_info=True)
 
 def render_categories_management():
     """Render the categories management section"""
@@ -767,436 +838,570 @@ def render_categories_management():
                 st.info("No rooms were updated.")
 
 def render_message_users_settings():
-    """Render the message users settings tab"""
+    """Render the message users settings tab."""
     st.header("Message Users")
     
-    # Create tabs for different sections
-    welcome_tab, direct_message_tab, mod_announcement_tab, prompt_library_tab = st.tabs([
-        "Welcome Templates",
-        "Direct Message",
-        "Mod Announcement",
-        "Prompt Library"
-    ])
+    # Use tabs to organize different messaging options
+    dm_tab, room_tab = st.tabs(["Direct Message", "Room Message"])
     
-    with welcome_tab:
-        render_welcome_templates()
+    with dm_tab:
+        st.subheader("Send Direct Message")
         
-    with direct_message_tab:
-        render_direct_message()
-        
-    with mod_announcement_tab:
-        render_mod_announcement()
-        
-    with prompt_library_tab:
-        render_prompt_library()
-
-def render_welcome_templates():
-    """Render the welcome templates section"""
-    st.subheader("Welcome Message Templates")
-    st.info("These messages are used when welcoming new users. You can use placeholders like {name}, {username}, and {intro}.")
-    
-    # Load current welcome messages
-    welcome_messages = load_welcome_messages()
-    
-    # Direct welcome message
-    direct_welcome = st.text_area(
-        "Direct Welcome Message", 
-        value=welcome_messages.get("direct_welcome", ""),
-        help="Sent as a direct message to new users. Placeholders: {name}",
-        key="welcome_direct_message"
-    )
-    
-    # Room announcement
-    room_announcement = st.text_area(
-        "Room Announcement", 
-        value=welcome_messages.get("room_announcement", ""),
-        help="Posted in community rooms to announce new users. Placeholders: {name}, {username}, {intro}",
-        key="welcome_room_announcement"
-    )
-    
-    # Invite message
-    invite_message = st.text_area(
-        "Default Room Invite Message", 
-        value=welcome_messages.get("invite_message", ""),
-        help="Default message sent when inviting users to rooms. Placeholders: {name}, {username}",
-        key="welcome_invite_message"
-    )
-    
-    # Room-specific messages
-    st.subheader("Room-Specific Welcome Messages")
-    st.info("These messages will be sent when a user is added to a specific room. If not specified, the default invite message will be used.")
-    
-    # Get all rooms from Matrix
-    all_rooms = merge_room_data()
-    room_options = ["-- Select a room --"] + [f"{room.get('name', 'Unknown')} - {room.get('room_id')}" for room in all_rooms if 'room_id' in room]
-    
-    # Room selection
-    selected_room = st.selectbox("Select Room", room_options, key="room_specific_select")
-    
-    room_id = None
-    if selected_room and selected_room != "-- Select a room --":
-        # Extract room ID
-        room_name, room_id = selected_room.rsplit(" - ", 1)
-        
-        # Get existing message for this room or use default
-        room_message = welcome_messages.get("room_specific", {}).get(room_id, welcome_messages.get("invite_message", ""))
-        
-        # Edit message
-        room_specific_message = st.text_area(
-            f"Welcome Message for {room_name}", 
-            value=room_message,
-            help="Message sent when a user is added to this room. Placeholders: {name}, {username}",
-            key=f"room_message_{room_id}"
-        )
-        
-        # Add/Update button
-        if st.button("Save Room Message", key="save_room_message"):
-            room_specific = welcome_messages.get("room_specific", {})
-            room_specific[room_id] = room_specific_message
-            welcome_messages["room_specific"] = room_specific
-            
-            if save_welcome_messages(welcome_messages):
-                st.success(f"Welcome message for room '{room_name}' saved successfully!")
+        # Get all accessible users
+        try:
+            # Create a button to fetch users (this avoids the event loop issue)
+            if st.button("Fetch Matrix Users", key="fetch_matrix_users"):
+                st.session_state['loading_matrix_users'] = True
+                st.session_state['matrix_users'] = None  # Reset users to ensure fresh data
+                st.info("Loading Matrix users, please wait...")
+                st.rerun()
+                
+            if 'loading_matrix_users' in st.session_state and st.session_state['loading_matrix_users']:
+                # Use a background thread to load users
+                import threading
+                import asyncio
+                
+                if 'matrix_users' not in st.session_state or st.session_state['matrix_users'] is None:
+                    # Define the function to run in the background
+                    def load_users():
+                        try:
+                            # Create new event loop
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            
+                            # Import here to avoid circular imports
+                            from app.utils.matrix_actions import get_all_accessible_users
+                            
+                            # Run the async function
+                            st.session_state['matrix_users'] = loop.run_until_complete(get_all_accessible_users())
+                            
+                            # Close the loop
+                            loop.close()
+                        except Exception as e:
+                            st.session_state['matrix_error'] = str(e)
+                            logging.error(f"Error loading Matrix users: {str(e)}", exc_info=True)
+                        finally:
+                            st.session_state['loading_matrix_users'] = False
+                    
+                    # Start the background thread
+                    thread = threading.Thread(target=load_users)
+                    thread.start()
+                    st.info("Loading users, please wait...")
+                    st.rerun()
+                    
+                # Check if we have users or an error
+                if 'matrix_error' in st.session_state:
+                    st.error(f"Error loading Matrix users: {st.session_state['matrix_error']}")
+                    if 'matrix_error' in st.session_state:
+                        del st.session_state['matrix_error']
+                    st.session_state['loading_matrix_users'] = False
+                
+                if 'matrix_users' in st.session_state:
+                    st.session_state['loading_matrix_users'] = False
+                    display_direct_message_form(st.session_state['matrix_users'])
+                else:
+                    st.info("Loading users...")
             else:
-                st.error("Failed to save room-specific welcome message.")
+                if 'matrix_users' in st.session_state and st.session_state['matrix_users'] is not None:
+                    display_direct_message_form(st.session_state['matrix_users'])
+                else:
+                    st.info("Click 'Fetch Matrix Users' to load available users")
+        except Exception as e:
+            st.error(f"Error loading users: {str(e)}")
+            logging.error(f"Error in render_message_users_settings: {str(e)}", exc_info=True)
     
-    # Category-specific messages
-    st.subheader("Category-Specific Welcome Messages")
-    st.info("These messages will be sent when a user is added to a room in a specific category. Room-specific messages take precedence.")
-    
-    # Get all categories
-    all_categories = set()
-    for room in all_rooms:
-        if 'categories' in room:
-            all_categories.update(room['categories'])
-    
-    # Category selection
-    category_options = ["-- Select a category --"] + sorted(list(all_categories))
-    selected_category = st.selectbox("Select Category", category_options, key="category_specific_select")
-    
-    if selected_category and selected_category != "-- Select a category --":
-        # Get existing message for this category or use default
-        category_message = welcome_messages.get("category_specific", {}).get(selected_category, welcome_messages.get("invite_message", ""))
-        
-        # Edit message
-        category_specific_message = st.text_area(
-            f"Welcome Message for {selected_category} category", 
-            value=category_message,
-            help="Message sent when a user is added to a room in this category. Placeholders: {name}, {username}",
-            key=f"category_message_{selected_category}"
-        )
-        
-        # Add/Update button
-        if st.button("Save Category Message", key="save_category_message"):
-            category_specific = welcome_messages.get("category_specific", {})
-            category_specific[selected_category] = category_specific_message
-            welcome_messages["category_specific"] = category_specific
-            
-            if save_welcome_messages(welcome_messages):
-                st.success(f"Welcome message for category '{selected_category}' saved successfully!")
-            else:
-                st.error("Failed to save category-specific welcome message.")
-    
-    # Save all global messages button
-    st.subheader("Save Global Messages")
-    if st.button("Save All Global Messages", key="welcome_save_button"):
-        # Preserve room and category specific messages
-        room_specific = welcome_messages.get("room_specific", {})
-        category_specific = welcome_messages.get("category_specific", {})
-        
-        updated_messages = {
-            "direct_welcome": direct_welcome,
-            "room_announcement": room_announcement,
-            "invite_message": invite_message,
-            "room_specific": room_specific,
-            "category_specific": category_specific
-        }
-        
-        if save_welcome_messages(updated_messages):
-            st.success("Welcome messages saved successfully!")
-        else:
-            st.error("Failed to save welcome messages. Please check the logs for details.")
+    with room_tab:
+        st.subheader("Send Message to Room")
+        # This part isn't async so we don't need to modify it
+        # ...
 
-def render_direct_message():
-    """Render the direct message section"""
-    st.subheader("Send Direct Message to User")
-    st.info("Send a direct message to a specific Matrix user.")
+def display_direct_message_form(users):
+    """Display the form for sending direct messages."""
+    if not users:
+        st.warning("No accessible users found. This could be due to Matrix integration being inactive or connection issues.")
+        return
     
-    # Get all Matrix users
-    all_users = get_all_accessible_users()
-    
-    # Create user options
-    user_options = ["-- Select a user --"]
-    if all_users:
-        for user in all_users:
-            display_name = user.get('display_name', user.get('user_id', 'Unknown'))
-            user_id = user.get('user_id', '')
-            if user_id:
-                user_options.append(f"{display_name} - {user_id}")
-        
-        st.info(f"Found {len(all_users)} users from Matrix rooms.")
-    else:
-        st.warning("No Matrix users found. You can still add users manually below.")
-    
+    # Create a dropdown with user display names
+    user_options = ["-- Select a user --"] + [f"{user.get('display_name', user.get('user_id', 'Unknown'))} - {user.get('user_id', 'Unknown')}" for user in users]
     selected_user = st.selectbox("Select User", user_options, key="direct_message_user_select")
     
-    # Manual user ID entry
-    st.write("**Or enter user ID manually:**")
-    manual_user_id = st.text_input("User ID (e.g., @username:matrix.org)", key="direct_message_manual_user_id")
-    
-    # Get the user ID to use
-    user_id_to_use = None
-    username_to_use = None
-    
     if selected_user and selected_user != "-- Select a user --":
-        # Extract user ID from selection
-        display_name, user_id = selected_user.rsplit(" - ", 1)
-        user_id_to_use = user_id
-        username_to_use = display_name
-    elif manual_user_id:
-        user_id_to_use = manual_user_id
-        # Ensure the user ID has the correct format
-        if not manual_user_id.startswith('@'):
-            manual_user_id = f"@{manual_user_id}"
-        if ':' not in manual_user_id:
-            # Add default domain if not specified
-            domain = os.getenv("BASE_DOMAIN", "matrix.org")
-            manual_user_id = f"{manual_user_id}:{domain}"
-            
-        user_id_to_use = manual_user_id
-        username_to_use = manual_user_id.split(':')[0][1:] if ':' in manual_user_id else manual_user_id.lstrip('@')
-    
-    if user_id_to_use:
+        # Extract the user ID from the selection
+        user_id = selected_user.split(" - ")[-1]
+        
+        # Get previous message if in session state
+        default_message = st.session_state.get('direct_message_text', '')
+        
         # Message input
-        st.write("**Message:**")
-        message = st.text_area("Enter your message", key="direct_message_text")
-        
-        # Send button
-        if st.button("Send Direct Message", key="send_direct_message_button"):
-            if not message:
-                st.error("Please enter a message to send.")
-            else:
-                try:
-                    # Send the message
-                    success = send_direct_message(user_id_to_use, message)
-                    
-                    if success:
-                        st.success(f"Message sent to {username_to_use} successfully!")
-                    else:
-                        st.error(f"Failed to send message to {username_to_use}.")
-                except Exception as e:
-                    st.error(f"Error sending message: {e}")
-
-def render_mod_announcement():
-    """Render the mod announcement section"""
-    st.subheader("Send Mod Announcement")
-    st.info("Send an announcement to one or more Matrix rooms.")
-    
-    # Get all rooms from Matrix
-    all_rooms = merge_room_data()
-    room_options = []
-    for room in all_rooms:
-        if room.get('name') and room.get('room_id'):
-            room_options.append(f"{room.get('name')} - {room.get('room_id')}")
-    
-    # Room selection
-    selected_rooms = st.multiselect("Select Room(s)", room_options, key="mod_announcement_rooms")
-    
-    # Option to select by category
-    st.write("**Or select rooms by category:**")
-    all_categories = set()
-    for room in all_rooms:
-        if 'categories' in room:
-            all_categories.update(room['categories'])
-    
-    selected_categories = st.multiselect("Categories", sorted(all_categories), key="mod_announcement_categories")
-    
-    # Get room IDs from selections
-    room_ids = []
-    
-    # Add specifically selected rooms
-    for selected_room in selected_rooms:
-        room_name, room_id = selected_room.rsplit(" - ", 1)
-        if room_id not in room_ids:
-            room_ids.append(room_id)
-    
-    # Add rooms from categories
-    if selected_categories:
-        for room in all_rooms:
-            room_categories = room.get('categories', [])
-            if any(category in room_categories for category in selected_categories):
-                room_id = room.get('room_id')
-                if room_id and room_id not in room_ids:
-                    room_ids.append(room_id)
-    
-    # Message input
-    st.write("**Announcement Message:**")
-    announcement = st.text_area("Enter your announcement", key="mod_announcement_text", height=200)
-    
-    # Send button
-    if room_ids:
-        st.write(f"**Selected Rooms:** {len(room_ids)}")
-        
-        if st.button("Send Announcement", key="send_announcement_button"):
-            if not announcement:
-                st.error("Please enter an announcement message.")
-            else:
-                try:
-                    # Send the message
-                    success_count = 0
-                    failed_rooms = []
-                    
-                    for room_id in room_ids:
-                        # Find room name for display
-                        room_name = "Unknown Room"
-                        for room in all_rooms:
-                            if room.get('room_id') == room_id:
-                                room_name = room.get('name', "Unknown Room")
-                                break
-                        
-                        # Send the message
-                        success = send_room_message(room_id, announcement)
-                        
-                        if success:
-                            success_count += 1
-                        else:
-                            failed_rooms.append(room_name)
-                    
-                    if success_count == len(room_ids):
-                        st.success(f"Announcement sent to all {success_count} rooms successfully!")
-                    elif success_count > 0:
-                        st.warning(f"Announcement sent to {success_count} rooms. Failed to send to: {', '.join(failed_rooms)}")
-                    else:
-                        st.error("Failed to send announcement to any rooms.")
-                except Exception as e:
-                    st.error(f"Error sending announcement: {e}")
-    else:
-        st.warning("Please select at least one room or category.")
-
-def render_prompt_library():
-    """Render the prompt library section"""
-    st.subheader("Admin Prompt Library")
-    st.info("Copy and paste these pre-written prompts for common moderation scenarios.")
-    
-    # Get all prompts
-    prompts = get_all_prompts()
-    
-    # Create a dropdown for prompt categories
-    categories = list(prompts.keys())
-    selected_category = st.selectbox("Select Prompt Category", categories, key="prompt_category_select")
-    
-    if selected_category:
-        # Display prompts in the selected category
-        category_prompts = prompts.get(selected_category, {})
-        
-        for title, content in category_prompts.items():
-            with st.expander(title):
-                st.text_area(
-                    "Copy this prompt",
-                    value=content,
-                    height=200,
-                    key=f"prompt_{title.replace(' ', '_').lower()}"
-                )
-                
-                # Add buttons to send the prompt
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    if st.button("Send to Selected User", key=f"send_user_{title.replace(' ', '_').lower()}"):
-                        st.session_state['direct_message_text'] = content
-                        st.info("Prompt copied to Direct Message tab. Please go there to select a user and send.")
-                
-                with col2:
-                    if st.button("Send as Announcement", key=f"send_announcement_{title.replace(' ', '_').lower()}"):
-                        st.session_state['mod_announcement_text'] = content
-                        st.info("Prompt copied to Mod Announcement tab. Please go there to select rooms and send.")
-
-def render_user_settings():
-    """Render the user settings tab"""
-    st.header("User Settings")
-    
-    # Load current settings
-    webhook_enabled = os.getenv("WEBHOOK_ENABLED", "true").lower() == "true"
-    user_created_webhook = os.getenv("WEBHOOK_USER_CREATED", "true").lower() == "true"
-    password_reset_webhook = os.getenv("WEBHOOK_PASSWORD_RESET", "true").lower() == "true"
-    selected_theme = os.getenv("THEME", "light")
-    
-    # Authentication settings
-    st.subheader("Authentication Settings")
-    
-    authentik_api_url = st.text_input("Authentik API URL", value=Config.AUTHENTIK_API_URL or "", key="user_authentik_api_url")
-    authentik_api_token = st.text_input("Authentik API Token", value=Config.AUTHENTIK_API_TOKEN or "", type="password", key="user_authentik_api_token")
-    main_group_id = st.text_input("Main Group ID", value=Config.MAIN_GROUP_ID or "", key="user_main_group_id")
-    flow_id = st.text_input("Flow ID", value=Config.FLOW_ID or "", key="user_flow_id")
-    
-    # Auth0 settings
-    st.subheader("Auth0 Settings (Optional)")
-    auth0_domain = st.text_input("Auth0 Domain", value=os.getenv("AUTH0_DOMAIN", ""), key="user_auth0_domain")
-    auth0_callback_url = st.text_input("Auth0 Callback URL", value=os.getenv("AUTH0_CALLBACK_URL", ""), key="user_auth0_callback_url")
-    auth0_authorize_url = st.text_input("Auth0 Authorize URL", value=os.getenv("AUTH0_AUTHORIZE_URL", ""), key="user_auth0_authorize_url")
-    auth0_token_url = st.text_input("Auth0 Token URL", value=os.getenv("AUTH0_TOKEN_URL", ""), key="user_auth0_token_url")
-    
-    # Webhook settings
-    st.subheader("Webhook Settings")
-    webhook_enabled = st.checkbox("Enable Webhooks", value=webhook_enabled, key="user_webhook_enabled")
-    webhook_url = st.text_input("Webhook URL", value=Config.WEBHOOK_URL or "", key="user_webhook_url")
-    webhook_secret = st.text_input("Webhook Secret", value=Config.WEBHOOK_SECRET or "", type="password", key="user_webhook_secret")
-    
-    # Webhook events
-    st.write("Webhook Events:")
-    user_created_webhook = st.checkbox("User Created", value=user_created_webhook, key="user_webhook_user_created")
-    password_reset_webhook = st.checkbox("Password Reset", value=password_reset_webhook, key="user_webhook_password_reset")
-    
-    # URL Shortener settings
-    st.subheader("URL Shortener Settings")
-    shlink_url = st.text_input("Shlink URL", value=Config.SHLINK_URL or "", key="user_shlink_url")
-    shlink_api_token = st.text_input("Shlink API Token", value=Config.SHLINK_API_TOKEN or "", type="password", key="user_shlink_api_token")
-    
-    # Security settings
-    st.subheader("Security Settings")
-    encryption_password = st.text_input("Encryption Password", value=os.getenv("ENCRYPTION_PASSWORD", ""), type="password", key="user_encryption_password")
-    
-    # Theme settings
-    st.subheader("Theme Settings")
-    theme_index = 0 if selected_theme == "light" else 1
-    selected_theme = st.selectbox("Theme", ["light", "dark"], index=theme_index, key="user_theme")
-    
-    # Save button
-    if st.button("Save User Settings", key="user_save_button"):
-        success = save_user_settings(
-            webhook_enabled, 
-            user_created_webhook, 
-            password_reset_webhook, 
-            selected_theme, 
-            shlink_url,
-            auth0_domain, 
-            auth0_callback_url, 
-            auth0_authorize_url, 
-            auth0_token_url, 
-            authentik_api_url,
-            webhook_url, 
-            authentik_api_token, 
-            shlink_api_token, 
-            main_group_id, 
-            flow_id, 
-            encryption_password, 
-            webhook_secret
+        message = st.text_area(
+            "Direct Message", 
+            value=default_message,
+            height=150, 
+            help="Enter your message here. This will be sent as a direct message.",
+            key="direct_message_text_input"
         )
         
-        if success:
-            st.success("User settings saved successfully! Please restart the application for changes to take effect.")
+        if st.button("Send Message", key="direct_message_send_button"):
+            if not message.strip():
+                st.warning("Please enter a message before sending.")
+                return
+                
+            # Set up progress state
+            st.session_state['sending_message'] = True
+            st.session_state['message_user_id'] = user_id
+            st.session_state['message_text'] = message
+            st.info("Sending message...")
+            st.rerun()
+
+    # Handle message sending in a separate state
+    if 'sending_message' in st.session_state and st.session_state['sending_message']:
+        # Use a background thread to send the message
+        import threading
+        import asyncio
+        
+        # Define the function to run in the background
+        def send_message():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                from app.utils.matrix_actions import send_matrix_message_async
+                st.session_state['message_result'] = loop.run_until_complete(
+                    send_matrix_message_async(
+                        st.session_state['message_user_id'], 
+                        st.session_state['message_text']
+                    )
+                )
+            except Exception as e:
+                st.session_state['message_error'] = str(e)
+            finally:
+                loop.close()
+                st.session_state['sending_message'] = False
+        
+        # Start the background thread if not already started
+        if 'message_thread_started' not in st.session_state:
+            st.session_state['message_thread_started'] = True
+            thread = threading.Thread(target=send_message)
+            thread.start()
+            st.info("Sending message, please wait...")
+            st.rerun()
+        
+        # Check if we have a result or an error
+        if 'message_error' in st.session_state:
+            st.error(f"Error sending message: {st.session_state['message_error']}")
+            del st.session_state['message_error']
+            del st.session_state['sending_message']
+            del st.session_state['message_thread_started']
+        
+        if 'message_result' in st.session_state:
+            result = st.session_state['message_result']
+            if result:
+                st.success(f"Message sent successfully!")
+                # Clear the message
+                st.session_state['direct_message_text'] = ''
+            else:
+                st.error(f"Failed to send message")
+            
+            del st.session_state['message_result']
+            del st.session_state['sending_message']
+            del st.session_state['message_thread_started']
+            del st.session_state['message_user_id']
+            del st.session_state['message_text']
+
+def render_user_settings():
+    """Render user settings section"""
+    st.subheader("Integration Settings")
+    
+    # Load current settings with defaults for missing attributes
+    selected_theme = os.getenv("THEME", "light")  # Default to light if not set
+    shlink_url = getattr(Config, "SHLINK_URL", "")
+    auth0_domain = getattr(Config, "AUTH0_DOMAIN", "")
+    auth0_callback_url = getattr(Config, "AUTH0_CALLBACK_URL", "")
+    auth0_authorize_url = getattr(Config, "AUTH0_AUTHORIZE_URL", "")
+    auth0_token_url = getattr(Config, "AUTH0_TOKEN_URL", "")
+    authentik_api_url = getattr(Config, "AUTHENTIK_API_URL", "")
+    authentik_api_token = getattr(Config, "AUTHENTIK_API_TOKEN", "")
+    shlink_api_token = getattr(Config, "SHLINK_API_TOKEN", "")
+    main_group_id = getattr(Config, "MAIN_GROUP_ID", "")
+    flow_id = getattr(Config, "FLOW_ID", "")
+    encryption_password = getattr(Config, "ENCRYPTION_PASSWORD", "")
+    
+    # Create a form for saving settings
+    with st.form("user_settings_form_tab"):
+        # Theme selection
+        theme_options = ["light", "dark"]
+        selected_theme = st.selectbox("Select theme", theme_options, 
+                                      index=theme_options.index(selected_theme) if selected_theme in theme_options else 0,
+                                      key="settings_theme")
+        
+        # Group ID settings
+        st.subheader("Group and Flow Settings")
+        main_group_id = st.text_input("Default Group ID", value=main_group_id or "", key="settings_main_group_id")
+        flow_id = st.text_input("Flow ID", value=flow_id or "", key="settings_flow_id")
+        
+        # Auth0 settings
+        st.subheader("Auth0 Configuration")
+        auth0_domain = st.text_input("Auth0 Domain", value=auth0_domain or "", key="settings_auth0_domain")
+        auth0_callback_url = st.text_input("Auth0 Callback URL", value=auth0_callback_url or "", key="settings_auth0_callback_url")
+        auth0_authorize_url = st.text_input("Auth0 Authorize URL", value=auth0_authorize_url or "", key="settings_auth0_authorize_url")
+        auth0_token_url = st.text_input("Auth0 Token URL", value=auth0_token_url or "", key="settings_auth0_token_url")
+        
+        # Authentik settings
+        st.subheader("Authentik Configuration")
+        authentik_api_url = st.text_input("Authentik API URL", value=authentik_api_url or "", key="settings_authentik_api_url")
+        authentik_api_token = st.text_input("Authentik API Token", value=authentik_api_token or "", type="password", key="settings_authentik_api_token")
+        
+        # Shlink settings
+        st.subheader("Shlink URL Shortener Configuration")
+        shlink_url = st.text_input("Shlink URL", value=shlink_url or "", key="settings_shlink_url")
+        shlink_api_token = st.text_input("Shlink API Token", value=shlink_api_token or "", type="password", key="settings_shlink_api_token")
+        
+        # Encryption settings
+        st.subheader("Encryption Settings")
+        encryption_password = st.text_input("Encryption Password", value=encryption_password or "", type="password", key="settings_encryption_password")
+        
+        submitted = st.form_submit_button("Save Settings")
+        
+        if submitted:
+            if save_user_settings(
+                selected_theme=selected_theme,
+                shlink_url=shlink_url,
+                auth0_domain=auth0_domain,
+                auth0_callback_url=auth0_callback_url,
+                auth0_authorize_url=auth0_authorize_url,
+                auth0_token_url=auth0_token_url,
+                authentik_api_url=authentik_api_url,
+                authentik_api_token=authentik_api_token,
+                shlink_api_token=shlink_api_token,
+                main_group_id=main_group_id,
+                flow_id=flow_id,
+                encryption_password=encryption_password
+            ):
+                st.success("Settings saved successfully! Refresh the page to see the changes.")
+            else:
+                st.error("Failed to save settings.")
+
+def render_prompts_settings():
+    """Render the prompts management tab"""
+    st.header("Prompts Management")
+    
+    from app.utils.prompts_manager import load_prompts, save_prompts, add_or_update_prompt, delete_prompt
+    
+    # Load all prompts
+    prompts_data = load_prompts()
+    
+    # Create tabs for different prompt operations
+    view_tab, edit_tab, create_tab, associate_tab = st.tabs([
+        "View Prompts", 
+        "Edit Prompt", 
+        "Create Prompt",
+        "Associate Prompts"
+    ])
+    
+    with view_tab:
+        st.subheader("All Prompts")
+        
+        if not prompts_data["prompts"]:
+            st.info("No prompts found. Create a new prompt to get started.")
         else:
-            st.error("There was an error saving some settings. Please check the logs for details.")
+            # Create a dataframe for displaying prompts
+            import pandas as pd
+            prompt_list = []
+            for prompt in prompts_data["prompts"]:
+                prompt_list.append({
+                    "ID": prompt["id"],
+                    "Name": prompt["name"],
+                    "Description": prompt["description"],
+                    "Tags": ", ".join(prompt["tags"]),
+                    "Content": prompt["content"][:50] + "..." if len(prompt["content"]) > 50 else prompt["content"]
+                })
+            
+            prompts_df = pd.DataFrame(prompt_list)
+            st.dataframe(prompts_df, use_container_width=True)
+            
+            # Allow selecting a prompt to view details
+            prompt_ids = [prompt["id"] for prompt in prompts_data["prompts"]]
+            selected_prompt_id = st.selectbox("Select a prompt to view details", ["-- Select a prompt --"] + prompt_ids)
+            
+            if selected_prompt_id and selected_prompt_id != "-- Select a prompt --":
+                # Find the selected prompt
+                selected_prompt = next((p for p in prompts_data["prompts"] if p["id"] == selected_prompt_id), None)
+                
+                if selected_prompt:
+                    st.write("### Prompt Details")
+                    st.write(f"**ID:** {selected_prompt['id']}")
+                    st.write(f"**Name:** {selected_prompt['name']}")
+                    st.write(f"**Description:** {selected_prompt['description']}")
+                    st.write(f"**Tags:** {', '.join(selected_prompt['tags'])}")
+                    
+                    st.write("**Content:**")
+                    st.text_area(
+                        "Prompt Content",
+                        value=selected_prompt['content'],
+                        height=200,
+                        disabled=True,
+                        key=f"view_prompt_{selected_prompt_id}"
+                    )
+                    
+                    # Display associations if any
+                    room_associations = [room_id for room_id, prompt_id in prompts_data["room_associations"].items() if prompt_id == selected_prompt_id]
+                    category_associations = [category for category, prompt_id in prompts_data["category_associations"].items() if prompt_id == selected_prompt_id]
+                    
+                    if room_associations:
+                        st.write(f"**Associated with rooms:** {', '.join(room_associations)}")
+                    
+                    if category_associations:
+                        st.write(f"**Associated with categories:** {', '.join(category_associations)}")
+                    
+                    # Add delete button
+                    if st.button(f"Delete Prompt: {selected_prompt_id}"):
+                        updated_prompts = delete_prompt(prompts_data, selected_prompt_id)
+                        if save_prompts(updated_prompts):
+                            st.success(f"Prompt '{selected_prompt_id}' deleted successfully!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to delete prompt. Please check logs for details.")
+                
+    with edit_tab:
+        st.subheader("Edit Existing Prompt")
+        
+        if not prompts_data["prompts"]:
+            st.info("No prompts found. Create a new prompt first.")
+        else:
+            # Select a prompt to edit
+            prompt_ids = [prompt["id"] for prompt in prompts_data["prompts"]]
+            edit_prompt_id = st.selectbox("Select a prompt to edit", ["-- Select a prompt --"] + prompt_ids, key="edit_prompt_select")
+            
+            if edit_prompt_id and edit_prompt_id != "-- Select a prompt --":
+                # Find the selected prompt
+                edit_prompt = next((p for p in prompts_data["prompts"] if p["id"] == edit_prompt_id), None)
+                
+                if edit_prompt:
+                    with st.form("edit_prompt_form"):
+                        prompt_name = st.text_input("Prompt Name", value=edit_prompt["name"])
+                        prompt_description = st.text_input("Description", value=edit_prompt["description"])
+                        prompt_content = st.text_area("Content", value=edit_prompt["content"], height=300)
+                        prompt_tags = st.text_input("Tags (comma-separated)", value=", ".join(edit_prompt["tags"]))
+                        
+                        submitted = st.form_submit_button("Update Prompt")
+                        
+                        if submitted:
+                            # Process tags
+                            tags = [tag.strip() for tag in prompt_tags.split(",") if tag.strip()]
+                            
+                            # Update the prompt
+                            updated_prompts = add_or_update_prompt(
+                                prompts_data,
+                                edit_prompt_id,
+                                prompt_name,
+                                prompt_content,
+                                prompt_description,
+                                tags
+                            )
+                            
+                            if save_prompts(updated_prompts):
+                                st.success(f"Prompt '{edit_prompt_id}' updated successfully!")
+                            else:
+                                st.error("Failed to update prompt. Please check logs for details.")
+    
+    with create_tab:
+        st.subheader("Create New Prompt")
+        
+        with st.form("create_prompt_form"):
+            new_prompt_id = st.text_input("Prompt ID (unique identifier)", placeholder="e.g., welcome_message_1")
+            new_prompt_name = st.text_input("Prompt Name", placeholder="e.g., Welcome Message")
+            new_prompt_description = st.text_input("Description", placeholder="e.g., Standard welcome message for new users")
+            new_prompt_content = st.text_area(
+                "Content", 
+                placeholder="Enter your prompt template here. You can use variables like {name}, {username}, etc.",
+                height=300
+            )
+            new_prompt_tags = st.text_input("Tags (comma-separated)", placeholder="e.g., welcome, onboarding, new user")
+            
+            submitted = st.form_submit_button("Create Prompt")
+            
+            if submitted:
+                if not new_prompt_id or not new_prompt_name or not new_prompt_content:
+                    st.error("Prompt ID, Name, and Content are required fields")
+                else:
+                    # Process tags
+                    tags = [tag.strip() for tag in new_prompt_tags.split(",") if tag.strip()]
+                    
+                    # Check if prompt ID already exists
+                    prompt_exists = any(p["id"] == new_prompt_id for p in prompts_data["prompts"])
+                    if prompt_exists:
+                        st.error(f"A prompt with ID '{new_prompt_id}' already exists. Please use a different ID.")
+                    else:
+                        # Add the new prompt
+                        updated_prompts = add_or_update_prompt(
+                            prompts_data,
+                            new_prompt_id,
+                            new_prompt_name,
+                            new_prompt_content,
+                            new_prompt_description,
+                            tags
+                        )
+                        
+                        if save_prompts(updated_prompts):
+                            st.success(f"Prompt '{new_prompt_id}' created successfully!")
+                            # Clear form
+                            st.session_state["create_prompt_form"] = {
+                                "new_prompt_id": "",
+                                "new_prompt_name": "",
+                                "new_prompt_description": "",
+                                "new_prompt_content": "",
+                                "new_prompt_tags": ""
+                            }
+                            st.rerun()
+                        else:
+                            st.error("Failed to create prompt. Please check logs for details.")
+    
+    with associate_tab:
+        st.subheader("Associate Prompts with Rooms or Categories")
+        
+        if not prompts_data["prompts"]:
+            st.info("No prompts found. Create a new prompt first.")
+        else:
+            # Create tabs for room and category associations
+            room_tab, category_tab = st.tabs(["Room Associations", "Category Associations"])
+            
+            with room_tab:
+                st.write("Associate prompts with specific Matrix rooms")
+                
+                # Get available rooms
+                from app.utils.matrix_actions import merge_room_data
+                matrix_rooms = merge_room_data()
+                
+                if not matrix_rooms:
+                    st.info("No Matrix rooms found. Configure Matrix rooms first.")
+                else:
+                    # Create room selection
+                    room_options = ["-- Select a room --"]
+                    for room in matrix_rooms:
+                        if room.get('name') and room.get('room_id'):
+                            room_options.append(f"{room.get('name')} - {room.get('room_id')}")
+                    
+                    selected_room = st.selectbox("Select Room", room_options, key="associate_room_select")
+                    
+                    if selected_room and selected_room != "-- Select a room --":
+                        # Extract room ID
+                        room_name, room_id = selected_room.rsplit(" - ", 1)
+                        
+                        # Get current prompt association
+                        current_prompt_id = prompts_data["room_associations"].get(room_id)
+                        
+                        # Create prompt selection
+                        prompt_options = ["-- None --"] + [f"{p['id']} - {p['name']}" for p in prompts_data["prompts"]]
+                        default_index = 0
+                        if current_prompt_id:
+                            for i, option in enumerate(prompt_options):
+                                if option.startswith(f"{current_prompt_id} - "):
+                                    default_index = i
+                                    break
+                        
+                        selected_prompt = st.selectbox(
+                            f"Select Prompt for {room_name}",
+                            prompt_options,
+                            index=default_index,
+                            key=f"room_prompt_{room_id}"
+                        )
+                        
+                        if st.button("Save Room Association"):
+                            from app.utils.prompts_manager import associate_prompt_with_room
+                            
+                            if selected_prompt == "-- None --":
+                                # Remove association if it exists
+                                if room_id in prompts_data["room_associations"]:
+                                    del prompts_data["room_associations"][room_id]
+                                    if save_prompts(prompts_data):
+                                        st.success(f"Removed prompt association for room {room_name}")
+                                        st.rerun()
+                                    else:
+                                        st.error("Failed to update prompt associations")
+                            else:
+                                # Extract prompt ID
+                                prompt_id = selected_prompt.split(" - ")[0]
+                                
+                                # Associate prompt with room
+                                updated_prompts = associate_prompt_with_room(prompts_data, prompt_id, room_id)
+                                
+                                if save_prompts(updated_prompts):
+                                    st.success(f"Associated prompt '{prompt_id}' with room {room_name}")
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to update prompt association")
+            
+            with category_tab:
+                st.write("Associate prompts with room categories")
+                
+                # Get all categories from matrix rooms
+                all_categories = set()
+                from app.utils.matrix_actions import merge_room_data
+                matrix_rooms = merge_room_data()
+                
+                for room in matrix_rooms:
+                    if 'categories' in room:
+                        all_categories.update(room['categories'])
+                
+                if not all_categories:
+                    st.info("No room categories found. Configure room categories first.")
+                else:
+                    # Create category selection
+                    category_options = ["-- Select a category --"] + sorted(list(all_categories))
+                    selected_category = st.selectbox("Select Category", category_options, key="associate_category_select")
+                    
+                    if selected_category and selected_category != "-- Select a category --":
+                        # Get current prompt association
+                        current_prompt_id = prompts_data["category_associations"].get(selected_category)
+                        
+                        # Create prompt selection
+                        prompt_options = ["-- None --"] + [f"{p['id']} - {p['name']}" for p in prompts_data["prompts"]]
+                        default_index = 0
+                        if current_prompt_id:
+                            for i, option in enumerate(prompt_options):
+                                if option.startswith(f"{current_prompt_id} - "):
+                                    default_index = i
+                                    break
+                        
+                        selected_prompt = st.selectbox(
+                            f"Select Prompt for {selected_category} category",
+                            prompt_options,
+                            index=default_index,
+                            key=f"category_prompt_{selected_category}"
+                        )
+                        
+                        if st.button("Save Category Association"):
+                            from app.utils.prompts_manager import associate_prompt_with_category
+                            
+                            if selected_prompt == "-- None --":
+                                # Remove association if it exists
+                                if selected_category in prompts_data["category_associations"]:
+                                    del prompts_data["category_associations"][selected_category]
+                                    if save_prompts(prompts_data):
+                                        st.success(f"Removed prompt association for category {selected_category}")
+                                        st.rerun()
+                                    else:
+                                        st.error("Failed to update prompt associations")
+                            else:
+                                # Extract prompt ID
+                                prompt_id = selected_prompt.split(" - ")[0]
+                                
+                                # Associate prompt with category
+                                updated_prompts = associate_prompt_with_category(prompts_data, prompt_id, selected_category)
+                                
+                                if save_prompts(updated_prompts):
+                                    st.success(f"Associated prompt '{prompt_id}' with category {selected_category}")
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to update prompt association")
 
 def render_advanced_settings():
     """Render the advanced settings tab"""
     st.header("Advanced Settings")
     st.warning("These settings are for advanced users only. Incorrect configuration may cause the application to malfunction.")
     
-    
     # OpenAI settings
     st.subheader("OpenAI Integration")
-    openai_api_key = st.text_input("OpenAI API Key", value=Config.OPENAI_API_KEY or "", type="password", key="advanced_openai_api_key")
+    openai_api_key = st.text_input("OpenAI API Key", value=getattr(Config, "OPENAI_API_KEY", "") or "", type="password", key="advanced_openai_api_key")
     
     # Save button
     if st.button("Save Advanced Settings", key="advanced_save_button"):

@@ -3,7 +3,7 @@ import streamlit as st
 from datetime import datetime, timedelta
 import logging
 from app.utils.config import Config
-from app.db.database import get_db
+from app.db.session import get_db
 from app.db.operations import User, AdminEvent
 from app.ui.home import render_home_page
 from app.ui.forms import (
@@ -15,6 +15,8 @@ from app.ui.summary import main as render_summary_page
 from app.ui.help_resources import main as render_help_page
 from app.ui.prompts import main as render_prompts_page
 from app.ui.matrix import render_matrix_messaging_page
+from app.ui.admin import render_admin_dashboard
+from app.ui.signal_association import render_signal_association
 from app.utils.helpers import (
     create_unique_username,
     update_username,
@@ -24,6 +26,10 @@ from app.utils.helpers import (
 )
 from app.db.init_db import init_db
 from app.utils.helpers import setup_logging
+from app.db.models import *  # Import models to ensure tables are created
+from app.auth.callback import auth_callback
+from app.auth.auth_middleware import auth_middleware, admin_middleware
+from app.auth.authentication import is_authenticated, require_authentication
 
 # Initialize logging first
 setup_logging()
@@ -40,6 +46,12 @@ def initialize_session_state():
         st.session_state['user_count'] = 0
     if 'active_users' not in st.session_state:
         st.session_state['active_users'] = 0
+    if 'is_authenticated' not in st.session_state:
+        st.session_state['is_authenticated'] = False
+    if 'is_admin' not in st.session_state:
+        st.session_state['is_admin'] = False
+    if 'current_page' not in st.session_state:
+        st.session_state['current_page'] = 'Create User'
 
 def setup_page_config():
     """Set up the Streamlit page configuration"""
@@ -55,23 +67,75 @@ async def render_sidebar():
     # Use synchronous Streamlit components
     st.sidebar.title("Navigation")
     
-    # Get the current page from session state or default to "Create User"
+    # Get the current page from session state or default to appropriate page
     current_page = st.session_state.get('current_page', 'Create User')
     
+    # Define pages based on authentication status and admin rights
+    is_authenticated = st.session_state.get('is_authenticated', False)
+    is_admin = st.session_state.get('is_admin', False)
+    
+    # Define page options based on authentication and admin status
+    if is_authenticated:
+        if is_admin:
+            # Admin users get all pages
+            page_options = [
+                "Create User", 
+                "List & Manage Users",
+                "Create Invite",
+                "Matrix Messages and Rooms",
+                "Signal Association",
+                "Settings",
+                "Prompts Manager",
+                "Admin Dashboard"
+            ]
+        else:
+            # Regular authenticated users
+            page_options = [
+                "Create User",
+                "List & Manage Users",
+                "Create Invite",
+                "Matrix Messages and Rooms",
+                "Signal Association",
+                "Prompts Manager"
+            ]
+    else:
+        # Non-authenticated users only see login page
+        page_options = ["Create User"]
+    
+    # If current_page is not in available options, reset to the first available option
+    if current_page not in page_options and page_options:
+        current_page = page_options[0]
+        st.session_state['current_page'] = current_page
+    
     # Create the page selection dropdown
-    selected_page = st.sidebar.selectbox(
-        "Select Page",
-        [
-            "Create User",
-            "Create Invite",
-            "List & Manage Users",
-            "Matrix Messages and Rooms",
-            "Settings",
-            "Prompts Manager"
-        ],
-        index=0 if current_page not in st.session_state else None,
-        key='current_page'
-    )
+    if page_options:
+        selected_page = st.sidebar.selectbox(
+            "Select Page",
+            page_options,
+            index=page_options.index(current_page) if current_page in page_options else 0,
+            key='current_page'
+        )
+    else:
+        # Fallback for empty page_options (shouldn't happen)
+        selected_page = "Create User"
+        st.session_state['current_page'] = selected_page
+    
+    # Show login/logout in sidebar
+    st.sidebar.markdown("---")
+    if is_authenticated:
+        username = st.session_state.get('username', '')
+        st.sidebar.write(f"Logged in as: **{username}**")
+        if is_admin:
+            st.sidebar.write("📊 Admin privileges")
+        
+        if st.sidebar.button("Logout"):
+            # Clear session state and redirect
+            for key in list(st.session_state.keys()):
+                if key != 'current_page':
+                    del st.session_state[key]
+            st.session_state['is_authenticated'] = False
+            st.session_state['is_admin'] = False
+            st.rerun()
     
     return selected_page
 
@@ -79,25 +143,66 @@ async def render_main_content():
     """Render the main content area"""
     st.title("Community Dashboard")
     
+    # Check for auth callback parameters first
+    query_params = st.query_params
+    if 'code' in query_params and 'state' in query_params:
+        # Process authentication callback if present
+        logging.info("Authentication callback detected in URL, processing...")
+        auth_callback()
+        return  # Return early after handling callback
+    
     # Get the current page from session state
     page = st.session_state.get('current_page', 'Create User')
+    
+    # Global authentication check for all pages
+    if not is_authenticated():
+        # Show login page instead of the requested page
+        from app.ui.common import display_login_button
+        st.markdown("## Welcome to the Community Dashboard")
+        st.markdown("Please log in to access all features.")
+        display_login_button()
+        return
     
     try:
         # Import UI components only when needed to avoid circular imports
         if page == "Create User":
-            await render_create_user_form()
+            # Protect with admin check
+            if st.session_state.get('is_admin', False):
+                await render_create_user_form()
+            else:
+                st.error("You need administrator privileges to access this page.")
+                st.info("Please contact an administrator if you need to create a user account.")
+        
         elif page == "Create Invite":
             await render_invite_form()
+            
         elif page == "List & Manage Users":
             await display_user_list()
+            
         elif page == "Matrix Messages and Rooms":
             await render_matrix_messaging_page()
+            
+        elif page == "Signal Association":
+            render_signal_association()
+            
         elif page == "Settings":
-            from app.pages.settings import render_settings_page
-            render_settings_page()
+            # Protect with admin check
+            if st.session_state.get('is_admin', False):
+                from app.pages.settings import render_settings_page
+                render_settings_page()
+            else:
+                st.error("You need administrator privileges to access this page.")
+                
         elif page == "Prompts Manager":
             from app.pages.prompts_manager import render_prompts_manager
             render_prompts_manager()
+            
+        elif page == "Admin Dashboard":
+            # Protect with admin check
+            if st.session_state.get('is_admin', False):
+                render_admin_dashboard()
+            else:
+                st.error("You need administrator privileges to access this page.")
     except Exception as e:
         st.error(f"Error rendering content: {str(e)}")
         logging.error(f"Error in render_main_content: {str(e)}", exc_info=True)
@@ -144,10 +249,6 @@ async def main():
             logging.info("✅ Discourse integration is fully configured")
         else:
             logging.warning("⚠️ Discourse integration is not fully configured")
-        
-        # Initialize current_page in session state if not present
-        if 'current_page' not in st.session_state:
-            st.session_state['current_page'] = 'Create User'
         
         # Render the sidebar and get selected page
         # The selectbox widget will automatically update st.session_state.current_page

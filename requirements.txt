@@ -19,3 +19,4 @@ alembic
 openai
 email-validator
 matrix-nio
+nest-asyncio

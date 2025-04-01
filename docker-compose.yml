@@ -2,7 +2,7 @@ services:
   streamlit:
     build: .
     ports:
-      - "${PORT:-8503}:8502"  # Map container's 8502 to host's PORT (default 8503)
+      - "${PORT:-8503}:${PORT:-8503}"  # Map container's internal port to host's port (default 8503)
     volumes:
       - .:/app
     environment:
@@ -13,7 +13,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8502"]
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8503}"]
       interval: 30s
       timeout: 10s
       retries: 3

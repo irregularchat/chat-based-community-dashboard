@@ -65,7 +65,7 @@ def test_email_connection(mocker):
     # Mock Config values
     mocker.patch.object(Config, 'SMTP_SERVER', 'test.smtp.com')
     mocker.patch.object(Config, 'SMTP_PORT', '587')
-    mocker.patch.object(Config, 'SMTP_USER', 'test@test.com')
+    mocker.patch.object(Config, 'SMTP_USERNAME', 'test@test.com')
     mocker.patch.object(Config, 'SMTP_PASSWORD', 'password')
     
     # Test successful connection

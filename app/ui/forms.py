@@ -147,7 +147,7 @@ def parse_and_rerun():
             # If we're updating name fields, we should update the username too if it was auto-generated
             first_name = st.session_state.get('first_name_input', '')
             last_name = st.session_state.get('last_name_input', '')
-            logging.info(f"Triggering username generation with {first_name} {last_name}")
+            logging.info(f"Triggering username generation with first_name='{first_name}', last_name='{last_name}'")
         
         # Set a flag to indicate parsing was successful
         st.session_state["parsing_successful"] = True
@@ -181,6 +181,7 @@ async def render_create_user_form():
             st.session_state[key] = "" if key != 'selected_groups' else []
     
     # Also initialize the outside form fields if not already present
+    # But DO NOT modify them if they already exist to avoid the "cannot modify after widget instantiation" error
     for key in ['first_name_input_outside', 'last_name_input_outside', 'username_input_outside']:
         if key not in st.session_state:
             # Get the base key (without _outside)
@@ -191,6 +192,10 @@ async def render_create_user_form():
     # Initialize username auto-generation flag if not present
     if 'username_was_auto_generated' not in st.session_state:
         st.session_state['username_was_auto_generated'] = False
+    
+    # Initialize a new flag to indicate if username needs updating
+    if 'username_needs_update' not in st.session_state:
+        st.session_state['username_needs_update'] = False
 
     # Check if data was cleared
     was_cleared = st.session_state.get("clear_parse_data_flag", False)
@@ -201,176 +206,12 @@ async def render_create_user_form():
     # Get database connection
     db = next(get_db())
     
-    # Define callback to update username when first or last name changes
-    def update_username_from_inputs():
-        """
-        Generate a username based on first and last name inputs.
-        Checks both local database and SSO service for existing usernames.
-        """
-        # Only auto-generate username if username is empty or matches previous auto-generation
-        # This prevents overwriting a manually entered username
-        if (not st.session_state.get('username_input') or 
-            st.session_state.get('username_was_auto_generated', False)):
-            
-            first_name = st.session_state.get('first_name_input', '').strip().lower()
-            last_name = st.session_state.get('last_name_input', '').strip().lower()
-            
-            logging.info(f"Attempting username generation with first_name='{first_name}', last_name='{last_name}'")
-            
-            # Generate username even with partial information
-            if first_name or last_name:
-                # Handle different combinations of first/last name
-                if first_name and last_name:
-                    # First name and first letter of last name
-                    base_username = f"{first_name}-{last_name[0]}"
-                    logging.info(f"Generated base username from first+last: {base_username}")
-                elif first_name:
-                    # Just first name if that's all we have
-                    base_username = first_name
-                    logging.info(f"Generated base username from first name only: {base_username}")
-                else:
-                    # Just last name if that's all we have
-                    base_username = last_name
-                    logging.info(f"Generated base username from last name only: {base_username}")
-                
-                # Replace spaces with hyphens
-                base_username = base_username.replace(" ", "-")
-                
-                # Remove any special characters except hyphens
-                import re
-                base_username = re.sub(r'[^a-z0-9-]', '', base_username)
-                
-                # Ensure we have at least one character
-                if not base_username:
-                    base_username = "user"
-                    logging.info(f"Empty base username, using default: {base_username}")
-                
-                # Check for existing username in local database
-                existing_usernames = []
-                with next(get_db()) as db:
-                    local_existing = db.query(User).filter(User.username.like(f"{base_username}%")).all()
-                    existing_usernames = [user.username for user in local_existing]
-                    logging.info(f"Found {len(existing_usernames)} existing usernames in local DB with prefix {base_username}")
-                
-                # Also check for existing username in Authentik SSO
-                try:
-                    headers = {
-                        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-                        'Content-Type': 'application/json'
-                    }
-                    
-                    sso_usernames = []
-                    user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username__startswith={base_username}"
-                    response = requests.get(user_search_url, headers=headers, timeout=10)
-                    
-                    if response.status_code == 200:
-                        users = response.json().get('results', [])
-                        sso_usernames = [user['username'] for user in users]
-                        logging.info(f"Found {len(sso_usernames)} existing usernames in SSO starting with {base_username}")
-                    else:
-                        logging.warning(f"Failed to check SSO for existing usernames: {response.status_code}")
-                    
-                    # Combine both lists of existing usernames
-                    all_existing_usernames = list(set(existing_usernames + sso_usernames))
-                    logging.info(f"Total existing usernames: {len(all_existing_usernames)}")
-                    
-                    # Generate unique username
-                    final_username = base_username
-                    if final_username in all_existing_usernames:
-                        # Try to add numeric suffix
-                        suffix = 1
-                        while f"{base_username}{suffix}" in all_existing_usernames:
-                            suffix += 1
-                            # Safety check to avoid infinite loop
-                            if suffix > 100:
-                                import random
-                                # Add random suffix as fallback
-                                random_suffix = random.randint(100, 999)
-                                final_username = f"{base_username}{random_suffix}"
-                                logging.warning(f"Using random suffix after trying 100 sequential numbers: {final_username}")
-                                break
-                        else:
-                            final_username = f"{base_username}{suffix}"
-                    
-                    logging.info(f"Final generated username: {final_username}")
-                    
-                    # Update session state
-                    st.session_state['username_input'] = final_username
-                    st.session_state['username_was_auto_generated'] = True
-                    
-                    # Also update the outside form field to ensure consistency
-                    if 'username_input_outside' in st.session_state:
-                        st.session_state['username_input_outside'] = final_username
-                        logging.info(f"Updated username_input_outside with: {final_username}")
-                    
-                except Exception as e:
-                    # If there's an error checking SSO, fall back to just local check
-                    logging.error(f"Error checking SSO for existing usernames: {e}")
-                    if base_username in existing_usernames:
-                        # Generate a unique suffix
-                        suffix = 1
-                        while f"{base_username}{suffix}" in existing_usernames:
-                            suffix += 1
-                        suggested_username = f"{base_username}{suffix}"
-                    else:
-                        suggested_username = base_username
-                        
-                    st.session_state['username_input'] = suggested_username
-                    st.session_state['username_was_auto_generated'] = True
-                    logging.info(f"Generated username (fallback): {suggested_username}")
-                    
-                    # Also update the outside form field to ensure consistency
-                    if 'username_input_outside' in st.session_state:
-                        st.session_state['username_input_outside'] = suggested_username
-                        logging.info(f"Updated username_input_outside with fallback: {suggested_username}")
-
-    # Define callbacks for first and last name changes
-    def on_first_name_change():
-        """Update username when first name changes"""
-        logging.info("on_first_name_change triggered")
-        # Get the current value from the widget
-        if 'first_name_input_outside' in st.session_state:
-            # Update the form field value
-            st.session_state['first_name_input'] = st.session_state['first_name_input_outside']
-            logging.info(f"First name changed to: {st.session_state['first_name_input_outside']}")
-            # Now update username
-            update_username_from_inputs()
-            # Force rerun after username update for immediate feedback
-            st.rerun()
-    
-    def on_last_name_change():
-        """Update username when last name changes"""
-        logging.info("on_last_name_change triggered")
-        # Get the current value from the widget
-        if 'last_name_input_outside' in st.session_state:
-            # Update the form field value
-            st.session_state['last_name_input'] = st.session_state['last_name_input_outside']
-            logging.info(f"Last name changed to: {st.session_state['last_name_input_outside']}")
-            # Now update username
-            update_username_from_inputs()
-            # Force rerun after username update for immediate feedback
-            st.rerun()
-        
-    def on_username_manual_edit():
-        """Handle manual username edits"""
-        # Set flag to prevent auto-updates when user manually edits the username
-        st.session_state['username_was_auto_generated'] = False
-        
-        # Validate the username format
-        username = st.session_state.get('username_input', '')
-        if username:
-            # Remove any special characters except hyphens and alphanumeric
-            import re
-            cleaned_username = re.sub(r'[^a-z0-9-]', '', username.lower())
-            
-            # If the username changed after cleaning, update it
-            if cleaned_username != username:
-                st.session_state['username_input'] = cleaned_username
-
     # Run username update on initialization if we have some name data
-    if (st.session_state.get('first_name_input') or st.session_state.get('last_name_input')) and not st.session_state.get('username_input'):
+    if ((st.session_state.get('first_name_input') or 
+         st.session_state.get('last_name_input')) and 
+        not st.session_state.get('username_input')):
         update_username_from_inputs()
-
+    
     # Create tabs for different input methods
     create_tabs = st.tabs(["Manual Create", "Auto Create", "Advanced Options"])
     
@@ -398,10 +239,10 @@ async def render_create_user_form():
         with col2_outside:
             # Avoid using value parameter when using Session State
             st.text_input(
-                "Last Name *",
+                "Last Name",  # Removed the required asterisk since last name is optional
                 key="last_name_input_outside",
                 placeholder="e.g., Doe",
-                help="User's last name (required)",
+                help="User's last name (optional)",
                 on_change=on_last_name_change
             )
             
@@ -410,15 +251,32 @@ async def render_create_user_form():
                 st.session_state['last_name_input'] = st.session_state['last_name_input_outside']
         
         # Username field outside form to handle manual edits
-        st.text_input(
-            "Username *",
-            key="username_input_outside",
-            placeholder="e.g., johndoe123",
-            help="Username for login (required, must be unique). Auto-generated based on name.",
-            on_change=on_username_manual_edit
-        )
+        username_value = st.session_state.get('username_input', '')
+        # If we have a username that needs updating, prepare to initialize the field with it
+        if st.session_state.get('username_needs_update') and username_value:
+            # Reset the flag - it will be recreated on next change if needed
+            st.session_state['username_needs_update'] = False
+            # Here we're setting the initial value during widget creation, not modifying
+            # an existing widget value
+            st.text_input(
+                "Username *",
+                key="username_input_outside",
+                value=username_value,  # Set value during creation is fine
+                placeholder="e.g., johndoe123",
+                help="Username for login (required, must be unique). Auto-generated based on name.",
+                on_change=on_username_manual_edit
+            )
+        else:
+            # If no update needed, just render normally
+            st.text_input(
+                "Username *",
+                key="username_input_outside",
+                placeholder="e.g., johndoe123",
+                help="Username for login (required, must be unique). Auto-generated based on name.",
+                on_change=on_username_manual_edit
+            )
         
-        # Sync the username from outside to inside form
+        # Always sync from the widget to the internal value - this is safe
         if 'username_input_outside' in st.session_state:
             st.session_state['username_input'] = st.session_state['username_input_outside']
             
@@ -656,6 +514,267 @@ async def render_create_user_form():
         # - Notification preferences
         
         st.info("Advanced user options will be available in a future update.")
+
+def on_first_name_change():
+    """Update username when first name changes"""
+    logging.info("on_first_name_change triggered")
+    # Get the current value from the widget
+    if 'first_name_input_outside' in st.session_state:
+        # Update the form field value
+        st.session_state['first_name_input'] = st.session_state['first_name_input_outside']
+        logging.info(f"First name changed to: {st.session_state['first_name_input_outside']}")
+        # Now update username - will only update the internal value
+        username_updated = update_username_from_inputs()
+        if username_updated:
+            # Set flag to indicate username needs update on next rerun
+            st.session_state['username_needs_update'] = True
+            # Force rerun after username update for immediate feedback
+            st.rerun()
+
+def on_last_name_change():
+    """Update username when last name changes"""
+    logging.info("on_last_name_change triggered")
+    # Get the current value from the widget
+    if 'last_name_input_outside' in st.session_state:
+        # Update the form field value
+        st.session_state['last_name_input'] = st.session_state['last_name_input_outside']
+        logging.info(f"Last name changed to: {st.session_state['last_name_input_outside']}")
+        # Now update username - will only update the internal value
+        username_updated = update_username_from_inputs()
+        if username_updated:
+            # Set flag to indicate username needs update on next rerun
+            st.session_state['username_needs_update'] = True
+            # Force rerun after username update for immediate feedback
+            st.rerun()
+        
+def on_username_manual_edit():
+    """Handle manual username edits"""
+    # Set flag to prevent auto-updates when user manually edits the username
+    st.session_state['username_was_auto_generated'] = False
+    
+    # Validate the username format
+    if 'username_input_outside' in st.session_state:
+        username = st.session_state['username_input_outside']
+        # Update the internal value
+        st.session_state['username_input'] = username
+        
+        if username:
+            # Remove any special characters except hyphens and alphanumeric
+            import re
+            cleaned_username = re.sub(r'[^a-z0-9-]', '', username.lower())
+            
+            # If the username changed after cleaning
+            if cleaned_username != username:
+                st.session_state['username_input'] = cleaned_username
+                # Set flag to indicate username needs update on next rerun
+                st.session_state['username_needs_update'] = True
+                # Schedule a rerun
+                st.rerun()
+
+    # Run username update on initialization if we have some name data
+    if ((st.session_state.get('first_name_input') or 
+         st.session_state.get('last_name_input')) and 
+        not st.session_state.get('username_input')):
+        update_username_from_inputs()
+    
+    # Username field outside form to handle manual edits
+    username_value = st.session_state.get('username_input', '')
+    # If we have a username that needs updating, prepare to initialize the field with it
+    if st.session_state.get('username_needs_update') and username_value:
+        # Reset the flag - it will be recreated on next change if needed
+        st.session_state['username_needs_update'] = False
+        # Here we're setting the initial value during widget creation, not modifying
+        # an existing widget value
+        st.text_input(
+            "Username *",
+            key="username_input_outside",
+            value=username_value,  # Set value during creation is fine
+            placeholder="e.g., johndoe123",
+            help="Username for login (required, must be unique). Auto-generated based on name.",
+            on_change=on_username_manual_edit
+        )
+    else:
+        # If no update needed, just render normally
+        st.text_input(
+            "Username *",
+            key="username_input_outside",
+            placeholder="e.g., johndoe123",
+            help="Username for login (required, must be unique). Auto-generated based on name.",
+            on_change=on_username_manual_edit
+        )
+    
+    # Always sync from the widget to the internal value - this is safe
+    if 'username_input_outside' in st.session_state:
+        st.session_state['username_input'] = st.session_state['username_input_outside']
+
+    if st.session_state.get('username_was_auto_generated', False):
+        st.caption("Username auto-generated. Edit to create custom username.")
+        
+        # Add a check button to verify username uniqueness
+        if st.button("Check Username Availability", key="check_username_btn"):
+            username = st.session_state.get('username_input', '')
+            if username:
+                try:
+                    # Check in local database
+                    with next(get_db()) as db:
+                        local_existing = db.query(User).filter(User.username == username).first()
+                    
+                    # Check exact match in SSO
+                    headers = {
+                        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                        'Content-Type': 'application/json'
+                    }
+                    
+                    user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
+                    response = requests.get(user_search_url, headers=headers, timeout=10)
+                    
+                    if response.status_code == 200:
+                        sso_users = response.json().get('results', [])
+                        
+                        if not local_existing and not sso_users:
+                            st.success(f"Username '{username}' is available!")
+                            logging.info(f"Username check: '{username}' is available")
+                        else:
+                            st.error(f"Username '{username}' is already taken. Please choose another.")
+                            logging.warning(f"Username check: '{username}' is already taken")
+                            # Suggest a different username
+                            base_username = username
+                            # Generate a unique suffix
+                            existing_usernames = []
+                            if local_existing:
+                                # Get similar usernames
+                                similar_local = db.query(User).filter(User.username.like(f"{base_username}%")).all()
+                                existing_usernames = [user.username for user in similar_local]
+                            
+                            if sso_users:
+                                # Add SSO usernames
+                                similar_sso_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username__startswith={base_username}"
+                                sso_response = requests.get(similar_sso_url, headers=headers, timeout=10)
+                                if sso_response.status_code == 200:
+                                    similar_sso_users = sso_response.json().get('results', [])
+                                    sso_usernames = [user['username'] for user in similar_sso_users]
+                                    existing_usernames.extend(sso_usernames)
+                                
+                            # Find available username with suffix
+                            suffix = 1
+                            while f"{base_username}{suffix}" in existing_usernames:
+                                suffix += 1
+                            suggested_username = f"{base_username}{suffix}"
+                            st.info(f"Suggestion: How about '{suggested_username}'?")
+                    else:
+                        st.warning("Could not verify username availability with SSO service.")
+                        logging.warning(f"Username check: Could not verify with SSO: {response.status_code}")
+                except Exception as e:
+                    logging.error(f"Error checking username availability: {str(e)}")
+                    logging.error(traceback.format_exc())
+                    st.error("An error occurred while checking username availability.")
+    
+    # Add a divider before the form
+    st.divider()
+    st.caption("Review the information above and click 'Create User' when ready.")
+        
+    # Now create the actual form with hidden fields that will be submitted
+    with st.form("create_user_form"):
+        # Sync values between outside and inside forms
+        # We don't need to assign these directly in hidden fields, as they'll be
+        # read from session_state when needed
+        
+        # Create two columns for better layout
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Email field (not duplicated)
+            st.text_input(
+                "Email Address",
+                key="email_input",
+                placeholder="e.g., johndoe@example.com",
+                help="Email address for password resets and notifications"
+            )
+        
+        with col2:
+            st.text_input(
+                "Invited by",
+                key="invited_by_input",
+                placeholder="e.g., @janedoe",
+                help="Who invited this user to the platform"
+            )
+            
+            # Get all available groups
+            from app.auth.admin import get_authentik_groups
+            all_groups = get_authentik_groups()
+            
+            # Group selection
+            if all_groups:
+                # Initialize selected_groups if not in session state
+                if 'selected_groups' not in st.session_state:
+                    st.session_state['selected_groups'] = []
+                
+                # Find the main group ID if configured
+                main_group_id = Config.MAIN_GROUP_ID
+                
+                # Pre-select the main group if it exists
+                default_selection = [main_group_id] if main_group_id else []
+                
+                # Group selection with multiselect
+                selected_groups = st.multiselect(
+                    "Assign to Groups",
+                    options=[g.get('pk') for g in all_groups],
+                    default=default_selection,
+                    format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
+                    help="Select groups to assign the user to",
+                    key="group_selection"
+                )
+                
+                # Store in session state
+                st.session_state['selected_groups'] = selected_groups
+        
+        # Introduction text
+        st.text_area(
+            "Introduction",
+            key="intro_input",
+            height=100,
+            placeholder="e.g., Software Engineer at TechCorp with interests in AI and machine learning",
+            help="User's introduction or bio"
+        )
+        
+        # Add admin checkbox (only visible to admins)
+        is_admin = False
+        # Check if current user is an admin
+        from app.auth.admin import check_admin_permission
+        current_username = st.session_state.get("username", "")
+        if current_username and check_admin_permission(current_username):
+            is_admin = st.checkbox("Grant Admin Privileges", key="is_admin_checkbox", 
+                                  help="Make this user an administrator with full access to all features")
+        
+        # Submit buttons - Handle different Streamlit versions
+        try:
+            # Try to create three columns for buttons
+            cols = st.columns([1, 1, 1])
+            if len(cols) == 3:
+                col1, col2, col3 = cols
+                with col1:
+                    submit_button = st.form_submit_button("Create User")
+                with col2:
+                    clear_button = st.form_submit_button("Clear Form")
+                with col3:
+                    # This is just a placeholder for layout balance
+                    st.write("")
+            else:
+                # Fall back to two columns if three aren't created
+                col1, col2 = st.columns(2)
+                with col1:
+                    submit_button = st.form_submit_button("Create User")
+                with col2:
+                    clear_button = st.form_submit_button("Clear Form")
+        except Exception as e:
+            # Fall back to simple layout if columns fail
+            logging.warning(f"Error creating columns for buttons: {e}")
+            submit_button = st.form_submit_button("Create User")
+            clear_button = st.form_submit_button("Clear Form")
+        
+        # Display required fields note
+        st.markdown("**Note:** Fields marked with * are required")
+
     # Handle form submission
     if submit_button:
         # Validate required fields
@@ -663,9 +782,10 @@ async def render_create_user_form():
             st.error("First name is required.")
             return
         
-        if not st.session_state.get('last_name_input'):
-            st.error("Last name is required.")
-            return
+        # Last name is now optional
+        # if not st.session_state.get('last_name_input'):
+        #     st.error("Last name is required.")
+        #     return
         
         if not st.session_state.get('username_input'):
             st.error("Username is required.")
@@ -687,49 +807,60 @@ async def render_create_user_form():
         
         if username and full_name:
             with st.spinner("Creating user..."):
-                # Call create_user with admin status
-                # Directly await the create_user function instead of using asyncio.run()
-                success, username, password, discourse_url = await create_user(
-                    username=username,
-                    full_name=full_name,
-                    email=email,
-                    invited_by=invited_by,
-                    intro=intro,
-                    is_admin=is_admin,
-                    groups=selected_groups
-                )
+                try:
+                    # Correctly use asyncio.run for the async function
+                    import asyncio
+                    
+                    async def create_user_async():
+                        return await create_user(
+                            username=username,
+                            full_name=full_name,
+                            email=email,
+                            invited_by=invited_by,
+                            intro=intro,
+                            is_admin=is_admin,
+                            groups=selected_groups
+                        )
+                    
+                    # Use asyncio.run to execute the async function
+                    success, username, password, discourse_url = asyncio.run(create_user_async())
+                    
+                    if success:
+                        from app.messages import create_user_message
+                        create_user_message(username, password, discourse_url)
+                        
+                        # Add user to selected groups if not already handled in create_user
+                        if selected_groups and not Config.MAIN_GROUP_ID:
+                            from app.auth.admin import manage_user_groups
+                            
+                            # Get the user ID from the API response
+                            headers = {
+                                'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                                'Content-Type': 'application/json'
+                            }
+                            
+                            # Search for the newly created user
+                            users = list_users(Config.AUTHENTIK_API_URL, headers, username)
+                            user_id = next((user.get('pk') for user in users if user.get('username') == username), None)
+                            
+                            if user_id:
+                                # Add user to selected groups
+                                manage_user_groups(
+                                    st.session_state.get("username", "system"),
+                                    user_id,
+                                    groups_to_add=selected_groups
+                                )
+                        
+                        # Reset form fields after successful submission
+                        reset_create_user_form_fields()
+                        st.rerun()
+                    else:
+                        st.error(f"Failed to create user: {password}")  # password contains error message on failure
                 
-                if success:
-                    from app.messages import create_user_message
-                    create_user_message(username, password, discourse_url)
-                    
-                    # Add user to selected groups if not already handled in create_user
-                    if selected_groups and not Config.MAIN_GROUP_ID:
-                        from app.auth.admin import manage_user_groups
-                        
-                        # Get the user ID from the API response
-                        headers = {
-                            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-                            'Content-Type': 'application/json'
-                        }
-                        
-                        # Search for the newly created user
-                        users = list_users(Config.AUTHENTIK_API_URL, headers, username)
-                        user_id = next((user.get('pk') for user in users if user.get('username') == username), None)
-                        
-                        if user_id:
-                            # Add user to selected groups
-                            manage_user_groups(
-                                st.session_state.get("username", "system"),
-                                user_id,
-                                groups_to_add=selected_groups
-                            )
-                    
-                    # Reset form fields after successful submission
-                    reset_create_user_form_fields()
-                    st.rerun()
-                else:
-                    st.error(f"Failed to create user: {password}")  # password contains error message on failure
+                except Exception as e:
+                    logging.error(f"Error creating user: {str(e)}")
+                    logging.error(traceback.format_exc())
+                    st.error(f"Failed to create user: {str(e)}")
         else:
             st.error("Username and full name are required.")
 
@@ -1546,3 +1677,129 @@ def format_date(date_str):
     except Exception as e:
         logging.error(f"Error formatting date {date_str}: {e}")
         return ""  # Return empty string instead of the error-causing value
+
+def update_username_from_inputs():
+    """
+    Generate a username based on first and last name inputs.
+    Checks both local database and SSO service for existing usernames.
+    """
+    # Only auto-generate username if username is empty or matches previous auto-generation
+    # This prevents overwriting a manually entered username
+    if (not st.session_state.get('username_input') or 
+        st.session_state.get('username_was_auto_generated', False)):
+        
+        first_name = st.session_state.get('first_name_input', '').strip().lower()
+        last_name = st.session_state.get('last_name_input', '').strip().lower()
+        
+        logging.info(f"Attempting username generation with first_name='{first_name}', last_name='{last_name}'")
+        
+        # Generate username even with partial information
+        if first_name or last_name:
+            # Handle different combinations of first/last name
+            if first_name and last_name:
+                # First name and first letter of last name
+                base_username = f"{first_name}-{last_name[0]}"
+                logging.info(f"Generated base username from first+last: {base_username}")
+            elif first_name:
+                # Just first name if that's all we have
+                base_username = first_name
+                logging.info(f"Generated base username from first name only: {base_username}")
+            else:
+                # Just last name if that's all we have
+                base_username = last_name
+                logging.info(f"Generated base username from last name only: {base_username}")
+            
+            # Replace spaces with hyphens
+            base_username = base_username.replace(" ", "-")
+            
+            # Remove any special characters except hyphens
+            import re
+            base_username = re.sub(r'[^a-z0-9-]', '', base_username)
+            
+            # Ensure we have at least one character
+            if not base_username:
+                base_username = "user"
+                logging.info(f"Empty base username, using default: {base_username}")
+            
+            # Check for existing username in local database
+            existing_usernames = []
+            with next(get_db()) as db:
+                local_existing = db.query(User).filter(User.username.like(f"{base_username}%")).all()
+                existing_usernames = [user.username for user in local_existing]
+                logging.info(f"Found {len(existing_usernames)} existing usernames in local DB with prefix {base_username}")
+            
+            # Also check for existing username in Authentik SSO
+            try:
+                headers = {
+                    'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                    'Content-Type': 'application/json'
+                }
+                
+                sso_usernames = []
+                user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username__startswith={base_username}"
+                response = requests.get(user_search_url, headers=headers, timeout=10)
+                
+                if response.status_code == 200:
+                    users = response.json().get('results', [])
+                    sso_usernames = [user['username'] for user in users]
+                    logging.info(f"Found {len(sso_usernames)} existing usernames in SSO starting with {base_username}")
+                else:
+                    logging.warning(f"Failed to check SSO for existing usernames: {response.status_code}")
+                
+                # Combine both lists of existing usernames
+                all_existing_usernames = list(set(existing_usernames + sso_usernames))
+                logging.info(f"Total existing usernames: {len(all_existing_usernames)}")
+                
+                # Generate unique username
+                final_username = base_username
+                if final_username in all_existing_usernames:
+                    # Try to add numeric suffix
+                    suffix = 1
+                    while f"{base_username}{suffix}" in all_existing_usernames:
+                        suffix += 1
+                        # Safety check to avoid infinite loop
+                        if suffix > 100:
+                            import random
+                            # Add random suffix as fallback
+                            random_suffix = random.randint(100, 999)
+                            final_username = f"{base_username}{random_suffix}"
+                            logging.warning(f"Using random suffix after trying 100 sequential numbers: {final_username}")
+                            break
+                    else:
+                        final_username = f"{base_username}{suffix}"
+                
+                logging.info(f"Final generated username: {final_username}")
+                
+                # Update session state - ONLY update username_input, not the widget value
+                st.session_state['username_input'] = final_username
+                st.session_state['username_was_auto_generated'] = True
+                
+                # We don't update username_input_outside directly here anymore
+                # This avoids the "cannot be modified after widget is instantiated" error
+                logging.info(f"Updated username_input to: {final_username}")
+                
+                # Return true to indicate username was generated
+                return True
+                
+            except Exception as e:
+                # If there's an error checking SSO, fall back to just local check
+                logging.error(f"Error checking SSO for existing usernames: {e}")
+                if base_username in existing_usernames:
+                    # Generate a unique suffix
+                    suffix = 1
+                    while f"{base_username}{suffix}" in existing_usernames:
+                        suffix += 1
+                    suggested_username = f"{base_username}{suffix}"
+                else:
+                    suggested_username = base_username
+                    
+                # Update only the internal value, not the widget value
+                st.session_state['username_input'] = suggested_username
+                st.session_state['username_was_auto_generated'] = True
+                logging.info(f"Generated username (fallback): {suggested_username}")
+                
+                # Return true to indicate username was generated
+                return True
+                
+    # Return false to indicate no username was generated
+    return False

@@ -15,7 +15,7 @@ from nio import RoomInviteResponse
 def mock_matrix_config(mocker):
     """Setup mock Matrix configuration"""
     mocker.patch.object(Config, 'MATRIX_ACTIVE', True)
-    mocker.patch.object(Config, 'MATRIX_URL', 'https://matrix.test')
+    mocker.patch.object(Config, 'MATRIX_HOMESERVER_URL', 'https://matrix.test')
     mocker.patch.object(Config, 'MATRIX_ACCESS_TOKEN', 'test_token')
 
 @pytest.fixture
@@ -29,20 +29,20 @@ async def mock_matrix_client():
 @pytest.fixture
 def mock_config():
     return {
-        "MATRIX_ENABLED": True,
-        "MATRIX_SERVER": "matrix.org",
-        "MATRIX_USER": "@bot:matrix.org",
-        "MATRIX_TOKEN": "test_token"
+        "MATRIX_ACTIVE": True,
+        "MATRIX_HOMESERVER_URL": "matrix.org",
+        "MATRIX_USER_ID": "@bot:matrix.org",
+        "MATRIX_ACCESS_TOKEN": "test_token"
     }
 
 @pytest.mark.asyncio
 async def test_get_matrix_client():
     with patch('app.utils.matrix_actions.AsyncClient') as MockClient, \
          patch('app.utils.matrix_actions.Config') as MockConfig:
-        MockConfig.MATRIX_ENABLED = True
-        MockConfig.MATRIX_SERVER = "matrix.org"
-        MockConfig.MATRIX_USER = "@bot:matrix.org"
-        MockConfig.MATRIX_TOKEN = "test_token"
+        MockConfig.MATRIX_ACTIVE = True
+        MockConfig.MATRIX_HOMESERVER_URL = "matrix.org"
+        MockConfig.MATRIX_USER_ID = "@bot:matrix.org"
+        MockConfig.MATRIX_ACCESS_TOKEN = "test_token"
         
         mock_client = AsyncMock()
         MockClient.return_value = mock_client
@@ -70,7 +70,7 @@ async def test_create_matrix_direct_chat(mock_matrix_client):
         result = await create_matrix_direct_chat(user_id)
         assert result is not None
         mock_matrix_client.room_create.assert_called_once_with(
-            visibility=0,
+            visibility="private",
             is_direct=True,
             invite=[user_id],
             preset="trusted_private_chat"

@@ -7,13 +7,22 @@ and getting room details. This module provides a synchronous wrapper for the mat
 import os
 import logging
 import asyncio
-from typing import List, Dict, Optional, Union, Set
+import nest_asyncio
+from typing import List, Dict, Optional, Union, Set, Any
 from urllib.parse import urlparse
 import json
 from nio import AsyncClient, AsyncClientConfig
 
 from app.utils.config import Config
-from app.utils.helpers import get_eastern_time
+
+# Import get_db conditionally to avoid import errors
+try:
+    from app.db.session import get_db
+except ImportError:
+    logger.warning("Could not import get_db - DB caching for matrix room members will not be available")
+    # Create a dummy function to avoid errors
+    def get_db():
+        yield None
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -51,15 +60,15 @@ else:
     class RoomMessageText: pass
 
 # Get Matrix configuration from environment variables
-MATRIX_URL = Config.MATRIX_URL or "https://matrix.org"
+MATRIX_HOMESERVER_URL = Config.MATRIX_HOMESERVER_URL or "https://matrix.org"
 MATRIX_ACCESS_TOKEN = Config.MATRIX_ACCESS_TOKEN or ""
 MATRIX_BOT_USERNAME = Config.MATRIX_BOT_USERNAME or "@bot:matrix.org"
 MATRIX_BOT_DISPLAY_NAME = Config.MATRIX_BOT_DISPLAY_NAME or "Service Bot"
 MATRIX_DEFAULT_ROOM_ID = Config.MATRIX_DEFAULT_ROOM_ID or ""
 MATRIX_WELCOME_ROOM_ID = Config.MATRIX_WELCOME_ROOM_ID or ""
 
-# Parse the homeserver URL from MATRIX_URL
-parsed_url = urlparse(MATRIX_URL)
+# Parse the homeserver URL from MATRIX_HOMESERVER_URL
+parsed_url = urlparse(MATRIX_HOMESERVER_URL)
 HOMESERVER = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
 class MatrixClient:
@@ -240,30 +249,21 @@ class MatrixClient:
         
         try:
             for room_id in room_ids:
-                response = await client.room_send(
-                    room_id=room_id,
-                    message_type="m.room.message",
-                    content={
-                        "msgtype": "m.text",
-                        "body": message
-                    }
-                )
-                
-                if isinstance(response, RoomSendResponse) and response.event_id:
-                    logger.info(f"Message sent to room {room_id} with event_id {response.event_id}")
-                    results[room_id] = True
-                else:
-                    logger.error(f"Failed to send message to room {room_id}: {response}")
-                    results[room_id] = False
-                    
-        except Exception as e:
-            logger.error(f"Error in send_message_to_multiple_rooms: {e}")
-            # Mark remaining rooms as failed
-            for room_id in room_ids:
-                if room_id not in results:
+                try:
+                    response = await client.room_send(
+                        room_id=room_id,
+                        message_type="m.room.message",
+                        content={
+                            "msgtype": "m.text",
+                            "body": message
+                        }
+                    )
+                    results[room_id] = isinstance(response, RoomSendResponse) and response.event_id is not None
+                except Exception as e:
+                    logger.error(f"Error sending message to room {room_id}: {e}")
                     results[room_id] = False
         finally:
-            await self.close()
+            await client.close()
             
         return results
 
@@ -271,27 +271,42 @@ class MatrixClient:
 
 async def get_matrix_client() -> Optional[AsyncClient]:
     """Get Matrix client instance"""
-    if not Config.MATRIX_ACTIVE:
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active")
         return None
-    
-    client_config = AsyncClientConfig(
-        max_limit_exceeded=0,
-        max_timeouts=0,
-        store_sync_tokens=False,
-        encryption_enabled=False,
-    )
-    
-    client = AsyncClient(
-        homeserver_url=Config.MATRIX_URL,
-        token=Config.MATRIX_ACCESS_TOKEN,
-        config=client_config,
-    )
-    
-    return client
+
+    client = None
+    try:
+        client_config = AsyncClientConfig(
+            max_limit_exceeded=0,
+            max_timeouts=0,
+            store_sync_tokens=False,
+            encryption_enabled=False,
+        )
+
+        client = AsyncClient(
+            homeserver=MATRIX_HOMESERVER_URL,
+            config=client_config,
+        )
+        client.access_token = MATRIX_ACCESS_TOKEN
+        client.user_id = MATRIX_BOT_USERNAME
+
+        # Skip sync for initial connection - some servers have issues with the next_batch property
+        # Just return the client as it's authenticated with the access token
+        logger.info(f"Matrix client created with user_id: {MATRIX_BOT_USERNAME}")
+        return client
+    except Exception as e:
+        logger.error(f"Error creating Matrix client: {e}")
+        if client:
+            try:
+                await client.close()
+            except Exception as close_error:
+                logger.error(f"Error closing Matrix client: {close_error}")
+        return None
 
 async def send_matrix_message(room_id: str, message: str) -> bool:
     """Send a message to a Matrix room"""
-    if not Config.MATRIX_ACTIVE:
+    if not MATRIX_ACTIVE:
         logging.warning("Matrix integration is disabled")
         return False
 
@@ -313,7 +328,7 @@ async def send_matrix_message(room_id: str, message: str) -> bool:
 
 async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
     """Create a direct chat with a user"""
-    if not Config.MATRIX_ACTIVE:
+    if not MATRIX_ACTIVE:
         logging.warning("Matrix integration is disabled")
         return None
 
@@ -323,7 +338,7 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
             return None
 
         response = await client.room_create(
-            visibility=0,
+            visibility="private",
             is_direct=True,
             invite=[user_id],
             preset="trusted_private_chat"
@@ -375,49 +390,47 @@ async def invite_to_matrix_room(room_id: str, user_id: str) -> bool:
         if client:
             await client.close()
 
-def send_matrix_message_to_multiple_rooms(room_ids: List[str], message: str) -> Dict[str, bool]:
+async def send_matrix_message_to_multiple_rooms(room_ids: List[str], message: str) -> Dict[str, bool]:
     """
-    Synchronous wrapper for sending a message to multiple Matrix rooms.
+    Send a message to multiple Matrix rooms.
     
     Args:
         room_ids: List of room IDs to send the message to
         message: The message content
         
     Returns:
-        Dict[str, bool]: Dictionary mapping room IDs to success status
+        Dict[str, bool]: A dictionary mapping room IDs to success status
     """
     if not MATRIX_ACTIVE:
-        logger.warning("Matrix integration is not active. Skipping send_matrix_message_to_multiple_rooms.")
+        logger.warning("Matrix integration is not active. Skipping send_message_to_multiple_rooms.")
         return {room_id: False for room_id in room_ids}
         
-    client = MatrixClient()
+    results = {}
+    client = await get_matrix_client()
+    
     try:
-        # Check if there's an existing event loop
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-        except RuntimeError:
-            # No event loop exists in this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-        # Get the client and send the messages
-        async_client = loop.run_until_complete(client._get_client())
-        result = loop.run_until_complete(client.send_message_to_multiple_rooms(room_ids, message))
-        
-        # Close the client properly
-        loop.run_until_complete(client.close())
-        
-        return result
-    except Exception as e:
-        logger.error(f"Error sending message to multiple rooms: {e}")
-        return {room_id: False for room_id in room_ids}
+        for room_id in room_ids:
+            try:
+                response = await client.room_send(
+                    room_id=room_id,
+                    message_type="m.room.message",
+                    content={
+                        "msgtype": "m.text",
+                        "body": message
+                    }
+                )
+                results[room_id] = isinstance(response, RoomSendResponse) and response.event_id is not None
+            except Exception as e:
+                logger.error(f"Error sending message to room {room_id}: {e}")
+                results[room_id] = False
+    finally:
+        await client.close()
+    
+    return results
 
-def send_welcome_message(user_id: str, username: str, full_name: str = None) -> bool:
+async def send_welcome_message_async(user_id: str, username: str, full_name: str = None) -> bool:
     """
-    Send a welcome message to a new user.
+    Send a welcome message to a new user asynchronously.
     
     Args:
         user_id: The Matrix ID of the user
@@ -431,24 +444,58 @@ def send_welcome_message(user_id: str, username: str, full_name: str = None) -> 
         logger.warning("Matrix integration is not active. Skipping send_welcome_message.")
         return False
         
-    # Create a direct chat with the user
-    room_id = create_matrix_direct_chat(user_id)
-    if not room_id:
-        logger.error(f"Failed to create direct chat with {user_id}")
+    try:
+        # Create a direct chat with the user
+        room_id = await create_matrix_direct_chat(user_id)
+        if not room_id:
+            logger.error(f"Failed to create direct chat with {user_id}")
+            return False
+        
+        # Prepare the welcome message
+        name_to_use = full_name if full_name else username
+        message = f"Welcome to our community, {name_to_use}! 👋\n\n"
+        message += "I'm the community bot, here to help you get started. "
+        message += "Feel free to explore our community rooms and reach out if you have any questions."
+        
+        # Send the welcome message
+        return await send_matrix_message(room_id, message)
+    except Exception as e:
+        logger.error(f"Error sending welcome message: {e}")
         return False
-    
-    # Prepare the welcome message
-    name_to_use = full_name if full_name else username
-    message = f"Welcome to our community, {name_to_use}! 👋\n\n"
-    message += "I'm the community bot, here to help you get started. "
-    message += "Feel free to explore our community rooms and reach out if you have any questions."
-    
-    # Send the welcome message
-    return send_matrix_message(room_id, message)
 
-def announce_new_user(username: str, full_name: str = None, intro: str = None) -> bool:
+def send_welcome_message(user_id: str, username: str, full_name: str = None) -> bool:
     """
-    Announce a new user in the welcome room.
+    Synchronous wrapper for sending a welcome message to a new user.
+    
+    Args:
+        user_id: The Matrix ID of the user
+        username: The username of the user
+        full_name: The full name of the user (optional)
+        
+    Returns:
+        bool: True if the message was sent successfully, False otherwise
+    """
+    try:
+        # Create a new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Send the welcome message
+        result = loop.run_until_complete(send_welcome_message_async(user_id, username, full_name))
+        return result
+    except Exception as e:
+        logger.error(f"Error sending welcome message: {e}")
+        return False
+    finally:
+        # Clean up the loop
+        if loop.is_running():
+            loop.stop()
+        if not loop.is_closed():
+            loop.close()
+
+async def announce_new_user_async(username: str, full_name: str = None, intro: str = None) -> bool:
+    """
+    Announce a new user in the welcome room asynchronously.
     
     Args:
         username: The username of the new user
@@ -466,15 +513,49 @@ def announce_new_user(username: str, full_name: str = None, intro: str = None) -
         logger.warning("No welcome room ID configured, skipping announcement")
         return False
     
-    # Prepare the announcement message
-    name_to_use = full_name if full_name else username
-    message = f"🎉 Please welcome our new community member: **{name_to_use}** (@{username})!"
+    try:
+        # Prepare the announcement message
+        name_to_use = full_name if full_name else username
+        message = f"🎉 Please welcome our new community member: **{name_to_use}** (@{username})!"
+        
+        if intro:
+            message += f"\n\nThey introduce themselves as:\n> {intro}"
+        
+        # Send the announcement
+        return await send_matrix_message(MATRIX_WELCOME_ROOM_ID, message)
+    except Exception as e:
+        logger.error(f"Error announcing new user: {e}")
+        return False
+
+def announce_new_user(username: str, full_name: str = None, intro: str = None) -> bool:
+    """
+    Synchronous wrapper for announcing a new user in the welcome room.
     
-    if intro:
-        message += f"\n\nThey introduce themselves as:\n> {intro}"
-    
-    # Send the announcement
-    return send_matrix_message(MATRIX_WELCOME_ROOM_ID, message)
+    Args:
+        username: The username of the new user
+        full_name: The full name of the new user (optional)
+        intro: The user's introduction (optional)
+        
+    Returns:
+        bool: True if the announcement was sent successfully, False otherwise
+    """
+    try:
+        # Create a new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Send the announcement
+        result = loop.run_until_complete(announce_new_user_async(username, full_name, intro))
+        return result
+    except Exception as e:
+        logger.error(f"Error announcing new user: {e}")
+        return False
+    finally:
+        # Clean up the loop
+        if loop.is_running():
+            loop.stop()
+        if not loop.is_closed():
+            loop.close()
 
 def get_room_ids_by_category(category: str) -> List[str]:
     """
@@ -511,103 +592,177 @@ def invite_user_to_rooms_by_interests(user_id: str, interests: List[str], userna
         
     results = {}
     
-    # Normalize user ID format if needed
-    if not user_id.startswith("@"):
-        user_id = f"@{user_id}"
-    
-    if ":" not in user_id:
-        domain = os.getenv("BASE_DOMAIN", "example.com")
-        user_id = f"{user_id}:{domain}"
-    
-    # Extract username from user_id if not provided
-    if username is None:
-        username = user_id.split(":")[0].lstrip("@")
-    
-    # Get all rooms from configuration
-    all_rooms = Config.get_matrix_rooms()
-    
-    # Filter rooms by user interests
-    matching_rooms = []
-    for room in all_rooms:
-        # Check if any interest matches any of the room's categories
-        if "categories" in room and isinstance(room["categories"], list):
-            room_categories = [cat.lower() for cat in room["categories"]]
-            if any(interest.lower() in room_categories for interest in interests):
-                matching_rooms.append((room.get("name", "Unknown Room"), room.get("room_id")))
-        else:
-            # Fallback to the original category string
-            room_category = room.get("category", "").lower()
-            if any(interest.lower() in room_category for interest in interests):
-                matching_rooms.append((room.get("name", "Unknown Room"), room.get("room_id")))
-    
-    # Invite user to each matching room
-    for room_name, room_id in matching_rooms:
-        if not room_id:
-            continue
-            
-        success = invite_to_matrix_room(room_id, user_id, username=username)
-        results[room_id] = success
+    try:
+        # Normalize user ID format if needed
+        if not user_id.startswith("@"):
+            user_id = f"@{user_id}"
         
-        if success:
-            logger.info(f"Invited {user_id} to {room_name} ({room_id})")
-        else:
-            logger.error(f"Failed to invite {user_id} to {room_name} ({room_id})")
+        if ":" not in user_id:
+            domain = Config.BASE_DOMAIN or os.getenv("BASE_DOMAIN", "example.com")
+            user_id = f"{user_id}:{domain}"
+        
+        # Extract username from user_id if not provided
+        if username is None:
+            username = user_id.split(":")[0].lstrip("@")
+        
+        # Get all rooms from configuration
+        all_rooms = Config.get_matrix_rooms()
+        logger.info(f"Got {len(all_rooms)} rooms from configuration")
+        
+        # Filter rooms by user interests
+        matching_rooms = []
+        for room in all_rooms:
+            # Check if any interest matches any of the room's categories
+            if "categories" in room and isinstance(room["categories"], list):
+                room_categories = [cat.lower() for cat in room["categories"]]
+                if any(interest.lower() in room_categories for interest in interests):
+                    matching_rooms.append((room.get("name", "Unknown Room"), room.get("room_id")))
+            else:
+                # Fallback to the original category string
+                room_category = room.get("category", "").lower()
+                if any(interest.lower() in room_category for interest in interests):
+                    matching_rooms.append((room.get("name", "Unknown Room"), room.get("room_id")))
+        
+        logger.info(f"Found {len(matching_rooms)} matching rooms for interests: {interests}")
+        
+        # Create a new event loop for the async calls
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Invite user to each matching room
+        for room_name, room_id in matching_rooms:
+            if not room_id:
+                logger.warning(f"Skipping invitation to room with no ID: {room_name}")
+                continue
+                
+            try:
+                # Use the async version directly with the event loop
+                success = loop.run_until_complete(invite_to_matrix_room(room_id, user_id))
+                results[room_id] = success
+                
+                if success:
+                    logger.info(f"Invited {user_id} to {room_name} ({room_id})")
+                else:
+                    logger.warning(f"Failed to invite {user_id} to {room_name} ({room_id})")
+            except Exception as e:
+                logger.error(f"Error inviting {user_id} to {room_name} ({room_id}): {e}")
+                results[room_id] = False
+        
+        # Clean up the loop
+        loop.close()
+        
+    except Exception as e:
+        logger.error(f"Error in invite_user_to_rooms_by_interests: {e}")
     
     return results
 
-async def get_joined_rooms_async(client: AsyncClient) -> List[str]:
+async def get_joined_rooms_async(client: AsyncClient = None) -> List[str]:
     """
-    Get all room IDs that the bot has joined.
+    Get a list of all joined rooms asynchronously.
     
     Args:
-        client: The Matrix client
+        client: Optional AsyncClient instance. If not provided, a new one will be created.
         
     Returns:
-        List[str]: List of room IDs
+        List[str]: List of room IDs the bot has joined
     """
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active. Skipping get_joined_rooms_async.")
+        return []
+    
+    # If no client provided, create a temporary one
+    close_client = False
     try:
-        response = await client.joined_rooms()
-        if hasattr(response, 'rooms'):
-            return response.rooms
-        return []
+        if client is None:
+            client = AsyncClient(
+                homeserver=HOMESERVER,
+                device_id=f"Dashboard_Bot_{os.getpid()}"
+            )
+            client.access_token = MATRIX_ACCESS_TOKEN
+            client.user_id = MATRIX_BOT_USERNAME
+            close_client = True
+            
+        logger.info(f"Matrix client created with user_id: {client.user_id}")
+        
+        # Check if the client has a valid access token
+        if not client.access_token:
+            logger.warning("No access token provided for Matrix client.")
+            return []
+            
+        try:
+            # Get joined rooms
+            response = await client.joined_rooms()
+            
+            # Check if response is valid
+            if hasattr(response, 'rooms'):
+                rooms = response.rooms
+                return rooms
+            else:
+                error_msg = getattr(response, 'message', str(response))
+                # Only log detailed warning if it's not the common M_UNKNOWN_TOKEN error
+                if "M_UNKNOWN_TOKEN" not in error_msg:
+                    logger.warning(f"Unexpected response format from joined_rooms(): {error_msg}")
+                return []
+                
+        except Exception as e:
+            # Only log detailed error if it's not the common M_UNKNOWN_TOKEN error
+            if "M_UNKNOWN_TOKEN" not in str(e):
+                logger.warning(f"Error getting joined rooms: {e}")
+            return []
     except Exception as e:
-        logger.error(f"Error getting joined rooms: {e}")
+        # Only log detailed error if it's not the common M_UNKNOWN_TOKEN error
+        if "M_UNKNOWN_TOKEN" not in str(e):
+            logger.error(f"Error in get_joined_rooms_async: {e}")
         return []
+    finally:
+        # Close the client if we created it here
+        if close_client and client:
+            await client.close()
 
 def get_joined_rooms() -> List[str]:
     """
-    Synchronous wrapper to get all rooms the bot has joined.
+    Get a list of all joined rooms.
     
     Returns:
         List[str]: List of room IDs
     """
+    global MATRIX_ACTIVE
+    
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping get_joined_rooms.")
         return []
-        
-    client = MatrixClient()
+    
+    # If token is empty or invalid, return empty list
+    if not MATRIX_ACCESS_TOKEN:
+        logger.warning("Matrix access token is empty. Skipping get_joined_rooms.")
+        return []
+    
     try:
-        # Check if there's an existing event loop
+        # Run the async function in a new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        client = AsyncClient(
+            homeserver=HOMESERVER,
+            device_id=f"Dashboard_Bot_{os.getpid()}"
+        )
+        client.access_token = MATRIX_ACCESS_TOKEN
+        client.user_id = MATRIX_BOT_USERNAME
+        
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-        except RuntimeError:
-            # No event loop exists in this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-        # Get the client and get joined rooms
-        async_client = loop.run_until_complete(client._get_client())
-        result = loop.run_until_complete(get_joined_rooms_async(async_client))
-        
-        # Close the client properly
-        loop.run_until_complete(client.close())
-        
-        return result
+            rooms = loop.run_until_complete(get_joined_rooms_async(client))
+            loop.close()
+            return rooms
+        except Exception as e:
+            logger.warning(f"Unexpected response format from joined_rooms(): {e}")
+            # If it's an M_UNKNOWN_TOKEN error, flag Matrix as inactive
+            if "M_UNKNOWN_TOKEN" in str(e):
+                logger.error("Invalid Matrix access token. Disabling Matrix integration.")
+                # Mark Matrix as inactive to prevent further attempts
+                MATRIX_ACTIVE = False
+            return []
     except Exception as e:
-        logger.error(f"Error getting joined rooms: {e}")
+        logger.error(f"Error in get_joined_rooms: {e}")
         return []
 
 async def get_room_details_async(client: AsyncClient, room_id: str) -> Dict:
@@ -725,127 +880,118 @@ def get_room_name(room_id: str) -> str:
         logger.error(f"Error getting room name for {room_id}: {e}")
         return room_id.split(':')[0].lstrip('!')
 
-def get_all_accessible_rooms() -> List[Dict]:
+async def get_all_accessible_rooms() -> List[Dict]:
     """
-    Get all rooms the bot has access to, with details.
+    Get all rooms that the bot has access to.
     
     Returns:
-        List[Dict]: List of room details
+        List[Dict]: List of room dictionaries with details
     """
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping get_all_accessible_rooms.")
         return []
         
-    client = MatrixClient()
     try:
-        # Check if there's an existing event loop
+        # Get a Matrix client
+        client = await get_matrix_client()
+        if not client:
+            logger.error("Failed to get Matrix client")
+            return []
+            
+        try:
+            # Get joined rooms
+            joined_rooms = await get_joined_rooms_async(client)
+            
+            # Get details for each room
+            rooms = []
+            for room_id in joined_rooms:
+                room_details = await get_room_details_async(client, room_id)
+                if room_details:
+                    rooms.append(room_details)
+                    
+            return rooms
+            
+        finally:
+            # Always close the client if we have one
+            if client:
+                await client.close()
+            
+    except Exception as e:
+        logger.error(f"Error getting accessible rooms: {e}")
+        return []
+
+# Non-async wrapper that creates its own event loop
+def get_all_accessible_rooms_sync() -> List[Dict]:
+    """
+    Synchronous wrapper for get_all_accessible_rooms.
+    
+    Returns:
+        List[Dict]: List of room dictionaries with details
+    """
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active. Skipping get_all_accessible_rooms_sync.")
+        return []
+    
+    try:
+        # Try to get the current event loop, if it's already running, use nest_asyncio
         try:
             loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+            if loop.is_running():
+                # Import nest_asyncio at runtime to avoid dependency issues
+                import nest_asyncio
+                nest_asyncio.apply()
         except RuntimeError:
             # No event loop exists in this thread
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
         
-        # Get all joined room IDs
-        async_client = loop.run_until_complete(client._get_client())
-        room_ids = loop.run_until_complete(get_joined_rooms_async(async_client))
-        
-        # Get details for each room
-        rooms = []
-        for room_id in room_ids:
-            try:
-                room_details = loop.run_until_complete(get_room_details_async(async_client, room_id))
-                rooms.append(room_details)
-            except Exception as e:
-                logger.error(f"Error getting details for room {room_id}: {e}")
-                rooms.append({"room_id": room_id, "name": f"Error: {str(e)[:30]}...", "error": str(e)})
-        
-        # Close the client properly
-        loop.run_until_complete(client.close())
-        
-        # Don't close the loop if we didn't create it
-        # This prevents issues with other async code in the application
-        
-        return rooms
+        # Run the async function and return the result
+        return asyncio.run(get_all_accessible_rooms())
     except Exception as e:
-        logger.error(f"Error getting accessible rooms: {e}")
+        logger.error(f"Error in get_all_accessible_rooms_sync: {e}")
         return []
 
 def merge_room_data() -> List[Dict]:
     """
-    Merge room data from configuration and actual joined rooms.
+    Merge room data from Matrix API with configured room data.
     
     Returns:
         List[Dict]: Combined list of rooms with configuration data when available
     """
     if not MATRIX_ACTIVE:
-        logger.warning("Matrix integration is not active. Skipping merge_room_data.")
-        return Config.get_matrix_rooms()  # Return config rooms even if Matrix is inactive
+        logger.warning("Matrix integration is not active. Returning configured rooms only.")
+        return Config.get_matrix_rooms()
         
-    # Get rooms from configuration
-    config_rooms = Config.get_matrix_rooms()
-    config_room_ids = {room.get('room_id') for room in config_rooms if 'room_id' in room}
-    
-    # Get rooms from Matrix server
-    matrix_rooms = get_all_accessible_rooms()
-    
-    # Create a mapping of room_id to room details from Matrix
-    matrix_rooms_map = {room.get('room_id'): room for room in matrix_rooms if 'room_id' in room}
-    
-    # Create a mapping of room names to room IDs for easier lookup
-    room_name_to_id = {}
-    for room in matrix_rooms:
-        if 'room_id' in room and 'display_name' in room:
-            room_name_to_id[room['display_name']] = room['room_id']
-    
-    # Merge the data
-    merged_rooms = []
-    
-    # First, add all configured rooms with additional details from Matrix
-    for config_room in config_rooms:
-        room_id = config_room.get('room_id')
-        room_name = config_room.get('name')
+    try:
+        # Get rooms from Matrix API - use the sync version
+        matrix_rooms = get_all_accessible_rooms_sync()
         
-        # Try to find the room by ID first
-        if room_id and room_id in matrix_rooms_map:
-            # Merge configuration with Matrix data
-            merged_room = {**matrix_rooms_map[room_id], **config_room}
-            merged_room['configured'] = True
-            merged_room['accessible'] = True
-            merged_rooms.append(merged_room)
-        # If not found by ID, try to find by name
-        elif room_name and room_name in room_name_to_id:
-            matrix_room = matrix_rooms_map.get(room_name_to_id[room_name])
-            if matrix_room:
-                # Merge configuration with Matrix data
-                merged_room = {**matrix_room, **config_room}
-                merged_room['configured'] = True
-                merged_room['accessible'] = True
-                merged_rooms.append(merged_room)
-        else:
-            # Room is in config but not accessible
-            config_room['configured'] = True
-            config_room['accessible'] = False
-            config_room['display_name'] = config_room.get('name', config_room.get('room_id', 'Unknown Room'))
-            merged_rooms.append(config_room)
-    
-    # Then, add any Matrix rooms not in configuration
-    for room_id, matrix_room in matrix_rooms_map.items():
-        if room_id not in config_room_ids:
-            # Room is accessible but not configured
-            matrix_room['configured'] = False
-            matrix_room['accessible'] = True
-            matrix_room['category'] = 'Uncategorized'
-            matrix_room['categories'] = ['Uncategorized']
-            merged_rooms.append(matrix_room)
-    
-    # Sort rooms by name for better organization
-    merged_rooms.sort(key=lambda x: x.get('display_name', '').lower())
-    
-    return merged_rooms
+        # Get configured rooms
+        configured_rooms = Config.get_matrix_rooms()
+        
+        # Create a mapping of room IDs to configured data
+        room_config = {room.get('room_id'): room for room in configured_rooms if room.get('room_id')}
+        
+        # Merge the data
+        merged_rooms = []
+        for room in matrix_rooms:
+            room_id = room.get('room_id')
+            if room_id in room_config:
+                # Update Matrix room data with configured data
+                room.update(room_config[room_id])
+            merged_rooms.append(room)
+            
+        # Add any configured rooms that weren't found in Matrix
+        for room_id, config in room_config.items():
+            if not any(r.get('room_id') == room_id for r in merged_rooms):
+                merged_rooms.append(config)
+                
+        return merged_rooms
+        
+    except Exception as e:
+        logger.error(f"Error merging room data: {e}")
+        # Fall back to configured rooms on error
+        return Config.get_matrix_rooms()
 
 async def remove_from_room(client: AsyncClient, room_id: str, user_id: str) -> bool:
     """
@@ -912,136 +1058,135 @@ def remove_from_matrix_room(room_id: str, user_id: str) -> bool:
         logger.error(f"Error removing user {user_id} from room {room_id}: {e}")
         return False
 
-async def get_room_members_async(client: AsyncClient, room_id: str) -> List[Dict]:
+async def get_room_members_async(client, room_id: str) -> Dict[str, Any]:
     """
-    Get all members of a Matrix room.
+    Get all members of a Matrix room asynchronously.
     
     Args:
-        client: The Matrix client
-        room_id: The ID of the room
+        client: Matrix client
+        room_id: Matrix room ID
         
     Returns:
-        List[Dict]: List of user details including user_id and display_name
+        Dict[str, Any]: Dictionary mapping user IDs to member details
     """
     try:
-        # Get the room members
-        logger.info(f"Fetching members for room {room_id}")
-        
-        # Try using room_get_state first
+        # Get database connection - wrap in try/except to avoid issues
         try:
-            response = await client.room_get_state(room_id)
-            
-            if response:
-                members = []
-                for event in response.events:
-                    if event.get("type") == "m.room.member":
-                        content = event.get("content", {})
-                        state_key = event.get("state_key", "")
-                        if content.get("membership") in ["join", "invite"] and state_key:
-                            members.append({
-                                "user_id": state_key,
-                                "display_name": content.get("displayname", state_key.split(":")[0][1:]),
-                                "avatar_url": content.get("avatar_url", ""),
-                                "membership": content.get("membership", "")
-                            })
-                
-                logger.info(f"Found {len(members)} members in room {room_id} using room_get_state")
-                return members
-        except Exception as e:
-            logger.warning(f"Error getting room state for {room_id}: {e}, trying alternative method")
+            db = next(get_db())
+            # Try to get from cache first
+            cached_members = get_matrix_room_members(db, room_id)
+            if cached_members:
+                logging.info(f"Using cached members for room {room_id}")
+                return cached_members
+        except Exception as db_error:
+            logging.warning(f"Error accessing database for room member cache: {db_error}")
         
-        # If room_get_state fails, try using room_get_joined_members
+        # If not in cache, fetch from Matrix
+        logging.info(f"Fetching members for room {room_id}")
+        members_dict = {}
+        
+        # Try room_get_state first
         try:
-            response = await client.room_get_joined_members(room_id)
+            state_response = await client.room_get_state(room_id)
             
-            if hasattr(response, "joined") and response.joined:
-                members = []
-                for user_id, user_info in response.joined.items():
-                    members.append({
-                        "user_id": user_id,
-                        "display_name": user_info.get("display_name", user_id.split(":")[0][1:]),
-                        "avatar_url": user_info.get("avatar_url", ""),
-                        "membership": "join"
-                    })
-                
-                logger.info(f"Found {len(members)} members in room {room_id} using room_get_joined_members")
-                return members
-        except Exception as e:
-            logger.warning(f"Error getting joined members for {room_id}: {e}")
+            # Check for members in different formats
+            if hasattr(state_response, 'members') and state_response.members:
+                # Format: Object with members attribute (dictionary)
+                members_dict = state_response.members
+                logging.info(f"Found {len(members_dict)} members in room {room_id} using room_get_state.members")
+            
+            elif hasattr(state_response, 'events'):
+                # Format: Object with events list
+                for event in state_response.events:
+                    if isinstance(event, dict) and event.get('type') == 'm.room.member':
+                        user_id = event.get('state_key')
+                        if user_id and event.get('content', {}).get('membership') == 'join':
+                            members_dict[user_id] = {
+                                'display_name': event.get('content', {}).get('displayname', user_id),
+                                'avatar_url': event.get('content', {}).get('avatar_url', '')
+                            }
+                logging.info(f"Found {len(members_dict)} members in room {room_id} using room_get_state.events")
         
-        # If all else fails, return an empty list
-        logger.warning(f"Could not retrieve members for room {room_id}")
-        return []
+        except Exception as e:
+            logging.warning(f"Failed to get members using room_get_state: {str(e)}")
+        
+        # If we didn't get any members, try room_get_joined_members
+        if not members_dict:
+            try:
+                members_response = await client.room_get_joined_members(room_id)
+                
+                # Check for different response formats
+                if hasattr(members_response, 'members') and members_response.members:
+                    members_dict = members_response.members
+                elif hasattr(members_response, 'joined') and members_response.joined:
+                    members_dict = members_response.joined
+                elif isinstance(members_response, dict) and 'joined' in members_response:
+                    members_dict = members_response['joined']
+                
+                logging.info(f"Found {len(members_dict)} members in room {room_id} using room_get_joined_members")
+            
+            except Exception as e:
+                logging.error(f"Failed to get members using room_get_joined_members: {str(e)}")
+        
+        # Cache the results if we got some
+        if members_dict and db:
+            try:
+                update_matrix_room_members(db, room_id, members_dict)
+            except Exception as cache_error:
+                logging.warning(f"Failed to cache room members: {cache_error}")
+        
+        return members_dict
+        
     except Exception as e:
-        logger.error(f"Error getting room members for {room_id}: {e}")
-        return []
+        logging.error(f"Error getting room members for {room_id}: {str(e)}")
+        return {}
 
-def get_all_accessible_users() -> List[Dict]:
+async def get_all_accessible_users() -> List[Dict]:
     """
-    Get all users accessible to the bot across all rooms.
+    Get all users that the bot can interact with from Matrix.
     
     Returns:
-        List[Dict]: List of user details including user_id and display_name
+        List[Dict]: List of user dictionaries with details
     """
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping get_all_accessible_users.")
         return []
         
-    logger.info("Fetching all accessible users from Matrix")
-    client = MatrixClient()
     try:
-        # Check if there's an existing event loop
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-        except RuntimeError:
-            # No event loop exists in this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        # Get a Matrix client
+        client = await get_matrix_client()
+        if not client:
+            logger.error("Failed to get Matrix client")
+            return []
             
-        # Get all joined room IDs
-        async_client = loop.run_until_complete(client._get_client())
-        room_ids = loop.run_until_complete(get_joined_rooms_async(async_client))
-        
-        logger.info(f"Found {len(room_ids)} rooms to check for users")
-        
-        # Get members for each room
-        all_users = {}
-        for room_id in room_ids:
-            try:
-                room_members = loop.run_until_complete(get_room_members_async(async_client, room_id))
-                for member in room_members:
-                    user_id = member["user_id"]
-                    if user_id != MATRIX_BOT_USERNAME and user_id not in all_users:
-                        all_users[user_id] = member
-                        logger.debug(f"Added user {user_id} from room {room_id}")
-            except Exception as e:
-                logger.error(f"Error getting members for room {room_id}: {e}")
-        
-        # Close the client properly
-        loop.run_until_complete(client.close())
-        
-        logger.info(f"Found {len(all_users)} unique users across all rooms")
-        
-        # If no users were found, add some dummy users for testing
-        if not all_users and os.environ.get("ENVIRONMENT") == "development":
-            logger.warning("No users found, adding dummy users for development")
-            all_users = {
-                "@user1:matrix.org": {
-                    "user_id": "@user1:matrix.org",
-                    "display_name": "User One",
-                    "membership": "join"
-                },
-                "@user2:matrix.org": {
-                    "user_id": "@user2:matrix.org",
-                    "display_name": "User Two",
-                    "membership": "join"
+        try:
+            # Get joined rooms
+            joined_rooms = await get_joined_rooms_async(client)
+            
+            # Get all users across all rooms
+            all_users = {}
+            for room_id in joined_rooms:
+                room_members = await get_room_members_async(client, room_id)
+                for user_id, details in room_members.items():
+                    if user_id != MATRIX_BOT_USERNAME:  # Skip the bot itself
+                        all_users[user_id] = details
+                        
+            # Convert dictionary to list
+            users = []
+            for user_id, details in all_users.items():
+                user_dict = {
+                    "user_id": user_id,
+                    "display_name": details.get('display_name', user_id.split(':')[0].lstrip('@'))
                 }
-            }
-        
-        return list(all_users.values())
+                users.append(user_dict)
+                
+            return users
+            
+        finally:
+            # Always close the client if we have one
+            if client:
+                await client.close()
+            
     except Exception as e:
         logger.error(f"Error getting accessible users: {e}")
         return []
@@ -1070,16 +1215,29 @@ async def _send_direct_message_async(user_id: str, message: str) -> bool:
         
         # Check if we already have a direct chat with this user
         direct_room_id = None
-        rooms = await client.joined_rooms()
+        rooms_response = await client.joined_rooms()
         
-        for room_id in rooms.rooms:
+        # Get rooms list from response, handling different response formats
+        if hasattr(rooms_response, 'rooms'):
+            room_ids = rooms_response.rooms
+        elif hasattr(rooms_response, 'joined_rooms'):
+            room_ids = rooms_response.joined_rooms
+        elif isinstance(rooms_response, dict) and 'joined_rooms' in rooms_response:
+            room_ids = rooms_response['joined_rooms']
+        elif isinstance(rooms_response, dict) and 'rooms' in rooms_response:
+            room_ids = rooms_response['rooms']
+        else:
+            logger.warning(f"Unexpected response format from joined_rooms(): {rooms_response}")
+            room_ids = []
+        
+        for room_id in room_ids:
             # Get room members
             members = await get_room_members_async(client, room_id)
             
             # Check if this is a direct chat with the target user
             if members and len(members) == 2:  # Just us and the target user
-                for member in members:
-                    if member["user_id"] == user_id:
+                for member_id in members:
+                    if member_id == user_id:
                         direct_room_id = room_id
                         break
                 
@@ -1090,13 +1248,13 @@ async def _send_direct_message_async(user_id: str, message: str) -> bool:
         if not direct_room_id:
             logger.info(f"Creating new direct chat with {user_id}")
             response = await client.room_create(
-                visibility=0,  # Private
+                visibility="private",  # Use string instead of int
                 name=f"Direct chat with {user_id}",
                 is_direct=True,
                 invite=[user_id]
             )
             
-            if isinstance(response, RoomCreateResponse):
+            if hasattr(response, 'room_id'):
                 direct_room_id = response.room_id
                 logger.info(f"Created direct chat room: {direct_room_id}")
             else:
@@ -1117,7 +1275,7 @@ async def _send_direct_message_async(user_id: str, message: str) -> bool:
         # Close the client
         await client.close()
         
-        if isinstance(response, RoomSendResponse):
+        if hasattr(response, 'event_id'):
             logger.info(f"Message sent to {user_id} successfully")
             return True
         else:
@@ -1132,26 +1290,30 @@ def send_direct_message(user_id: str, message: str) -> bool:
     Send a direct message to a Matrix user.
     
     Args:
-        user_id (str): The Matrix user ID to send the message to
-        message (str): The message content
+        user_id: The Matrix ID of the user to message
+        message: The message content
         
     Returns:
-        bool: True if successful, False otherwise
+        bool: True if the message was sent successfully, False otherwise
     """
     if not MATRIX_ACTIVE:
-        logger.warning("Matrix integration is not active. Cannot send direct message.")
+        logger.warning("Matrix integration is not active. Skipping send_direct_message.")
         return False
-    
+        
     try:
-        # Create and manage the event loop
+        # Create a new event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        
+        # Send the message
         result = loop.run_until_complete(_send_direct_message_async(user_id, message))
-        loop.close()
         return result
+        
     except Exception as e:
-        logger.error(f"Error in send_direct_message: {e}")
+        logger.error(f"Error sending direct message to {user_id}: {e}")
         return False
+    finally:
+        loop.close()
 
 async def _send_room_message_async(room_id: str, message: str) -> bool:
     """
@@ -1203,23 +1365,71 @@ def send_room_message(room_id: str, message: str) -> bool:
     Send a message to a Matrix room.
     
     Args:
-        room_id (str): The Matrix room ID to send the message to
-        message (str): The message content
+        room_id: The ID of the room to send the message to
+        message: The message content
         
     Returns:
-        bool: True if successful, False otherwise
+        bool: True if the message was sent successfully, False otherwise
     """
     if not MATRIX_ACTIVE:
-        logger.warning("Matrix integration is not active. Cannot send room message.")
+        logger.warning("Matrix integration is not active. Skipping send_room_message.")
         return False
-    
+        
     try:
-        # Create and manage the event loop
+        # Create a new event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        
+        # Send the message
         result = loop.run_until_complete(_send_room_message_async(room_id, message))
-        loop.close()
         return result
+        
     except Exception as e:
-        logger.error(f"Error in send_room_message: {e}")
+        logger.error(f"Error sending message to room {room_id}: {e}")
         return False
+    finally:
+        loop.close()
+
+async def send_matrix_message_async(user_id: str, message: str) -> bool:
+    """
+    Send a message to a Matrix user asynchronously.
+    If a direct chat doesn't exist, creates one first.
+    
+    Args:
+        user_id: The Matrix ID of the user to send the message to
+        message: The message content
+        
+    Returns:
+        bool: True if the message was sent successfully, False otherwise
+    """
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active. Skipping send_matrix_message_async.")
+        return False
+        
+    try:
+        # Create a direct chat with the user if needed
+        room_id = await create_matrix_direct_chat(user_id)
+        if not room_id:
+            logger.error(f"Failed to create direct chat with {user_id}")
+            return False
+            
+        # Send the message
+        return await send_matrix_message(room_id, message)
+    except Exception as e:
+        logger.error(f"Error sending message to {user_id}: {e}")
+        return False
+
+# Stub implementations for matrix room member functions
+def get_matrix_room_members(db, room_id):
+    """
+    Get matrix room members from cache (stub implementation).
+    In the future, this will retrieve room members from the database.
+    """
+    return None  # Always return None to force fetching from matrix API
+    
+def update_matrix_room_members(db, room_id, members):
+    """
+    Update matrix room members in cache (stub implementation).
+    In the future, this will store room members in the database.
+    """
+    pass  # No-op

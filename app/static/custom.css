@@ -1,0 +1,37 @@
+/* Login button styling */
+.login-button {
+    display: inline-block;
+    padding: 10px 20px;
+    background-color: #4285F4;
+    color: white;
+    text-align: center;
+    text-decoration: none;
+    font-weight: bold;
+    border-radius: 4px;
+    margin: 10px 0;
+    transition: background-color 0.3s;
+}
+
+.login-button:hover {
+    background-color: #3367D6;
+    text-decoration: none;
+    color: white;
+}
+
+.login-container {
+    display: flex;
+    justify-content: center;
+    margin: 20px 0;
+}
+
+/* User info display */
+.user-info {
+    padding: 10px;
+    background-color: #f0f0f0;
+    border-radius: 4px;
+    margin-bottom: 15px;
+}
+
+.user-info p {
+    margin: 5px 0;
+}

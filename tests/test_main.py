@@ -51,15 +51,16 @@ def mock_config():
         'AUTHENTIK_API_URL': "http://test-api",
         'AUTHENTIK_API_TOKEN': "test-token",
         'MATRIX_ACTIVE': False,
+        'MATRIX_HOMESERVER_URL': "https://matrix.test",
+        'MATRIX_USER_ID': "@bot:matrix.test",
+        'MATRIX_ACCESS_TOKEN': "test-token",
+        'MATRIX_ROOM_ID': "!test:matrix.test",
         'DISCOURSE_URL': None,
         'DISCOURSE_API_KEY': None,
         'DISCOURSE_API_USERNAME': None,
         'DISCOURSE_CATEGORY_ID': None,
         'DISCOURSE_INTRO_TAG': None,
         'DISCOURSE_ACTIVE': False,
-        'WEBHOOK_URL': None,
-        'WEBHOOK_SECRET': None,
-        'WEBHOOK_ACTIVE': False,
         'DATABASE_URL': "sqlite:///test.db"
     }
     
@@ -209,6 +210,11 @@ async def test_render_sidebar(mock_streamlit):
     mock_title = Mock()
     mock_streamlit.sidebar.title = mock_title
     
+    # Mock an authenticated admin user
+    mock_streamlit.session_state['is_authenticated'] = True
+    mock_streamlit.session_state['is_admin'] = True
+    mock_streamlit.session_state['current_page'] = 'Create User'
+    
     # Call the function and await its result
     result = await app.main.render_sidebar()
     
@@ -217,14 +223,16 @@ async def test_render_sidebar(mock_streamlit):
     mock_selectbox.assert_called_once_with(
         "Select Page",
         [
-            "Create User",
-            "Create Invite",
+            "Create User", 
             "List & Manage Users",
+            "Create Invite",
             "Matrix Messages and Rooms",
+            "Signal Association",
             "Settings",
-            "Prompts Manager"
+            "Prompts Manager",
+            "Admin Dashboard"
         ],
-        index=0,
+        index=mock_selectbox.call_args[0][1].index("Create User"),
         key='current_page'
     )
     assert result == "Create User"
@@ -234,15 +242,32 @@ async def test_render_main_content(mock_streamlit):
     """Test main content rendering"""
     with patch('app.main.render_create_user_form', new_callable=AsyncMock) as mock_create_form, \
          patch('app.main.render_invite_form', new_callable=AsyncMock) as mock_invite_form, \
-         patch('app.main.display_user_list', new_callable=AsyncMock) as mock_display_users:
+         patch('app.main.display_user_list', new_callable=AsyncMock) as mock_display_users, \
+         patch('app.main.is_authenticated', return_value=True) as mock_is_auth, \
+         patch('app.main.require_authentication', return_value=True) as mock_require_auth:
+        
+        # Mock authentication state
+        mock_streamlit.session_state['is_authenticated'] = True
+        mock_streamlit.session_state['is_admin'] = True
+        mock_streamlit.query_params = {}
         
         mock_streamlit.session_state['current_page'] = 'Create User'
         await app.main.render_main_content()
         mock_create_form.assert_awaited_once()
         
+        # Reset mocks
+        mock_create_form.reset_mock()
+        mock_invite_form.reset_mock()
+        mock_display_users.reset_mock()
+        
         mock_streamlit.session_state['current_page'] = 'Create Invite'
         await app.main.render_main_content()
         mock_invite_form.assert_awaited_once()
+        
+        # Reset mocks
+        mock_create_form.reset_mock()
+        mock_invite_form.reset_mock()
+        mock_display_users.reset_mock()
         
         mock_streamlit.session_state['current_page'] = 'List & Manage Users'
         await app.main.render_main_content()
@@ -296,14 +321,16 @@ async def test_session_state_modification_after_widget(mock_streamlit):
             
         def get(self, key, default=None):
             return super().get(key, default)
-        
+            
         def update(self, *args, **kwargs):
             super().update(*args, **kwargs)
     
     # Initialize the mock session state
     session_state = MockSessionState()
     session_state.update({
-        'current_page': 'Create User'
+        'current_page': 'Create User',
+        'is_authenticated': True,
+        'is_admin': True
     })
     mock_streamlit.session_state = session_state
     
@@ -339,14 +366,16 @@ async def test_session_state_modification_after_widget(mock_streamlit):
     mock_selectbox.assert_called_once_with(
         "Select Page",
         [
-            "Create User",
-            "Create Invite",
+            "Create User", 
             "List & Manage Users",
+            "Create Invite",
             "Matrix Messages and Rooms",
+            "Signal Association",
             "Settings",
-            "Prompts Manager"
+            "Prompts Manager",
+            "Admin Dashboard"
         ],
-        index=0,
+        index=0,  # Create User is at index 0
         key='current_page'
     )
 
@@ -362,8 +391,13 @@ async def test_main_session_state_handling(mock_streamlit):
          patch('app.main.render_main_content', new_callable=AsyncMock), \
          patch('app.main.init_db'):
         
+        # Mock initialize_session_state to set current_page
+        def mock_init_side_effect():
+            mock_streamlit.session_state['current_page'] = 'Create User'
+        mock_init.side_effect = mock_init_side_effect
+        
         # Set up the sidebar mock to return a value
-        mock_sidebar.return_value = "Create User"
+        mock_sidebar.return_value = "List & Manage Users"
         
         # Call main function
         await app.main.main()

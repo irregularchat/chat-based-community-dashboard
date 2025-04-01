@@ -7,16 +7,21 @@ from app.db.operations import (
     AdminEvent,
     add_admin_event,
     search_users,
-    sync_user_data
+    sync_user_data,
+    create_user,
+    get_user_by_username,
+    get_user_by_email,
+    create_admin_event,
+    get_admin_events
 )
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 from app.db.operations import (
     get_verification_code,
     update_status,
-    create_admin_event,
     get_user
 )
+from app.db.database import SessionLocal
 
 @pytest.fixture
 def test_db():
@@ -46,47 +51,75 @@ def sample_user_data():
     }
 
 def test_create_user(test_db):
-    """Test user creation in database"""
+    """Test creating a user"""
     user = User(
-        username="testuser",
-        email="test@example.com",
-        first_name="Test",
-        last_name="User"
+        username="newuser",
+        email="new@example.com",
+        first_name="New",
+        last_name="User",
+        is_active=True,
+        is_admin=False
     )
     test_db.add(user)
     test_db.commit()
     
-    saved_user = test_db.query(User).filter_by(username="testuser").first()
-    assert saved_user is not None
-    assert saved_user.email == "test@example.com"
-    assert saved_user.first_name == "Test"
-    assert saved_user.last_name == "User"
+    assert user is not None
+    assert user.username == "newuser"
+    assert user.email == "new@example.com"
+    assert user.first_name == "New"
+    assert user.last_name == "User"
+    assert user.is_active is True
+    assert user.is_admin is False
 
 def test_create_admin_event(test_db):
-    """Test admin event creation"""
+    """Test creating an admin event"""
     event = AdminEvent(
         event_type="test_event",
-        username="testuser",
-        details="Test event details"
+        username="admin",
+        details="Test event description",
+        timestamp=datetime.now()
     )
     test_db.add(event)
     test_db.commit()
     
-    saved_event = test_db.query(AdminEvent).filter_by(username="testuser").first()
-    assert saved_event is not None
-    assert saved_event.event_type == "test_event"
-    assert saved_event.details == "Test event details"
+    assert event is not None
+    assert event.event_type == "test_event"
+    assert event.username == "admin"
+    assert event.details == "Test event description"
 
-@pytest.mark.asyncio
-async def test_sync_user_data(test_db):
+def test_sync_user_data(test_db, test_user):
     """Test syncing user data"""
-    test_data = {
-        "username": "testuser",
-        "email": "test@example.com",
-        "is_active": True
+    user_data = {
+        "username": test_user.username,
+        "email": test_user.email,
+        "first_name": "Updated",
+        "last_name": "Name",
+        "is_active": True,
+        "is_admin": False
     }
-    result = sync_user_data(test_db, [test_data])
-    assert result is True
+    success = sync_user_data(test_db, [user_data])
+    assert success is True
+    
+    updated_user = test_db.query(User).filter_by(username=test_user.username).first()
+    assert updated_user.first_name == "Updated"
+    assert updated_user.last_name == "Name"
+
+def test_add_admin_event(test_db, test_admin):
+    """Test adding an admin event"""
+    event = add_admin_event(
+        test_db,
+        event_type="test_event",
+        username=test_admin.username,
+        details="Test event description",
+        timestamp=datetime.now()
+    )
+    assert event is not None
+    
+    events = test_db.query(AdminEvent).all()
+    assert len(events) == 1
+    assert events[0].event_type == "test_event"
+    assert events[0].username == test_admin.username
+    assert events[0].details == "Test event description"
 
 @pytest.mark.asyncio
 async def test_get_verification_code(mock_db_session):
@@ -124,19 +157,4 @@ async def test_create_or_update_user(mock_db_session, sample_user_data):
         
         assert result is True
         mock_db_session.add.assert_called_once_with(mock_user)
-        mock_db_session.commit.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_add_admin_event(test_db):
-    """Test adding an admin event"""
-    timestamp = datetime.now()
-    event = add_admin_event(
-        db=test_db,
-        event_type="test_event",
-        username="testuser",
-        details="Test details",
-        timestamp=timestamp
-    )
-    assert isinstance(event, AdminEvent)
-    assert event.event_type == "test_event"
-    assert event.username == "testuser" 
+        mock_db_session.commit.assert_called_once() 

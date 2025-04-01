@@ -32,3 +32,17 @@ app/db/postgres/
 app/db/postgres_data/
 app/db/postgres_data/*
 data/matrix_rooms.json
+test_env/lib/*
+test_env/lib64/*
+test_env/Scripts/*
+test_env/share/*
+test_env/include/*
+test_env/man/*
+test_env/pyvenv.cfg
+test_env/bin/*
+test_env/etc/*
+test_env/lib/python3.11/site-packages/alembic/ddl/__init__.py
+test_env/lib/python3.11/site-packages/alembic/ddl/impl.py
+test_env/lib/python3.11/site-packages/alembic/ddl/compiler.py
+test_env/lib/python3.11/site-packages/alembic/ddl/operations.py
+app/db/migrations/*

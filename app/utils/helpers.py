@@ -78,16 +78,24 @@ def update_username():
     
     # Construct base username based on available inputs
     if first_name and last_name:
+        # Use first name and first letter of last name
         base_username = f"{first_name}-{last_name[0]}"
     elif first_name:
+        # Just use first name if that's all we have
         base_username = first_name
     elif last_name:
+        # Just use last name if that's all we have
         base_username = last_name
     else:
-        base_username = "pending"
+        # Default if no name provided
+        base_username = "user"
     
-    # Replace spaces with hyphens and update session state
-    st.session_state['username_input'] = base_username.replace(" ", "-")
+    # Replace spaces with hyphens for multi-word names
+    base_username = base_username.replace(" ", "-")
+    
+    # Update session state with the generated username
+    st.session_state['username_input'] = base_username
+    st.session_state['username_was_auto_generated'] = True
 
 def add_timeline_event(db: Session, event_type: str, username: str, event_description: str):
     """
@@ -104,6 +112,31 @@ def add_timeline_event(db: Session, event_type: str, username: str, event_descri
     return add_admin_event(db, event_type, username, event_description, timestamp)
 
 def create_unique_username(db, desired_username):
+    """
+    Create a unique username based on the desired username.
+    Checks the database for existing usernames and increments a suffix if needed.
+    
+    Args:
+        db: Database session
+        desired_username: The desired username to check
+        
+    Returns:
+        str: A unique username
+    """
+    # Clean up the desired username
+    desired_username = desired_username.strip().lower()
+    
+    # Replace spaces with hyphens
+    desired_username = desired_username.replace(" ", "-")
+    
+    # Remove any special characters except hyphens
+    import re
+    desired_username = re.sub(r'[^a-z0-9-]', '', desired_username)
+    
+    # Ensure we have at least one character
+    if not desired_username:
+        desired_username = "user"
+    
     # Query the database for usernames that start with the desired username
     existing_users = search_users(db, desired_username)
     existing_usernames = [user.username for user in existing_users]

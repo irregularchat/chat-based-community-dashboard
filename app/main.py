@@ -50,6 +50,8 @@ def initialize_session_state():
         st.session_state['is_authenticated'] = False
     if 'is_admin' not in st.session_state:
         st.session_state['is_admin'] = False
+    if 'current_page' not in st.session_state:
+        st.session_state['current_page'] = 'Create User'
 
 def setup_page_config():
     """Set up the Streamlit page configuration"""
@@ -66,7 +68,7 @@ async def render_sidebar():
     st.sidebar.title("Navigation")
     
     # Get the current page from session state or default to appropriate page
-    current_page = st.session_state.get('current_page', 'List & Manage Users')
+    current_page = st.session_state.get('current_page', 'Create User')
     
     # Define pages based on authentication status and admin rights
     is_authenticated = st.session_state.get('is_authenticated', False)
@@ -77,8 +79,8 @@ async def render_sidebar():
         if is_admin:
             # Admin users get all pages
             page_options = [
-                "List & Manage Users",
                 "Create User", 
+                "List & Manage Users",
                 "Create Invite",
                 "Matrix Messages and Rooms",
                 "Signal Association",
@@ -89,6 +91,7 @@ async def render_sidebar():
         else:
             # Regular authenticated users
             page_options = [
+                "Create User",
                 "List & Manage Users",
                 "Create Invite",
                 "Matrix Messages and Rooms",
@@ -96,8 +99,8 @@ async def render_sidebar():
                 "Prompts Manager"
             ]
     else:
-        # Non-authenticated users
-        page_options = ["List & Manage Users"]
+        # Non-authenticated users only see login page
+        page_options = ["Create User"]
     
     # If current_page is not in available options, reset to the first available option
     if current_page not in page_options and page_options:
@@ -114,7 +117,7 @@ async def render_sidebar():
         )
     else:
         # Fallback for empty page_options (shouldn't happen)
-        selected_page = "List & Manage Users"
+        selected_page = "Create User"
         st.session_state['current_page'] = selected_page
     
     # Show login/logout in sidebar
@@ -149,61 +152,54 @@ async def render_main_content():
         return  # Return early after handling callback
     
     # Get the current page from session state
-    page = st.session_state.get('current_page', 'List & Manage Users')
+    page = st.session_state.get('current_page', 'Create User')
     
-    # Check authentication first for all pages except the default landing page
-    if page != "List & Manage Users" and not is_authenticated():
-        # Force redirect to the default page if attempting to access protected page without auth
-        st.session_state['current_page'] = 'List & Manage Users'
-        page = 'List & Manage Users'
-        st.rerun()
+    # Check authentication for all pages
+    if not is_authenticated():
+        # Show login page instead of the requested page
+        from app.ui.common import display_login_button
+        st.markdown("## Welcome to the Community Dashboard")
+        st.markdown("Please log in to access all features.")
+        display_login_button()
+        return
     
     try:
         # Import UI components only when needed to avoid circular imports
         if page == "Create User":
             # Protect with authentication and admin check
-            if require_authentication(page) and st.session_state.get('is_admin', False):
+            if st.session_state.get('is_admin', False):
                 await render_create_user_form()
-            elif is_authenticated() and not st.session_state.get('is_admin', False):
+            else:
                 st.error("You need administrator privileges to access this page.")
                 st.info("Please contact an administrator if you need to create a user account.")
         elif page == "Create Invite":
             # Protect with authentication
-            if require_authentication(page):
-                await render_invite_form()
+            await render_invite_form()
         elif page == "List & Manage Users":
             # Protect with authentication to view full user list
-            if require_authentication(page):
-                await display_user_list()
-            else:
-                # For non-authenticated users, show a welcome page
-                st.markdown("## Welcome to the Community Dashboard")
-                st.markdown("Please log in to access all features.")
+            await display_user_list()
         elif page == "Matrix Messages and Rooms":
             # Protect with authentication
-            if require_authentication(page):
-                await render_matrix_messaging_page()
+            await render_matrix_messaging_page()
         elif page == "Signal Association":
             # Protect with authentication
-            if require_authentication(page):
-                render_signal_association()
+            render_signal_association()
         elif page == "Settings":
             # Protect with authentication and admin check
-            if require_authentication(page) and st.session_state.get('is_admin', False):
+            if st.session_state.get('is_admin', False):
                 from app.pages.settings import render_settings_page
                 render_settings_page()
-            elif is_authenticated() and not st.session_state.get('is_admin', False):
+            else:
                 st.error("You need administrator privileges to access this page.")
         elif page == "Prompts Manager":
             # Protect with authentication
-            if require_authentication(page):
-                from app.pages.prompts_manager import render_prompts_manager
-                render_prompts_manager()
+            from app.pages.prompts_manager import render_prompts_manager
+            render_prompts_manager()
         elif page == "Admin Dashboard":
             # Protect with authentication and admin check
-            if require_authentication(page) and st.session_state.get('is_admin', False):
+            if st.session_state.get('is_admin', False):
                 render_admin_dashboard()
-            elif is_authenticated() and not st.session_state.get('is_admin', False):
+            else:
                 st.error("You need administrator privileges to access this page.")
     except Exception as e:
         st.error(f"Error rendering content: {str(e)}")
@@ -251,10 +247,6 @@ async def main():
             logging.info("✅ Discourse integration is fully configured")
         else:
             logging.warning("⚠️ Discourse integration is not fully configured")
-        
-        # Initialize current_page in session state if not present
-        if 'current_page' not in st.session_state:
-            st.session_state['current_page'] = 'List & Manage Users'
         
         # Render the sidebar and get selected page
         # The selectbox widget will automatically update st.session_state.current_page

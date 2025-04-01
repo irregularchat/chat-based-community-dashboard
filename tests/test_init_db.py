@@ -58,9 +58,30 @@ def test_should_sync_users(mock_db_session, mock_streamlit):
 
 def test_init_db():
     """Test database initialization"""
-    with patch.object(Base.metadata, 'create_all') as mock_create_all:
+    with patch.object(Base.metadata, 'create_all') as mock_create_all, \
+         patch('app.db.init_db.inspect') as mock_inspect, \
+         patch('app.db.migrations.add_signal_identity.migrate') as mock_migration, \
+         patch('app.db.init_db.should_sync_users', return_value=False) as mock_should_sync, \
+         patch('app.db.init_db.SessionLocal') as mock_session_local, \
+         patch('app.db.init_db.create_default_admin_user') as mock_create_admin:
+        
+        # Mock inspector to simulate missing tables
+        mock_inspector = Mock()
+        mock_inspect.return_value = mock_inspector
+        mock_inspector.get_table_names.return_value = []  # No tables exist
+        
+        # Mock session
+        mock_db = Mock()
+        mock_session_local.return_value = mock_db
+        
         init_db()
+        
+        # Verify create_all was called
         mock_create_all.assert_called_once()
+        
+        # Verify other functions were called
+        mock_migration.assert_called_once()
+        mock_create_admin.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_sync_user_data_incremental(mock_db_session):

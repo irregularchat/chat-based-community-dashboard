@@ -144,6 +144,10 @@ async def render_create_user_form():
     
     # Define callback to update username when first or last name changes
     def update_username_from_inputs():
+        """
+        Generate a username based on first and last name inputs.
+        Checks both local database and SSO service for existing usernames.
+        """
         # Only auto-generate username if username is empty or matches previous auto-generation
         # This prevents overwriting a manually entered username
         if (not st.session_state.get('username_input') or 
@@ -168,6 +172,14 @@ async def render_create_user_form():
                 # Replace spaces with hyphens
                 base_username = base_username.replace(" ", "-")
                 
+                # Remove any special characters except hyphens
+                import re
+                base_username = re.sub(r'[^a-z0-9-]', '', base_username)
+                
+                # Ensure we have at least one character
+                if not base_username:
+                    base_username = "user"
+                
                 # Check for existing username in local database
                 local_existing = db.query(User).filter(User.username.like(f"{base_username}%")).all()
                 local_usernames = [user.username for user in local_existing]
@@ -186,6 +198,9 @@ async def render_create_user_form():
                     if response.status_code == 200:
                         users = response.json().get('results', [])
                         sso_usernames = [user['username'] for user in users]
+                        logging.info(f"Found {len(sso_usernames)} existing usernames in SSO starting with {base_username}")
+                    else:
+                        logging.warning(f"Failed to check SSO for existing usernames: {response.status_code}")
                     
                     # Combine both lists of existing usernames
                     existing_usernames = list(set(local_usernames + sso_usernames))
@@ -202,6 +217,7 @@ async def render_create_user_form():
                     # Update session state
                     st.session_state['username_input'] = final_username
                     st.session_state['username_was_auto_generated'] = True
+                    logging.info(f"Generated username: {final_username}")
                     
                 except Exception as e:
                     # If there's an error checking SSO, fall back to just local check
@@ -209,21 +225,36 @@ async def render_create_user_form():
                     suggested_username = create_unique_username(db, base_username)
                     st.session_state['username_input'] = suggested_username
                     st.session_state['username_was_auto_generated'] = True
+                    logging.info(f"Generated username (fallback): {suggested_username}")
 
     # Define callbacks for first and last name changes
     def on_first_name_change():
+        """Update username when first name changes"""
         update_username_from_inputs()
         # Force rerun after username update for immediate feedback
         st.rerun()
     
     def on_last_name_change():
+        """Update username when last name changes"""
         update_username_from_inputs()
         # Force rerun after username update for immediate feedback
         st.rerun()
         
     def on_username_manual_edit():
-        # Set flag to prevent auto-updates
+        """Handle manual username edits"""
+        # Set flag to prevent auto-updates when user manually edits the username
         st.session_state['username_was_auto_generated'] = False
+        
+        # Validate the username format
+        username = st.session_state.get('username_input', '')
+        if username:
+            # Remove any special characters except hyphens and alphanumeric
+            import re
+            cleaned_username = re.sub(r'[^a-z0-9-]', '', username.lower())
+            
+            # If the username changed after cleaning, update it
+            if cleaned_username != username:
+                st.session_state['username_input'] = cleaned_username
 
     # Run username update on initialization if we have some name data
     if (st.session_state.get('first_name_input') or st.session_state.get('last_name_input')) and not st.session_state.get('username_input'):
@@ -272,6 +303,7 @@ async def render_create_user_form():
             key="username_input_outside",
             placeholder="e.g., johndoe123",
             help="Username for login (required, must be unique). Auto-generated based on name.",
+            value=username_value,
             on_change=on_username_manual_edit
         )
         
@@ -281,6 +313,36 @@ async def render_create_user_form():
             
         if st.session_state.get('username_was_auto_generated', False):
             st.caption("Username auto-generated. Edit to create custom username.")
+            
+            # Add a check button to verify username uniqueness
+            if st.button("Check Username Availability", key="check_username_btn"):
+                username = st.session_state.get('username_input', '')
+                if username:
+                    try:
+                        # Check in local database
+                        local_existing = db.query(User).filter(User.username == username).all()
+                        
+                        # Check in SSO
+                        headers = {
+                            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                            'Content-Type': 'application/json'
+                        }
+                        
+                        user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
+                        response = requests.get(user_search_url, headers=headers, timeout=10)
+                        
+                        if response.status_code == 200:
+                            sso_users = response.json().get('results', [])
+                            
+                            if not local_existing and not sso_users:
+                                st.success(f"Username '{username}' is available!")
+                            else:
+                                st.error(f"Username '{username}' is already taken. Please choose another.")
+                        else:
+                            st.warning("Could not verify username availability with SSO service.")
+                    except Exception as e:
+                        logging.error(f"Error checking username availability: {e}")
+                        st.error("An error occurred while checking username availability.")
         
         # Add a divider before the form
         st.divider()

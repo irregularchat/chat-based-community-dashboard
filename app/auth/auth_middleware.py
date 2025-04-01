@@ -18,7 +18,12 @@ def auth_middleware(page_function):
         page_path = st.session_state.get('current_page')
         
         # Check if user is authenticated
-        if not require_authentication(page_path):
+        if not is_authenticated():
+            # Display login button instead of the requested page
+            from app.ui.common import display_login_button
+            st.markdown("## Authentication Required")
+            st.markdown("Please log in to access this page.")
+            display_login_button()
             return
         
         # If authenticated, render the page
@@ -38,8 +43,12 @@ def admin_middleware(page_function):
     """
     def wrapper(*args, **kwargs):
         # First check authentication
-        page_path = st.session_state.get('current_page')
-        if not require_authentication(page_path):
+        if not is_authenticated():
+            # Display login button instead of the requested page
+            from app.ui.common import display_login_button
+            st.markdown("## Authentication Required")
+            st.markdown("Please log in to access this page.")
+            display_login_button()
             return
         
         # Then check admin permissions (either SSO admin or local admin)
@@ -47,6 +56,7 @@ def admin_middleware(page_function):
         
         if not is_admin:
             st.error("You do not have permission to access this page")
+            st.info("This page requires administrator privileges. Please contact an administrator if you need access.")
             return
         
         # If admin, render the page

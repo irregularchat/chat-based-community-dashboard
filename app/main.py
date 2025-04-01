@@ -154,7 +154,7 @@ async def render_main_content():
     # Get the current page from session state
     page = st.session_state.get('current_page', 'Create User')
     
-    # Check authentication for all pages
+    # Global authentication check for all pages
     if not is_authenticated():
         # Show login page instead of the requested page
         from app.ui.common import display_login_button
@@ -166,37 +166,39 @@ async def render_main_content():
     try:
         # Import UI components only when needed to avoid circular imports
         if page == "Create User":
-            # Protect with authentication and admin check
+            # Protect with admin check
             if st.session_state.get('is_admin', False):
                 await render_create_user_form()
             else:
                 st.error("You need administrator privileges to access this page.")
                 st.info("Please contact an administrator if you need to create a user account.")
+        
         elif page == "Create Invite":
-            # Protect with authentication
             await render_invite_form()
+            
         elif page == "List & Manage Users":
-            # Protect with authentication to view full user list
             await display_user_list()
+            
         elif page == "Matrix Messages and Rooms":
-            # Protect with authentication
             await render_matrix_messaging_page()
+            
         elif page == "Signal Association":
-            # Protect with authentication
             render_signal_association()
+            
         elif page == "Settings":
-            # Protect with authentication and admin check
+            # Protect with admin check
             if st.session_state.get('is_admin', False):
                 from app.pages.settings import render_settings_page
                 render_settings_page()
             else:
                 st.error("You need administrator privileges to access this page.")
+                
         elif page == "Prompts Manager":
-            # Protect with authentication
             from app.pages.prompts_manager import render_prompts_manager
             render_prompts_manager()
+            
         elif page == "Admin Dashboard":
-            # Protect with authentication and admin check
+            # Protect with admin check
             if st.session_state.get('is_admin', False):
                 render_admin_dashboard()
             else:

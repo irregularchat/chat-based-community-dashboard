@@ -64,31 +64,57 @@ def handle_auth_callback(code, state):
         bool: True if authentication was successful, False otherwise
     """
     # Verify the state parameter
-    if state != st.session_state.get('auth_state'):
-        logging.error("Invalid state parameter in authentication callback")
+    expected_state = st.session_state.get('auth_state')
+    if state != expected_state:
+        logging.error(f"Invalid state parameter in authentication callback. Received: {state}, Expected: {expected_state}")
         return False
+    
+    # Log authentication details
+    logging.info(f"Authenticating with code: {code[:5]}... (truncated), state: {state}")
+    logging.info(f"Using redirect URI: {Config.OIDC_REDIRECT_URI}")
     
     # Exchange the code for tokens
     try:
+        # Log token endpoint
+        logging.info(f"Token endpoint: {Config.OIDC_TOKEN_ENDPOINT}")
+        
+        # Prepare token request data
+        token_data = {
+            'grant_type': 'authorization_code',
+            'code': code,
+            'redirect_uri': Config.OIDC_REDIRECT_URI,
+            'client_id': Config.OIDC_CLIENT_ID,
+            'client_secret': Config.OIDC_CLIENT_SECRET
+        }
+        
+        # Log token request data (excluding client_secret)
+        safe_token_data = token_data.copy()
+        safe_token_data['client_secret'] = '*****'
+        logging.info(f"Token request data: {safe_token_data}")
+        
+        # Make the token request
         token_response = requests.post(
             Config.OIDC_TOKEN_ENDPOINT,
-            data={
-                'grant_type': 'authorization_code',
-                'code': code,
-                'redirect_uri': Config.OIDC_REDIRECT_URI,
-                'client_id': Config.OIDC_CLIENT_ID,
-                'client_secret': Config.OIDC_CLIENT_SECRET
-            },
+            data=token_data,
             timeout=10
         )
-        token_response.raise_for_status()
+        
+        # Check response status
+        if token_response.status_code != 200:
+            logging.error(f"Token response error: Status {token_response.status_code}")
+            logging.error(f"Token response content: {token_response.text}")
+            return False
+            
         token_data = token_response.json()
         
         # Get the access token
         access_token = token_data.get('access_token')
         if not access_token:
             logging.error("No access token in token response")
+            logging.error(f"Token response: {token_data}")
             return False
+        
+        logging.info("Access token received successfully")
         
         # Get user info
         user_response = requests.get(
@@ -96,8 +122,21 @@ def handle_auth_callback(code, state):
             headers={'Authorization': f'Bearer {access_token}'},
             timeout=10
         )
-        user_response.raise_for_status()
+        
+        # Check user info response status
+        if user_response.status_code != 200:
+            logging.error(f"User info response error: Status {user_response.status_code}")
+            logging.error(f"User info response content: {user_response.text}")
+            return False
+            
         user_data = user_response.json()
+        
+        # Log user data (excluding sensitive information)
+        safe_user_data = user_data.copy() if isinstance(user_data, dict) else {}
+        for key in ['sub', 'email', 'preferred_username']:
+            if key in safe_user_data:
+                safe_user_data[key] = f"{safe_user_data[key][:3]}..." if safe_user_data[key] else None
+        logging.info(f"User data received: {safe_user_data}")
         
         # Store user data in session state
         st.session_state['is_authenticated'] = True
@@ -107,13 +146,21 @@ def handle_auth_callback(code, state):
         
         # Check if user is admin
         from app.auth.admin import check_admin_permission
-        is_admin = check_admin_permission(user_data.get('preferred_username', ''))
+        preferred_username = user_data.get('preferred_username', '')
+        is_admin = check_admin_permission(preferred_username)
         st.session_state['is_admin'] = is_admin
         
+        logging.info(f"Authentication successful for user: {preferred_username[:3]}...")
         return True
         
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Request error in authentication callback: {e}")
+        return False
+    except ValueError as e:
+        logging.error(f"JSON parsing error in authentication callback: {e}")
+        return False
     except Exception as e:
-        logging.error(f"Error in authentication callback: {e}")
+        logging.error(f"Unexpected error in authentication callback: {e}")
         return False
 
 def is_authenticated():

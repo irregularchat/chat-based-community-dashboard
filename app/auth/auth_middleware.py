@@ -1,5 +1,6 @@
 import streamlit as st
 from app.auth.authentication import is_authenticated, require_authentication
+from app.auth.local_auth import is_local_admin
 import logging
 
 def auth_middleware(page_function):
@@ -41,8 +42,10 @@ def admin_middleware(page_function):
         if not require_authentication(page_path):
             return
         
-        # Then check admin permissions
-        if not st.session_state.get('is_admin', False):
+        # Then check admin permissions (either SSO admin or local admin)
+        is_admin = st.session_state.get('is_admin', False) or is_local_admin()
+        
+        if not is_admin:
             st.error("You do not have permission to access this page")
             return
         

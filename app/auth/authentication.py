@@ -5,6 +5,7 @@ import urllib.parse
 import uuid
 from datetime import datetime
 from app.utils.config import Config
+from app.auth.local_auth import display_local_login_form
 
 def get_login_url(redirect_path=None):
     """
@@ -143,6 +144,7 @@ def handle_auth_callback(code, state):
         st.session_state['user_info'] = user_data
         st.session_state['access_token'] = access_token
         st.session_state['session_start_time'] = datetime.now()
+        st.session_state['auth_method'] = 'sso'  # Set auth_method to 'sso'
         
         # Check if user is admin
         from app.auth.admin import check_admin_permission
@@ -196,7 +198,8 @@ def logout():
         'auth_state', 
         'auth_redirect_path',
         'session_start_time',
-        'is_admin'
+        'is_admin',
+        'auth_method'  # Add auth_method to the list of keys to clear
     ]
     
     for key in auth_keys:
@@ -216,20 +219,30 @@ def require_authentication(page_path=None):
     if not is_authenticated():
         st.warning("You must be logged in to access this page")
         
-        login_url = get_login_url(page_path)
+        # Create tabs for different login methods
+        sso_tab, local_tab = st.tabs(["Login with SSO", "Local Admin Login"])
         
-        # Display a more prominent login button
-        st.markdown(
-            f"""
-            <div style="text-align: center; margin: 30px 0;">
-                <p style="font-size: 18px; margin-bottom: 15px;">Please log in to continue</p>
-                <a href="{login_url}" class="login-button" style="font-size: 16px; padding: 12px 24px;">
-                    Login with Authentik
-                </a>
-            </div>
-            """, 
-            unsafe_allow_html=True
-        )
+        with sso_tab:
+            login_url = get_login_url(page_path)
+            
+            # Display a more prominent login button
+            st.markdown(
+                f"""
+                <div style="text-align: center; margin: 30px 0;">
+                    <p style="font-size: 18px; margin-bottom: 15px;">Please log in to continue</p>
+                    <a href="{login_url}" class="login-button" style="font-size: 16px; padding: 12px 24px;">
+                        Login with Authentik
+                    </a>
+                </div>
+                """, 
+                unsafe_allow_html=True
+            )
+        
+        with local_tab:
+            # Display local login form
+            if display_local_login_form():
+                # If login was successful, refresh the page
+                st.rerun()
         
         return False
     

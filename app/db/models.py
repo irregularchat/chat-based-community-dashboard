@@ -124,3 +124,33 @@ class UserNote(Base):
             'created_by': self.created_by,
             'last_edited_by': self.last_edited_by
         }
+
+class Invite(Base):
+    """Model for storing invitation information"""
+    __tablename__ = 'invites'
+
+    id = Column(Integer, primary_key=True)
+    token = Column(String, nullable=False, unique=True)
+    label = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    created_by = Column(String)  # Username of the person who created the invite
+    is_used = Column(Boolean, default=False)
+    used_by = Column(String)  # Username of the person who used the invite
+    used_at = Column(DateTime)
+    
+    def __repr__(self):
+        return f"<Invite(label='{self.label}', token='{self.token[:8]}...', expires='{self.expires_at}')>"
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'token': self.token,
+            'label': self.label,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'expires_at': self.expires_at.isoformat() if self.expires_at else None,
+            'created_by': self.created_by,
+            'is_used': self.is_used,
+            'used_by': self.used_by,
+            'used_at': self.used_at.isoformat() if self.used_at else None
+        }

@@ -1,37 +1,53 @@
 # ui/forms.py
 import streamlit as st
-from app.utils.transformations import parse_input
-from datetime import datetime, timedelta
-from app.utils.helpers import (
-    update_username, 
-    get_eastern_time, 
-    add_timeline_event,
-    handle_form_submission,
-    safety_number_change_email,
-    create_unique_username
-)
-from app.utils.config import Config
-from app.db.operations import AdminEvent, search_users, User
-from app.db.session import get_db
-from app.db.init_db import should_sync_users
-import re
-import pandas as pd
-import json
 import logging
-from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode, ColumnsAutoSizeMode
+import asyncio
+import requests
 import time
 import warnings
-import requests
-from pytz import timezone
+import pandas as pd
+import json
 import numpy as np
+import traceback
+from datetime import datetime, timedelta
+from pytz import timezone
+from app.utils.transformations import parse_input
+from app.utils.config import Config
+from app.utils.helpers import (
+    update_username,
+    create_unique_username,
+    handle_form_submission,
+    reset_create_user_form_fields,
+    get_eastern_time,
+    add_timeline_event,
+    safety_number_change_email
+)
+from app.db.database import get_db
+# Import the Invite model if available (for backward compatibility)
+try:
+    from app.db.models import Invite, User
+except ImportError:
+    # Define placeholder classes that won't be used
+    class Invite:
+        pass
+    class User:
+        pass
+    logging.warning("Models not found in app.db.models. Using placeholders.")
+from app.db.operations import search_users, AdminEvent
+from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode, ColumnsAutoSizeMode
 from app.auth.api import (
+    create_user,
+    list_users,
     update_user_status,
+    update_user_email,
+    force_password_reset,
     delete_user,
     update_user_intro,
     update_user_invited_by,
     create_invite
 )
-from app.messages import create_invite_message
+from app.auth.admin import get_user_details
+from app.messages import create_user_message, create_invite_message
 
 def reset_create_user_form_fields():
     """Helper function to reset all fields related to create user."""
@@ -97,6 +113,18 @@ def parse_and_rerun():
     # Rerun so the text inputs see the updated session state
     st.rerun()
 
+def clear_parse_data():
+    """Callback to clear the parsed data and rerun the script."""
+    # Set a flag to indicate that data should be cleared
+    st.session_state["clear_parse_data_flag"] = True
+    # Also clear any previously parsed data
+    for key in ['first_name_input', 'last_name_input', 'username_input', 
+               'email_input', 'invited_by_input', 'intro_input']:
+        if key in st.session_state:
+            st.session_state[key] = ""
+    # Rerun to apply changes
+    st.rerun()
+
 async def render_create_user_form():
     """Render the create user form with an improved layout and group selection"""
     # Initialize session state variables if they don't exist
@@ -105,42 +133,171 @@ async def render_create_user_form():
         if key not in st.session_state:
             st.session_state[key] = "" if key != 'selected_groups' else []
 
+    # Check if data was cleared
+    was_cleared = st.session_state.get("clear_parse_data_flag", False)
+    if was_cleared:
+        # Reset the flag
+        st.session_state["clear_parse_data_flag"] = False
+
     # Get database connection
     db = next(get_db())
+    
+    # Define callback to update username when first or last name changes
+    def update_username_from_inputs():
+        # Only auto-generate username if username is empty or matches previous auto-generation
+        # This prevents overwriting a manually entered username
+        if (not st.session_state.get('username_input') or 
+            st.session_state.get('username_was_auto_generated', False)):
+            
+            first_name = st.session_state.get('first_name_input', '').strip().lower()
+            last_name = st.session_state.get('last_name_input', '').strip().lower()
+            
+            # Generate username even with partial information
+            if first_name or last_name:
+                # Handle different combinations of first/last name
+                if first_name and last_name:
+                    # First name and first letter of last name
+                    base_username = f"{first_name}-{last_name[0]}"
+                elif first_name:
+                    # Just first name if that's all we have
+                    base_username = first_name
+                else:
+                    # Just last name if that's all we have
+                    base_username = last_name
+                
+                # Replace spaces with hyphens
+                base_username = base_username.replace(" ", "-")
+                
+                # Check for existing username in local database
+                local_existing = db.query(User).filter(User.username.like(f"{base_username}%")).all()
+                local_usernames = [user.username for user in local_existing]
+                
+                # Also check for existing username in Authentik SSO
+                try:
+                    headers = {
+                        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                        'Content-Type': 'application/json'
+                    }
+                    
+                    sso_usernames = []
+                    user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username__startswith={base_username}"
+                    response = requests.get(user_search_url, headers=headers, timeout=10)
+                    
+                    if response.status_code == 200:
+                        users = response.json().get('results', [])
+                        sso_usernames = [user['username'] for user in users]
+                    
+                    # Combine both lists of existing usernames
+                    existing_usernames = list(set(local_usernames + sso_usernames))
+                    
+                    # Generate unique username
+                    if base_username not in existing_usernames:
+                        final_username = base_username
+                    else:
+                        suffix = 1
+                        while f"{base_username}{suffix}" in existing_usernames:
+                            suffix += 1
+                        final_username = f"{base_username}{suffix}"
+                    
+                    # Update session state
+                    st.session_state['username_input'] = final_username
+                    st.session_state['username_was_auto_generated'] = True
+                    
+                except Exception as e:
+                    # If there's an error checking SSO, fall back to just local check
+                    logging.error(f"Error checking SSO for existing usernames: {e}")
+                    suggested_username = create_unique_username(db, base_username)
+                    st.session_state['username_input'] = suggested_username
+                    st.session_state['username_was_auto_generated'] = True
 
-    # Update username based on first and last name before form
-    # IMPORTANT: Moved username generation to happen before the form widgets are created
-    if st.session_state.get('first_name_input') and st.session_state.get('last_name_input') and not st.session_state.get('username_input'):
-        # Create a base username from first and last name
-        base_username = f"{st.session_state['first_name_input'].lower()}{st.session_state['last_name_input'].lower()}"
-        suggested_username = create_unique_username(db, base_username)
-        st.session_state['username_input'] = suggested_username
+    # Define callbacks for first and last name changes
+    def on_first_name_change():
+        update_username_from_inputs()
+        # Force rerun after username update for immediate feedback
+        st.rerun()
+    
+    def on_last_name_change():
+        update_username_from_inputs()
+        # Force rerun after username update for immediate feedback
+        st.rerun()
+        
+    def on_username_manual_edit():
+        # Set flag to prevent auto-updates
+        st.session_state['username_was_auto_generated'] = False
+
+    # Run username update on initialization if we have some name data
+    if (st.session_state.get('first_name_input') or st.session_state.get('last_name_input')) and not st.session_state.get('username_input'):
+        update_username_from_inputs()
 
     # Create tabs for different input methods
-    create_tabs = st.tabs(["Basic Info", "Advanced Options", "Bulk Import"])
+    create_tabs = st.tabs(["Manual Create", "Auto Create", "Advanced Options"])
     
     with create_tabs[0]:
+        # Input fields outside the form for first name and last name to handle on_change
+        st.subheader("Manual Create")
+        st.info("Enter your information below to create a new user. The username will be automatically generated based on your first and last name.")
+        
+        col1_outside, col2_outside = st.columns(2)
+        
+        with col1_outside:
+            st.text_input(
+                "First Name *",
+                key="first_name_input_outside",
+                placeholder="e.g., John",
+                help="User's first name (required)",
+                on_change=on_first_name_change
+            )
+            
+            # If the session state is updated by the on_change, sync it to the actual form input
+            if 'first_name_input_outside' in st.session_state:
+                st.session_state['first_name_input'] = st.session_state['first_name_input_outside']
+        
+        with col2_outside:
+            st.text_input(
+                "Last Name *",
+                key="last_name_input_outside",
+                placeholder="e.g., Doe",
+                help="User's last name (required)",
+                on_change=on_last_name_change
+            )
+            
+            # If the session state is updated by the on_change, sync it to the actual form input
+            if 'last_name_input_outside' in st.session_state:
+                st.session_state['last_name_input'] = st.session_state['last_name_input_outside']
+        
+        # Username field outside form to handle manual edits
+        username_value = st.session_state.get('username_input', '')
+        st.text_input(
+            "Username *",
+            key="username_input_outside",
+            placeholder="e.g., johndoe123",
+            help="Username for login (required, must be unique). Auto-generated based on name.",
+            on_change=on_username_manual_edit
+        )
+        
+        # Sync the username from outside to inside form
+        if 'username_input_outside' in st.session_state:
+            st.session_state['username_input'] = st.session_state['username_input_outside']
+            
+        if st.session_state.get('username_was_auto_generated', False):
+            st.caption("Username auto-generated. Edit to create custom username.")
+        
+        # Add a divider before the form
+        st.divider()
+        st.caption("Review the information above and click 'Create User' when ready.")
+            
+        # Now create the actual form with hidden fields that will be submitted
         with st.form("create_user_form"):
-            st.subheader("User Information")
+            # Store the values in hidden form fields
+            st.session_state['first_name_input'] = st.session_state.get('first_name_input_outside', '')
+            st.session_state['last_name_input'] = st.session_state.get('last_name_input_outside', '')
+            st.session_state['username_input'] = st.session_state.get('username_input_outside', '')
             
             # Create two columns for better layout
             col1, col2 = st.columns(2)
             
             with col1:
-                st.text_input(
-                    "First Name *",
-                    key="first_name_input",
-                    placeholder="e.g., John",
-                    help="User's first name (required)"
-                )
-                
-                st.text_input(
-                    "Username *",
-                    key="username_input",
-                    placeholder="e.g., johndoe123",
-                    help="Username for login (required, must be unique)"
-                )
-                
+                # Email field (not duplicated)
                 st.text_input(
                     "Email Address",
                     key="email_input",
@@ -149,13 +306,6 @@ async def render_create_user_form():
                 )
             
             with col2:
-                st.text_input(
-                    "Last Name *",
-                    key="last_name_input",
-                    placeholder="e.g., Doe",
-                    help="User's last name (required)"
-                )
-                
                 st.text_input(
                     "Invited by",
                     key="invited_by_input",
@@ -223,19 +373,9 @@ async def render_create_user_form():
             # Display required fields note
             st.markdown("**Note:** Fields marked with * are required")
     
-    with create_tabs[1]:
-        st.subheader("Advanced User Options")
-        
-        # This section could include additional options like:
-        # - Custom attributes
-        # - User expiration
-        # - Initial password settings
-        # - Notification preferences
-        
-        st.info("Advanced user options will be available in a future update.")
     
-    with create_tabs[2]:
-        st.subheader("Bulk Import Users")
+    with create_tabs[1]:
+        st.subheader("Auto Create Users")
         
         st.markdown("""
         ### Instructions
@@ -262,6 +402,11 @@ async def render_create_user_form():
         """, unsafe_allow_html=True)
         
         st.markdown('<div class="data-to-parse">', unsafe_allow_html=True)
+        
+        # Check if we should show cleared message
+        if was_cleared:
+            st.info("Data has been cleared. Enter new data below.")
+        
         st.text_area(
             "User Data to Parse",
             key="data_to_parse_input",
@@ -271,7 +416,8 @@ async def render_create_user_form():
                          "2. What org are you with\n"
                          "3. Who invited you (add and mention them in this chat)\n"
                          "4. Your Email or Email-Alias/Mask (for password resets and safety number verifications)\n"
-                         "5. Your Interests (so we can get you to the right chats)")
+                         "5. Your Interests (so we can get you to the right chats)"),
+            value="" if was_cleared else None  # Set to empty string when cleared
         )
         st.markdown('</div>', unsafe_allow_html=True)
         
@@ -280,10 +426,19 @@ async def render_create_user_form():
             if st.button("Parse Data", key="parse_button", on_click=parse_and_rerun):
                 pass  # The on_click handler will handle this
         with col2:
-            if st.button("Clear Data", key="clear_data_button"):
-                st.session_state["data_to_parse_input"] = ""
-                st.rerun()
+            if st.button("Clear Data", key="clear_data_button", on_click=clear_parse_data):
+                pass  # The on_click handler will handle this
 
+    with create_tabs[2]:
+        st.subheader("Advanced User Options")
+        
+        # This section could include additional options like:
+        # - Custom attributes
+        # - User expiration
+        # - Initial password settings
+        # - Notification preferences
+        
+        st.info("Advanced user options will be available in a future update.")
     # Handle form submission
     if submit_button:
         # Validate required fields
@@ -426,26 +581,43 @@ async def render_invite_form():
             }
             
             # Create the invite
-            invite_url, expires = create_invite(
-                headers=headers,
-                label=invite_label,
-                expires=expires_iso
-            )
-            
-            if invite_url:
-                # Create and display the invite message
-                create_invite_message(
+            try:
+                invite_result = create_invite(
+                    headers=headers,
                     label=invite_label,
-                    invite_url=invite_url,
-                    expires_datetime=expires_datetime
+                    expires=expires_iso
                 )
                 
-                # Add custom message if provided
-                if st.session_state.get("custom_message"):
-                    st.markdown("### Additional Message:")
-                    st.markdown(st.session_state.get("custom_message"))
-            else:
-                st.error("Failed to create invite. Please check your settings and try again.")
+                # Handle different return formats
+                if isinstance(invite_result, tuple) and len(invite_result) >= 2:
+                    invite_url, expires = invite_result
+                elif isinstance(invite_result, tuple):
+                    # Handle case where we get more or fewer values than expected
+                    invite_url = invite_result[0] if len(invite_result) > 0 else None
+                    expires = invite_result[1] if len(invite_result) > 1 else None
+                else:
+                    # Handle case where we don't get a tuple
+                    invite_url = invite_result
+                    expires = expires_iso
+                
+                if invite_url:
+                    # Create and display the invite message
+                    create_invite_message(
+                        label=invite_label,
+                        invite_url=invite_url,
+                        expires_datetime=expires_datetime
+                    )
+                    
+                    # Add custom message if provided
+                    if st.session_state.get("custom_message"):
+                        st.markdown("### Additional Message:")
+                        st.markdown(st.session_state.get("custom_message"))
+                else:
+                    st.error("Failed to create invite. Please check your settings and try again.")
+                
+            except Exception as e:
+                logging.error(f"Error creating invite: {e}")
+                st.error(f"An error occurred: {str(e)}")
                 
         except Exception as e:
             logging.error(f"Error creating invite: {e}")
@@ -572,7 +744,11 @@ async def display_user_list(auth_api_url=None, headers=None):
                     st.write(f"Found {len(df)} users matching your filters")
                     
                     # Using Streamlit's data editor for selection
-                    selection = st.data_editor(
+                    # Store selected rows from previous state if any
+                    if 'selected_rows_indices' not in st.session_state:
+                        st.session_state['selected_rows_indices'] = []
+                    
+                    edited_df = st.data_editor(
                         df[cols_to_display],
                         hide_index=True,
                         key="user_table",
@@ -585,16 +761,21 @@ async def display_user_list(auth_api_url=None, headers=None):
                             "last_login": st.column_config.TextColumn("Last Login")
                         },
                         disabled=cols_to_display,
-                        selection="multiple",
                         height=400
                     )
                     
-                    # Get selected rows
-                    selected_rows = selection.get("selected_rows", [])
+                    # Add a multi-select to choose users
+                    st.write("Select users from the list:")
+                    selected_usernames = st.multiselect(
+                        "Select Users",
+                        options=df['username'].tolist(),
+                        default=[],
+                        key="selected_usernames"
+                    )
                     
-                    if selected_rows:
+                    # Get selected rows based on username
+                    if selected_usernames:
                         # Get the selected user IDs
-                        selected_usernames = [row.get('username') for row in selected_rows]
                         selected_user_ids = df[df['username'].isin(selected_usernames)]['pk'].tolist()
                         
                         # Display selection info

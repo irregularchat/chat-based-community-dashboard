@@ -656,53 +656,113 @@ def invite_user_to_rooms_by_interests(user_id: str, interests: List[str], userna
     
     return results
 
-async def get_joined_rooms_async(client: AsyncClient) -> List[str]:
+async def get_joined_rooms_async(client: AsyncClient = None) -> List[str]:
     """
-    Get all room IDs that the bot has joined.
+    Get a list of all joined rooms asynchronously.
     
     Args:
-        client: The Matrix client
+        client: Optional AsyncClient instance. If not provided, a new one will be created.
         
+    Returns:
+        List[str]: List of room IDs the bot has joined
+    """
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active. Skipping get_joined_rooms_async.")
+        return []
+    
+    # If no client provided, create a temporary one
+    close_client = False
+    try:
+        if client is None:
+            client = AsyncClient(
+                homeserver=HOMESERVER,
+                device_id=f"Dashboard_Bot_{os.getpid()}"
+            )
+            client.access_token = MATRIX_ACCESS_TOKEN
+            client.user_id = MATRIX_BOT_USERNAME
+            close_client = True
+            
+        logger.info(f"Matrix client created with user_id: {client.user_id}")
+        
+        # Check if the client has a valid access token
+        if not client.access_token:
+            logger.warning("No access token provided for Matrix client.")
+            return []
+            
+        try:
+            # Get joined rooms
+            response = await client.joined_rooms()
+            
+            # Check if response is valid
+            if hasattr(response, 'rooms'):
+                rooms = response.rooms
+                return rooms
+            else:
+                error_msg = getattr(response, 'message', str(response))
+                # Only log detailed warning if it's not the common M_UNKNOWN_TOKEN error
+                if "M_UNKNOWN_TOKEN" not in error_msg:
+                    logger.warning(f"Unexpected response format from joined_rooms(): {error_msg}")
+                return []
+                
+        except Exception as e:
+            # Only log detailed error if it's not the common M_UNKNOWN_TOKEN error
+            if "M_UNKNOWN_TOKEN" not in str(e):
+                logger.warning(f"Error getting joined rooms: {e}")
+            return []
+    except Exception as e:
+        # Only log detailed error if it's not the common M_UNKNOWN_TOKEN error
+        if "M_UNKNOWN_TOKEN" not in str(e):
+            logger.error(f"Error in get_joined_rooms_async: {e}")
+        return []
+    finally:
+        # Close the client if we created it here
+        if close_client and client:
+            await client.close()
+
+def get_joined_rooms() -> List[str]:
+    """
+    Get a list of all joined rooms.
+    
     Returns:
         List[str]: List of room IDs
     """
-    try:
-        response = await client.joined_rooms()
-        
-        # Handle different response formats
-        if isinstance(response, dict):
-            # New format: {'joined_rooms': [...]}
-            if 'joined_rooms' in response:
-                return response['joined_rooms']
-            # Older format: {'rooms': [...]}
-            elif 'rooms' in response:
-                return response['rooms']
-        
-        # Response is an object with rooms attribute
-        if hasattr(response, 'rooms'):
-            return response.rooms
-        
-        # Response is an object with joined_rooms attribute
-        if hasattr(response, 'joined_rooms'):
-            return response.joined_rooms
-            
-        # If we reach here, we couldn't parse the response
-        logger.warning(f"Unexpected response format from joined_rooms(): {response}")
-        return []
-    except Exception as e:
-        logger.error(f"Error getting joined rooms: {e}")
-        return []
-
-def get_joined_rooms() -> List[str]:
-    """Synchronous wrapper to get all rooms the bot has joined."""
+    global MATRIX_ACTIVE
+    
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping get_joined_rooms.")
         return []
-        
+    
+    # If token is empty or invalid, return empty list
+    if not MATRIX_ACCESS_TOKEN:
+        logger.warning("Matrix access token is empty. Skipping get_joined_rooms.")
+        return []
+    
     try:
-        return asyncio.run(get_joined_rooms_async())
+        # Run the async function in a new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        client = AsyncClient(
+            homeserver=HOMESERVER,
+            device_id=f"Dashboard_Bot_{os.getpid()}"
+        )
+        client.access_token = MATRIX_ACCESS_TOKEN
+        client.user_id = MATRIX_BOT_USERNAME
+        
+        try:
+            rooms = loop.run_until_complete(get_joined_rooms_async(client))
+            loop.close()
+            return rooms
+        except Exception as e:
+            logger.warning(f"Unexpected response format from joined_rooms(): {e}")
+            # If it's an M_UNKNOWN_TOKEN error, flag Matrix as inactive
+            if "M_UNKNOWN_TOKEN" in str(e):
+                logger.error("Invalid Matrix access token. Disabling Matrix integration.")
+                # Mark Matrix as inactive to prevent further attempts
+                MATRIX_ACTIVE = False
+            return []
     except Exception as e:
-        logger.error(f"Error getting joined rooms: {e}")
+        logger.error(f"Error in get_joined_rooms: {e}")
         return []
 
 async def get_room_details_async(client: AsyncClient, room_id: str) -> Dict:

@@ -65,25 +65,74 @@ async def render_sidebar():
     # Use synchronous Streamlit components
     st.sidebar.title("Navigation")
     
-    # Get the current page from session state or default to "Create User"
-    current_page = st.session_state.get('current_page', 'Create User')
+    # Get the current page from session state or default to appropriate page
+    current_page = st.session_state.get('current_page', 'List & Manage Users')
+    
+    # Define pages based on authentication status and admin rights
+    is_authenticated = st.session_state.get('is_authenticated', False)
+    is_admin = st.session_state.get('is_admin', False)
+    
+    # Define page options based on authentication and admin status
+    if is_authenticated:
+        if is_admin:
+            # Admin users get all pages
+            page_options = [
+                "List & Manage Users",
+                "Create User", 
+                "Create Invite",
+                "Matrix Messages and Rooms",
+                "Signal Association",
+                "Settings",
+                "Prompts Manager",
+                "Admin Dashboard"
+            ]
+        else:
+            # Regular authenticated users
+            page_options = [
+                "List & Manage Users",
+                "Create Invite",
+                "Matrix Messages and Rooms",
+                "Signal Association",
+                "Prompts Manager"
+            ]
+    else:
+        # Non-authenticated users
+        page_options = ["List & Manage Users"]
+    
+    # If current_page is not in available options, reset to the first available option
+    if current_page not in page_options and page_options:
+        current_page = page_options[0]
+        st.session_state['current_page'] = current_page
     
     # Create the page selection dropdown
-    selected_page = st.sidebar.selectbox(
-        "Select Page",
-        [
-            "Create User",
-            "Create Invite",
-            "List & Manage Users",
-            "Matrix Messages and Rooms",
-            "Signal Association",
-            "Settings",
-            "Prompts Manager",
-            "Admin Dashboard"
-        ],
-        index=0 if current_page not in st.session_state else None,
-        key='current_page'
-    )
+    if page_options:
+        selected_page = st.sidebar.selectbox(
+            "Select Page",
+            page_options,
+            index=page_options.index(current_page) if current_page in page_options else 0,
+            key='current_page'
+        )
+    else:
+        # Fallback for empty page_options (shouldn't happen)
+        selected_page = "List & Manage Users"
+        st.session_state['current_page'] = selected_page
+    
+    # Show login/logout in sidebar
+    st.sidebar.markdown("---")
+    if is_authenticated:
+        username = st.session_state.get('username', '')
+        st.sidebar.write(f"Logged in as: **{username}**")
+        if is_admin:
+            st.sidebar.write("📊 Admin privileges")
+        
+        if st.sidebar.button("Logout"):
+            # Clear session state and redirect
+            for key in list(st.session_state.keys()):
+                if key != 'current_page':
+                    del st.session_state[key]
+            st.session_state['is_authenticated'] = False
+            st.session_state['is_admin'] = False
+            st.rerun()
     
     return selected_page
 
@@ -100,20 +149,36 @@ async def render_main_content():
         return  # Return early after handling callback
     
     # Get the current page from session state
-    page = st.session_state.get('current_page', 'Create User')
+    page = st.session_state.get('current_page', 'List & Manage Users')
+    
+    # Check authentication first for all pages except the default landing page
+    if page != "List & Manage Users" and not is_authenticated():
+        # Force redirect to the default page if attempting to access protected page without auth
+        st.session_state['current_page'] = 'List & Manage Users'
+        page = 'List & Manage Users'
+        st.rerun()
     
     try:
         # Import UI components only when needed to avoid circular imports
         if page == "Create User":
-            await render_create_user_form()
+            # Protect with authentication and admin check
+            if require_authentication(page) and st.session_state.get('is_admin', False):
+                await render_create_user_form()
+            elif is_authenticated() and not st.session_state.get('is_admin', False):
+                st.error("You need administrator privileges to access this page.")
+                st.info("Please contact an administrator if you need to create a user account.")
         elif page == "Create Invite":
             # Protect with authentication
             if require_authentication(page):
                 await render_invite_form()
         elif page == "List & Manage Users":
-            # Protect with authentication
+            # Protect with authentication to view full user list
             if require_authentication(page):
                 await display_user_list()
+            else:
+                # For non-authenticated users, show a welcome page
+                st.markdown("## Welcome to the Community Dashboard")
+                st.markdown("Please log in to access all features.")
         elif page == "Matrix Messages and Rooms":
             # Protect with authentication
             if require_authentication(page):
@@ -189,7 +254,7 @@ async def main():
         
         # Initialize current_page in session state if not present
         if 'current_page' not in st.session_state:
-            st.session_state['current_page'] = 'Create User'
+            st.session_state['current_page'] = 'List & Manage Users'
         
         # Render the sidebar and get selected page
         # The selectbox widget will automatically update st.session_state.current_page

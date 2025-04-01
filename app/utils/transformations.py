@@ -27,21 +27,6 @@ def simple_parse_input(input_text):
     # Log the input we're trying to parse
     logging.info(f"Simple parsing input: {input_text[:100]}..." if len(input_text) > 100 else f"Simple parsing input: {input_text}")
     
-    # Check for empty input
-    if not input_text or not input_text.strip():
-        logging.warning("Empty input provided to simple_parse_input")
-        return {
-            "error": "No input provided. Please enter user information."
-        }
-    
-    # Remove numbers and any following periods/characters from the input text
-    cleaned_text = re.sub(r'^[\d\-#\.*\•\(\)]+\s*', '', input_text, flags=re.MULTILINE)
-    logging.info(f"After cleaning prefixes: {cleaned_text[:100]}..." if len(cleaned_text) > 100 else f"After cleaning prefixes: {cleaned_text}")
-
-    # Split the input text by newlines and strip whitespace
-    lines = [line.strip() for line in cleaned_text.split('\n') if line.strip()]
-    logging.info(f"Parsed {len(lines)} non-empty lines")
-
     # Initialize the dictionary with default values
     parsed_data = {
         "first_name": "",
@@ -53,6 +38,19 @@ def simple_parse_input(input_text):
             "interests": ""
         }
     }
+    
+    # Check for empty input - return empty dictionary with default values
+    if not input_text or not input_text.strip():
+        logging.warning("Empty input provided to simple_parse_input")
+        return parsed_data
+    
+    # Remove numbers and any following periods/characters from the input text
+    cleaned_text = re.sub(r'^[\d\-#\.*\•\(\)]+\s*', '', input_text, flags=re.MULTILINE)
+    logging.info(f"After cleaning prefixes: {cleaned_text[:100]}..." if len(cleaned_text) > 100 else f"After cleaning prefixes: {cleaned_text}")
+
+    # Split the input text by newlines and strip whitespace
+    lines = [line.strip() for line in cleaned_text.split('\n') if line.strip()]
+    logging.info(f"Parsed {len(lines)} non-empty lines")
 
     # Search for email in all lines (IMPORTANT: Do this first)
     email_index = -1  # Initialize email index
@@ -201,7 +199,8 @@ def parse_input(input_text):
     """
     if not input_text or not input_text.strip():
         logging.warning("Empty input provided to parse_input")
-        return {"error": "No input provided. Please enter user information."}
+        # Handle empty input consistently by calling simple_parse_input
+        return simple_parse_input("")
     
     try:
         # Log the input we're trying to parse

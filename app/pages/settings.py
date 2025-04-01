@@ -1026,7 +1026,7 @@ def render_user_settings():
     encryption_password = getattr(Config, "ENCRYPTION_PASSWORD", "")
     
     # Create a form for saving settings
-    with st.form("user_settings_form"):
+    with st.form("user_settings_form_tab"):
         # Theme selection
         theme_options = ["light", "dark"]
         selected_theme = st.selectbox("Select theme", theme_options, 

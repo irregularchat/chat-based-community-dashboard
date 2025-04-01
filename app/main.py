@@ -91,8 +91,13 @@ async def render_main_content():
     """Render the main content area"""
     st.title("Community Dashboard")
     
-    # Process authentication callback if present
-    auth_callback()
+    # Check for auth callback parameters first
+    query_params = st.query_params
+    if 'code' in query_params and 'state' in query_params:
+        # Process authentication callback if present
+        logging.info("Authentication callback detected in URL, processing...")
+        auth_callback()
+        return  # Return early after handling callback
     
     # Get the current page from session state
     page = st.session_state.get('current_page', 'Create User')

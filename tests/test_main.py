@@ -321,14 +321,16 @@ async def test_session_state_modification_after_widget(mock_streamlit):
             
         def get(self, key, default=None):
             return super().get(key, default)
-        
+            
         def update(self, *args, **kwargs):
             super().update(*args, **kwargs)
     
     # Initialize the mock session state
     session_state = MockSessionState()
     session_state.update({
-        'current_page': 'Create User'
+        'current_page': 'Create User',
+        'is_authenticated': True,
+        'is_admin': True
     })
     mock_streamlit.session_state = session_state
     
@@ -364,14 +366,16 @@ async def test_session_state_modification_after_widget(mock_streamlit):
     mock_selectbox.assert_called_once_with(
         "Select Page",
         [
-            "Create User",
-            "Create Invite",
             "List & Manage Users",
+            "Create User", 
+            "Create Invite",
             "Matrix Messages and Rooms",
+            "Signal Association",
             "Settings",
-            "Prompts Manager"
+            "Prompts Manager",
+            "Admin Dashboard"
         ],
-        index=0,
+        index=1,  # Create User is at index 1
         key='current_page'
     )
 
@@ -388,7 +392,7 @@ async def test_main_session_state_handling(mock_streamlit):
          patch('app.main.init_db'):
         
         # Set up the sidebar mock to return a value
-        mock_sidebar.return_value = "Create User"
+        mock_sidebar.return_value = "List & Manage Users"
         
         # Call main function
         await app.main.main()
@@ -396,6 +400,6 @@ async def test_main_session_state_handling(mock_streamlit):
         # Verify that initialize_session_state was called
         mock_init.assert_called_once()
         
-        # Verify that current_page was initialized in session state
+        # Verify that current_page was initialized in session state to default value
         assert 'current_page' in mock_streamlit.session_state
-        assert mock_streamlit.session_state['current_page'] == 'Create User' 
+        assert mock_streamlit.session_state['current_page'] == 'List & Manage Users' 

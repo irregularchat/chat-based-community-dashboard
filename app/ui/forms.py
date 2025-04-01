@@ -82,36 +82,79 @@ def reset_create_user_form_fields():
 def parse_and_rerun():
     """Callback to parse data and rerun the script so widgets see updated session state."""
     # Check if input is empty
-    if not st.session_state["data_to_parse_input"].strip():
+    if not st.session_state.get("data_to_parse_input", "").strip():
+        logging.warning("Parsing called with empty data")
         return  # Just return if there's no data to parse
     
+    # Log the input data for debugging
+    input_data = st.session_state.get("data_to_parse_input", "")
+    logging.info(f"Parsing data: {input_data[:100]}..." if len(input_data) > 100 else f"Parsing data: {input_data}")
+    
     # Parse the data from the text area
-    parsed = parse_input(st.session_state["data_to_parse_input"])
-    
-    # Check for error in parsed data
-    if isinstance(parsed, dict) and "error" in parsed:
-        st.error(parsed["error"])
-        return
-    
-    if not parsed or (isinstance(parsed, tuple) and parsed[1] is False):
-        st.error("Could not parse the input text")
-        return
+    try:
+        parsed = parse_input(input_data)
+        
+        # Check for error in parsed data
+        if isinstance(parsed, dict) and "error" in parsed:
+            error_msg = parsed["error"]
+            logging.error(f"Error parsing input: {error_msg}")
+            st.error(error_msg)
+            return
+        
+        if not parsed or (isinstance(parsed, tuple) and parsed[1] is False):
+            logging.error("Could not parse the input text, empty or invalid result")
+            st.error("Could not parse the input text")
+            return
 
-    # Update session state with safer dictionary access
-    st.session_state["first_name_input"] = parsed.get("first_name", st.session_state["first_name_input"])
-    st.session_state["last_name_input"] = parsed.get("last_name", st.session_state["last_name_input"])
-    st.session_state["email_input"] = parsed.get("email", st.session_state["email_input"])
-    st.session_state["invited_by_input"] = parsed.get("invited_by", st.session_state["invited_by_input"])
-    
-    # Safely access nested intro fields and combine organization and interests
-    intro_data = parsed.get("intro", {})
-    org = intro_data.get("organization", "")
-    interests = intro_data.get("interests", "")
-    combined_intro = f"{org}\n\nInterests: {interests}" if interests else org
-    st.session_state["intro_input"] = combined_intro
-
-    # Rerun so the text inputs see the updated session state
-    st.rerun()
+        # Debug the parsed data
+        logging.info(f"Successfully parsed data: {parsed}")
+        
+        # Update session state properly
+        # Make sure to update all fields even if they're missing in the parsed result
+        if "first_name" in parsed:
+            st.session_state["first_name_input"] = parsed.get("first_name")
+            st.session_state["first_name_input_outside"] = parsed.get("first_name")
+            logging.info(f"Updated first_name to: {parsed.get('first_name')}")
+        
+        if "last_name" in parsed:
+            st.session_state["last_name_input"] = parsed.get("last_name")
+            st.session_state["last_name_input_outside"] = parsed.get("last_name") 
+            logging.info(f"Updated last_name to: {parsed.get('last_name')}")
+        
+        if "email" in parsed:
+            st.session_state["email_input"] = parsed.get("email")
+            logging.info(f"Updated email to: {parsed.get('email')}")
+        
+        if "invited_by" in parsed:
+            st.session_state["invited_by_input"] = parsed.get("invited_by")
+            logging.info(f"Updated invited_by to: {parsed.get('invited_by')}")
+        
+        # Safely access nested intro fields and combine organization and interests
+        if "intro" in parsed:
+            intro_data = parsed.get("intro", {})
+            org = intro_data.get("organization", "")
+            interests = intro_data.get("interests", "")
+            combined_intro = f"{org}\n\nInterests: {interests}" if interests else org
+            st.session_state["intro_input"] = combined_intro
+            logging.info(f"Updated intro with org: '{org}' and interests: '{interests}'")
+        
+        # Trigger username generation from the updated names
+        if ("first_name" in parsed or "last_name" in parsed) and st.session_state.get('username_was_auto_generated', False):
+            # If we're updating name fields, we should update the username too if it was auto-generated
+            first_name = st.session_state.get('first_name_input', '')
+            last_name = st.session_state.get('last_name_input', '')
+            logging.info(f"Triggering username generation with {first_name} {last_name}")
+        
+        # Set a flag to indicate parsing was successful
+        st.session_state["parsing_successful"] = True
+        
+        # Rerun so the text inputs see the updated session state
+        logging.info("Rerunning with updated session state")
+        st.rerun()
+    except Exception as e:
+        logging.error(f"Exception during parsing: {str(e)}")
+        logging.error(traceback.format_exc())
+        st.error(f"An error occurred while parsing: {str(e)}")
 
 def clear_parse_data():
     """Callback to clear the parsed data and rerun the script."""
@@ -156,18 +199,23 @@ async def render_create_user_form():
             first_name = st.session_state.get('first_name_input', '').strip().lower()
             last_name = st.session_state.get('last_name_input', '').strip().lower()
             
+            logging.info(f"Attempting username generation with first_name='{first_name}', last_name='{last_name}'")
+            
             # Generate username even with partial information
             if first_name or last_name:
                 # Handle different combinations of first/last name
                 if first_name and last_name:
                     # First name and first letter of last name
                     base_username = f"{first_name}-{last_name[0]}"
+                    logging.info(f"Generated base username from first+last: {base_username}")
                 elif first_name:
                     # Just first name if that's all we have
                     base_username = first_name
+                    logging.info(f"Generated base username from first name only: {base_username}")
                 else:
                     # Just last name if that's all we have
                     base_username = last_name
+                    logging.info(f"Generated base username from last name only: {base_username}")
                 
                 # Replace spaces with hyphens
                 base_username = base_username.replace(" ", "-")
@@ -179,6 +227,7 @@ async def render_create_user_form():
                 # Ensure we have at least one character
                 if not base_username:
                     base_username = "user"
+                    logging.info(f"Empty base username, using default: {base_username}")
                 
                 # Check for existing username in local database
                 local_existing = db.query(User).filter(User.username.like(f"{base_username}%")).all()
@@ -217,7 +266,12 @@ async def render_create_user_form():
                     # Update session state
                     st.session_state['username_input'] = final_username
                     st.session_state['username_was_auto_generated'] = True
-                    logging.info(f"Generated username: {final_username}")
+                    logging.info(f"Generated final username: {final_username}")
+                    
+                    # Also update the outside form field to ensure consistency
+                    if 'username_input_outside' in st.session_state:
+                        st.session_state['username_input_outside'] = final_username
+                        logging.info(f"Updated username_input_outside with: {final_username}")
                     
                 except Exception as e:
                     # If there's an error checking SSO, fall back to just local check
@@ -226,16 +280,29 @@ async def render_create_user_form():
                     st.session_state['username_input'] = suggested_username
                     st.session_state['username_was_auto_generated'] = True
                     logging.info(f"Generated username (fallback): {suggested_username}")
+                    
+                    # Also update the outside form field to ensure consistency
+                    if 'username_input_outside' in st.session_state:
+                        st.session_state['username_input_outside'] = suggested_username
+                        logging.info(f"Updated username_input_outside with fallback: {suggested_username}")
 
     # Define callbacks for first and last name changes
     def on_first_name_change():
         """Update username when first name changes"""
+        logging.info("on_first_name_change triggered")
+        first_name = st.session_state.get('first_name_input_outside', '')
+        st.session_state['first_name_input'] = first_name
+        logging.info(f"First name changed to: {first_name}")
         update_username_from_inputs()
         # Force rerun after username update for immediate feedback
         st.rerun()
     
     def on_last_name_change():
         """Update username when last name changes"""
+        logging.info("on_last_name_change triggered")
+        last_name = st.session_state.get('last_name_input_outside', '')
+        st.session_state['last_name_input'] = last_name
+        logging.info(f"Last name changed to: {last_name}")
         update_username_from_inputs()
         # Force rerun after username update for immediate feedback
         st.rerun()
@@ -271,30 +338,40 @@ async def render_create_user_form():
         col1_outside, col2_outside = st.columns(2)
         
         with col1_outside:
-            st.text_input(
+            first_name_value = st.session_state.get('first_name_input', '')
+            first_name = st.text_input(
                 "First Name *",
                 key="first_name_input_outside",
                 placeholder="e.g., John",
                 help="User's first name (required)",
+                value=first_name_value,
                 on_change=on_first_name_change
             )
             
-            # If the session state is updated by the on_change, sync it to the actual form input
-            if 'first_name_input_outside' in st.session_state:
-                st.session_state['first_name_input'] = st.session_state['first_name_input_outside']
+            # Sync values between the outside input and the session state
+            if first_name != st.session_state.get('first_name_input', ''):
+                logging.info(f"Updating first_name_input with: {first_name}")
+                st.session_state['first_name_input'] = first_name
+                # Trigger username update
+                update_username_from_inputs()
         
         with col2_outside:
-            st.text_input(
+            last_name_value = st.session_state.get('last_name_input', '')
+            last_name = st.text_input(
                 "Last Name *",
                 key="last_name_input_outside",
                 placeholder="e.g., Doe",
                 help="User's last name (required)",
+                value=last_name_value,
                 on_change=on_last_name_change
             )
             
-            # If the session state is updated by the on_change, sync it to the actual form input
-            if 'last_name_input_outside' in st.session_state:
-                st.session_state['last_name_input'] = st.session_state['last_name_input_outside']
+            # Sync values between the outside input and the session state
+            if last_name != st.session_state.get('last_name_input', ''):
+                logging.info(f"Updating last_name_input with: {last_name}")
+                st.session_state['last_name_input'] = last_name
+                # Trigger username update
+                update_username_from_inputs()
         
         # Username field outside form to handle manual edits
         username_value = st.session_state.get('username_input', '')

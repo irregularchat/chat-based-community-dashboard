@@ -407,4 +407,4 @@ async def test_main_session_state_handling(mock_streamlit):
         
         # Verify that current_page was initialized in session state
         assert 'current_page' in mock_streamlit.session_state
-        assert mock_streamlit.session_state['current_page'] == 'List & Manage Users' 
+        assert mock_streamlit.session_state['current_page'] == 'Create User' 

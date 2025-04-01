@@ -223,8 +223,8 @@ async def test_render_sidebar(mock_streamlit):
     mock_selectbox.assert_called_once_with(
         "Select Page",
         [
-            "List & Manage Users",
             "Create User", 
+            "List & Manage Users",
             "Create Invite",
             "Matrix Messages and Rooms",
             "Signal Association",
@@ -366,8 +366,8 @@ async def test_session_state_modification_after_widget(mock_streamlit):
     mock_selectbox.assert_called_once_with(
         "Select Page",
         [
-            "List & Manage Users",
             "Create User", 
+            "List & Manage Users",
             "Create Invite",
             "Matrix Messages and Rooms",
             "Signal Association",
@@ -375,7 +375,7 @@ async def test_session_state_modification_after_widget(mock_streamlit):
             "Prompts Manager",
             "Admin Dashboard"
         ],
-        index=1,  # Create User is at index 1
+        index=0,  # Create User is at index 0
         key='current_page'
     )
 
@@ -391,6 +391,11 @@ async def test_main_session_state_handling(mock_streamlit):
          patch('app.main.render_main_content', new_callable=AsyncMock), \
          patch('app.main.init_db'):
         
+        # Mock initialize_session_state to set current_page
+        def mock_init_side_effect():
+            mock_streamlit.session_state['current_page'] = 'Create User'
+        mock_init.side_effect = mock_init_side_effect
+        
         # Set up the sidebar mock to return a value
         mock_sidebar.return_value = "List & Manage Users"
         
@@ -400,6 +405,6 @@ async def test_main_session_state_handling(mock_streamlit):
         # Verify that initialize_session_state was called
         mock_init.assert_called_once()
         
-        # Verify that current_page was initialized in session state to default value
+        # Verify that current_page was initialized in session state
         assert 'current_page' in mock_streamlit.session_state
         assert mock_streamlit.session_state['current_page'] == 'List & Manage Users' 

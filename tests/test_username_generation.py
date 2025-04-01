@@ -53,9 +53,15 @@ async def test_username_generation():
         mock_form.return_value.__enter__.return_value = mock_form_context
         mock_form.return_value.__exit__.return_value = None
         
-        # Create columns context manager
-        mock_columns_context = [MagicMock(), MagicMock()]
-        mock_columns.return_value = mock_columns_context
+        # Create columns context manager with variable results depending on parameters
+        def columns_side_effect(*args, **kwargs):
+            # Return 2 columns for normal calls and 3 columns for the button section with [1,1,1]
+            if args and isinstance(args[0], list) and len(args[0]) == 3 and args[0] == [1, 1, 1]:
+                return [MagicMock(), MagicMock(), MagicMock()]
+            # For all other calls, return 2 columns
+            return [MagicMock(), MagicMock()]
+        
+        mock_columns.side_effect = columns_side_effect
         
         # Set up behavior for text inputs
         def text_input_side_effect(*args, **kwargs):
@@ -173,9 +179,15 @@ async def test_username_generation_api_error():
         mock_form.return_value.__enter__.return_value = mock_form_context
         mock_form.return_value.__exit__.return_value = None
         
-        # Create columns context manager
-        mock_columns_context = [MagicMock(), MagicMock()]
-        mock_columns.return_value = mock_columns_context
+        # Create columns context manager with variable results depending on parameters
+        def columns_side_effect(*args, **kwargs):
+            # Return 2 columns for normal calls and 3 columns for the button section with [1,1,1]
+            if args and isinstance(args[0], list) and len(args[0]) == 3 and args[0] == [1, 1, 1]:
+                return [MagicMock(), MagicMock(), MagicMock()]
+            # For all other calls, return 2 columns
+            return [MagicMock(), MagicMock()]
+        
+        mock_columns.side_effect = columns_side_effect
         
         # Mock API error
         mock_requests_get.side_effect = Exception("API Error")

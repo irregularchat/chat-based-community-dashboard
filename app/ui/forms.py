@@ -422,15 +422,31 @@ async def render_create_user_form():
                 is_admin = st.checkbox("Grant Admin Privileges", key="is_admin_checkbox", 
                                       help="Make this user an administrator with full access to all features")
             
-            # Submit buttons
-            col1, col2, col3 = st.columns([1, 1, 1])
-            with col1:
+            # Submit buttons - Handle different Streamlit versions
+            try:
+                # Try to create three columns for buttons
+                cols = st.columns([1, 1, 1])
+                if len(cols) == 3:
+                    col1, col2, col3 = cols
+                    with col1:
+                        submit_button = st.form_submit_button("Create User")
+                    with col2:
+                        clear_button = st.form_submit_button("Clear Form")
+                    with col3:
+                        # This is just a placeholder for layout balance
+                        st.write("")
+                else:
+                    # Fall back to two columns if three aren't created
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        submit_button = st.form_submit_button("Create User")
+                    with col2:
+                        clear_button = st.form_submit_button("Clear Form")
+            except Exception as e:
+                # Fall back to simple layout if columns fail
+                logging.warning(f"Error creating columns for buttons: {e}")
                 submit_button = st.form_submit_button("Create User")
-            with col2:
                 clear_button = st.form_submit_button("Clear Form")
-            with col3:
-                # This is just a placeholder for layout balance
-                st.write("")
             
             # Display required fields note
             st.markdown("**Note:** Fields marked with * are required")

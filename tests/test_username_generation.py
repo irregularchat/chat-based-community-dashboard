@@ -7,7 +7,7 @@ from app.db.models import User
 from app.utils.helpers import create_unique_username
 
 # Skip these tests for now as they're too complex to mock correctly
-SKIP_USERNAME_TESTS = True
+SKIP_USERNAME_TESTS = False
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(SKIP_USERNAME_TESTS, reason="Username generation tests are too complex to mock correctly")

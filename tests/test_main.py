@@ -210,6 +210,11 @@ async def test_render_sidebar(mock_streamlit):
     mock_title = Mock()
     mock_streamlit.sidebar.title = mock_title
     
+    # Mock an authenticated admin user
+    mock_streamlit.session_state['is_authenticated'] = True
+    mock_streamlit.session_state['is_admin'] = True
+    mock_streamlit.session_state['current_page'] = 'Create User'
+    
     # Call the function and await its result
     result = await app.main.render_sidebar()
     
@@ -218,14 +223,16 @@ async def test_render_sidebar(mock_streamlit):
     mock_selectbox.assert_called_once_with(
         "Select Page",
         [
-            "Create User",
-            "Create Invite",
             "List & Manage Users",
+            "Create User", 
+            "Create Invite",
             "Matrix Messages and Rooms",
+            "Signal Association",
             "Settings",
-            "Prompts Manager"
+            "Prompts Manager",
+            "Admin Dashboard"
         ],
-        index=0,
+        index=mock_selectbox.call_args[0][1].index("Create User"),
         key='current_page'
     )
     assert result == "Create User"
@@ -235,15 +242,32 @@ async def test_render_main_content(mock_streamlit):
     """Test main content rendering"""
     with patch('app.main.render_create_user_form', new_callable=AsyncMock) as mock_create_form, \
          patch('app.main.render_invite_form', new_callable=AsyncMock) as mock_invite_form, \
-         patch('app.main.display_user_list', new_callable=AsyncMock) as mock_display_users:
+         patch('app.main.display_user_list', new_callable=AsyncMock) as mock_display_users, \
+         patch('app.main.is_authenticated', return_value=True) as mock_is_auth, \
+         patch('app.main.require_authentication', return_value=True) as mock_require_auth:
+        
+        # Mock authentication state
+        mock_streamlit.session_state['is_authenticated'] = True
+        mock_streamlit.session_state['is_admin'] = True
+        mock_streamlit.query_params = {}
         
         mock_streamlit.session_state['current_page'] = 'Create User'
         await app.main.render_main_content()
         mock_create_form.assert_awaited_once()
         
+        # Reset mocks
+        mock_create_form.reset_mock()
+        mock_invite_form.reset_mock()
+        mock_display_users.reset_mock()
+        
         mock_streamlit.session_state['current_page'] = 'Create Invite'
         await app.main.render_main_content()
         mock_invite_form.assert_awaited_once()
+        
+        # Reset mocks
+        mock_create_form.reset_mock()
+        mock_invite_form.reset_mock()
+        mock_display_users.reset_mock()
         
         mock_streamlit.session_state['current_page'] = 'List & Manage Users'
         await app.main.render_main_content()

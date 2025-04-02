@@ -32,7 +32,6 @@ async def test_send_matrix_message_failure():
     with patch("app.utils.matrix_actions.get_matrix_client", return_value=mock_client):
         result = await send_matrix_message("test_room", "test message")
         assert result is False
-        await mock_client.close()
         mock_client.close.assert_called_once()
 
 @pytest.mark.asyncio

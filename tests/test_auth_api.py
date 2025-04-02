@@ -88,21 +88,21 @@ async def test_reset_password_success(mock_db_session):
 async def test_create_user():
     """Test user creation"""
     with patch('app.auth.api.requests.post') as mock_post, \
-         patch('app.auth.api.reset_user_password') as mock_reset:
-        
+         patch('app.auth.api.Config') as mock_config:
         mock_post.return_value.status_code = 201
-        mock_post.return_value.json.return_value = {"pk": "123", "username": "testuser"}
-        mock_reset.return_value = True
-        
-        success, username, password, error = await create_user(
+        mock_post.return_value.json.return_value = {"pk": "123"}
+        mock_config.MATRIX_ENABLED = False
+
+        result = await create_user(
             username="testuser",
-            full_name="Test User",
-            email="test@example.com"
+            password="testpass",
+            email="test@example.com",
+            name="Test User"
         )
-        assert success is True
-        assert username == "testuser"
-        assert password is not None
-        assert error is None 
+
+        assert result['success'] is True
+        assert result['user_id'] == "123"
+        assert result['message'] == "User created successfully"
 
 @pytest.mark.asyncio
 async def test_create_invite():

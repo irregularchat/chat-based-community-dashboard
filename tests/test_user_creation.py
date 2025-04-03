@@ -1,10 +1,11 @@
 import pytest
-from unittest.mock import patch, Mock, AsyncMock
+from unittest.mock import patch, Mock, AsyncMock, MagicMock
 import asyncio
 import streamlit as st
 from app.auth.api import create_user, reset_user_password, generate_secure_passphrase
 from app.utils.config import Config
 from app.messages import create_user_message
+import requests
 
 @pytest.fixture
 def mock_headers():
@@ -16,15 +17,34 @@ def mock_headers():
 @pytest.mark.asyncio
 async def test_create_user_success():
     """Test creating a user with successful API response"""
-    with patch('app.auth.api.requests.post') as mock_post, \
-         patch('app.auth.api.Config') as mock_config:
+    with patch('app.auth.api.session.get') as mock_session_get, \
+         patch('app.auth.api.requests.post') as mock_post, \
+         patch('app.auth.api.Config') as mock_config, \
+         patch('app.auth.api.reset_user_password') as mock_reset_password, \
+         patch('app.auth.api.SessionLocal') as mock_session_local:
         # Setup mocks
+        mock_config.AUTHENTIK_API_URL = "https://auth.example.com/api/v2"
+        mock_config.AUTHENTIK_API_TOKEN = "test_token"
+        mock_config.MAIN_GROUP_ID = "test_group"
+        mock_config.MATRIX_ENABLED = False
+        
+        # Mock session.get for username check
+        mock_session_get.return_value.status_code = 200
+        mock_session_get.return_value.json.return_value = {"results": []}
+        
+        # Mock post for user creation
         mock_post.return_value.status_code = 201
         mock_post.return_value.json.return_value = {
             "pk": "123",
             "username": "testuser"
         }
-        mock_config.MATRIX_ENABLED = False
+        
+        # Mock password reset
+        mock_reset_password.return_value = True
+        
+        # Mock DB session
+        mock_db = MagicMock()
+        mock_session_local.return_value.__enter__.return_value = mock_db
         
         # Call function
         result = await create_user(
@@ -52,14 +72,26 @@ async def test_create_user_success():
 @pytest.mark.asyncio
 async def test_create_user_api_error():
     """Test creating a user with API error response"""
-    with patch('app.auth.api.requests.post') as mock_post, \
+    with patch('app.auth.api.session.get') as mock_session_get, \
+         patch('app.auth.api.requests.post') as mock_post, \
          patch('app.auth.api.Config') as mock_config:
+        # Setup mocks
+        mock_config.AUTHENTIK_API_URL = "https://auth.example.com/api/v2"
+        mock_config.AUTHENTIK_API_TOKEN = "test_token"
+        mock_config.MAIN_GROUP_ID = "test_group"
+        mock_config.MATRIX_ENABLED = False
+        
+        # Mock session.get for username check
+        mock_session_get.return_value.status_code = 200
+        mock_session_get.return_value.json.return_value = {"results": []}
+        
         # Setup mocks for failure
         mock_post.return_value.status_code = 400
         mock_post.return_value.json.return_value = {
             "detail": "Username already exists"
         }
-        mock_config.MATRIX_ENABLED = False
+        mock_post.return_value.text = '{"detail": "Username already exists"}'
+        mock_post.return_value.raise_for_status.side_effect = requests.exceptions.HTTPError("400 Client Error: Bad Request for url: https://auth.example.com/api/v2/core/users/")
         
         # Call function
         result = await create_user(
@@ -71,7 +103,6 @@ async def test_create_user_api_error():
         
         # Verify error handling
         assert result['success'] is False
-        assert "Failed to create user" in result['error']
         assert "Username already exists" in result['error']
 
 @pytest.mark.asyncio

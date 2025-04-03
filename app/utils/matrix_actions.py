@@ -304,26 +304,37 @@ async def get_matrix_client() -> Optional[AsyncClient]:
                 logger.error(f"Error closing Matrix client: {close_error}")
         return None
 
-async def send_matrix_message(room_id: str, message: str) -> bool:
-    """Send a message to a Matrix room"""
-    if not MATRIX_ACTIVE:
-        logging.warning("Matrix integration is disabled")
-        return False
-
+async def send_matrix_message(room_id, message, client=None):
+    """Send a message to a Matrix room."""
+    should_close = client is None  # Track if we created the client
     try:
-        client = await get_matrix_client()
+        if client is None:
+            client = await get_matrix_client()
+            
         if not client:
+            logging.error("Failed to get Matrix client")
             return False
-
-        response = await client.room_send(
+            
+        # Send the message
+        await client.room_send(
             room_id=room_id,
             message_type="m.room.message",
             content={"msgtype": "m.text", "body": message}
         )
-        await client.close()
+        
+        # Only close if we created the client
+        if should_close:
+            await client.close()
+            
         return True
     except Exception as e:
-        logging.error(f"Failed to send Matrix message: {e}")
+        logging.error(f"Error sending Matrix message: {e}")
+        # Make sure to close client even on error if we created it
+        if should_close and client:
+            try:
+                await client.close()
+            except Exception as close_error:
+                logging.error(f"Error closing Matrix client: {close_error}")
         return False
 
 async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
@@ -1433,3 +1444,27 @@ def update_matrix_room_members(db, room_id, members):
     In the future, this will store room members in the database.
     """
     pass  # No-op
+
+async def create_user(username, password, display_name=None, admin=False):
+    """Create a new user in Matrix."""
+    try:
+        client = await get_matrix_client()
+        if not client:
+            return False
+            
+        # Create the user
+        user_id = f"@{username}:{Config.MATRIX_DOMAIN}"
+        response = await client.register_user(username, password)
+        
+        if response and 'user_id' in response:
+            # Set display name if provided
+            if display_name:
+                await client.set_displayname(user_id, display_name)
+            
+            # Send welcome message
+            await send_welcome_message_async(user_id, username)
+            
+            return True
+    except Exception as e:
+        logging.error(f"Error creating Matrix user: {e}")
+        return False

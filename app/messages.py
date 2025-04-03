@@ -30,6 +30,23 @@ def create_user_message(new_username, temp_password, discourse_post_url=None):
         st.session_state['message'] = welcome_message
         st.session_state['user_list'] = None  # Clear user list if there was any
         st.warning("User created but password reset failed. Manual reset required.")
+        
+        # Add buttons to control next actions
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Clear Message", key="clear_message_btn_reset"):
+                # Clear message from session state
+                if 'message' in st.session_state:
+                    del st.session_state['message']
+                st.rerun()
+        with col2:
+            if st.button("Create Another User", key="create_another_reset"):
+                # Clear form fields and message
+                if 'message' in st.session_state:
+                    del st.session_state['message']
+                st.session_state['should_clear_form'] = True
+                st.rerun()
+        
         return
     
     # Normal case with successful password reset
@@ -68,6 +85,22 @@ def create_user_message(new_username, temp_password, discourse_post_url=None):
     st.session_state['message'] = welcome_message
     st.session_state['user_list'] = None  # Clear user list if there was any
     st.success("User created successfully!")
+    
+    # Add buttons to control next actions
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Clear Message", key="clear_message_btn"):
+            # Clear message from session state
+            if 'message' in st.session_state:
+                del st.session_state['message']
+            st.rerun()
+    with col2:
+        if st.button("Create Another User", key="create_another"):
+            # Clear form fields and message
+            if 'message' in st.session_state:
+                del st.session_state['message']
+            st.session_state['should_clear_form'] = True
+            st.rerun()
 
 
 def create_recovery_message(username_input, new_password):

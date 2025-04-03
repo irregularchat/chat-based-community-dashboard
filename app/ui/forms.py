@@ -31,6 +31,7 @@ from app.auth.api import (
 )
 from app.db.operations import search_users
 from app.messages import create_invite_message
+from app.utils.messages import WELCOME_MESSAGE
 
 def reset_create_user_form_fields():
     """Helper function to reset all fields related to create user."""
@@ -80,18 +81,18 @@ def parse_and_rerun():
     # Parse the data from the text area
     try:
         parsed = parse_input(input_data)
-        
-        # Check for error in parsed data
-        if isinstance(parsed, dict) and "error" in parsed:
+    
+    # Check for error in parsed data
+    if isinstance(parsed, dict) and "error" in parsed:
             error_msg = parsed["error"]
             logging.error(f"Error parsing input: {error_msg}")
             st.error(error_msg)
-            return
-        
-        if not parsed or (isinstance(parsed, tuple) and parsed[1] is False):
+        return
+    
+    if not parsed or (isinstance(parsed, tuple) and parsed[1] is False):
             logging.error("Could not parse the input text, empty or invalid result")
-            st.error("Could not parse the input text")
-            return
+        st.error("Could not parse the input text")
+        return
 
         # Debug the parsed data
         logging.info(f"Successfully parsed data: {parsed}")
@@ -115,14 +116,14 @@ def parse_and_rerun():
         if "invited_by" in parsed:
             st.session_state["invited_by_input"] = parsed.get("invited_by")
             logging.info(f"Updated invited_by to: {parsed.get('invited_by')}")
-        
-        # Safely access nested intro fields and combine organization and interests
+    
+    # Safely access nested intro fields and combine organization and interests
         if "intro" in parsed:
-            intro_data = parsed.get("intro", {})
-            org = intro_data.get("organization", "")
-            interests = intro_data.get("interests", "")
-            combined_intro = f"{org}\n\nInterests: {interests}" if interests else org
-            st.session_state["intro_input"] = combined_intro
+    intro_data = parsed.get("intro", {})
+    org = intro_data.get("organization", "")
+    interests = intro_data.get("interests", "")
+    combined_intro = f"{org}\n\nInterests: {interests}" if interests else org
+    st.session_state["intro_input"] = combined_intro
             logging.info(f"Updated intro with org: '{org}' and interests: '{interests}'")
         
         # Trigger username generation from the updated names
@@ -134,8 +135,8 @@ def parse_and_rerun():
         
         # Set a flag to indicate parsing was successful
         st.session_state["parsing_successful"] = True
-        
-        # Rerun so the text inputs see the updated session state
+
+    # Rerun so the text inputs see the updated session state
         logging.info("Rerunning with updated session state")
         st.rerun()
     except Exception as e:
@@ -210,13 +211,13 @@ async def render_create_user_form():
 
     # Get database connection
     db = next(get_db())
-    
+
     # Run username update on initialization if we have some name data
     if ((st.session_state.get('first_name_input') or 
          st.session_state.get('last_name_input')) and 
         not st.session_state.get('username_input')):
         update_username_from_inputs()
-    
+
     # Create tabs for different input methods
     create_tabs = st.tabs(["Manual Create", "Auto Create", "Advanced Options"])
     
@@ -224,15 +225,15 @@ async def render_create_user_form():
         # Input fields outside the form for first name and last name to handle on_change
         st.subheader("Manual Create")
         st.info("Enter your information below to create a new user. The username will be automatically generated based on your first and last name.")
-        
+            
         col1_outside, col2_outside = st.columns(2)
-        
+            
         with col1_outside:
             # Avoid using value parameter when using Session State
-            st.text_input(
-                "First Name *",
+                st.text_input(
+                    "First Name *",
                 key="first_name_input_outside",
-                placeholder="e.g., John",
+                    placeholder="e.g., John",
                 help="User's first name (required)",
                 on_change=on_first_name_change
             )
@@ -262,11 +263,11 @@ async def render_create_user_form():
             st.session_state['username_needs_update'] = False
             
         # Always render a single username input with conditional value
-        st.text_input(
-            "Username *",
+                st.text_input(
+                    "Username *",
             key="username_input_outside",
             value=username_value if username_value else None,  # Only set value if we have one
-            placeholder="e.g., johndoe123",
+                    placeholder="e.g., johndoe123",
             help="Username for login (required, must be unique). Auto-generated based on name.",
             on_change=on_username_manual_edit
         )
@@ -442,7 +443,7 @@ async def render_create_user_form():
             
             # Display required fields note
             st.markdown("**Note:** Fields marked with * are required")
-            
+    
             # Handle form submission
             if submit_button:
                 try:
@@ -496,8 +497,12 @@ async def render_create_user_form():
                                 st.session_state['created_username'] = created_username
                                 st.session_state['should_clear_form'] = True
                                 
-                                # Store success message
-                                st.session_state['success_message'] = f"User '{created_username}' was created successfully!"
+                                # Store success message with welcome message and credentials
+                                welcome_text = WELCOME_MESSAGE.format(username=created_username)
+                                welcome_text += f"\n\nYour username is: {created_username}"
+                                welcome_text += f"\nYour password is: {user_data.get('password', 'Please check your email for the password')}"
+                                welcome_text += "\n\nPlease change your password after your first login."
+                                st.session_state['success_message'] = welcome_text
                                 
                                 # Rerun to refresh the form
                                 st.rerun()
@@ -636,8 +641,8 @@ def on_first_name_change():
             # Set flag to indicate username needs update on next rerun
             st.session_state['username_needs_update'] = True
             # Force rerun after username update for immediate feedback
-            st.rerun()
-
+                st.rerun()
+        
 def on_last_name_change():
     """Update username when last name changes"""
     logging.info("on_last_name_change triggered")
@@ -690,11 +695,11 @@ def handle_action(action, selected_users, action_params=None, headers=None):
 
     # Get headers if not provided
     if headers is None:
-        headers = {
-            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-            'Content-Type': 'application/json'
-        }
-
+                        headers = {
+                            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                            'Content-Type': 'application/json'
+                        }
+                        
     success = True  # Track if all actions completed successfully
     
     # Initialize action_params if None
@@ -736,10 +741,10 @@ def handle_action(action, selected_users, action_params=None, headers=None):
                 result = update_user_status(
                     Config.AUTHENTIK_API_URL,
                     headers,
-                    user_id,
+                                user_id,
                     action_lower == "activate"
-                )
-                
+                            )
+                    
                 if result:
                     st.success(f"User {username} {'activated' if action_lower == 'activate' else 'deactivated'} successfully.")
                 else:
@@ -765,7 +770,7 @@ def handle_action(action, selected_users, action_params=None, headers=None):
                 
                 if result:
                     st.success(f"User {username} deleted successfully")
-                else:
+        else:
                     st.error(f"Failed to delete user {username}")
                     success = False
             except Exception as e:
@@ -1098,11 +1103,11 @@ def update_username_from_inputs():
             
             # Also check for existing username in Authentik SSO
             try:
-                headers = {
-                    'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-                    'Content-Type': 'application/json'
-                }
-                
+            headers = {
+                'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                'Content-Type': 'application/json'
+            }
+            
                 sso_usernames = []
                 user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username__startswith={base_username}"
                 response = requests.get(user_search_url, headers=headers, timeout=10)
@@ -1255,7 +1260,7 @@ async def render_invite_form():
             elif not name:
                 st.error("Name is required")
             else:
-                # Create the invite
+            # Create the invite
                 try:
                     # Generate expiry date
                     expiry_date = datetime.now() + timedelta(days=expiry_days)
@@ -1289,7 +1294,7 @@ async def render_invite_form():
                         if st.button("Send Email Invitation"):
                             # Send email with invite link
                             try:
-                                create_invite_message(
+                create_invite_message(
                                     to=email,
                                     subject="You've been invited to join our platform",
                                     full_name=name,
@@ -1305,14 +1310,14 @@ async def render_invite_form():
                             st.session_state['invite_email'] = ""
                         if 'invite_name' in st.session_state:
                             st.session_state['invite_name'] = ""
-                    else:
+            else:
                         st.error(f"Failed to create invite: {result.get('error', 'Unknown error')}")
-                    
-                except Exception as e:
-                    logging.error(f"Error creating invite: {e}")
+                
+        except Exception as e:
+            logging.error(f"Error creating invite: {e}")
                     logging.error(traceback.format_exc())
-                    st.error(f"An error occurred: {str(e)}")
-        
+            st.error(f"An error occurred: {str(e)}")
+    
         elif clear_button:
             # Clear form fields
             if 'invite_email' in st.session_state:
@@ -1677,7 +1682,7 @@ def update_user_status(api_url: str, headers: dict, user_id: str, is_active: boo
         response = requests.patch(url, headers=headers, json=data)
         response.raise_for_status()
         return True
-    except Exception as e:
+            except Exception as e:
         logging.error(f"Error updating user status: {e}")
         return False
 
@@ -1688,8 +1693,8 @@ def delete_user(api_url: str, headers: dict, user_id: str) -> bool:
         response = requests.delete(url, headers=headers)
         response.raise_for_status()
         return True
-    except Exception as e:
-        logging.error(f"Error deleting user: {e}")
+            except Exception as e:
+                logging.error(f"Error deleting user: {e}")
         return False
 
 def update_user_email(api_url: str, headers: dict, user_id: str, new_email: str) -> bool:
@@ -1700,7 +1705,7 @@ def update_user_email(api_url: str, headers: dict, user_id: str, new_email: str)
         response = requests.patch(url, headers=headers, json=data)
         response.raise_for_status()
         return True
-    except Exception as e:
+            except Exception as e:
         logging.error(f"Error updating user email: {e}")
         return False
 
@@ -1722,7 +1727,7 @@ def update_user_intro(api_url: str, headers: dict, user_id: str, intro_text: str
         response = requests.patch(url, headers=headers, json=data)
         response.raise_for_status()
         return True
-    except Exception as e:
+            except Exception as e:
         logging.error(f"Error updating user intro: {e}")
         return False
 
@@ -1744,7 +1749,7 @@ def update_user_invited_by(api_url: str, headers: dict, user_id: str, invited_by
         response = requests.patch(url, headers=headers, json=data)
         response.raise_for_status()
         return True
-    except Exception as e:
+            except Exception as e:
         logging.error(f"Error updating user invited_by: {e}")
         return False
 
@@ -1758,6 +1763,6 @@ def handle_form_submission(action: str, username: str, **kwargs) -> bool:
             # Implement safety number verification logic here
             return True
         return False
-    except Exception as e:
+            except Exception as e:
         logging.error(f"Error handling form submission: {e}")
         return False

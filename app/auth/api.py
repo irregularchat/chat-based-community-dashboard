@@ -187,208 +187,65 @@ def reset_user_password(auth_api_url, headers, user_id, new_password):
         logging.error(f"Error resetting password for user {user_id}: {e}")
         return False
 
-async def create_user(username, full_name, email, invited_by=None, intro=None, is_admin=False, groups=None):
-    """
-    Create a new user in Authentik.
-    
-    Args:
-        username (str): Username for the new user
-        full_name (str): Full name of the user
-        email (str, optional): Email address
-        invited_by (str, optional): Who invited this user
-        intro (str, optional): Introduction information
-        is_admin (bool, optional): Whether the user should be an admin
-        groups (list, optional): List of group IDs to assign the user to
-        
-    Returns:
-        tuple: (success, username, password/error_message, optional_discourse_url)
-    """
+async def create_user(username, password, email=None, name=None, is_admin=False):
+    """Create a new user in Authentik."""
     try:
-        # Generate a secure passphrase for the user
-        password = generate_secure_passphrase()
+        # Create user in Authentik
+        user_data = {
+            'username': username,
+            'name': name or username,
+            'email': email,
+            'is_active': True,
+            'password': password
+        }
         
-        # Configure the headers for the API request
         headers = {
             'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
             'Content-Type': 'application/json'
         }
         
-        # Prepare the user data
-        user_data = {
-            'username': username,
-            'name': full_name,
-            'password': password,
-            'path': 0,  # Standard users group
-        }
-        
-        # Add groups if provided, otherwise use the main group if configured
-        if groups:
-            user_data['groups'] = groups
-        elif Config.MAIN_GROUP_ID:
-            user_data['groups'] = [Config.MAIN_GROUP_ID]
-        
-        # Add email if provided
-        if email:
-            user_data['email'] = email
-        
-        # Add custom attributes if provided
-        custom_attributes = {}
-        if invited_by:
-            custom_attributes['invited_by'] = invited_by
-        if intro:
-            custom_attributes['intro'] = intro
-        
-        if custom_attributes:
-            user_data['attributes'] = custom_attributes
-        
-        # Create the user
-        logging.info(f"Creating user: {username}")
-        logging.info(f"User data: {user_data}")
-        
-        user_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
-        response = requests.post(user_url, json=user_data, headers=headers)
+        response = requests.post(
+            f"{Config.AUTHENTIK_API_URL}/core/users/",
+            headers=headers,
+            json=user_data
+        )
         
         if response.status_code == 201:
+            # User created successfully
             user_id = response.json().get('pk')
             
-            # Update user data if needed (e.g. reset password, etc.)
-            result = reset_user_password(Config.AUTHENTIK_API_URL, headers, user_id, password)
+            # Send welcome message asynchronously
+            if Config.MATRIX_ENABLED:
+                from app.utils.matrix_actions import send_welcome_message_async
+                import asyncio
+                # Create task for welcome message
+                asyncio.create_task(send_welcome_message_async(user_id, username))
             
-            if not result:
-                logging.warning(f"Failed to reset password for user {username}")
+            # Generate welcome message with credentials
+            from app.utils.messages import WELCOME_MESSAGE
+            welcome_text = WELCOME_MESSAGE.format(username=username)
+            welcome_text += f"\n\nYour username is: {username}"
+            welcome_text += f"\nYour password is: {password}"
+            welcome_text += "\n\nPlease change your password after your first login."
             
-            # Set admin status in local database
-            try:
-                with SessionLocal() as db:
-                    # Check if user exists in local database
-                    db_user = db.query(User).filter(User.username == username).first()
-                    
-                    if db_user:
-                        # Update existing user
-                        db_user.is_admin = is_admin
-                    else:
-                        # Create new user in local database
-                        db_user = User(
-                            username=username,
-                            email=email,
-                            first_name=full_name.split(' ')[0] if full_name else '',
-                            last_name=' '.join(full_name.split(' ')[1:]) if full_name and ' ' in full_name else '',
-                            is_active=True,
-                            is_admin=is_admin,
-                            authentik_id=user_id,
-                            attributes=custom_attributes
-                        )
-                        db.add(db_user)
-                    
-                    db.commit()
-                    
-                    # Log admin status if applicable
-                    if is_admin:
-                        from app.db.operations import create_admin_event
-                        create_admin_event(
-                            db, 
-                            "admin_granted", 
-                            username, 
-                            f"Admin status granted to {username} during creation"
-                        )
-                    
-                    # Log group assignments if applicable
-                    if groups:
-                        from app.db.operations import create_admin_event
-                        group_names = []
-                        for group_id in groups:
-                            # Get group name
-                            group_url = f"{Config.AUTHENTIK_API_URL}/core/groups/{group_id}/"
-                            try:
-                                group_response = requests.get(group_url, headers=headers)
-                                if group_response.status_code == 200:
-                                    group_name = group_response.json().get('name', f"Group {group_id}")
-                                    group_names.append(group_name)
-                            except Exception as e:
-                                logging.error(f"Error getting group name for {group_id}: {e}")
-                                group_names.append(f"Group {group_id}")
-                        
-                        create_admin_event(
-                            db, 
-                            "user_added_to_groups", 
-                            username, 
-                            f"User {username} assigned to groups: {', '.join(group_names)} during creation"
-                        )
-            except Exception as e:
-                logging.error(f"Error setting admin status for {username}: {e}")
-            
-            # Send welcome email
-            try:
-                if Config.MATRIX_ACTIVE:
-                    from app.utils.matrix_actions import send_welcome_message
-                    matrix_welcome_sent = send_welcome_message(
-                        f"@{username}:{Config.MATRIX_BOT_USERNAME.split(':')[1]}" if "@" not in username else username,
-                        username, 
-                        full_name
-                    )
-                    
-                    if matrix_welcome_sent:
-                        logging.info(f"Matrix welcome message sent to user {username}")
-                    else:
-                        logging.warning(f"Failed to send Matrix welcome message to user {username}")
-                    
-                    # Announce the new user if introduction is provided
-                    if intro:
-                        from app.utils.matrix_actions import announce_new_user
-                        announcement_sent = announce_new_user(username, full_name, intro)
-                        
-                        if announcement_sent:
-                            logging.info(f"New user announcement sent for {username}")
-                        else:
-                            logging.warning(f"Failed to send new user announcement for {username}")
-            except Exception as e:
-                logging.error(f"Error with Matrix notifications for new user {username}: {e}")
-            
-            # Create Discourse post
-            discourse_url = None
-            if Config.DISCOURSE_ACTIVE and Config.DISCOURSE_URL and Config.DISCOURSE_API_KEY:
-                try:
-                    discourse_headers = {
-                        'Api-Key': Config.DISCOURSE_API_KEY,
-                        'Api-Username': Config.DISCOURSE_API_USERNAME,
-                        'Content-Type': 'application/json'
-                    }
-                    
-                    # Create a Discourse announcement post
-                    result = create_discourse_post(
-                        discourse_headers,
-                        f"Welcome new member: {full_name} (@{username})",
-                        intro or f"Please welcome {full_name} to the community!",
-                        username=username,
-                        intro=intro,
-                        invited_by=invited_by
-                    )
-                    
-                    if result and result.get('success'):
-                        discourse_url = result.get('post_url')
-                        logging.info(f"Created Discourse post for new user {username}: {discourse_url}")
-                    else:
-                        error_msg = result.get('error') if result else "Unknown error"
-                        logging.warning(f"Failed to create Discourse post for user {username}: {error_msg}")
-                except Exception as e:
-                    logging.error(f"Error creating Discourse post for new user {username}: {e}")
-            
-            # Success response with optional Discourse URL
-            return True, username, password, discourse_url
+            return {
+                'success': True,
+                'user_id': user_id,
+                'message': welcome_text
+            }
         else:
-            error_message = f"Error: {response.status_code}"
-            try:
-                error_data = response.json()
-                error_message = "\n".join([f"{k}: {', '.join(v)}" for k, v in error_data.items() if isinstance(v, list)])
-            except:
-                pass
-            
-            logging.error(f"Failed to create user {username}: {error_message}")
-            return False, username, error_message, None
+            error_msg = response.json().get('detail', 'Unknown error')
+            return {
+                'success': False,
+                'error': f'Failed to create user: {error_msg}'
+            }
             
     except Exception as e:
-        logging.error(f"Error creating user {username}: {e}")
-        return False, username, str(e), None
+        logging.error(f"Error creating user: {e}")
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
 
 # List Users Function is needed and works better than the new methos session.get(f"{auth_api_url}/users/", headers=headers, timeout=10)

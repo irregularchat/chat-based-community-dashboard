@@ -1,0 +1,514 @@
+[
+  {
+    "name": "Hardware Chat",
+    "category": "Tech, Hardware",
+    "categories": [
+      "Tech",
+      "Hardware"
+    ],
+    "room_id": "!GrHbVBAvXWRNvDizlE:irregularchat.com",
+    "configured": true,
+    "accessible": false
+  },
+  {
+    "room_id": "!SIibRDAYdXnZUeoeaI:irregularchat.com",
+    "name": "Cert Chat",
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "category": "Tech, Cyber, Certs",
+    "categories": [
+      "Tech",
+      "Cyber",
+      "Certs"
+    ],
+    "configured": true
+  },
+  {
+    "room_id": "!ieJxPoNPZSqOdazaPt:irregularchat.com",
+    "name": "Influence Chat",
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "category": "Influence,OIE",
+    "categories": [
+      "Influence",
+      "OIE"
+    ],
+    "configured": true
+  },
+  {
+    "room_id": "!SQydNARklBUZNWXMBh:irregularchat.com",
+    "name": "Research Chat",
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "category": "Research, OIE",
+    "categories": [
+      "Research",
+      "OIE"
+    ],
+    "configured": true
+  },
+  {
+    "name": "DragonOS",
+    "category": "Tech,RF,EW",
+    "categories": [
+      "Tech",
+      "RF",
+      "EW"
+    ],
+    "room_id": "!awhHxldTVsJuywYCik:irregularchat.com",
+    "configured": true,
+    "accessible": false
+  },
+  {
+    "name": "Tech Chat",
+    "category": "Tech",
+    "categories": [
+      "Tech"
+    ],
+    "room_id": "!JXxwnVNiAUhLxNjLJT:irregularchat.com",
+    "configured": true,
+    "accessible": false
+  },
+  {
+    "name": "Unmanned Chat",
+    "category": "Unmanned Systems",
+    "categories": [
+      "Unmanned Systems"
+    ],
+    "room_id": "!GlxeZhkRTTQvTGZzEo:irregularchat.com",
+    "configured": true,
+    "accessible": false
+  },
+  {
+    "name": "Counter UxS",
+    "category": "Unmanned Systems",
+    "categories": [
+      "Unmanned Systems"
+    ],
+    "room_id": "!XajihEVHsAvfKlsssE:irregularchat.com",
+    "configured": true,
+    "accessible": false
+  },
+  {
+    "name": "AI Chat",
+    "category": "Tech",
+    "categories": [
+      "Tech"
+    ],
+    "room_id": "!aimhzjpwDqeHSLrWKN:irregularchat.com",
+    "configured": true,
+    "accessible": false
+  },
+  {
+    "name": "Bot Development",
+    "category": "Development",
+    "categories": [
+      "Development",
+      "Testing"
+    ],
+    "room_id": "!LJrsfYIwcwAtZhBQQj:irregularchat.com",
+    "configured": true,
+    "accessible": false
+  },
+  {
+    "name": "New SOLO",
+    "category": "Development",
+    "categories": [
+      "Development"
+    ],
+    "room_id": "!zgcptRQUKaPxwenZhB:irregularchat.com",
+    "configured": true,
+    "accessible": false
+  },
+  {
+    "name": "System Managers",
+    "category": "Development",
+    "categories": [
+      "Development"
+    ],
+    "room_id": "!cxKrHfVaBkiTRWULcp:irregularchat.com",
+    "configured": true,
+    "accessible": false
+  },
+  {
+    "name": "Actions",
+    "category": "Development",
+    "categories": [
+      "Development"
+    ],
+    "room_id": "!kNzWsYJjmSAUaSKydR:irregularchat.com",
+    "configured": true,
+    "accessible": false
+  },
+  {
+    "room_id": "!iuXpkZLPIBysrZIyhF:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!JsShqdSAoVTyCoFLUa:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!JHsUUjxDoaPkJEKbgs:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!LrVMBjFjMBgGmyFwHR:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!IMRQjuHkDmoxsIwduC:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!hfzgDdZNYUuaFFxjaj:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!qeXEocDAuKhUdZaevQ:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!WAilRouxTriorpiMDO:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!qpMfFRSFFBNPoEdXsE:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!pLZNKpIKaXzBYAkiZE:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!qhFJsoWZnjAPfslGFD:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!jZKMNDanqVuyHqhPVU:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!eHWcTsckYVSUrkWBWS:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!jMUoxltQlhljukCYZc:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!sdIFUjKiXLySJfYldm:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!VRzSwqajxOpHepBQDL:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!WjVUjWNXpYcwWVpeAh:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!DcmcciBQcYxnXiAarm:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!tsRanWusSAnHRDnGBW:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!sNMfHXrrJtAZSScPXm:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!btVrSLzYFuBDXtdDjA:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!avKNmHtkVGMxqtWYuP:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!QevwHXUPEwlbsjWKlx:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!LDPjYQMLhSeFgySUpO:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!wRtqyerhHkNStVBWIO:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!UkTQdoEtWQhPKghJFU:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!VhBJklImrBzvkigTgZ:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!jmofGHoUQDXWxFpXnz:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!uzbAnZDqOqGJifAKOe:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!hwEJrnYUOHrkPfbrJH:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!TwOdwIynktYAlEwobw:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!qrxnEmbCpuQZgdhvZg:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!CgRMxcwuLDZrnfwPsC:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  },
+  {
+    "room_id": "!TLPtarGKKToLAYiRRm:irregularchat.com",
+    "name": null,
+    "error": "'AsyncClient' object has no attribute 'get_room_members'",
+    "configured": false,
+    "accessible": true,
+    "category": "Uncategorized",
+    "categories": [
+      "Uncategorized"
+    ]
+  }
+]

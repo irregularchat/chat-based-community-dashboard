@@ -5,10 +5,10 @@ import requests
 from pytz import timezone  
 from datetime import datetime, date, time as time_type
 import time
-from db.operations import search_users, add_admin_event, sync_user_data, User
-from db.database import get_db
+from app.db.operations import search_users, add_admin_event, sync_user_data, User
+from app.db.database import get_db
 from sqlalchemy.orm import Session
-from auth.api import (
+from app.auth.api import (
     create_user,
     force_password_reset,
     generate_secure_passphrase,
@@ -24,7 +24,7 @@ from auth.api import (
     webhook_notification,
     create_discourse_post
 )
-from messages import (
+from app.messages import (
     create_user_message,
     create_recovery_message,
     create_invite_message, 
@@ -36,16 +36,16 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import random
 import string
-from utils.config import Config
+from app.utils.config import Config
 import os
 from datetime import timedelta
 from typing import Dict, Any, Union
-from db.operations import AdminEvent
+from app.db.operations import AdminEvent
 
 # Import the reset_create_user_form_fields function from ui.forms
 # Use a try/except block to handle potential circular imports
 try:
-    from ui.forms import reset_create_user_form_fields
+    from app.ui.forms import reset_create_user_form_fields
 except ImportError:
     # Define a fallback function in case of circular import
     def reset_create_user_form_fields():

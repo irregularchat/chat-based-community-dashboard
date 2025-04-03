@@ -1,12 +1,12 @@
 # app/main.py
 import streamlit as st
-from utils.config import Config
-from ui.home import render_home_page
-from ui.summary import main as render_summary_page
-from ui.help_resources import main as render_help_page
-from ui.prompts import main as render_prompts_page
-from ui.matrix import render_matrix_messaging_page
-from utils.helpers import setup_logging
+from app.utils.config import Config
+from app.ui.home import render_home_page
+from app.ui.summary import main as render_summary_page
+from app.ui.help_resources import main as render_help_page
+from app.ui.prompts import main as render_prompts_page
+from app.ui.matrix import render_matrix_messaging_page
+from app.utils.helpers import setup_logging
 import logging
 from db.database import get_db
 from db.init_db import init_db

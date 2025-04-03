@@ -6,8 +6,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 import json
-from utils.config import Config
-from auth.api import (
+from app.utils.config import Config
+from app.auth.api import (
     create_user,
     force_password_reset,
     generate_secure_passphrase,
@@ -22,17 +22,17 @@ from auth.api import (
     list_users,
     webhook_notification
 )
-from ui.forms import render_create_user_form, render_invite_form, display_user_list
-from utils.helpers import (
+from app.ui.forms import render_create_user_form, render_invite_form, display_user_list
+from app.utils.helpers import (
     create_unique_username,
     update_username,
     get_eastern_time,
     add_timeline_event,
     handle_form_submission
 )
-from db.database import get_db
-from db.operations import search_users, User
-from messages import (
+from app.db.database import get_db
+from app.db.operations import search_users, User
+from app.messages import (
     create_user_message,
     create_recovery_message,
     create_invite_message, 
@@ -42,11 +42,11 @@ import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from pytz import timezone  # Ensure this is imported
-from utils.transformations import parse_input
-from db.init_db import should_sync_users, sync_user_data, sync_user_data_incremental
-from db.init_db import AdminEvent
-from auth.api import get_users_modified_since
-from ui.common import display_useful_links
+from app.utils.transformations import parse_input
+from app.db.init_db import should_sync_users, sync_user_data, sync_user_data_incremental
+from app.db.init_db import AdminEvent
+from app.auth.api import get_users_modified_since
+from app.ui.common import display_useful_links
 
 # Set up session with retry logic
 session = requests.Session()

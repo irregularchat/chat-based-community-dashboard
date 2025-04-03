@@ -1,10 +1,10 @@
 # app/messages.py
 import streamlit as st
-from auth.api import shorten_url, force_password_reset, generate_secure_passphrase, create_invite
+from app.auth.api import shorten_url, force_password_reset, generate_secure_passphrase, create_invite
 from pytz import timezone
 from datetime import datetime
 import logging
-from utils.config import Config  # Ensure Config is imported
+from app.utils.config import Config  # Ensure Config is imported
 
 def create_user_message(new_username, temp_password, discourse_post_url=None):
     """Generate and display the welcome message after user creation with temp password."""

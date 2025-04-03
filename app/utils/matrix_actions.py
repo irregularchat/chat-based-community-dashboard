@@ -10,7 +10,7 @@ import asyncio
 from typing import List, Dict, Optional, Union, Set
 from urllib.parse import urlparse
 
-from utils.config import Config
+from app.utils.config import Config
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

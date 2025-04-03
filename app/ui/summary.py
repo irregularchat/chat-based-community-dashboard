@@ -1,13 +1,13 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-from auth.api import list_users_cached, list_events_cached
-from utils.config import Config
-from db.database import get_db
-from db.operations import User, AdminEvent
+from app.auth.api import list_users_cached, list_events_cached
+from app.utils.config import Config
+from app.db.database import get_db
+from app.db.operations import User, AdminEvent
 from sqlalchemy.orm import Session
 import logging
-from ui.common import display_useful_links
+from app.ui.common import display_useful_links
 
 def fetch_user_data():
     headers = {

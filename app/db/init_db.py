@@ -1,10 +1,10 @@
-from db.database import engine, Base, SessionLocal
+from app.db.database import engine, Base, SessionLocal
 import requests
-from db.operations import User, AdminEvent, sync_user_data, sync_user_data_incremental
+from app.db.operations import User, AdminEvent, sync_user_data, sync_user_data_incremental
 from sqlalchemy import inspect
 import logging
-from utils.config import Config
-from auth.api import list_users, session, get_last_modified_timestamp, get_users_modified_since
+from app.utils.config import Config
+from app.auth.api import list_users, session, get_last_modified_timestamp, get_users_modified_since
 from datetime import datetime, timedelta
 import streamlit as st
 
@@ -85,7 +85,7 @@ def init_db():
     """Initialize database tables and sync with Authentik users if needed."""
     try:
         # Ensure models are registered with Base.metadata
-        from db.operations import User, AdminEvent
+        from app.db.operations import User, AdminEvent
 
         # Check if required tables exist; create them if not
         inspector = inspect(engine)

@@ -4,14 +4,14 @@ import random
 from xkcdpass import xkcd_password as xp
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from utils.config import Config # This will import the Config class from the config module
+from app.utils.config import Config # This will import the Config class from the config module
 from datetime import datetime, timedelta
 from pytz import timezone  
 import logging
 import os
 from sqlalchemy.orm import Session
-from db.operations import AdminEvent, sync_user_data
-from db.database import SessionLocal
+from app.db.operations import AdminEvent, sync_user_data
+from app.db.database import SessionLocal
 import time
 import json
 import streamlit as st
@@ -881,3 +881,59 @@ Notice that Login is required to view any of the Community posts. Please help ma
     except Exception as e:
         logging.error(f"Error creating Discourse post for {username}: {e}")
         return False, None
+
+def verify_email(auth_api_url, headers, user_id, email):
+    """Verify a user's email address in Authentik.
+    
+    Args:
+        auth_api_url (str): The base URL for the Authentik API
+        headers (dict): Headers for the API request
+        user_id (str): The ID of the user to verify
+        email (str): The email address to verify
+        
+    Returns:
+        bool: True if the verification was successful, False otherwise
+    """
+    url = f"{auth_api_url}/core/users/{user_id}/"
+    data = {"email": email, "email_verified": True}
+    try:
+        logging.info(f"Verifying email {email} for user {user_id}")
+        response = session.patch(url, headers=headers, json=data, timeout=10)
+        
+        if response.status_code in [200, 201, 202, 204]:
+            logging.info(f"Email {email} verified for user {user_id}")
+            return True
+        else:
+            logging.error(f"Failed to verify email for user {user_id}. Status code: {response.status_code}")
+            return False
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error verifying email: {e}")
+        return False
+
+def reset_password(auth_api_url, headers, user_id, new_password):
+    """Reset a user's password in Authentik.
+    
+    Args:
+        auth_api_url (str): The base URL for the Authentik API
+        headers (dict): Headers for the API request
+        user_id (str): The ID of the user to update
+        new_password (str): The new password to set
+        
+    Returns:
+        bool: True if the password was reset successfully, False otherwise
+    """
+    url = f"{auth_api_url}/core/users/{user_id}/set_password/"
+    data = {"password": new_password}
+    try:
+        logging.info(f"Resetting password for user {user_id}")
+        response = session.post(url, headers=headers, json=data, timeout=10)
+        
+        if response.status_code in [200, 201, 202, 204]:
+            logging.info(f"Password reset for user {user_id}")
+            return True
+        else:
+            logging.error(f"Failed to reset password for user {user_id}. Status code: {response.status_code}")
+            return False
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error resetting password: {e}")
+        return False

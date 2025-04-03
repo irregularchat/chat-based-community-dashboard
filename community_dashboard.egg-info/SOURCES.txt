@@ -13,6 +13,8 @@ app/db/__init__.py
 app/db/database.py
 app/db/init_db.py
 app/db/operations.py
+app/db/migrations/__init__.py
+app/db/migrations/add_signal_identity.py
 app/pages/__init__.py
 app/pages/prompts_manager.py
 app/pages/settings.py
@@ -29,9 +31,7 @@ app/utils/config.py
 app/utils/gpt_call.py
 app/utils/helpers.py
 app/utils/matrix_actions.py
-app/utils/messages.py
 app/utils/prompts_manager.py
-app/utils/shared.py
 app/utils/temp-test-deterimine_input_format.py
 app/utils/transformations.py
 community_dashboard.egg-info/PKG-INFO

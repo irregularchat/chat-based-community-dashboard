@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON, cast, String
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import JSONB
-from db.database import Base  # Make sure we're using the same Base
+from app.db.database import Base  # Make sure we're using the same Base
 from typing import List, Dict, Any
 from datetime import datetime
 import logging
@@ -9,14 +9,16 @@ import logging
 class User(Base):
     __tablename__ = 'users'
 
-    id = Column(Integer, primary_key=True)
-    username = Column(String, unique=True, nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
     name = Column(String)
-    email = Column(String)
+    email = Column(String, unique=True, index=True)
     is_active = Column(Boolean, default=True)
     last_login = Column(DateTime)
     attributes = Column(JSON)
     authentik_id = Column(String)  # Link with Authentik user ID
+    verification_code = Column(String, nullable=True)
+    verification_code_expires = Column(DateTime, nullable=True)
 
     def to_dict(self):
         return {
@@ -317,3 +319,18 @@ def sync_user_data_incremental(db: Session, authentik_users: List[Dict[str, Any]
         logging.error(f"Error in incremental sync: {e}")
         db.rollback()
         return False 
+
+def get_verification_code(db: Session, username: str) -> str:
+    """Get the verification code for a user.
+    
+    Args:
+        db (Session): The database session
+        username (str): The username to get the verification code for
+        
+    Returns:
+        str: The verification code if found, None otherwise
+    """
+    user = db.query(User).filter(User.username == username).first()
+    if user and user.verification_code and user.verification_code_expires > datetime.now():
+        return user.verification_code
+    return None 

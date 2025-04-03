@@ -23,6 +23,8 @@ def get_db():
         db.close()
 
 # Only create tables if not in test mode
+# Moving this part out so it doesn't execute on import during tests
 if not os.getenv("TESTING"):
+    # Import models only needed for table creation, not during testing
     from app.db.models import *  # Import models to ensure they're registered
     Base.metadata.create_all(bind=engine) 

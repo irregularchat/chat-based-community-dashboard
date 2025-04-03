@@ -3,6 +3,9 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
+# Set testing environment variable first
+os.environ["TESTING"] = "True"
+
 # Get the project root directory (parent of tests directory)
 ROOT_DIR = Path(__file__).parent.parent
 

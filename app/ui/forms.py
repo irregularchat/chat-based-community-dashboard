@@ -207,6 +207,42 @@ async def render_create_user_form():
         border: 1px solid rgba(120, 120, 120, 0.3);
     }
     
+    /* Section header styling */
+    .section-header {
+        margin-top: 25px;
+        margin-bottom: 15px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid rgba(120, 120, 120, 0.3);
+        font-weight: 600;
+        color: #d1d1d1;
+    }
+    
+    /* Create user button styling */
+    .stButton > button[data-testid="baseButton-secondary"] {
+        background-color: #2e6fdb;
+        color: white;
+        font-weight: 600;
+        border: none;
+        padding: 10px 20px;
+    }
+    
+    .stButton > button[data-testid="baseButton-secondary"]:hover {
+        background-color: #3d7fe8;
+        box-shadow: 0 4px 10px rgba(25, 118, 210, 0.3);
+    }
+    
+    /* Clear data button styling */
+    .clear-button button {
+        color: #9e9e9e;
+        border-color: #505050;
+        background-color: transparent;
+    }
+    
+    .clear-button button:hover {
+        border-color: #ff5252;
+        color: #ff5252;
+    }
+    
     /* Better help text styling */
     .stMarkdown div[data-testid="stText"] small {
         opacity: 0.7;
@@ -290,6 +326,9 @@ async def render_create_user_form():
         st.markdown('<div class="form-container">', unsafe_allow_html=True)
         
         st.info("Enter your information below to create a new user. The username will be automatically generated based on your first and last name.")
+        
+        # SECTION 1: Basic User Information
+        st.markdown('<div class="section-header">Basic Information</div>', unsafe_allow_html=True)
         
         # Create a more elegant layout with 2 columns for the main fields
         col1, col2 = st.columns(2)
@@ -450,11 +489,56 @@ async def render_create_user_form():
                         logging.error(f"Error checking username availability: {str(e)}")
                         logging.error(traceback.format_exc())
                         st.error("An error occurred while checking username availability.")
+                        
+        # SECTION 2: Group Selection and Introduction
+        st.markdown('<div class="section-header">Group Assignment & Introduction</div>', unsafe_allow_html=True)
+        
+        # Get all available groups
+        all_groups = get_authentik_groups()
+        
+        # Group selection
+        if all_groups:
+            # Initialize selected_groups if not in session state
+            if 'selected_groups' not in st.session_state:
+                st.session_state['selected_groups'] = []
+            
+            # Find the main group ID if configured
+            main_group_id = Config.MAIN_GROUP_ID
+            
+            # Pre-select the main group if it exists
+            default_selection = [main_group_id] if main_group_id else []
+            
+            # Group selection with multiselect
+            selected_groups = st.multiselect(
+                "Assign to Groups",
+                options=[g.get('pk') for g in all_groups],
+                default=default_selection,
+                format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
+                help="Select groups to assign the user to",
+                key="group_selection"
+            )
+            
+            # Store in session state
+            st.session_state['selected_groups'] = selected_groups
+        
+        # Introduction text
+        st.text_area(
+            "Introduction",
+            key="intro_input",
+            height=100,
+            placeholder="e.g., Software Engineer at TechCorp with interests in AI and machine learning",
+            help="User's introduction or bio"
+        )
         
         st.markdown('</div>', unsafe_allow_html=True)
-                        
-        # Add parsing section after all the main input fields
+        
+        # SECTION 3: Parse Data Section
         st.subheader("Parse User Data")
+        
+        # Add a wrapper div for better styling
+        st.markdown('<div class="form-container">', unsafe_allow_html=True)
+        
+        st.markdown("Use this tool to easily fill in user details from structured text. Perfect for copying from emails, messages, or forms.")
         
         # Check if we should show cleared message
         if was_cleared:
@@ -475,13 +559,22 @@ async def render_create_user_form():
         )
         st.markdown('</div>', unsafe_allow_html=True)
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns([2, 2, 1])
         with col1:
             if st.button("Parse Data", key="parse_button", on_click=parse_and_rerun):
                 pass  # The on_click handler will handle this
         with col2:
             if st.button("Clear Data", key="clear_data_button", on_click=clear_parse_data):
                 pass  # The on_click handler will handle this
+        with col3:
+            # Additional clear all button with styling
+            st.markdown('<div class="clear-button">', unsafe_allow_html=True)
+            if st.button("Clear All Fields", key="clear_all_button", on_click=reset_create_user_form_fields):
+                pass
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+        # Close container
+        st.markdown('</div>', unsafe_allow_html=True)
         
         # Add a divider before the form
         st.divider()
@@ -489,44 +582,6 @@ async def render_create_user_form():
             
         # Now create the actual form with hidden fields that will be submitted
         with st.form("create_user_form_alt"):
-            # Get all available groups
-            from app.auth.admin import get_authentik_groups
-            all_groups = get_authentik_groups()
-            
-            # Group selection
-            if all_groups:
-                # Initialize selected_groups if not in session state
-                if 'selected_groups' not in st.session_state:
-                    st.session_state['selected_groups'] = []
-                
-                # Find the main group ID if configured
-                main_group_id = Config.MAIN_GROUP_ID
-                
-                # Pre-select the main group if it exists
-                default_selection = [main_group_id] if main_group_id else []
-                
-                # Group selection with multiselect
-                selected_groups = st.multiselect(
-                    "Assign to Groups",
-                    options=[g.get('pk') for g in all_groups],
-                    default=default_selection,
-                    format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
-                    help="Select groups to assign the user to",
-                    key="group_selection"
-                )
-                
-                # Store in session state
-                st.session_state['selected_groups'] = selected_groups
-            
-            # Introduction text
-            st.text_area(
-                "Introduction",
-                key="intro_input",
-                height=100,
-                placeholder="e.g., Software Engineer at TechCorp with interests in AI and machine learning",
-                help="User's introduction or bio"
-            )
-            
             # Add admin checkbox (only visible to admins)
             is_admin = False
             # Check if current user is an admin
@@ -536,31 +591,10 @@ async def render_create_user_form():
                 is_admin = st.checkbox("Grant Admin Privileges", key="is_admin_checkbox", 
                                       help="Make this user an administrator with full access to all features")
             
-            # Submit buttons - Handle different Streamlit versions
-            try:
-                # Try to create three columns for buttons
-                cols = st.columns([1, 1, 1])
-                if len(cols) == 3:
-                    col1, col2, col3 = cols
-                    with col1:
-                        submit_button = st.form_submit_button("Create User")
-                    with col2:
-                        clear_button = st.form_submit_button("Clear Form")
-                    with col3:
-                        # This is just a placeholder for layout balance
-                        st.write("")
-                else:
-                    # Fall back to two columns if three aren't created
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        submit_button = st.form_submit_button("Create User")
-                    with col2:
-                        clear_button = st.form_submit_button("Clear Form")
-            except Exception as e:
-                # Fall back to simple layout if columns fail
-                logging.warning(f"Error creating columns for buttons: {e}")
-                submit_button = st.form_submit_button("Create User")
-                clear_button = st.form_submit_button("Clear Form")
+            # Submit button - simplified layout with just one button
+            cols = st.columns([3, 2, 3])
+            with cols[1]:
+                submit_button = st.form_submit_button("Create User", use_container_width=True)
             
             # Display required fields note
             st.markdown("**Note:** Fields marked with * are required")
@@ -738,11 +772,6 @@ async def render_create_user_form():
                     logging.error(f"Error creating user: {str(e)}")
                     logging.error(traceback.format_exc())
                     st.error(f"An error occurred while creating the user: {str(e)}")
-            
-            # Handle clear button
-            elif clear_button:
-                reset_create_user_form_fields()
-                st.rerun()
 
     with create_tabs[1]:
         st.subheader("Advanced User Options")

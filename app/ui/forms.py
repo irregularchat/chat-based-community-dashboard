@@ -1,53 +1,36 @@
 # ui/forms.py
-import streamlit as st
-import logging
-import asyncio
-import requests
-import time
-import warnings
-import pandas as pd
+import os
+import re
 import json
-import numpy as np
+import time
+import asyncio
+import logging
+import requests
 import traceback
+import pandas as pd
 from datetime import datetime, timedelta
 from pytz import timezone
-from app.utils.transformations import parse_input
+from typing import Dict, List, Any, Optional, Tuple, Union
+
+import streamlit as st
+from streamlit.components.v1 import html
+from app.db.session import get_db
+from app.db.models import User
 from app.utils.config import Config
-from app.utils.helpers import (
-    update_username,
-    create_unique_username,
-    handle_form_submission,
-    reset_create_user_form_fields,
-    get_eastern_time,
-    add_timeline_event,
-    safety_number_change_email
+from app.auth.admin import (
+    check_admin_permission,
+    get_authentik_groups,
+    manage_user_groups,
+    get_user_details,
+    search_users_by_criteria
 )
-from app.db.database import get_db
-# Import the Invite model if available (for backward compatibility)
-try:
-    from app.db.models import Invite, User
-except ImportError:
-    # Define placeholder classes that won't be used
-    class Invite:
-        pass
-    class User:
-        pass
-    logging.warning("Models not found in app.db.models. Using placeholders.")
-from app.db.operations import search_users, AdminEvent
-from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode, GridUpdateMode, ColumnsAutoSizeMode
+from app.utils.transformations import parse_input
 from app.auth.api import (
-    create_user,
     list_users,
-    update_user_status,
-    update_user_email,
-    force_password_reset,
-    delete_user,
-    update_user_intro,
-    update_user_invited_by,
     create_invite
 )
-from app.auth.admin import get_user_details
-from app.messages import create_user_message, create_invite_message
+from app.db.operations import search_users
+from app.messages import create_invite_message
 
 def reset_create_user_form_fields():
     """Helper function to reset all fields related to create user."""
@@ -174,6 +157,28 @@ def clear_parse_data():
 
 async def render_create_user_form():
     """Render the create user form with an improved layout and group selection"""
+    # Handle form clearing at the start of rendering
+    if st.session_state.get('should_clear_form', False):
+        # Initialize empty values for the next render
+        st.session_state['first_name_input_outside'] = ""
+        st.session_state['last_name_input_outside'] = ""
+        st.session_state['username_input_outside'] = ""
+        st.session_state['email_input'] = ""
+        st.session_state['invited_by_input'] = ""
+        st.session_state['intro_input'] = ""
+        st.session_state['selected_groups'] = []
+        
+        # Reset the flag
+        st.session_state['should_clear_form'] = False
+    
+    # Display success message if user was created
+    if st.session_state.get('user_created', False):
+        st.success(st.session_state['success_message'])
+        # Clear the flags
+        st.session_state['user_created'] = False
+        if 'success_message' in st.session_state:
+            del st.session_state['success_message']
+    
     # Initialize session state variables if they don't exist
     for key in ['first_name_input', 'last_name_input', 'username_input', 
                 'email_input', 'invited_by_input', 'intro_input', 'selected_groups']:
@@ -437,8 +442,120 @@ async def render_create_user_form():
             
             # Display required fields note
             st.markdown("**Note:** Fields marked with * are required")
-    
-    
+            
+            # Handle form submission
+            if submit_button:
+                try:
+                    # Validate required fields
+                    username = st.session_state.get('username_input', '').strip()
+                    first_name = st.session_state.get('first_name_input', '').strip()
+                    email = st.session_state.get('email_input', '').strip()
+                    
+                    if not username:
+                        st.error("Username is required")
+                    elif not first_name:
+                        st.error("First name is required")
+                    elif not email:
+                        st.error("Email is required")
+                    else:
+                        # Prepare user data
+                        user_data = {
+                            'username': username,
+                            'name': f"{first_name} {st.session_state.get('last_name_input', '').strip()}".strip(),
+                            'email': email,
+                            'is_active': True,
+                            'attributes': {
+                                'invited_by': st.session_state.get('invited_by_input', '').strip(),
+                                'intro': st.session_state.get('intro_input', '').strip()
+                            }
+                        }
+                        
+                        # Create user in Authentik
+                        headers = {
+                            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                            'Content-Type': 'application/json'
+                        }
+                        
+                        # First create the user in Authentik
+                        create_user_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
+                        logging.info(f"Creating user with data: {user_data}")
+                        logging.info(f"Using API URL: {create_user_url}")
+                        
+                        try:
+                            response = requests.post(create_user_url, headers=headers, json=user_data)
+                            logging.info(f"Response status code: {response.status_code}")
+                            logging.info(f"Response headers: {response.headers}")
+                            logging.info(f"Response body: {response.text}")
+                            
+                            if response.status_code == 201:
+                                # User created successfully
+                                created_username = user_data['username']
+                                
+                                # Set flags for next render
+                                st.session_state['user_created'] = True
+                                st.session_state['created_username'] = created_username
+                                st.session_state['should_clear_form'] = True
+                                
+                                # Store success message
+                                st.session_state['success_message'] = f"User '{created_username}' was created successfully!"
+                                
+                                # Rerun to refresh the form
+                                st.rerun()
+                            else:
+                                error_response = response.json()
+                                logging.error(f"Error creating user: {error_response}")
+                                logging.error(f"Response status: {response.status_code}")
+                                
+                                # Handle field-specific errors
+                                if isinstance(error_response, dict):
+                                    for field, errors in error_response.items():
+                                        if isinstance(errors, list):
+                                            error_msg = f"{field.title()}: {', '.join(errors)}"
+                                            st.error(error_msg)
+                                        else:
+                                            st.error(f"{field.title()}: {errors}")
+                                            
+                                    # Suggest a new username if username is taken
+                                    if 'username' in error_response and any('unique' in str(err).lower() for err in error_response['username']):
+                                        # Generate a new unique username suggestion
+                                        base_username = username
+                                        suffix = 1
+                                        while True:
+                                            suggested_username = f"{base_username}{suffix}"
+                                            # Check if suggested username exists
+                                            check_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={suggested_username}"
+                                            check_response = requests.get(check_url, headers=headers)
+                                            if check_response.status_code == 200:
+                                                results = check_response.json().get('results', [])
+                                                if not results:
+                                                    break
+                                            suffix += 1
+                                        st.info(f"Suggestion: Try using '{suggested_username}' instead")
+                                else:
+                                    st.error(f"Failed to create user: {error_response}")
+                                
+                        except requests.exceptions.RequestException as e:
+                            logging.error(f"Request error: {str(e)}")
+                            logging.error(traceback.format_exc())
+                            st.error(f"Failed to connect to Authentik API: {str(e)}")
+                        except json.JSONDecodeError as e:
+                            logging.error(f"JSON decode error: {str(e)}")
+                            logging.error(f"Raw response: {response.text}")
+                            st.error("Failed to parse Authentik API response")
+                        except Exception as e:
+                            logging.error(f"Unexpected error: {str(e)}")
+                            logging.error(traceback.format_exc())
+                            st.error(f"An unexpected error occurred: {str(e)}")
+                except Exception as e:
+                    logging.error(f"Error creating user: {str(e)}")
+                    logging.error(traceback.format_exc())
+                    st.error(f"An error occurred while creating the user: {str(e)}")
+            
+            # Handle clear button
+            elif clear_button:
+                reset_create_user_form_fields()
+                st.rerun()
+
     with create_tabs[1]:
         st.subheader("Auto Create Users")
         
@@ -555,8 +672,8 @@ def on_username_manual_edit():
             
             # If the username changed after cleaning
             if cleaned_username != username:
+                # Only update the internal value, not the widget value
                 st.session_state['username_input'] = cleaned_username
-                st.session_state['username_input_outside'] = cleaned_username
                 # Set flag to indicate username needs update on next rerun
                 st.session_state['username_needs_update'] = True
                 # Schedule a rerun
@@ -707,33 +824,22 @@ def handle_action(action, selected_users, action_params=None, headers=None):
             
         elif action_lower == "verify safety number change":
             try:
-                # Try to get email from user data
-                user_email = None
-                if isinstance(user, dict):
-                    user_email = user.get('email')
-                
-                if not user_email:
-                    st.error(f"No email found for user {username}")
-                    success = False
-                    continue
-                    
-                # Get user's name
-                user_name = username
-                if isinstance(user, dict) and user.get('name'):
-                    user_name = user.get('name')
-                    
-                safety_number_change_email(
-                    to=user_email,
-                    subject="Verify Your Safety Number Change",
-                    full_name=user_name,
+                # This action sends a verification email to the user
+                result = handle_form_submission(
+                    action="verify_safety_number",
                     username=username
                 )
-                st.success(f"Verification email sent to {user_email}")
+                
+                if result:
+                    st.success(f"Verification email sent to {username}")
+                else:
+                    st.error(f"Failed to send verification email to {username}")
+                    success = False
             except Exception as e:
                 logging.error(f"Error sending verification email: {e}")
                 st.error(f"Error sending verification email: {str(e)}")
                 success = False
-                
+            
         elif action_lower == "add intro":
             try:
                 # Get the intro text from action_params
@@ -745,7 +851,7 @@ def handle_action(action, selected_users, action_params=None, headers=None):
                     continue
                     
                 if not user_id:
-                    st.error(f"Cannot add intro for {username}: missing user ID")
+                    st.error(f"Cannot update intro for {username}: missing user ID")
                     success = False
                     continue
                     
@@ -757,27 +863,27 @@ def handle_action(action, selected_users, action_params=None, headers=None):
                 )
                 
                 if result:
-                    st.success(f"Intro added for {username}")
+                    st.success(f"Intro updated for {username}")
                 else:
-                    st.error(f"Failed to add intro for {username}")
+                    st.error(f"Failed to update intro for {username}")
                     success = False
             except Exception as e:
-                logging.error(f"Error adding intro: {e}")
-                st.error(f"Error adding intro: {str(e)}")
+                logging.error(f"Error updating intro: {e}")
+                st.error(f"Error updating intro: {str(e)}")
                 success = False
-                
+            
         elif action_lower == "add invited by":
             try:
                 # Get the invited by from action_params
                 invited_by = action_params.get('invited_by')
                 
                 if not invited_by:
-                    st.error(f"No invited by provided for {username}")
+                    st.error(f"No 'invited by' provided for {username}")
                     success = False
                     continue
                     
                 if not user_id:
-                    st.error(f"Cannot add invited by for {username}: missing user ID")
+                    st.error(f"Cannot update 'invited by' for {username}: missing user ID")
                     success = False
                     continue
                     
@@ -789,18 +895,18 @@ def handle_action(action, selected_users, action_params=None, headers=None):
                 )
                 
                 if result:
-                    st.success(f"Invited by added for {username}")
+                    st.success(f"Invited by updated for {username}")
                 else:
-                    st.error(f"Failed to add invited by for {username}")
+                    st.error(f"Failed to update 'invited by' for {username}")
                     success = False
             except Exception as e:
-                logging.error(f"Error adding invited by: {e}")
-                st.error(f"Error adding invited by: {str(e)}")
+                logging.error(f"Error updating 'invited by': {e}")
+                st.error(f"Error updating 'invited by': {str(e)}")
                 success = False
-        
+                
         elif action_lower == "add to groups":
             try:
-                # Get the groups to add from action_params
+                # Get the groups from action_params
                 groups_to_add = action_params.get('groups_to_add', [])
                 
                 if not groups_to_add:
@@ -812,29 +918,36 @@ def handle_action(action, selected_users, action_params=None, headers=None):
                     st.error(f"Cannot add {username} to groups: missing user ID")
                     success = False
                     continue
-                
-                # Import the function here to avoid circular imports
+                    
+                # Add user to groups
                 from app.auth.admin import manage_user_groups
-                
                 result = manage_user_groups(
                     st.session_state.get("username", "system"),
                     user_id,
                     groups_to_add=groups_to_add
                 )
                 
-                if result.get('success'):
-                    st.success(f"Added {username} to selected groups")
+                if result:
+                    # Get the group names for display
+                    from app.auth.admin import get_authentik_groups
+                    all_groups = get_authentik_groups()
+                    group_names = []
+                    for group_id in groups_to_add:
+                        group_name = next((g.get('name') for g in all_groups if g.get('pk') == group_id), group_id)
+                        group_names.append(str(group_name))
+                    
+                    st.success(f"Added {username} to groups: {', '.join(group_names)}")
                 else:
-                    st.error(f"Failed to add {username} to groups: {result.get('error')}")
+                    st.error(f"Failed to add {username} to groups")
                     success = False
             except Exception as e:
                 logging.error(f"Error adding user to groups: {e}")
                 st.error(f"Error adding user to groups: {str(e)}")
                 success = False
-        
+                
         elif action_lower == "remove from groups":
             try:
-                # Get the groups to remove from action_params
+                # Get the groups from action_params
                 groups_to_remove = action_params.get('groups_to_remove', [])
                 
                 if not groups_to_remove:
@@ -846,26 +959,37 @@ def handle_action(action, selected_users, action_params=None, headers=None):
                     st.error(f"Cannot remove {username} from groups: missing user ID")
                     success = False
                     continue
-                
-                # Import the function here to avoid circular imports
+                    
+                # Remove user from groups
                 from app.auth.admin import manage_user_groups
-                
                 result = manage_user_groups(
                     st.session_state.get("username", "system"),
                     user_id,
                     groups_to_remove=groups_to_remove
                 )
                 
-                if result.get('success'):
-                    st.success(f"Removed {username} from selected groups")
+                if result:
+                    # Get the group names for display
+                    from app.auth.admin import get_authentik_groups
+                    all_groups = get_authentik_groups()
+                    group_names = []
+                    for group_id in groups_to_remove:
+                        group_name = next((g.get('name') for g in all_groups if g.get('pk') == group_id), group_id)
+                        group_names.append(str(group_name))
+                    
+                    st.success(f"Removed {username} from groups: {', '.join(group_names)}")
                 else:
-                    st.error(f"Failed to remove {username} from groups: {result.get('error')}")
+                    st.error(f"Failed to remove {username} from groups")
                     success = False
             except Exception as e:
                 logging.error(f"Error removing user from groups: {e}")
                 st.error(f"Error removing user from groups: {str(e)}")
                 success = False
-                
+        
+        else:
+            st.error(f"Unknown action: {action}")
+            success = False
+            
     return success
 
 def verify_safety_number_change(username, input_code):
@@ -1018,9 +1142,8 @@ def update_username_from_inputs():
                 st.session_state['username_input'] = final_username
                 st.session_state['username_was_auto_generated'] = True
                 
-                # We don't update username_input_outside directly here anymore
-                # This avoids the "cannot be modified after widget is instantiated" error
-                logging.info(f"Updated username_input to: {final_username}")
+                # Set flag to indicate username needs update on next rerun
+                st.session_state['username_needs_update'] = True
                 
                 # Return true to indicate username was generated
                 return True
@@ -1040,6 +1163,7 @@ def update_username_from_inputs():
                 # Update only the internal value, not the widget value
                 st.session_state['username_input'] = suggested_username
                 st.session_state['username_was_auto_generated'] = True
+                st.session_state['username_needs_update'] = True
                 logging.info(f"Generated username (fallback): {suggested_username}")
                 
                 # Return true to indicate username was generated
@@ -1198,3 +1322,442 @@ async def render_invite_form():
             if 'invite_selected_groups' in st.session_state:
                 st.session_state['invite_selected_groups'] = []
             # Don't reset the expiry days to keep the user preference
+
+async def display_user_list(auth_api_url=None, headers=None):
+    """Display the list of users with enhanced filtering and UI."""
+    if auth_api_url is None:
+        auth_api_url = Config.AUTHENTIK_API_URL
+    if headers is None:
+        headers = {
+            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+            'Content-Type': 'application/json'
+        }
+    
+    # Initialize session state
+    if 'user_list' not in st.session_state:
+        st.session_state['user_list'] = get_users_from_db()
+    if 'selection_state' not in st.session_state:
+        st.session_state['selection_state'] = 'viewing'  # States: viewing, selected
+    if 'selected_user_ids' not in st.session_state:
+        st.session_state['selected_user_ids'] = []
+    if 'filter_term' not in st.session_state:
+        st.session_state['filter_term'] = ""
+    if 'status_filter' not in st.session_state:
+        st.session_state['status_filter'] = "All"
+    
+    # Process any pending actions
+    if 'pending_action' in st.session_state:
+        action = st.session_state['pending_action']['action']
+        selected_users = st.session_state['pending_action']['selected_users']
+        action_params = st.session_state['pending_action'].get('action_params', {})
+        
+        # Handle the action
+        success = handle_action(action, selected_users, action_params, headers)
+        
+        # Clear the pending action
+        del st.session_state['pending_action']
+        
+        # Reset state after action
+        if success:
+            st.session_state['user_list'] = get_users_from_db()
+            st.session_state['selected_user_ids'] = []
+            st.session_state['selection_state'] = 'viewing'
+            
+    try:
+        st.write("## User Management")
+        
+        # Create filter section with columns for better layout
+        st.subheader("Filter Users")
+        filter_col1, filter_col2 = st.columns(2)
+        
+        with filter_col1:
+            # Search by name, username, or email
+            filter_term = st.text_input(
+                "Search by name, username, or email", 
+                value=st.session_state['filter_term'],
+                key="filter_input"
+            )
+            st.session_state['filter_term'] = filter_term
+        
+        with filter_col2:
+            # Filter by status
+            status_options = ['All', 'Active', 'Inactive']
+            status_filter = st.selectbox(
+                "Filter by status",
+                options=status_options,
+                index=status_options.index(st.session_state['status_filter']),
+                key="status_filter_select"
+            )
+            st.session_state['status_filter'] = status_filter
+        
+        # Simple UI with two states: selecting users and performing actions
+        if st.session_state['selection_state'] == 'viewing':
+            # STEP 1: SELECT USERS
+            st.write("### Step 1: Select Users")
+            
+            # Convert user list to DataFrame
+            df = pd.DataFrame(st.session_state['user_list'])
+            
+            # Apply filters
+            if st.session_state['filter_term']:
+                # Search in username, name, and email
+                search_term = st.session_state['filter_term'].lower()
+                df = df[
+                    df['username'].str.lower().str.contains(search_term, na=False) |
+                    df['name'].str.lower().str.contains(search_term, na=False) |
+                    df['email'].str.lower().str.contains(search_term, na=False)
+                ]
+            
+            # Apply status filter
+            if st.session_state['status_filter'] != 'All':
+                is_active = st.session_state['status_filter'] == 'Active'
+                df = df[df['is_active'] == is_active]
+            
+            # Process fields for display
+            if not df.empty:
+                # Process fields
+                df['intro'] = df.apply(
+                    lambda row: row.get('attributes', {}).get('intro', '') 
+                    if isinstance(row.get('attributes'), dict) else '', 
+                    axis=1
+                )
+                df['last_login'] = df.apply(
+                    lambda row: format_date(row.get('last_login')) if row.get('last_login') else '',
+                    axis=1
+                )
+                df['is_active'] = df['is_active'].apply(lambda x: '✅ Active' if x else '❌ Inactive')
+                df['invited_by'] = df.apply(
+                    lambda row: row.get('attributes', {}).get('invited_by', '') 
+                    if isinstance(row.get('attributes'), dict) else '', 
+                    axis=1
+                )
+                
+                # Create selection columns with unique IDs for each row
+                if 'pk' in df.columns:
+                    # Display the table with selection columns
+                    cols_to_display = ['username', 'name', 'email', 'is_active', 'last_login']
+                    st.write(f"Found {len(df)} users matching your filters")
+                    
+                    # Using Streamlit's data editor for selection
+                    # Store selected rows from previous state if any
+                    if 'selected_rows_indices' not in st.session_state:
+                        st.session_state['selected_rows_indices'] = []
+                    
+                    edited_df = st.data_editor(
+                        df[cols_to_display],
+                        hide_index=True,
+                        key="user_table",
+                        use_container_width=True,
+                        column_config={
+                            "username": st.column_config.TextColumn("Username"),
+                            "name": st.column_config.TextColumn("Name"),
+                            "email": st.column_config.TextColumn("Email"),
+                            "is_active": st.column_config.TextColumn("Status"),
+                            "last_login": st.column_config.TextColumn("Last Login")
+                        },
+                        disabled=cols_to_display,
+                        height=400
+                    )
+                    
+                    # Add a multi-select to choose users
+                    st.write("Select users from the list:")
+                    selected_usernames = st.multiselect(
+                        "Select Users",
+                        options=df['username'].tolist(),
+                        default=[],
+                        key="selected_usernames"
+                    )
+                    
+                    # Get selected rows based on username
+                    if selected_usernames:
+                        # Get the selected user IDs
+                        selected_user_ids = df[df['username'].isin(selected_usernames)]['pk'].tolist()
+                        
+                        # Display selection info
+                        st.success(f"Selected {len(selected_user_ids)} users")
+                        
+                        # Store selected users
+                        st.session_state['selected_user_ids'] = selected_user_ids
+                        st.session_state['selected_users'] = [
+                            df[df['pk'] == user_id].to_dict('records')[0] 
+                            for user_id in selected_user_ids
+                        ]
+                        
+                        # Continue button
+                        if st.button("Continue to Actions", key="continue_button"):
+                            st.session_state['selection_state'] = 'selected'
+                            st.rerun()
+                    else:
+                        st.info("Please select at least one user to continue.")
+                        
+            else:
+                st.warning("No users match the filter criteria.")
+                
+        elif st.session_state['selection_state'] == 'selected':
+            # STEP 2: PERFORM ACTIONS
+            st.write("### Step 2: Choose an Action")
+            
+            # Get selected users data
+            selected_users = st.session_state.get('selected_users', [])
+            
+            # Display selected usernames
+            selected_usernames = [user.get('username', 'Unknown') for user in selected_users]
+            st.write(f"**Selected Users:** {', '.join(selected_usernames)}")
+            
+            # Create tabs for different action categories
+            action_tabs = st.tabs(["Account Actions", "Group Management", "Profile Updates"])
+            
+            # Tab 1: Account Actions
+            with action_tabs[0]:
+                st.subheader("Account Actions")
+                
+                # Action selection
+                account_action = st.selectbox(
+                    "Select Action",
+                    ["Activate Users", "Deactivate Users", "Reset Password", "Delete Users"],
+                    key="account_action_selection"
+                )
+                
+                # Warning for destructive actions
+                if account_action in ["Deactivate Users", "Delete Users"]:
+                    st.warning(f"⚠️ {account_action} is a potentially destructive action. Please confirm you want to proceed.")
+                
+                # Confirmation checkbox for destructive actions
+                confirm = True
+                if account_action in ["Deactivate Users", "Delete Users"]:
+                    confirm = st.checkbox("I confirm I want to perform this action", key="confirm_destructive")
+                
+                if st.button("Apply Account Action", key="apply_account_action", disabled=not confirm):
+                    # Map the action to the internal action name
+                    action_map = {
+                        "Activate Users": "Activate",
+                        "Deactivate Users": "Deactivate",
+                        "Reset Password": "Reset Password",
+                        "Delete Users": "Delete"
+                    }
+                    
+                    # Store action and selected users
+                    st.session_state['pending_action'] = {
+                        'action': action_map[account_action],
+                        'selected_users': selected_users
+                    }
+                    st.rerun()
+            
+            # Tab 2: Group Management
+            with action_tabs[1]:
+                st.subheader("Group Management")
+                
+                # Get all available groups
+                from app.auth.admin import get_authentik_groups
+                all_groups = get_authentik_groups()
+                
+                if not all_groups:
+                    st.info("No groups available. Please create groups first.")
+                else:
+                    # Create two columns for add/remove operations
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write("**Add to Groups**")
+                        groups_to_add = st.multiselect(
+                            "Select groups to add users to",
+                            options=[g.get('pk') for g in all_groups],
+                            format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
+                            key="groups_to_add"
+                        )
+                        
+                        if groups_to_add and st.button("Add to Selected Groups", key="add_to_groups_btn"):
+                            # Store action and selected users
+                            st.session_state['pending_action'] = {
+                                'action': "Add to Groups",
+                                'selected_users': selected_users,
+                                'action_params': {'groups_to_add': groups_to_add}
+                            }
+                            st.rerun()
+                    
+                    with col2:
+                        st.write("**Remove from Groups**")
+                        groups_to_remove = st.multiselect(
+                            "Select groups to remove users from",
+                            options=[g.get('pk') for g in all_groups],
+                            format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
+                            key="groups_to_remove"
+                        )
+                        
+                        if groups_to_remove and st.button("Remove from Selected Groups", key="remove_from_groups_btn"):
+                            # Store action and selected users
+                            st.session_state['pending_action'] = {
+                                'action': "Remove from Groups",
+                                'selected_users': selected_users,
+                                'action_params': {'groups_to_remove': groups_to_remove}
+                            }
+                            st.rerun()
+            
+            # Tab 3: Profile Updates
+            with action_tabs[2]:
+                st.subheader("Profile Updates")
+                
+                # Profile action selection
+                profile_action = st.selectbox(
+                    "Select Action",
+                    ["Update Email", "Add Intro", "Add Invited By", "Verify Safety Number Change"],
+                    key="profile_action_selection"
+                )
+                
+                # Show additional inputs based on the selected action
+                action_params = {}
+                
+                if profile_action == "Update Email":
+                    st.info("This action is only applicable when a single user is selected.")
+                    if len(selected_users) == 1:
+                        user = selected_users[0]
+                        new_email = st.text_input(
+                            f"New email for {user.get('username')}",
+                            value=user.get('email', ''),
+                            key="new_email_input"
+                        )
+                        action_params['new_email'] = new_email
+                    else:
+                        st.warning("Please select only one user for email updates.")
+                
+                elif profile_action == "Add Intro":
+                    intro_text = st.text_area(
+                        "Enter Introduction Text",
+                        key="intro_text_input",
+                        height=100,
+                        help="This will be added to all selected users"
+                    )
+                    action_params['intro_text'] = intro_text
+                
+                elif profile_action == "Add Invited By":
+                    invited_by = st.text_input(
+                        "Enter Invited By",
+                        key="invited_by_input",
+                        help="Who invited these users to the platform"
+                    )
+                    action_params['invited_by'] = invited_by
+                
+                elif profile_action == "Verify Safety Number Change":
+                    st.info("This will send verification emails to all selected users.")
+                
+                if st.button("Apply Profile Action", key="apply_profile_action"):
+                    # Map the action to the internal action name
+                    action_map = {
+                        "Update Email": "Update Email",
+                        "Add Intro": "Add Intro",
+                        "Add Invited By": "Add Invited By",
+                        "Verify Safety Number Change": "Verify Safety Number Change"
+                    }
+                    
+                    # Store action and selected users
+                    st.session_state['pending_action'] = {
+                        'action': action_map[profile_action],
+                        'selected_users': selected_users,
+                        'action_params': action_params
+                    }
+                    st.rerun()
+            
+            # Back button
+            if st.button("Back to Selection", key="back_button"):
+                st.session_state['selection_state'] = 'viewing'
+                st.rerun()
+    
+    except Exception as e:
+        logging.error(f"Error in display_user_list: {str(e)}")
+        st.error(f"An error occurred: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
+
+# Add new functions for user management
+def update_user_status(api_url: str, headers: dict, user_id: str, is_active: bool) -> bool:
+    """Update user's active status in Authentik."""
+    try:
+        url = f"{api_url}/core/users/{user_id}/"
+        data = {'is_active': is_active}
+        response = requests.patch(url, headers=headers, json=data)
+        response.raise_for_status()
+        return True
+    except Exception as e:
+        logging.error(f"Error updating user status: {e}")
+        return False
+
+def delete_user(api_url: str, headers: dict, user_id: str) -> bool:
+    """Delete a user from Authentik."""
+    try:
+        url = f"{api_url}/core/users/{user_id}/"
+        response = requests.delete(url, headers=headers)
+        response.raise_for_status()
+        return True
+    except Exception as e:
+        logging.error(f"Error deleting user: {e}")
+        return False
+
+def update_user_email(api_url: str, headers: dict, user_id: str, new_email: str) -> bool:
+    """Update user's email in Authentik."""
+    try:
+        url = f"{api_url}/core/users/{user_id}/"
+        data = {'email': new_email}
+        response = requests.patch(url, headers=headers, json=data)
+        response.raise_for_status()
+        return True
+    except Exception as e:
+        logging.error(f"Error updating user email: {e}")
+        return False
+
+def update_user_intro(api_url: str, headers: dict, user_id: str, intro_text: str) -> bool:
+    """Update user's intro in Authentik."""
+    try:
+        # First get current attributes
+        user_details = get_user_details(user_id)
+        if not user_details:
+            return False
+            
+        # Update or add intro to attributes
+        attributes = user_details.get('attributes', {})
+        attributes['intro'] = intro_text
+        
+        # Update user with new attributes
+        url = f"{api_url}/core/users/{user_id}/"
+        data = {'attributes': attributes}
+        response = requests.patch(url, headers=headers, json=data)
+        response.raise_for_status()
+        return True
+    except Exception as e:
+        logging.error(f"Error updating user intro: {e}")
+        return False
+
+def update_user_invited_by(api_url: str, headers: dict, user_id: str, invited_by: str) -> bool:
+    """Update user's invited_by field in Authentik."""
+    try:
+        # First get current attributes
+        user_details = get_user_details(user_id)
+        if not user_details:
+            return False
+            
+        # Update or add invited_by to attributes
+        attributes = user_details.get('attributes', {})
+        attributes['invited_by'] = invited_by
+        
+        # Update user with new attributes
+        url = f"{api_url}/core/users/{user_id}/"
+        data = {'attributes': attributes}
+        response = requests.patch(url, headers=headers, json=data)
+        response.raise_for_status()
+        return True
+    except Exception as e:
+        logging.error(f"Error updating user invited_by: {e}")
+        return False
+
+def handle_form_submission(action: str, username: str, **kwargs) -> bool:
+    """Handle form submissions for various user actions."""
+    try:
+        if action == "reset_password":
+            # Implement password reset logic here
+            return True
+        elif action == "verify_safety_number":
+            # Implement safety number verification logic here
+            return True
+        return False
+    except Exception as e:
+        logging.error(f"Error handling form submission: {e}")
+        return False

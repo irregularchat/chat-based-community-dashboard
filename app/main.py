@@ -96,11 +96,11 @@ async def render_sidebar():
                 "Create Invite",
                 "Matrix Messages and Rooms",
                 "Signal Association",
-                "Prompts Manager"
+                "Prompts Manager"  # No Settings page for non-admin users
             ]
     else:
         # Non-authenticated users only see login page
-        page_options = ["Create User"]
+        page_options = ["Create User"]  # Neither Settings nor Prompts Manager available to non-authenticated users
     
     # If current_page is not in available options, reset to the first available option
     if current_page not in page_options and page_options:
@@ -153,15 +153,22 @@ async def render_main_content():
     
     # Get the current page from session state
     page = st.session_state.get('current_page', 'Create User')
+    is_admin = st.session_state.get('is_admin', False)
+    is_authenticated = st.session_state.get('is_authenticated', False)
     
     # Global authentication check for all pages
-    if not is_authenticated():
+    if not is_authenticated:
         # Show login page instead of the requested page
         from app.ui.common import display_login_button
         st.markdown("## Welcome to the Community Dashboard")
         st.markdown("Please log in to access all features.")
         display_login_button()
         return
+    
+    # Display welcome message for authenticated users
+    username = st.session_state.get('user_info', {}).get('preferred_username', 'Guest')
+    if username and username != 'Guest':
+        st.write(f"## Welcome, {username}!")
     
     try:
         # Import UI components only when needed to avoid circular imports
@@ -187,13 +194,14 @@ async def render_main_content():
             
         elif page == "Settings":
             # Protect with admin check
-            if st.session_state.get('is_admin', False):
+            if is_admin:
                 from app.pages.settings import render_settings_page
                 render_settings_page()
             else:
                 st.error("You need administrator privileges to access this page.")
                 
         elif page == "Prompts Manager":
+            # Protected by global authentication check above
             from app.pages.prompts_manager import render_prompts_manager
             render_prompts_manager()
             

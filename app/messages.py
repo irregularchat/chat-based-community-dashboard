@@ -8,6 +8,31 @@ from app.utils.config import Config  # Fixed import path
 
 def create_user_message(new_username, temp_password, discourse_post_url=None):
     """Generate and display the welcome message after user creation with temp password."""
+    
+    # Special case for failed password reset
+    if temp_password == "PASSWORD_NEEDS_RESET":
+        welcome_message = f"""
+        🌟 User Created But Password Reset Failed 🌟
+        
+        Username: {new_username}
+        
+        ⚠️ Important: The system was unable to set a password automatically.
+        
+        Please follow these steps:
+        1️⃣ Go to https://sso.irregularchat.com/if/flow/password-reset/
+        2️⃣ Enter the username: {new_username}
+        3️⃣ Click "Reset Password" and follow the instructions
+        
+        For admin assistance, please contact the system administrator.
+        """
+        
+        st.code(welcome_message)
+        st.session_state['message'] = welcome_message
+        st.session_state['user_list'] = None  # Clear user list if there was any
+        st.warning("User created but password reset failed. Manual reset required.")
+        return
+    
+    # Normal case with successful password reset
     welcome_message = f"""
     🌟 Your First Step Into the IrregularChat! 🌟
     You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans.

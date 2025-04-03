@@ -23,6 +23,7 @@ __pycache__/
 *.db
 *.csv
 users.csv
+.cursorignore
 
 # postgres from /app/db/postgres
 pg_dump.sql

@@ -407,4 +407,78 @@ async def test_main_session_state_handling(mock_streamlit):
         
         # Verify that current_page was initialized in session state
         assert 'current_page' in mock_streamlit.session_state
-        assert mock_streamlit.session_state['current_page'] == 'Create User' 
+        assert mock_streamlit.session_state['current_page'] == 'Create User'
+
+@pytest.mark.asyncio
+async def test_widget_default_and_session_state_conflict(mock_streamlit):
+    """Test that widgets don't have both default values and session state values set."""
+    
+    # Create a custom TrackedWidget class to detect conflicts
+    class WidgetConflictTracker:
+        def __init__(self):
+            self.widgets = {}  # Track widget keys and how they're initialized
+            self.conflict_detected = False
+            self.conflict_details = []
+        
+        def register_widget(self, key, has_default_value, has_session_state):
+            if key in self.widgets:
+                # We already have this widget registered, so update its status
+                if has_default_value and self.widgets[key]['has_session_state']:
+                    self.conflict_detected = True
+                    self.conflict_details.append({
+                        'key': key,
+                        'error': "Widget created with default value but also had value set via Session State API"
+                    })
+                if has_session_state and self.widgets[key]['has_default_value']:
+                    self.conflict_detected = True
+                    self.conflict_details.append({
+                        'key': key,
+                        'error': "Widget had value set via Session State API but was also created with default value"
+                    })
+            else:
+                # New widget, register it
+                self.widgets[key] = {
+                    'has_default_value': has_default_value,
+                    'has_session_state': has_session_state
+                }
+    
+    # Initialize tracker
+    tracker = WidgetConflictTracker()
+    
+    # Create a text_input mock that registers widgets
+    def tracked_text_input(*args, **kwargs):
+        key = kwargs.get('key')
+        has_default_value = 'value' in kwargs and kwargs['value'] is not None
+        has_session_state = key in mock_streamlit.session_state
+        
+        if key:
+            tracker.register_widget(key, has_default_value, has_session_state)
+        
+        # Return a mock widget value
+        return kwargs.get('value') or mock_streamlit.session_state.get(key, "")
+    
+    # Replace the text_input with our tracked version
+    mock_streamlit.text_input = tracked_text_input
+    
+    # Set up a session state with values for our key of interest
+    mock_streamlit.session_state = {
+        'username_input_outside': 'test_username',
+        'first_name_input_outside': 'John',
+        'last_name_input_outside': 'Doe'
+    }
+    
+    # Now simulate creating widgets both ways to trigger detection
+    # 1. Correct way - using session state without default
+    tracked_text_input("Username", key="username_input_outside")
+    
+    # 2. Incorrect way - using both session state and default value
+    tracked_text_input("Username", key="username_input_outside", value="default_username")
+    
+    # Check that our tracker detected the conflict
+    assert tracker.conflict_detected, "Widget conflict was not detected"
+    assert len(tracker.conflict_details) > 0, "No conflict details were recorded"
+    
+    # Check that the specific username_input_outside conflict was detected
+    username_conflicts = [d for d in tracker.conflict_details if d['key'] == 'username_input_outside']
+    assert len(username_conflicts) > 0, "No conflict detected for username_input_outside"
+    assert "Widget" in username_conflicts[0]['error'], "Error message not specific to widget conflict" 

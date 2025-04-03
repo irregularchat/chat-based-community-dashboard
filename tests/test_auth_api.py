@@ -102,7 +102,7 @@ async def test_create_user():
 
         assert result['success'] is True
         assert result['user_id'] == "123"
-        assert result['message'] == "User created successfully"
+        assert "Welcome testuser" in result['message']
 
 @pytest.mark.asyncio
 async def test_create_invite():

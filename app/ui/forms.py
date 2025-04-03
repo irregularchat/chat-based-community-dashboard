@@ -28,7 +28,9 @@ from app.utils.transformations import parse_input
 from app.auth.api import (
     list_users,
     create_invite,
-    generate_secure_passphrase
+    generate_secure_passphrase,
+    force_password_reset,
+    reset_user_password
 )
 from app.db.operations import search_users
 from app.messages import create_invite_message, create_user_message
@@ -127,12 +129,19 @@ def parse_and_rerun():
             st.session_state["intro_input"] = combined_intro
             logging.info(f"Updated intro with org: '{org}' and interests: '{interests}'")
         
-        # Trigger username generation from the updated names
-        if ("first_name" in parsed or "last_name" in parsed) and st.session_state.get('username_was_auto_generated', False):
-            # If we're updating name fields, we should update the username too if it was auto-generated
-            first_name = st.session_state.get('first_name_input', '')
-            last_name = st.session_state.get('last_name_input', '')
-            logging.info(f"Triggering username generation with first_name='{first_name}', last_name='{last_name}'")
+        # Generate username from the updated names
+        if "first_name" in parsed or "last_name" in parsed:
+            # Force username generation
+            st.session_state['username_was_auto_generated'] = True
+            # Call the function to update username
+            username_updated = update_username_from_inputs()
+            # Log the generated username
+            logging.info(f"Generated username: {st.session_state.get('username_input', '')}")
+            
+            # Make sure we update the username_input_outside field too
+            if username_updated and 'username_input' in st.session_state:
+                st.session_state['username_input_outside'] = st.session_state['username_input']
+                logging.info(f"Updated username_input_outside to: {st.session_state['username_input']}")
         
         # Set a flag to indicate parsing was successful
         st.session_state["parsing_successful"] = True
@@ -159,6 +168,58 @@ def clear_parse_data():
 
 async def render_create_user_form():
     """Render the create user form with an improved layout and group selection"""
+    # Add custom CSS for a more professional look
+    st.markdown("""
+    <style>
+    /* General form styling improvements */
+    .stTextInput, .stTextArea, .stMultiselect {
+        margin-bottom: 15px;
+    }
+    
+    /* Better button styling */
+    .stButton > button {
+        border-radius: 4px;
+        padding: 0.5rem 1rem;
+        font-weight: 500;
+        transition: all 0.2s ease;
+    }
+    
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    }
+    
+    /* Form container styling */
+    .form-container {
+        background-color: rgba(255, 255, 255, 0.05);
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+    }
+    
+    /* Parse data section styling */
+    .data-to-parse {
+        background-color: rgba(28, 28, 36, 0.5);
+        padding: 15px;
+        border-radius: 6px;
+        margin-bottom: 20px;
+        border: 1px solid rgba(120, 120, 120, 0.3);
+    }
+    
+    /* Better help text styling */
+    .stMarkdown div[data-testid="stText"] small {
+        opacity: 0.7;
+    }
+    
+    /* Divider styling */
+    hr {
+        margin: 30px 0;
+        border-color: rgba(120, 120, 120, 0.2);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
     # Handle form clearing at the start of rendering
     if st.session_state.get('should_clear_form', False):
         # Initialize empty values for the next render
@@ -218,18 +279,23 @@ async def render_create_user_form():
         not st.session_state.get('username_input')):
         update_username_from_inputs()
 
-    # Create tabs for different input methods
-    create_tabs = st.tabs(["Manual Create", "Auto Create", "Advanced Options"])
+    # Create main section and advanced options tab
+    create_tabs = st.tabs(["Create User", "Advanced Options"])
     
     with create_tabs[0]:
         # Input fields outside the form for first name and last name to handle on_change
-        st.subheader("Manual Create")
+        st.subheader("Create User")
+        
+        # Add a wrapper div for better styling
+        st.markdown('<div class="form-container">', unsafe_allow_html=True)
+        
         st.info("Enter your information below to create a new user. The username will be automatically generated based on your first and last name.")
+        
+        # Create a more elegant layout with 2 columns for the main fields
+        col1, col2 = st.columns(2)
             
-        col1_outside, col2_outside = st.columns(2)
-            
-        with col1_outside:
-            # Fix: Don't use value parameter when key exists in session state
+        with col1:
+            # First Name field
             if 'first_name_input_outside' in st.session_state:
                 st.text_input(
                     "First Name *",
@@ -249,15 +315,23 @@ async def render_create_user_form():
                     on_change=on_first_name_change
                 )
             
+            # Email field (moved up)
+            st.text_input(
+                "Email Address *",
+                key="email_input",
+                placeholder="e.g., johndoe@example.com",
+                help="Email address for password resets and notifications (required)"
+            )
+            
             # Keep the sync logic simple - only set if not already in session state
             if 'first_name_input_outside' in st.session_state and 'first_name_input' not in st.session_state:
                 st.session_state['first_name_input'] = st.session_state['first_name_input_outside']
         
-        with col2_outside:
-            # Fix: Don't use value parameter when key exists in session state
+        with col2:
+            # Last Name field
             if 'last_name_input_outside' in st.session_state:
                 st.text_input(
-                    "Last Name",  # Removed the required asterisk since last name is optional
+                    "Last Name",
                     key="last_name_input_outside",
                     placeholder="e.g., Doe",
                     help="User's last name (optional)",
@@ -266,7 +340,7 @@ async def render_create_user_form():
             else:
                 # Use value parameter only for initial setup
                 st.text_input(
-                    "Last Name",  # Removed the required asterisk since last name is optional
+                    "Last Name",
                     key="last_name_input_outside",
                     value=st.session_state.get('last_name_input', ''),
                     placeholder="e.g., Doe",
@@ -274,11 +348,19 @@ async def render_create_user_form():
                     on_change=on_last_name_change
                 )
             
+            # Invited by field (moved up)
+            st.text_input(
+                "Invited by",
+                key="invited_by_input",
+                placeholder="e.g., @janedoe",
+                help="Who invited this user to the platform"
+            )
+            
             # Keep the sync logic simple - only set if not already in session state 
             if 'last_name_input_outside' in st.session_state and 'last_name_input' not in st.session_state:
                 st.session_state['last_name_input'] = st.session_state['last_name_input_outside']
-        
-        # Username field outside form to handle manual edits
+                
+        # Username field as the last input field - Full width
         username_value = st.session_state.get('username_input', '')
         # Reset the needs_update flag if it's set
         if st.session_state.get('username_needs_update', False):
@@ -369,64 +451,72 @@ async def render_create_user_form():
                         logging.error(traceback.format_exc())
                         st.error("An error occurred while checking username availability.")
         
+        st.markdown('</div>', unsafe_allow_html=True)
+                        
+        # Add parsing section after all the main input fields
+        st.subheader("Parse User Data")
+        
+        # Check if we should show cleared message
+        if was_cleared:
+            st.info("Data has been cleared. Enter new data below.")
+        
+        st.markdown('<div class="data-to-parse">', unsafe_allow_html=True)
+        st.text_area(
+            "User Data to Parse",
+            key="data_to_parse_input",
+            height=150,
+            placeholder=("Please enter user details (each on a new line):\n"
+                         "1. What's Your Name\n"
+                         "2. What org are you with\n"
+                         "3. Who invited you (add and mention them in this chat)\n"
+                         "4. Your Email or Email-Alias/Mask (for password resets and safety number verifications)\n"
+                         "5. Your Interests (so we can get you to the right chats)"),
+            value="" if was_cleared else None  # Set to empty string when cleared
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Parse Data", key="parse_button", on_click=parse_and_rerun):
+                pass  # The on_click handler will handle this
+        with col2:
+            if st.button("Clear Data", key="clear_data_button", on_click=clear_parse_data):
+                pass  # The on_click handler will handle this
+        
         # Add a divider before the form
         st.divider()
         st.caption("Review the information above and click 'Create User' when ready.")
             
         # Now create the actual form with hidden fields that will be submitted
         with st.form("create_user_form_alt"):
-            # Sync values between outside and inside forms
-            # We don't need to assign these directly in hidden fields, as they'll be
-            # read from session_state when needed
+            # Get all available groups
+            from app.auth.admin import get_authentik_groups
+            all_groups = get_authentik_groups()
             
-            # Create two columns for better layout
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Email field (not duplicated)
-                      st.text_input(
-                    "Email Address",
-                    key="email_input",
-                    placeholder="e.g., johndoe@example.com",
-                    help="Email address for password resets and notifications"
-                )
-            
-            with col2:
-                st.text_input(
-                    "Invited by",
-                    key="invited_by_input",
-                    placeholder="e.g., @janedoe",
-                    help="Who invited this user to the platform"
+            # Group selection
+            if all_groups:
+                # Initialize selected_groups if not in session state
+                if 'selected_groups' not in st.session_state:
+                    st.session_state['selected_groups'] = []
+                
+                # Find the main group ID if configured
+                main_group_id = Config.MAIN_GROUP_ID
+                
+                # Pre-select the main group if it exists
+                default_selection = [main_group_id] if main_group_id else []
+                
+                # Group selection with multiselect
+                selected_groups = st.multiselect(
+                    "Assign to Groups",
+                    options=[g.get('pk') for g in all_groups],
+                    default=default_selection,
+                    format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
+                    help="Select groups to assign the user to",
+                    key="group_selection"
                 )
                 
-                # Get all available groups
-                from app.auth.admin import get_authentik_groups
-                all_groups = get_authentik_groups()
-                
-                # Group selection
-                if all_groups:
-                    # Initialize selected_groups if not in session state
-                    if 'selected_groups' not in st.session_state:
-                        st.session_state['selected_groups'] = []
-                    
-                    # Find the main group ID if configured
-                    main_group_id = Config.MAIN_GROUP_ID
-                    
-                    # Pre-select the main group if it exists
-                    default_selection = [main_group_id] if main_group_id else []
-                    
-                    # Group selection with multiselect
-                    selected_groups = st.multiselect(
-                        "Assign to Groups",
-                        options=[g.get('pk') for g in all_groups],
-                        default=default_selection,
-                        format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
-                        help="Select groups to assign the user to",
-                        key="group_selection"
-                    )
-                    
-                    # Store in session state
-                    st.session_state['selected_groups'] = selected_groups
+                # Store in session state
+                st.session_state['selected_groups'] = selected_groups
             
             # Introduction text
             st.text_area(
@@ -474,7 +564,7 @@ async def render_create_user_form():
             
             # Display required fields note
             st.markdown("**Note:** Fields marked with * are required")
-    
+
             # Handle form submission
             if submit_button:
                 try:
@@ -533,15 +623,69 @@ async def render_create_user_form():
                                 
                                 # Reset the password to our generated secure password
                                 user_id = response.json().get('pk')
-                                reset_url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/set_password/"
-                                reset_data = {'password': temp_password}
-                                reset_response = requests.post(reset_url, headers=headers, json=reset_data)
                                 
-                                if reset_response.status_code == 200:
-                                    # Display welcome message using the message template from app/messages.py
-                                    create_user_message(created_username, temp_password)
-                                else:
-                                    st.error(f"Failed to set password: {reset_response.text}")
+                                # Add more detailed logging for debugging
+                                logging.info(f"Attempting to reset password for user ID: {user_id}")
+                                
+                                try:
+                                    # First try using the reset_user_password function 
+                                    # which contains the proper error handling and logging
+                                    reset_result = reset_user_password(
+                                        Config.AUTHENTIK_API_URL, 
+                                        headers, 
+                                        user_id, 
+                                        temp_password
+                                    )
+                                    
+                                    if reset_result:
+                                        logging.info(f"Password reset successful using reset_user_password")
+                                        # Display welcome message using the message template from app/messages.py
+                                        create_user_message(created_username, temp_password)
+                                    else:
+                                        # Try alternative method 1: Using force_password_reset function
+                                        logging.info(f"Trying alternative method 1: force_password_reset")
+                                        
+                                        force_reset_result = force_password_reset(created_username)
+                                        if force_reset_result:
+                                            logging.info(f"Force password reset successful, setting password manually")
+                                            # Now try to set the password directly with a PATCH request
+                                            user_url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/"
+                                            patch_data = {"password": temp_password}
+                                            
+                                            patch_response = requests.patch(user_url, headers=headers, json=patch_data)
+                                            logging.info(f"Password patch response status: {patch_response.status_code}")
+                                            
+                                            if patch_response.status_code in [200, 204]:
+                                                create_user_message(created_username, temp_password)
+                                            else:
+                                                # Try alternative method 2: Using a different endpoint structure
+                                                alternative_reset_url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/"
+                                                alternative_reset_data = {'set_password': temp_password}
+                                                
+                                                logging.info(f"Attempting alternative password reset method 2")
+                                                logging.info(f"Alternative reset URL: {alternative_reset_url}")
+                                                
+                                                alt_reset_response = requests.patch(alternative_reset_url, headers=headers, json=alternative_reset_data)
+                                                
+                                                logging.info(f"Alternative reset response status: {alt_reset_response.status_code}")
+                                                logging.info(f"Alternative reset response body: {alt_reset_response.text[:500]}")
+                                                
+                                                if alt_reset_response.status_code in [200, 204]:
+                                                    create_user_message(created_username, temp_password)
+                                                else:
+                                                    st.error(f"Failed to set password. Please note the username and set the password manually.")
+                                                    # Still display the message but with a note about the password
+                                                    create_user_message(created_username, "PASSWORD_NEEDS_RESET")
+                                        else:
+                                            st.error(f"Failed to set password. Please note the username and set the password manually.")
+                                            # Still display the message but with a note about the password
+                                            create_user_message(created_username, "PASSWORD_NEEDS_RESET")
+                                except Exception as reset_error:
+                                    logging.error(f"Exception during password reset: {str(reset_error)}")
+                                    logging.error(traceback.format_exc())
+                                    st.error(f"Error during password reset: {str(reset_error)}")
+                                    # Still create the user message but with a note
+                                    create_user_message(created_username, "PASSWORD_NEEDS_RESET")
                                 
                                 # Rerun to refresh the form
                                 st.rerun()
@@ -601,61 +745,6 @@ async def render_create_user_form():
                 st.rerun()
 
     with create_tabs[1]:
-        st.subheader("Auto Create Users")
-        
-        st.markdown("""
-        ### Instructions
-        Enter user details in the text area below. Each user should be in the following format:
-        ```
-        1. Full Name
-        2. Organization/Company
-        3. Invited by (username or email)
-        4. Email Address
-        5. Interests or additional information
-        ```
-        
-        The system will attempt to parse this information and create user accounts automatically.
-        """)
-        
-        st.markdown("""
-        <style>
-        .data-to-parse {
-            background-color: #e0e0e0; 
-            padding: 10px;
-            border-radius: 5px;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        st.markdown('<div class="data-to-parse">', unsafe_allow_html=True)
-        
-        # Check if we should show cleared message
-        if was_cleared:
-            st.info("Data has been cleared. Enter new data below.")
-        
-        st.text_area(
-            "User Data to Parse",
-            key="data_to_parse_input",
-            height=200,
-            placeholder=("Please enter user details (each on a new line):\n"
-                         "1. What's Your Name\n"
-                         "2. What org are you with\n"
-                         "3. Who invited you (add and mention them in this chat)\n"
-                         "4. Your Email or Email-Alias/Mask (for password resets and safety number verifications)\n"
-                         "5. Your Interests (so we can get you to the right chats)"),
-            value="" if was_cleared else None  # Set to empty string when cleared
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Parse Data", key="parse_button", on_click=parse_and_rerun):
-                pass  # The on_click handler will handle this
-        with col2:
-            if st.button("Clear Data", key="clear_data_button", on_click=clear_parse_data):
-                pass  # The on_click handler will handle this
-
-    with create_tabs[2]:
         st.subheader("Advanced User Options")
         
         # This section could include additional options like:
@@ -1143,6 +1232,11 @@ def update_username_from_inputs():
             # Also check for existing username in Authentik SSO
             try:
                 sso_usernames = []
+                # Define headers before using them
+                headers = {
+                    'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                    'Content-Type': 'application/json'
+                }
                 user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username__startswith={base_username}"
                 response = requests.get(user_search_url, headers=headers, timeout=10)
                 
@@ -1177,8 +1271,9 @@ def update_username_from_inputs():
                 
                 logging.info(f"Final generated username: {final_username}")
                 
-                # Update session state - ONLY update username_input, not the widget value
+                # Update session state - update both username_input and username_input_outside
                 st.session_state['username_input'] = final_username
+                st.session_state['username_input_outside'] = final_username
                 st.session_state['username_was_auto_generated'] = True
                 
                 # Set flag to indicate username needs update on next rerun
@@ -1199,8 +1294,9 @@ def update_username_from_inputs():
                 else:
                     suggested_username = base_username
                     
-                # Update only the internal value, not the widget value
+                # Update both internal value and widget value
                 st.session_state['username_input'] = suggested_username
+                st.session_state['username_input_outside'] = suggested_username
                 st.session_state['username_was_auto_generated'] = True
                 st.session_state['username_needs_update'] = True
                 logging.info(f"Generated username (fallback): {suggested_username}")

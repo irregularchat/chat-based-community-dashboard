@@ -77,6 +77,33 @@ Invited by: sac""",
                 "email": "test@test.com",
                 "invited_by": "sac"
             }
+        },
+        {
+            "name": "Input with incomplete Gmail domain",
+            "input": """John Doe
+john.doe@gmail
+Acme Corp
+Invited by Jane Smith""",
+            "expected": {
+                "first_name": "John",
+                "last_name": "Doe",
+                "email": "john.doe@gmail.com",
+                "invited_by": "Jane Smith"
+            }
+        },
+        {
+            "name": "Input with labeled incomplete email domain",
+            "input": """First Name: Jane
+Last Name: Smith
+Email: jane.smith@yahoo
+Organization: Example Corp
+Invited by: John Doe""",
+            "expected": {
+                "first_name": "Jane",
+                "last_name": "Smith",
+                "email": "jane.smith@yahoo.com",
+                "invited_by": "John Doe"
+            }
         }
     ]
     

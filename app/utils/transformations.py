@@ -101,11 +101,22 @@ def simple_parse_input(input_text):
             # Email
             match = re.search(form_patterns['email'], line, re.IGNORECASE)
             if match and match.group(1).strip():
-                email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', match.group(1))
+                email = match.group(1).strip()
+                # Check for complete email with @ and domain
+                email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', email)
+                # Check for incomplete email with just @domain (missing TLD)
+                incomplete_email_match = re.search(r'[\w\.-]+@(gmail|yahoo|hotmail|outlook|aol|icloud|proton|zoho|mail|yandex)$', email, re.IGNORECASE)
+                
                 if email_match:
                     parsed_data["email"] = email_match.group(0)
+                elif incomplete_email_match:
+                    # Add .com to common domains that are missing it
+                    domain = incomplete_email_match.group(1).lower()
+                    corrected_email = f"{email}.com"
+                    logging.info(f"Fixed incomplete email: {email} -> {corrected_email}")
+                    parsed_data["email"] = corrected_email
                 else:
-                    parsed_data["email"] = match.group(1).strip()
+                    parsed_data["email"] = email
                 continue
                 
             # Organization
@@ -136,6 +147,16 @@ def simple_parse_input(input_text):
             email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', line)
             if email_match:
                 parsed_data["email"] = email_match.group(0)
+                continue
+                
+            # Check for incomplete email with just @domain (missing TLD)
+            incomplete_email_match = re.search(r'[\w\.-]+@(gmail|yahoo|hotmail|outlook|aol|icloud|proton|zoho|mail|yandex)$', line, re.IGNORECASE)
+            if incomplete_email_match:
+                # Add .com to common domains that are missing it
+                full_email = line
+                corrected_email = f"{full_email}.com"
+                logging.info(f"Fixed incomplete email: {full_email} -> {corrected_email}")
+                parsed_data["email"] = corrected_email
                 continue
         
         # If we're still missing a name but have something in line 1, try to use it
@@ -176,13 +197,25 @@ def simple_parse_input(input_text):
         # Search for email in all lines (IMPORTANT: Do this first)
         email_index = -1  # Initialize email index
         email_pattern = r'[\w\.-]+@[\w\.-]+\.\w+'  # More precise email regex
+        incomplete_email_pattern = r'[\w\.-]+@(gmail|yahoo|hotmail|outlook|aol|icloud|proton|zoho|mail|yandex)$'  # Pattern for common domains without TLD
         
         for i, line in enumerate(lines):
+            # First check for complete email
             email_match = re.search(email_pattern, line)
             if email_match:
                 parsed_data["email"] = email_match.group(0)
                 email_index = i
                 logging.info(f"Found email {parsed_data['email']} at line {i+1}")
+                break
+                
+            # Then check for incomplete email (missing TLD)
+            incomplete_match = re.search(incomplete_email_pattern, line, re.IGNORECASE)
+            if incomplete_match:
+                domain = incomplete_match.group(1).lower()
+                corrected_email = f"{line}.com"
+                logging.info(f"Fixed incomplete email: {line} -> {corrected_email}")
+                parsed_data["email"] = corrected_email
+                email_index = i
                 break
     
         # Parse based on whether email was found or not
@@ -263,6 +296,19 @@ def simple_parse_input(input_text):
                 
                 parsed_data["intro"]["interests"] = "; ".join(interests_lines)
                 logging.info(f"Parsed interests (no email): {parsed_data['intro']['interests']}")
+    
+    # Final validation and correction for email addresses
+    if parsed_data["email"]:
+        # Check if the email has a TLD (like .com, .org, etc)
+        if not re.search(r'\.\w+$', parsed_data["email"]):
+            # Check if it's a common domain without TLD
+            incomplete_match = re.search(r'([\w\.-]+@)(gmail|yahoo|hotmail|outlook|aol|icloud|proton|zoho|mail|yandex)$', 
+                                         parsed_data["email"], re.IGNORECASE)
+            if incomplete_match:
+                domain = incomplete_match.group(2).lower()
+                corrected_email = f"{parsed_data['email']}.com"
+                logging.info(f"Added missing .com to email: {parsed_data['email']} -> {corrected_email}")
+                parsed_data["email"] = corrected_email
     
     # Handle organization and interests if not already set
     # If we have multiple interests but no organization, move the first interest to organization

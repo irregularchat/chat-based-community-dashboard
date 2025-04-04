@@ -23,7 +23,7 @@ from app.utils.matrix_actions import (
 from app.ui.summary import main as render_summary_page
 from app.ui.help_resources import main as render_help_page
 from app.ui.prompts import main as render_prompts_page, get_all_prompts
-from app.ui.common import display_useful_links
+from app.ui.common import display_useful_links, display_login_button
 from app.db.session import get_db
 from app.db.operations import search_users
 from app.auth.api import create_user, create_invite, shorten_url
@@ -315,35 +315,56 @@ def save_user_settings(
         return False
 
 def render_settings_page():
-    """Render the settings page with tabs for different settings categories"""
+    """Main function to render the settings page with tabs for different setting categories"""
+    # Add authentication protection directly in the page
+    if not st.session_state.get('is_authenticated', False):
+        st.title("Authentication Required")
+        st.warning("You must log in to access Settings.")
+        display_login_button(location="main")
+        return
+        
+    # Only admin users should access settings
+    if not st.session_state.get('is_admin', False):
+        st.title("Access Denied")
+        st.error("You need administrator privileges to access the Settings page.")
+        st.info("Please contact an administrator if you need access to these settings.")
+        return
+    
+    # Display the settings page
     st.title("Settings")
     
-    # Create tabs for different settings categories
-    user_tab, integration_tab, matrix_rooms_tab, message_users_tab, prompts_tab, advanced_tab = st.tabs([
-        "User Settings",
-        "Integration Settings",
-        "Matrix Rooms",
-        "Message Users",
-        "Prompts",
+    # Display tabs for different setting categories
+    tabs = st.tabs([
+        "User Settings", 
+        "Integration Settings", 
+        "Matrix Rooms", 
+        "Message Users", 
+        "Prompts", 
         "Advanced Settings"
     ])
     
-    with user_tab:
+    # User Settings Tab
+    with tabs[0]:
         render_user_settings()
-        
-    with integration_tab:
+    
+    # Integration Settings Tab
+    with tabs[1]:
         render_integration_settings()
-        
-    with matrix_rooms_tab:
+    
+    # Matrix Rooms Tab
+    with tabs[2]:
         render_matrix_rooms_settings()
-        
-    with message_users_tab:
+    
+    # Message Users Tab
+    with tabs[3]:
         render_message_users_settings()
-        
-    with prompts_tab:
+    
+    # Prompts Tab
+    with tabs[4]:
         render_prompts_settings()
-        
-    with advanced_tab:
+    
+    # Advanced Settings Tab
+    with tabs[5]:
         render_advanced_settings()
 
 def render_integration_settings():
@@ -1026,7 +1047,7 @@ def render_user_settings():
     encryption_password = getattr(Config, "ENCRYPTION_PASSWORD", "")
     
     # Create a form for saving settings
-    with st.form("user_settings_form_tab"):
+    with st.form("user_settings_form_main"):
         # Theme selection
         theme_options = ["light", "dark"]
         selected_theme = st.selectbox("Select theme", theme_options, 

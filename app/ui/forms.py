@@ -30,7 +30,9 @@ from app.auth.api import (
     create_invite,
     generate_secure_passphrase,
     force_password_reset,
-    reset_user_password
+    reset_user_password,
+    create_discourse_post,
+    create_user
 )
 from app.db.operations import search_users
 from app.messages import create_invite_message, create_user_message
@@ -73,81 +75,66 @@ def reset_create_user_form_fields():
 def parse_and_rerun():
     """Callback to parse data and rerun the script so widgets see updated session state."""
     # Check if input is empty
-    if not st.session_state.get("data_to_parse_input", "").strip():
+    if not st.session_state.get("parse_data_input_outside", "").strip():
         logging.warning("Parsing called with empty data")
+        st.warning("Nothing to parse. Please enter some data first.")
         return  # Just return if there's no data to parse
     
     # Log the input data for debugging
-    input_data = st.session_state.get("data_to_parse_input", "")
+    input_data = st.session_state.get("parse_data_input_outside", "")
     logging.info(f"Parsing data: {input_data[:100]}..." if len(input_data) > 100 else f"Parsing data: {input_data}")
     
     try:
         # Parse the data from the text area
         parsed = parse_input(input_data)
-    
+        
         # Check for error in parsed data
         if isinstance(parsed, dict) and "error" in parsed:
             error_msg = parsed["error"]
             logging.error(f"Error parsing input: {error_msg}")
-            st.error(error_msg)
+            st.error(f"Error parsing input: {error_msg}")
             return
         
-        if not parsed or (isinstance(parsed, tuple) and parsed[1] is False):
-            logging.error("Could not parse the input text, empty or invalid result")
-            st.error("Could not parse the input text")
+        if not parsed:
+            logging.error("Could not parse the input text, empty result")
+            st.error("Could not parse the input text. The parser returned an empty result.")
             return
-
-        # Debug the parsed data
+            
+        # Log the parsed data
         logging.info(f"Successfully parsed data: {parsed}")
         
-        # Update session state properly
-        # Make sure to update all fields even if they're missing in the parsed result
+        # Store parsed data in temporary session state variables that can be used after rerun
+        # Do NOT modify the widget values directly with _outside suffix
         if "first_name" in parsed:
-            st.session_state["first_name_input"] = parsed.get("first_name")
-            st.session_state["first_name_input_outside"] = parsed.get("first_name")
-            logging.info(f"Updated first_name to: {parsed.get('first_name')}")
-        
+            st.session_state["_parsed_first_name"] = parsed.get("first_name", "")
+            logging.info(f"Set _parsed_first_name to: '{parsed.get('first_name', '')}'")
+            
         if "last_name" in parsed:
-            st.session_state["last_name_input"] = parsed.get("last_name")
-            st.session_state["last_name_input_outside"] = parsed.get("last_name") 
-            logging.info(f"Updated last_name to: {parsed.get('last_name')}")
-        
+            st.session_state["_parsed_last_name"] = parsed.get("last_name", "")
+            logging.info(f"Set _parsed_last_name to: '{parsed.get('last_name', '')}'")
+            
         if "email" in parsed:
-            st.session_state["email_input"] = parsed.get("email")
-            logging.info(f"Updated email to: {parsed.get('email')}")
-        
+            st.session_state["_parsed_email"] = parsed.get("email", "")
+            logging.info(f"Set _parsed_email to: '{parsed.get('email', '')}'")
+            
         if "invited_by" in parsed:
-            st.session_state["invited_by_input"] = parsed.get("invited_by")
-            logging.info(f"Updated invited_by to: {parsed.get('invited_by')}")
-    
-        # Safely access nested intro fields and combine organization and interests
-        if "intro" in parsed:
+            st.session_state["_parsed_invited_by"] = parsed.get("invited_by", "")
+            logging.info(f"Set _parsed_invited_by to: '{parsed.get('invited_by', '')}'")
+            
+        # Handle intro data which is nested
+        if "intro" in parsed and isinstance(parsed["intro"], dict):
             intro_data = parsed.get("intro", {})
             org = intro_data.get("organization", "")
             interests = intro_data.get("interests", "")
             combined_intro = f"{org}\n\nInterests: {interests}" if interests else org
-            st.session_state["intro_input"] = combined_intro
-            logging.info(f"Updated intro with org: '{org}' and interests: '{interests}'")
-        
-        # Generate username from the updated names
-        if "first_name" in parsed or "last_name" in parsed:
-            # Force username generation
-            st.session_state['username_was_auto_generated'] = True
-            # Call the function to update username
-            username_updated = update_username_from_inputs()
-            # Log the generated username
-            logging.info(f"Generated username: {st.session_state.get('username_input', '')}")
-            
-            # Make sure we update the username_input_outside field too
-            if username_updated and 'username_input' in st.session_state:
-                st.session_state['username_input_outside'] = st.session_state['username_input']
-                logging.info(f"Updated username_input_outside to: {st.session_state['username_input']}")
+            st.session_state["_parsed_intro"] = combined_intro
+            logging.info(f"Set _parsed_intro to organization: '{org}' and interests: '{interests}'")
         
         # Set a flag to indicate parsing was successful
         st.session_state["parsing_successful"] = True
-
-        # Rerun so the text inputs see the updated session state
-        logging.info("Rerunning with updated session state")
+        
+        # Rerun so the fields can be updated with the parsed data
+        logging.info("Rerunning with temporary parsed data in session state")
         st.rerun()
     except Exception as e:
         logging.error(f"Exception during parsing: {str(e)}")
@@ -158,620 +145,382 @@ def clear_parse_data():
     """Callback to clear the parsed data and rerun the script."""
     # Set a flag to indicate that data should be cleared
     st.session_state["clear_parse_data_flag"] = True
-    # Also clear any previously parsed data
-    for key in ['first_name_input', 'last_name_input', 'username_input', 
-               'email_input', 'invited_by_input', 'intro_input']:
+    
+    # Clear all temporary parsed data fields
+    for key in [
+        '_parsed_first_name', '_parsed_last_name', '_parsed_email',
+        '_parsed_invited_by', '_parsed_intro'
+    ]:
         if key in st.session_state:
-            st.session_state[key] = ""
+            del st.session_state[key]
+    
+    # Set flags to indicate form should be cleared on next rerun
+    st.session_state['should_clear_form'] = True
+    
     # Rerun to apply changes
     st.rerun()
 
 async def render_create_user_form():
-    """Render the create user form with an improved layout and group selection"""
-    # Add custom CSS for a more professional look
+    """Render the user creation form with improved layout and group selection."""
+    # Custom CSS for better form styling
     st.markdown("""
     <style>
-    /* General form styling improvements */
-    .stTextInput, .stTextArea, .stMultiselect {
-        margin-bottom: 15px;
-    }
-    
-    /* Better button styling */
-    .stButton > button {
-        border-radius: 4px;
-        padding: 0.5rem 1rem;
-        font-weight: 500;
-        transition: all 0.2s ease;
-    }
-    
-    .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-    }
-    
-    /* Form container styling */
+    /* Form styling */
     .form-container {
-        background-color: rgba(255, 255, 255, 0.05);
+        background-color: #f8f9fa;
         padding: 20px;
-        border-radius: 8px;
-        margin-bottom: 20px;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    /* Input field styling */
+    input[type="text"], input[type="email"], textarea {
+        margin-bottom: 10px;
+        border-radius: 5px !important;
+        border: 1px solid #ced4da !important;
+    }
+    
+    /* Button styling */
+    .stButton button {
+        border-radius: 5px;
+        padding: 8px 16px;
+        background-color: #4CAF50;
+        color: white;
+        border: none;
+        transition: background-color 0.3s;
+    }
+    
+    .stButton button:hover {
+        background-color: #45a049;
+    }
+    
+    /* Custom help text styling */
+    .help-text {
+        font-size: 0.8rem;
+        color: #6c757d;
+        margin-bottom: 5px;
+    }
+    
+    /* Divider styling */
+    .divider {
+        margin: 20px 0;
+        border-top: 1px solid #dee2e6;
     }
     
     /* Parse data section styling */
     .data-to-parse {
-        background-color: rgba(28, 28, 36, 0.5);
+        background-color: #e9ecef;
         padding: 15px;
-        border-radius: 6px;
-        margin-bottom: 20px;
-        border: 1px solid rgba(120, 120, 120, 0.3);
-    }
-    
-    /* Section header styling */
-    .section-header {
-        margin-top: 25px;
-        margin-bottom: 15px;
-        padding-bottom: 8px;
-        border-bottom: 1px solid rgba(120, 120, 120, 0.3);
-        font-weight: 600;
-        color: #d1d1d1;
-    }
-    
-    /* Create user button styling */
-    .stButton > button[data-testid="baseButton-secondary"] {
-        background-color: #2e6fdb;
-        color: white;
-        font-weight: 600;
-        border: none;
-        padding: 10px 20px;
-    }
-    
-    .stButton > button[data-testid="baseButton-secondary"]:hover {
-        background-color: #3d7fe8;
-        box-shadow: 0 4px 10px rgba(25, 118, 210, 0.3);
-    }
-    
-    /* Clear data button styling */
-    .clear-button button {
-        color: #9e9e9e;
-        border-color: #505050;
-        background-color: transparent;
-    }
-    
-    .clear-button button:hover {
-        border-color: #ff5252;
-        color: #ff5252;
-    }
-    
-    /* Better help text styling */
-    .stMarkdown div[data-testid="stText"] small {
-        opacity: 0.7;
-    }
-    
-    /* Divider styling */
-    hr {
-        margin: 30px 0;
-        border-color: rgba(120, 120, 120, 0.2);
+        border-radius: 5px;
+        border: 1px solid #dee2e6;
     }
     </style>
     """, unsafe_allow_html=True)
-    
-    # Handle form clearing at the start of rendering
+
+    # Form clearing logic
     if st.session_state.get('should_clear_form', False):
-        # Initialize empty values for the next render
-        st.session_state['first_name_input_outside'] = ""
-        st.session_state['last_name_input_outside'] = ""
-        st.session_state['username_input_outside'] = ""
-        st.session_state['email_input'] = ""
-        st.session_state['invited_by_input'] = ""
-        st.session_state['intro_input'] = ""
-        st.session_state['selected_groups'] = []
-        
-        # Reset the flag
+        reset_create_user_form_fields()
         st.session_state['should_clear_form'] = False
     
-    # We're now using create_user_message directly instead of this success message
-    # Clear any existing user_created flags
-    if st.session_state.get('user_created', False):
-        st.session_state['user_created'] = False
-        if 'success_message' in st.session_state:
-            del st.session_state['success_message']
+    # Initialize or update session state variables from parsed data if it exists
+    # This is how we'll update the form fields after parsing
+    if st.session_state.get('parsing_successful', False):
+        # Update session state variables from parsed data
+        if '_parsed_first_name' in st.session_state:
+            st.session_state['first_name_input'] = st.session_state['_parsed_first_name']
+            logging.info(f"Updated first_name_input from parsed data: {st.session_state['_parsed_first_name']}")
+            
+        if '_parsed_last_name' in st.session_state:
+            st.session_state['last_name_input'] = st.session_state['_parsed_last_name']
+            logging.info(f"Updated last_name_input from parsed data: {st.session_state['_parsed_last_name']}")
+            
+        if '_parsed_email' in st.session_state:
+            st.session_state['email_input'] = st.session_state['_parsed_email']
+            logging.info(f"Updated email_input from parsed data: {st.session_state['_parsed_email']}")
+            
+        if '_parsed_invited_by' in st.session_state:
+            st.session_state['invited_by_input'] = st.session_state['_parsed_invited_by']
+            logging.info(f"Updated invited_by_input from parsed data: {st.session_state['_parsed_invited_by']}")
+            
+        if '_parsed_intro' in st.session_state:
+            st.session_state['intro_text_input'] = st.session_state['_parsed_intro']
+            logging.info(f"Updated intro_text_input from parsed data: {st.session_state['_parsed_intro']}")
+        
+        # Generate username from updated names
+        if '_parsed_first_name' in st.session_state or '_parsed_last_name' in st.session_state:
+            # Force username generation
+            st.session_state['username_was_auto_generated'] = True
+            # Update username
+            update_username_from_inputs()
+            
+        # Clear the flag to prevent reprocessing
+        st.session_state['parsing_successful'] = False
+        
+        # Show success message
+        st.success(f"Successfully parsed user data")
     
-    # Initialize session state variables if they don't exist
-    for key in ['first_name_input', 'last_name_input', 'username_input', 
-                'email_input', 'invited_by_input', 'intro_input', 'selected_groups']:
-        if key not in st.session_state:
-            st.session_state[key] = "" if key != 'selected_groups' else []
-    
-    # Also initialize the outside form fields if not already present
-    # But DO NOT modify them if they already exist to avoid the "cannot modify after widget instantiation" error
-    for key in ['first_name_input_outside', 'last_name_input_outside', 'username_input_outside']:
-        if key not in st.session_state:
-            # Get the base key (without _outside)
-            base_key = key.replace('_outside', '')
-            # If base key exists, copy its value, otherwise initialize empty
-            st.session_state[key] = st.session_state.get(base_key, "")
-    
-    # Initialize username auto-generation flag if not present
-    if 'username_was_auto_generated' not in st.session_state:
-        st.session_state['username_was_auto_generated'] = False
-    
-    # Initialize a new flag to indicate if username needs updating
-    if 'username_needs_update' not in st.session_state:
-        st.session_state['username_needs_update'] = False
-
-    # Check if data was cleared
-    was_cleared = st.session_state.get("clear_parse_data_flag", False)
-    if was_cleared:
-        # Reset the flag
-        st.session_state["clear_parse_data_flag"] = False
-
-    # Get database connection
-    db = next(get_db())
-
-    # Run username update on initialization if we have some name data
-    if ((st.session_state.get('first_name_input') or 
-         st.session_state.get('last_name_input')) and 
-        not st.session_state.get('username_input')):
-        update_username_from_inputs()
-
-    # Create main section and advanced options tab
+    # Initialize session state variables for all form fields if they don't exist
+    if 'first_name_input' not in st.session_state:
+        st.session_state['first_name_input'] = ""
+    if 'last_name_input' not in st.session_state:
+        st.session_state['last_name_input'] = ""
+    if 'email_input' not in st.session_state:
+        st.session_state['email_input'] = ""
+    if 'invited_by_input' not in st.session_state:
+        st.session_state['invited_by_input'] = ""
+    if 'username_input' not in st.session_state:
+        st.session_state['username_input'] = ""
+    if 'parse_data_input' not in st.session_state:
+        st.session_state['parse_data_input'] = ""
+        
+    # Create tabs for main form and advanced options
     create_tabs = st.tabs(["Create User", "Advanced Options"])
     
     with create_tabs[0]:
-        # Input fields outside the form for first name and last name to handle on_change
-        st.subheader("Create User")
+        st.markdown("<div class='form-container'>", unsafe_allow_html=True)
         
-        # Add a wrapper div for better styling
-        st.markdown('<div class="form-container">', unsafe_allow_html=True)
+        # User information section
+        st.subheader("Basic Information")
         
-        st.info("Enter your information below to create a new user. The username will be automatically generated based on your first and last name.")
+        # First Name - First
+        first_name = st.text_input(
+            "First Name *",
+            value=st.session_state.get('first_name_input', ""),
+            key="first_name_input_outside",
+            on_change=on_first_name_change,
+            help="Required: User's first name"
+        )
         
-        # SECTION 1: Basic User Information
-        st.markdown('<div class="section-header">Basic Information</div>', unsafe_allow_html=True)
+        # Last Name - Second 
+        last_name = st.text_input(
+            "Last Name",
+            value=st.session_state.get('last_name_input', ""),
+            key="last_name_input_outside",
+            on_change=on_last_name_change,
+            help="User's last name (optional)"
+        )
         
-        # Create a more elegant layout with 2 columns for the main fields
-        col1, col2 = st.columns(2)
-            
-        with col1:
-            # First Name field
-            if 'first_name_input_outside' in st.session_state:
-                st.text_input(
-                    "First Name *",
-                    key="first_name_input_outside",
-                    placeholder="e.g., John",
-                    help="User's first name (required)",
-                    on_change=on_first_name_change
-                )
+        # Email - Third
+        email = st.text_input(
+            "Email Address *",
+            value=st.session_state.get('email_input', ""),
+            key="email_input_outside",
+            help="Required: User's email address",
+            placeholder="user@example.com"
+        )
+        
+        # Invited By - Fourth
+        invited_by = st.text_input(
+            "Invited by",
+            value=st.session_state.get('invited_by_input', ""),
+            key="invited_by_input_outside",
+            help="Who invited this person (optional)",
+            placeholder="username or name"
+        )
+        
+        # Username - Last to allow auto-generation based on other fields
+        username = st.text_input(
+            "Username *",
+            value=st.session_state.get('username_input', ""),
+            key="username_input_outside",
+            on_change=on_username_manual_edit,
+            help="Required: Unique username (auto-generated)",
+            placeholder="firstname-l"
+        )
+        
+        # Show help text for username
+        st.markdown("<div class='help-text'>Username auto-generated. Edit to create custom username.</div>", unsafe_allow_html=True)
+        
+        # Check Username button
+        if st.button("Check Username Availability"):
+            if not username:
+                st.warning("Please enter a username to check")
             else:
-                # Use value parameter only for initial setup
-                st.text_input(
-                    "First Name *",
-                    key="first_name_input_outside",
-                    value=st.session_state.get('first_name_input', ''),
-                    placeholder="e.g., John",
-                    help="User's first name (required)",
-                    on_change=on_first_name_change
-                )
-            
-            # Email field (moved up)
-            st.text_input(
-                "Email Address *",
-                key="email_input",
-                placeholder="e.g., johndoe@example.com",
-                help="Email address for password resets and notifications (required)"
-            )
-            
-            # Keep the sync logic simple - only set if not already in session state
-            if 'first_name_input_outside' in st.session_state and 'first_name_input' not in st.session_state:
-                st.session_state['first_name_input'] = st.session_state['first_name_input_outside']
-        
-        with col2:
-            # Last Name field
-            if 'last_name_input_outside' in st.session_state:
-                st.text_input(
-                    "Last Name",
-                    key="last_name_input_outside",
-                    placeholder="e.g., Doe",
-                    help="User's last name (optional)",
-                    on_change=on_last_name_change
-                )
-            else:
-                # Use value parameter only for initial setup
-                st.text_input(
-                    "Last Name",
-                    key="last_name_input_outside",
-                    value=st.session_state.get('last_name_input', ''),
-                    placeholder="e.g., Doe",
-                    help="User's last name (optional)",
-                    on_change=on_last_name_change
-                )
-            
-            # Invited by field (moved up)
-            st.text_input(
-                "Invited by",
-                key="invited_by_input",
-                placeholder="e.g., @janedoe",
-                help="Who invited this user to the platform"
-            )
-            
-            # Keep the sync logic simple - only set if not already in session state 
-            if 'last_name_input_outside' in st.session_state and 'last_name_input' not in st.session_state:
-                st.session_state['last_name_input'] = st.session_state['last_name_input_outside']
-                
-        # Username field as the last input field - Full width
-        username_value = st.session_state.get('username_input', '')
-        # Reset the needs_update flag if it's set
-        if st.session_state.get('username_needs_update', False):
-            st.session_state['username_needs_update'] = False
-            
-        # Always render a single username input with conditional value
-        if 'username_input_outside' in st.session_state:
-            st.text_input(
-                "Username *",
-                key="username_input_outside",
-                placeholder="e.g., johndoe123",
-                help="Username for login (required, must be unique). Auto-generated based on name.",
-                on_change=on_username_manual_edit
-            )
-        else:
-            st.text_input(
-                "Username *",
-                key="username_input_outside",
-                value=username_value if username_value else None,
-                placeholder="e.g., johndoe123",
-                help="Username for login (required, must be unique). Auto-generated based on name.",
-                on_change=on_username_manual_edit
-            )
-        
-        # Always sync from the widget to the internal value - this is safe
-        if 'username_input_outside' in st.session_state:
-            st.session_state['username_input'] = st.session_state['username_input_outside']
-            
-        if st.session_state.get('username_was_auto_generated', False):
-            st.caption("Username auto-generated. Edit to create custom username.")
-            
-            # Add a check button to verify username uniqueness
-            if st.button("Check Username Availability", key="check_username_btn"):
-                username = st.session_state.get('username_input', '')
-                if username:
+                # Check username availability locally first
+                try:
+                    from app.db.database import get_db
+                    from app.db.models import User
+                    db = next(get_db())
                     try:
-                        # Check in local database
-                        with next(get_db()) as db:
-                            local_existing = db.query(User).filter(User.username == username).first()
-                        
-                        # Check exact match in SSO
-                        headers = {
-                            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-                            'Content-Type': 'application/json'
-                        }
-                        
-                        user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
-                        response = requests.get(user_search_url, headers=headers, timeout=10)
-                        
-                        if response.status_code == 200:
-                            sso_users = response.json().get('results', [])
-                            
-                            if not local_existing and not sso_users:
-                                st.success(f"Username '{username}' is available!")
-                                logging.info(f"Username check: '{username}' is available")
-                            else:
-                                st.error(f"Username '{username}' is already taken. Please choose another.")
-                                logging.warning(f"Username check: '{username}' is already taken")
-                                # Suggest a different username
-                                base_username = username
-                                # Generate a unique suffix
-                                existing_usernames = []
-                                if local_existing:
-                                    # Get similar usernames
-                                    similar_local = db.query(User).filter(User.username.like(f"{base_username}%")).all()
-                                    existing_usernames = [user.username for user in similar_local]
-                                
-                                if sso_users:
-                                    # Add SSO usernames
-                                    similar_sso_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username__startswith={base_username}"
-                                    sso_response = requests.get(similar_sso_url, headers=headers, timeout=10)
-                                    if sso_response.status_code == 200:
-                                        similar_sso_users = sso_response.json().get('results', [])
-                                        sso_usernames = [user['username'] for user in similar_sso_users]
-                                        existing_usernames.extend(sso_usernames)
-                                
-                                # Find available username with suffix
-                                suffix = 1
-                                while f"{base_username}{suffix}" in existing_usernames:
-                                    suffix += 1
-                                suggested_username = f"{base_username}{suffix}"
-                                st.info(f"Suggestion: How about '{suggested_username}'?")
+                        existing_user = db.query(User).filter(User.username == username).first()
+                        if existing_user:
+                            st.warning(f"Username '{username}' already exists in local database.")
                         else:
-                            st.warning("Could not verify username availability with SSO service.")
-                            logging.warning(f"Username check: Could not verify with SSO: {response.status_code}")
+                            # Also check in Authentik SSO
+                            import requests
+                            from app.utils.config import Config
+                            headers = {
+                                'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                                'Content-Type': 'application/json'
+                            }
+                            user_check_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
+                            response = requests.get(user_check_url, headers=headers)
+                            
+                            if response.status_code == 200:
+                                users = response.json().get('results', [])
+                                if users:
+                                    st.warning(f"Username '{username}' already exists in SSO.")
+                                else:
+                                    st.success(f"Username '{username}' is available!")
+                            else:
+                                st.error(f"Error checking username in SSO: {response.status_code}")
                     except Exception as e:
-                        logging.error(f"Error checking username availability: {str(e)}")
-                        logging.error(traceback.format_exc())
-                        st.error("An error occurred while checking username availability.")
-                        
-        # SECTION 2: Group Selection and Introduction
-        st.markdown('<div class="section-header">Group Assignment & Introduction</div>', unsafe_allow_html=True)
+                        st.error(f"Error checking username: {str(e)}")
+                    finally:
+                        db.close()
+                except Exception as e:
+                    st.error(f"Database connection error: {str(e)}")
         
-        # Get all available groups
-        all_groups = get_authentik_groups()
+        # Group assignment (if applicable)
+        st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
+        st.subheader("Group Assignment & Introduction")
         
-        # Group selection
-        if all_groups:
+        # Group selection multi-select
+        from app.auth.admin import get_authentik_groups
+        groups = get_authentik_groups()
+        if groups:
+            # Group formatting function
+            def format_group(group_id):
+                for group in groups:
+                    if group.get('pk') == group_id:
+                        return group.get('name', group_id)
+                return group_id
+                
             # Initialize selected_groups if not in session state
             if 'selected_groups' not in st.session_state:
-                st.session_state['selected_groups'] = []
-            
-            # Find the main group ID if configured
-            main_group_id = Config.MAIN_GROUP_ID
-            
-            # Pre-select the main group if it exists
-            default_selection = [main_group_id] if main_group_id else []
-            
+                # Pre-select main group if it exists
+                from app.utils.config import Config
+                main_group_id = Config.MAIN_GROUP_ID
+                st.session_state['selected_groups'] = [main_group_id] if main_group_id else []
+                
             # Group selection with multiselect
-            selected_groups = st.multiselect(
+            st.multiselect(
                 "Assign to Groups",
-                options=[g.get('pk') for g in all_groups],
-                default=default_selection,
-                format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
-                help="Select groups to assign the user to",
-                key="group_selection"
+                options=[g.get('pk') for g in groups],
+                default=st.session_state['selected_groups'],
+                format_func=format_group,
+                key="group_selection",
+                help="Select groups to assign user to"
             )
-            
-            # Store in session state
-            st.session_state['selected_groups'] = selected_groups
         
-        # Introduction text
-        st.text_area(
+        # Introduction text for the user 
+        intro_text = st.text_area(
             "Introduction",
-            key="intro_input",
-            height=100,
-            placeholder="e.g., Software Engineer at TechCorp with interests in AI and machine learning",
-            help="User's introduction or bio"
+            value=st.session_state.get('intro_text_input', ""),
+            key="intro_text_input_outside",
+            placeholder="A few sentences about the new user",
+            help="Brief introduction for the new user",
+            height=100
         )
         
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        # SECTION 3: Parse Data Section
+        # Data parsing section - at the end of the form
+        st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
         st.subheader("Parse User Data")
         
-        # Add a wrapper div for better styling
-        st.markdown('<div class="form-container">', unsafe_allow_html=True)
+        # Help text for data parsing
+        st.markdown("<div class='data-to-parse'>", unsafe_allow_html=True)
         
-        st.markdown("Use this tool to easily fill in user details from structured text. Perfect for copying from emails, messages, or forms.")
-        
-        # Check if we should show cleared message
-        if was_cleared:
-            st.info("Data has been cleared. Enter new data below.")
-        
-        st.markdown('<div class="data-to-parse">', unsafe_allow_html=True)
-        st.text_area(
-            "User Data to Parse",
-            key="data_to_parse_input",
-            height=150,
-            placeholder=("Please enter user details (each on a new line):\n"
-                         "1. What's Your Name\n"
-                         "2. What org are you with\n"
-                         "3. Who invited you (add and mention them in this chat)\n"
-                         "4. Your Email or Email-Alias/Mask (for password resets and safety number verifications)\n"
-                         "5. Your Interests (so we can get you to the right chats)"),
-            value="" if was_cleared else None  # Set to empty string when cleared
+        # Parse data textarea
+        parse_data = st.text_area(
+            "Enter data to parse",
+            value=st.session_state.get('parse_data_input', ""),
+            key="parse_data_input_outside",
+            help="Enter multiple lines of information to parse into user fields",
+            placeholder="First Name: John\nLast Name: Doe\nEmail: john.doe@example.com",
+            height=100
         )
-        st.markdown('</div>', unsafe_allow_html=True)
         
-        col1, col2, col3 = st.columns([2, 2, 1])
+        # Parse and Clear buttons
+        col1, col2 = st.columns(2)
         with col1:
-            if st.button("Parse Data", key="parse_button", on_click=parse_and_rerun):
-                pass  # The on_click handler will handle this
+            if st.button("Parse Data"):
+                parse_and_rerun()
         with col2:
-            if st.button("Clear Data", key="clear_data_button", on_click=clear_parse_data):
-                pass  # The on_click handler will handle this
-        with col3:
-            # Additional clear all button with styling
-            st.markdown('<div class="clear-button">', unsafe_allow_html=True)
-            if st.button("Clear All Fields", key="clear_all_button", on_click=reset_create_user_form_fields):
-                pass
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-        # Close container
-        st.markdown('</div>', unsafe_allow_html=True)
+            if st.button("Clear Parse Data"):
+                clear_parse_data()
+                
+        st.markdown("</div>", unsafe_allow_html=True)
         
-        # Add a divider before the form
-        st.divider()
-        st.caption("Review the information above and click 'Create User' when ready.")
-            
-        # Now create the actual form with hidden fields that will be submitted
-        with st.form("create_user_form_alt"):
-            # Add admin checkbox (only visible to admins)
-            is_admin = False
-            # Check if current user is an admin
-            from app.auth.admin import check_admin_permission
-            current_username = st.session_state.get("username", "")
-            if current_username and check_admin_permission(current_username):
-                is_admin = st.checkbox("Grant Admin Privileges", key="is_admin_checkbox", 
-                                      help="Make this user an administrator with full access to all features")
-            
-            # Submit button - simplified layout with just one button
-            cols = st.columns([3, 2, 3])
-            with cols[1]:
-                submit_button = st.form_submit_button("Create User", use_container_width=True)
-            
-            # Display required fields note
-            st.markdown("**Note:** Fields marked with * are required")
-
-            # Handle form submission
-            if submit_button:
+        # Form submission area
+        st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
+        
+        # Submit button
+        if st.button("Create User"):
+            # Check required fields
+            if not username or not first_name or not email:
+                st.error("Please fill in all required fields (marked with *)")
+            else:
                 try:
-                    # Validate required fields
-                    username = st.session_state.get('username_input', '').strip()
-                    first_name = st.session_state.get('first_name_input', '').strip()
-                    email = st.session_state.get('email_input', '').strip()
+                    # Prepare user data for submission
+                    user_data = {
+                        "username": username,
+                        "name": f"{first_name} {last_name}".strip(),
+                        "email": email
+                    }
                     
-                    if not username:
-                        st.error("Username is required")
-                    elif not first_name:
-                        st.error("First name is required")
-                    elif not email:
-                        st.error("Email is required")
-                    else:
-                        # Prepare user data
-                        user_data = {
-                            'username': username,
-                            'name': f"{first_name} {st.session_state.get('last_name_input', '').strip()}".strip(),
-                            'email': email,
-                            'is_active': True,
-                            'attributes': {
-                                'invited_by': st.session_state.get('invited_by_input', '').strip(),
-                                'intro': st.session_state.get('intro_input', '').strip()
-                            }
-                        }
+                    # Add optional fields if provided
+                    if invited_by:
+                        user_data["attributes"] = {"invited_by": invited_by}
+                    
+                    if intro_text:
+                        user_data["attributes"] = user_data.get("attributes", {})
+                        user_data["attributes"]["intro"] = intro_text
+                    
+                    # Get selected groups
+                    selected_groups = st.session_state.get('group_selection', [])
+                    
+                    # Add log for debugging
+                    logging.info(f"Creating user with data: {user_data}")
+                    logging.info(f"Selected groups: {selected_groups}")
+                    
+                    # Set a spinner while creating the user
+                    with st.spinner("Creating user..."):
+                        # Import the create_user function
+                        from app.auth.api import create_user
                         
-                        # Create user in Authentik
-                        headers = {
-                            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-                            'Content-Type': 'application/json'
-                        }
+                        # Create user synchronously
+                        result = create_user(
+                            username=username,
+                            name=user_data["name"],
+                            email=email,
+                            attributes=user_data.get("attributes", {}),
+                            groups=selected_groups
+                        )
                         
-                        # First create the user in Authentik
-                        create_user_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
-                        logging.info(f"Creating user with data: {user_data}")
-                        logging.info(f"Using API URL: {create_user_url}")
-                        
-                        try:
-                            response = requests.post(create_user_url, headers=headers, json=user_data)
-                            logging.info(f"Response status code: {response.status_code}")
-                            logging.info(f"Response headers: {response.headers}")
-                            logging.info(f"Response body: {response.text}")
+                        # Handle the result
+                        if result and not result.get('error'):
+                            from app.messages import create_user_message
+                            # Show success message with buttons for clearing
                             
-                            if response.status_code == 201:
-                                # User created successfully
-                                created_username = user_data['username']
-                                
-                                # Generate a secure temporary password
-                                temp_password = generate_secure_passphrase()
-                                
-                                # Set flags for next render
-                                st.session_state['user_created'] = True
-                                st.session_state['created_username'] = created_username
-                                st.session_state['should_clear_form'] = True
-                                
-                                # Reset the password to our generated secure password
-                                user_id = response.json().get('pk')
-                                
-                                # Add more detailed logging for debugging
-                                logging.info(f"Attempting to reset password for user ID: {user_id}")
-                                
-                                try:
-                                    # First try using the reset_user_password function 
-                                    # which contains the proper error handling and logging
-                                    reset_result = reset_user_password(
-                                        Config.AUTHENTIK_API_URL, 
-                                        headers, 
-                                        user_id, 
-                                        temp_password
-                                    )
-                                    
-                                    if reset_result:
-                                        logging.info(f"Password reset successful using reset_user_password")
-                                        # Display welcome message using the message template from app/messages.py
-                                        create_user_message(created_username, temp_password)
-                                    else:
-                                        # Try alternative method 1: Using force_password_reset function
-                                        logging.info(f"Trying alternative method 1: force_password_reset")
-                                        
-                                        force_reset_result = force_password_reset(created_username)
-                                        if force_reset_result:
-                                            logging.info(f"Force password reset successful, setting password manually")
-                                            # Now try to set the password directly with a PATCH request
-                                            user_url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/"
-                                            patch_data = {"password": temp_password}
-                                            
-                                            patch_response = requests.patch(user_url, headers=headers, json=patch_data)
-                                            logging.info(f"Password patch response status: {patch_response.status_code}")
-                                            
-                                            if patch_response.status_code in [200, 204]:
-                                                create_user_message(created_username, temp_password)
-                                            else:
-                                                # Try alternative method 2: Using a different endpoint structure
-                                                alternative_reset_url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/"
-                                                alternative_reset_data = {'set_password': temp_password}
-                                                
-                                                logging.info(f"Attempting alternative password reset method 2")
-                                                logging.info(f"Alternative reset URL: {alternative_reset_url}")
-                                                
-                                                alt_reset_response = requests.patch(alternative_reset_url, headers=headers, json=alternative_reset_data)
-                                                
-                                                logging.info(f"Alternative reset response status: {alt_reset_response.status_code}")
-                                                logging.info(f"Alternative reset response body: {alt_reset_response.text[:500]}")
-                                                
-                                                if alt_reset_response.status_code in [200, 204]:
-                                                    create_user_message(created_username, temp_password)
-                                                else:
-                                                    st.error(f"Failed to set password. Please note the username and set the password manually.")
-                                                    # Still display the message but with a note about the password
-                                                    create_user_message(created_username, "PASSWORD_NEEDS_RESET")
-                                        else:
-                                            st.error(f"Failed to set password. Please note the username and set the password manually.")
-                                            # Still display the message but with a note about the password
-                                            create_user_message(created_username, "PASSWORD_NEEDS_RESET")
-                                except Exception as reset_error:
-                                    logging.error(f"Exception during password reset: {str(reset_error)}")
-                                    logging.error(traceback.format_exc())
-                                    st.error(f"Error during password reset: {str(reset_error)}")
-                                    # Still create the user message but with a note
-                                    create_user_message(created_username, "PASSWORD_NEEDS_RESET")
-                                
-                                # Rerun to refresh the form
-                                st.rerun()
-                            else:
-                                error_response = response.json()
-                                logging.error(f"Error creating user: {error_response}")
-                                logging.error(f"Response status: {response.status_code}")
-                                
-                                # Handle field-specific errors
-                                if isinstance(error_response, dict):
-                                    for field, errors in error_response.items():
-                                        if isinstance(errors, list):
-                                            error_msg = f"{field.title()}: {', '.join(errors)}"
-                                            st.error(error_msg)
-                                        else:
-                                            st.error(f"{field.title()}: {errors}")
-                                            
-                                    # Suggest a new username if username is taken
-                                    if 'username' in error_response and any('unique' in str(err).lower() for err in error_response['username']):
-                                        # Generate a new unique username suggestion
-                                        base_username = username
-                                        suffix = 1
-                                        while True:
-                                            suggested_username = f"{base_username}{suffix}"
-                                            # Check if suggested username exists
-                                            check_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={suggested_username}"
-                                            check_response = requests.get(check_url, headers=headers)
-                                            if check_response.status_code == 200:
-                                                results = check_response.json().get('results', [])
-                                                if not results:
-                                                    break
-                                            suffix += 1
-                                        st.info(f"Suggestion: Try using '{suggested_username}' instead")
-                                else:
-                                    st.error(f"Failed to create user: {error_response}")
-                                
-                        except requests.exceptions.RequestException as e:
-                            logging.error(f"Request error: {str(e)}")
-                            logging.error(traceback.format_exc())
-                            st.error(f"Failed to connect to Authentik API: {str(e)}")
-                        except json.JSONDecodeError as e:
-                            logging.error(f"JSON decode error: {str(e)}")
-                            logging.error(f"Raw response: {response.text}")
-                            st.error("Failed to parse Authentik API response")
-                        except Exception as e:
-                            logging.error(f"Unexpected error: {str(e)}")
-                            logging.error(traceback.format_exc())
-                            st.error(f"An unexpected error occurred: {str(e)}")
+                            # Log the return values for debugging
+                            logging.info(f"User creation result: {result}")
+                            discourse_post_url = result.get('discourse_url')
+                            logging.info(f"Discourse URL in result: {discourse_post_url}")
+                            
+                            create_user_message(
+                                new_username=username,
+                                temp_password=result.get('password', 'unknown'),
+                                discourse_post_url=discourse_post_url,
+                                password_reset_successful=result.get('password_reset_successful', False)
+                            )
+                            
+                            # Store success flag but DON'T rerun immediately
+                            st.session_state['user_created_successfully'] = True
+                            # Don't clear form fields yet to allow message to be seen
+                            st.session_state['should_clear_form'] = False
+                            
+                            # No st.rerun() here - let user see the message with buttons
+                        else:
+                            # Handle failure case
+                            st.error(f"Failed to create user: {result.get('error', 'Unknown error')}")
                 except Exception as e:
                     logging.error(f"Error creating user: {str(e)}")
                     logging.error(traceback.format_exc())
-                    st.error(f"An error occurred while creating the user: {str(e)}")
+                    st.error(f"An unexpected error occurred: {str(e)}")
+        
+        # Note about required fields
+        st.markdown("<div class='help-text'>* Required fields</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     with create_tabs[1]:
         st.subheader("Advanced User Options")
@@ -1253,13 +1002,30 @@ def update_username_from_inputs():
             
             # Check for existing username in local database
             existing_usernames = []
-            with next(get_db()) as db:
-                local_existing = db.query(User).filter(User.username.like(f"{base_username}%")).all()
-                existing_usernames = [user.username for user in local_existing]
-                logging.info(f"Found {len(existing_usernames)} existing usernames in local DB with prefix {base_username}")
+            try:
+                # Get a database session
+                from app.db.database import get_db
+                db = next(get_db())
+                try:
+                    from app.db.models import User
+                    # Use a SQL query that works with both SQLite and PostgreSQL
+                    local_existing = db.query(User).filter(User.username.like(f"{base_username}%")).all()
+                    existing_usernames = [user.username for user in local_existing]
+                    logging.info(f"Found {len(existing_usernames)} existing usernames in local DB with prefix {base_username}")
+                except Exception as db_err:
+                    logging.error(f"Database error checking existing usernames: {db_err}")
+                    existing_usernames = []
+                finally:
+                    db.close()
+            except Exception as e:
+                logging.error(f"Error with database connection: {e}")
+                existing_usernames = []
             
             # Also check for existing username in Authentik SSO
             try:
+                import requests
+                from app.utils.config import Config
+                
                 sso_usernames = []
                 # Define headers before using them
                 headers = {

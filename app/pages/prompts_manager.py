@@ -15,7 +15,7 @@ from utils.prompts_manager import (
 )
 from utils.matrix_actions import merge_room_data
 from utils.config import Config
-from ui.common import display_useful_links
+from app.ui.common import display_useful_links, display_login_button
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 
 def render_prompts_manager():
     """Main function to render the prompts manager page"""
+    # Add authentication protection directly in the page
+    if not st.session_state.get('is_authenticated', False):
+        st.title("Authentication Required")
+        st.warning("You must log in to access the Prompts Manager.")
+        display_login_button(location="main")
+        return
+    
     st.title("Prompts Manager")
     
     # Display Useful Links in the sidebar

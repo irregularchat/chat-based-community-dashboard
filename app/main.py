@@ -86,7 +86,8 @@ async def render_sidebar():
                 "Signal Association",
                 "Settings",
                 "Prompts Manager",
-                "Admin Dashboard"
+                "Admin Dashboard",
+                "Test SMTP"  # Add the new page for admin users
             ]
         else:
             # Regular authenticated users
@@ -231,6 +232,13 @@ async def render_main_content():
                 render_admin_dashboard()
             else:
                 st.error("You need administrator privileges to access this page.")
+
+        elif page == "Test SMTP":
+            # Protect with admin check
+            if st.session_state.get('is_admin', False):
+                await test_smtp_connection()
+            else:
+                st.error("You need administrator privileges to access this page.")
     except Exception as e:
         st.error(f"Error rendering content: {str(e)}")
         logging.error(f"Error in render_main_content: {str(e)}", exc_info=True)
@@ -293,8 +301,7 @@ if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
 
-@app.path('/test_smtp')
-async def test_smtp():
+async def test_smtp_connection():
     """Test SMTP connection and settings"""
     try:
         from app.utils.helpers import test_email_connection

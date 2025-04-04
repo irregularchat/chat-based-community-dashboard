@@ -99,8 +99,9 @@ async def render_sidebar():
                 "Prompts Manager"  # No Settings page for non-admin users
             ]
     else:
-        # Non-authenticated users only see login page
-        page_options = ["Create User"]  # Neither Settings nor Prompts Manager available to non-authenticated users
+        # Non-authenticated users only see the Create User page
+        # Neither Settings nor Prompts Manager are available to non-authenticated users
+        page_options = ["Create User"]
     
     # If current_page is not in available options, reset to the first available option
     if current_page not in page_options and page_options:
@@ -136,6 +137,10 @@ async def render_sidebar():
             st.session_state['is_authenticated'] = False
             st.session_state['is_admin'] = False
             st.rerun()
+    else:
+        # Display login button for non-authenticated users
+        from app.ui.common import display_login_button
+        display_login_button(location="sidebar")
     
     return selected_page
 
@@ -156,13 +161,22 @@ async def render_main_content():
     is_admin = st.session_state.get('is_admin', False)
     is_authenticated = st.session_state.get('is_authenticated', False)
     
-    # Global authentication check for all pages
-    if not is_authenticated:
+    # Handle unauthenticated users
+    if page in ["Prompts Manager", "Settings"] and not is_authenticated:
+        # Require authentication for sensitive pages
+        from app.ui.common import display_login_button
+        st.markdown("## Authentication Required")
+        st.markdown("You must login to access this page.")
+        display_login_button(location="main")
+        return
+    
+    # Global authentication check for most pages (except Create User)
+    if not is_authenticated and page != "Create User":
         # Show login page instead of the requested page
         from app.ui.common import display_login_button
         st.markdown("## Welcome to the Community Dashboard")
         st.markdown("Please log in to access all features.")
-        display_login_button()
+        display_login_button(location="main")
         return
     
     # Display welcome message for authenticated users
@@ -201,9 +215,15 @@ async def render_main_content():
                 st.error("You need administrator privileges to access this page.")
                 
         elif page == "Prompts Manager":
-            # Protected by global authentication check above
-            from app.pages.prompts_manager import render_prompts_manager
-            render_prompts_manager()
+            # Additional authentication check to ensure no unauthenticated access
+            if is_authenticated:
+                from app.pages.prompts_manager import render_prompts_manager
+                render_prompts_manager()
+            else:
+                from app.ui.common import display_login_button
+                st.markdown("## Authentication Required")
+                st.markdown("You must login to access the Prompts Manager.")
+                display_login_button(location="main")
             
         elif page == "Admin Dashboard":
             # Protect with admin check
@@ -273,9 +293,34 @@ if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
 
-
-
-
+@app.path('/test_smtp')
+async def test_smtp():
+    """Test SMTP connection and settings"""
+    try:
+        from app.utils.helpers import test_email_connection
+        # Test the email connection
+        result = test_email_connection()
+        if result:
+            st.success("SMTP connection test successful! Email sending should work.")
+        else:
+            st.error("SMTP connection test failed. Check your SMTP settings and logs.")
+            
+        # Display current SMTP settings
+        from app.utils.config import Config
+        st.subheader("Current SMTP Configuration")
+        st.json({
+            "SMTP_SERVER": Config.SMTP_SERVER,
+            "SMTP_PORT": Config.SMTP_PORT,
+            "SMTP_USERNAME": Config.SMTP_USERNAME,
+            "SMTP_FROM_EMAIL": Config.SMTP_FROM_EMAIL,
+            "SMTP_ACTIVE": Config.SMTP_ACTIVE,
+            "SMTP_BCC": Config.SMTP_BCC
+        })
+        
+        return True
+    except Exception as e:
+        st.error(f"Error testing SMTP connection: {str(e)}")
+        return False
 
 # auth/api.py: Handle all API interactions with Authentik and Shlink.
 # auth/encryption.py: Manage encryption and decryption functionalities.

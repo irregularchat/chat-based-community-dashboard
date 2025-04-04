@@ -58,20 +58,27 @@ def display_useful_links():
         - [Links to Community Chats and Services](https://irregularpedia.org/index.php/Links)
     """) 
 
-def display_login_button(redirect_path=None):
+def display_login_button(redirect_path=None, location="main"):
     """
     Display login buttons for both SSO and local authentication.
     
     Args:
         redirect_path (str, optional): Path to redirect to after login
+        location (str, optional): Where to display the button - 'main' or 'sidebar'
     """
     login_url = get_login_url(redirect_path)
     
+    # Select the container based on location
+    if location == "sidebar":
+        container = st.sidebar
+    else:
+        container = st
+    
     # Create columns for SSO and local login buttons
-    col1, col2 = st.columns(2)
+    col1, col2 = container.columns(2)
     
     with col1:
-        st.markdown(
+        col1.markdown(
             f"""
             <div class="login-container">
                 <a href="{login_url}" class="login-button">
@@ -83,18 +90,20 @@ def display_login_button(redirect_path=None):
         )
     
     with col2:
-        if st.button("Local Admin Login", key="local_admin_main"):
+        button_key = f"local_admin_{location}"
+        if col2.button("Local Admin Login", key=button_key):
             st.session_state['show_local_login'] = True
             st.rerun()
     
     # Show local login form if requested
     if st.session_state.get('show_local_login', False):
-        with st.expander("Local Admin Login", expanded=True):
+        with container.expander("Local Admin Login", expanded=True):
             from app.auth.local_auth import display_local_login_form
             if display_local_login_form():
                 st.session_state['show_local_login'] = False
                 st.rerun()
             
-            if st.button("Cancel", key="cancel_local_login"):
+            cancel_key = f"cancel_local_login_{location}"
+            if st.button("Cancel", key=cancel_key):
                 st.session_state['show_local_login'] = False
                 st.rerun()

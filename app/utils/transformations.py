@@ -46,66 +46,230 @@ def simple_parse_input(input_text):
     
     # Remove numbers and any following periods/characters from the input text
     cleaned_text = re.sub(r'^[\d\-#\.*\•\(\)]+\s*', '', input_text, flags=re.MULTILINE)
-    logging.info(f"After cleaning prefixes: {cleaned_text[:100]}..." if len(cleaned_text) > 100 else f"After cleaning prefixes: {cleaned_text}")
-
+    
     # Split the input text by newlines and strip whitespace
     lines = [line.strip() for line in cleaned_text.split('\n') if line.strip()]
-    logging.info(f"Parsed {len(lines)} non-empty lines")
-
-    # Search for email in all lines (IMPORTANT: Do this first)
-    email_index = -1  # Initialize email index
-    email_pattern = r'[\w\.-]+@[\w\.-]+\.\w+'  # More precise email regex
     
-    for i, line in enumerate(lines):
-        email_match = re.search(email_pattern, line)
-        if email_match:
-            parsed_data["email"] = email_match.group(0)
-            email_index = i
-            logging.info(f"Found email {parsed_data['email']} at line {i+1}")
+    # Detect if this is form-style input (contains field labels)
+    has_form_labels = False
+    form_patterns = {
+        'first_name': r'^(?:First\s*Name\s*[:,-]?\s*)(.*)',
+        'last_name': r'^(?:Last\s*Name\s*[:,-]?\s*)(.*)',
+        'full_name': r'^(?:(?:Full\s*)?Name\s*[:,-]?\s*)(.*)',
+        'email': r'^(?:Email\s*(?:Address)?\s*[:,-]?\s*)(.*)',
+        'organization': r'^(?:Organization\s*[:,-]?\s*)(.*)',
+        'invited_by': r'^(?:Invited\s*by\s*[:,-]?\s*)(.*)',
+        'interests': r'^(?:Interests\s*[:,-]?\s*)(.*)'
+    }
+    
+    # Check if this is likely a form input
+    for line in lines:
+        for pattern in form_patterns.values():
+            if re.search(pattern, line, re.IGNORECASE):
+                has_form_labels = True
+                break
+        if has_form_labels:
             break
-
-    # Parse based on whether email was found or not
-    if email_index != -1:
-        # Email found, parse name, organization, invited_by from lines before email
-        if email_index > 0:
-            name_parts = lines[0].split()
-            if name_parts:
-                parsed_data["first_name"] = name_parts[0]
-                parsed_data["last_name"] = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
-                logging.info(f"Parsed name: {parsed_data['first_name']} {parsed_data['last_name']}")
+    
+    # If it's form-style input, extract the values directly
+    if has_form_labels:
+        logging.info("Detected form-style input, extracting values from labeled fields")
         
-        if email_index > 1:
-            parsed_data["intro"]["organization"] = lines[1]
-            logging.info(f"Parsed organization: {parsed_data['intro']['organization']}")
+        # Extract values based on field labels
+        for i, line in enumerate(lines):
+            # First name
+            match = re.search(form_patterns['first_name'], line, re.IGNORECASE)
+            if match and match.group(1).strip():
+                parsed_data["first_name"] = match.group(1).strip()
+                continue
+                
+            # Last name
+            match = re.search(form_patterns['last_name'], line, re.IGNORECASE)
+            if match and match.group(1).strip():
+                parsed_data["last_name"] = match.group(1).strip()
+                continue
+                
+            # Full name
+            match = re.search(form_patterns['full_name'], line, re.IGNORECASE)
+            if match and match.group(1).strip():
+                name_parts = match.group(1).split()
+                if name_parts:
+                    parsed_data["first_name"] = name_parts[0]
+                    parsed_data["last_name"] = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+                continue
+                
+            # Email
+            match = re.search(form_patterns['email'], line, re.IGNORECASE)
+            if match and match.group(1).strip():
+                email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', match.group(1))
+                if email_match:
+                    parsed_data["email"] = email_match.group(0)
+                else:
+                    parsed_data["email"] = match.group(1).strip()
+                continue
+                
+            # Organization
+            match = re.search(form_patterns['organization'], line, re.IGNORECASE)
+            if match and match.group(1).strip():
+                parsed_data["intro"]["organization"] = match.group(1).strip()
+                continue
+                
+            # Invited by
+            match = re.search(form_patterns['invited_by'], line, re.IGNORECASE)
+            if match and match.group(1).strip():
+                parsed_data["invited_by"] = match.group(1).strip()
+                continue
+                
+            # Interests
+            match = re.search(form_patterns['interests'], line, re.IGNORECASE)
+            if match and match.group(1).strip():
+                parsed_data["intro"]["interests"] = match.group(1).strip()
+                continue
+                
+            # Also check for lines that just have "Invited by" text without the colon
+            invited_match = re.search(r'^Invited\s+by\s+(.+)', line, re.IGNORECASE)
+            if invited_match and invited_match.group(1).strip():
+                parsed_data["invited_by"] = invited_match.group(1).strip()
+                continue
+                
+            # If none of the patterns match but the line has an email, extract it
+            email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', line)
+            if email_match:
+                parsed_data["email"] = email_match.group(0)
+                continue
         
-        if email_index > 2:
-            parsed_data["invited_by"] = lines[2]
-            logging.info(f"Parsed invited_by: {parsed_data['invited_by']}")
-
-        # Interests are after email
-        if email_index < len(lines) - 1:
-            parsed_data["intro"]["interests"] = "; ".join(lines[email_index + 1:])
-            logging.info(f"Parsed interests: {parsed_data['intro']['interests']}")
+        # If we're still missing a name but have something in line 1, try to use it
+        if not parsed_data["first_name"] and not parsed_data["last_name"] and len(lines) > 0:
+            # Check if the first line appears to be a name (no special characters)
+            if not re.search(r'[:@\d]', lines[0]):
+                name_parts = lines[0].split()
+                if name_parts:
+                    parsed_data["first_name"] = name_parts[0]
+                    parsed_data["last_name"] = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
     else:
-        # Email not found, try to parse as much as possible
-        if len(lines) > 0:
-            name_parts = lines[0].split()
-            if name_parts:
-                parsed_data["first_name"] = name_parts[0]
-                parsed_data["last_name"] = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
-                logging.info(f"Parsed name (no email): {parsed_data['first_name']} {parsed_data['last_name']}")
+        # If not form-style, use the original parsing logic
+        logging.info("Using standard parsing logic for non-form input")
         
-        if len(lines) > 1:
-            parsed_data["intro"]["organization"] = lines[1]
-            logging.info(f"Parsed organization (no email): {parsed_data['intro']['organization']}")
+        # Clean up common labels from each line
+        label_patterns = [
+            r'^(First\s*Name\s*[:,-]?\s*)',
+            r'^(Last\s*Name\s*[:,-]?\s*)',
+            r'^(Name\s*[:,-]?\s*)',
+            r'^(Email\s*[:,-]?\s*)',
+            r'^(Email\s*Address\s*[:,-]?\s*)',
+            r'^(Organization\s*[:,-]?\s*)',
+            r'^(Invited\s*by\s*[:,-]?\s*)',
+            r'^(Interests\s*[:,-]?\s*)'
+        ]
         
-        if len(lines) > 2:
-            parsed_data["invited_by"] = lines[2]
-            logging.info(f"Parsed invited_by (no email): {parsed_data['invited_by']}")
+        cleaned_lines = []
+        for line in lines:
+            # Try each label pattern and remove if found
+            cleaned_line = line
+            for pattern in label_patterns:
+                cleaned_line = re.sub(pattern, '', cleaned_line, flags=re.IGNORECASE)
+            cleaned_lines.append(cleaned_line.strip())
         
-        if len(lines) > 3:
-            parsed_data["intro"]["interests"] = "; ".join(lines[3:])
-            logging.info(f"Parsed interests (no email): {parsed_data['intro']['interests']}")
+        lines = cleaned_lines
+        logging.info(f"Parsed {len(lines)} non-empty lines after label removal")
+        
+        # Search for email in all lines (IMPORTANT: Do this first)
+        email_index = -1  # Initialize email index
+        email_pattern = r'[\w\.-]+@[\w\.-]+\.\w+'  # More precise email regex
+        
+        for i, line in enumerate(lines):
+            email_match = re.search(email_pattern, line)
+            if email_match:
+                parsed_data["email"] = email_match.group(0)
+                email_index = i
+                logging.info(f"Found email {parsed_data['email']} at line {i+1}")
+                break
+    
+        # Parse based on whether email was found or not
+        if email_index != -1:
+            # Email found, parse name, organization, invited_by from lines before email
+            if email_index > 0:
+                name_parts = lines[0].split()
+                if name_parts:
+                    parsed_data["first_name"] = name_parts[0]
+                    parsed_data["last_name"] = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+                    logging.info(f"Parsed name: {parsed_data['first_name']} {parsed_data['last_name']}")
+            
+            if email_index > 1:
+                parsed_data["intro"]["organization"] = lines[1]
+                logging.info(f"Parsed organization: {parsed_data['intro']['organization']}")
+            
+            if email_index > 2:
+                # Check if this line contains "invited by" text
+                invited_line = lines[2].lower()
+                if "invited" in invited_line and "by" in invited_line:
+                    # Try to extract just the name part after "invited by"
+                    invited_match = re.search(r'invited\s+by\s+(.+)', invited_line, re.IGNORECASE)
+                    if invited_match:
+                        parsed_data["invited_by"] = invited_match.group(1).strip()
+                    else:
+                        parsed_data["invited_by"] = lines[2]
+                else:
+                    parsed_data["invited_by"] = lines[2]
+                logging.info(f"Parsed invited_by: {parsed_data['invited_by']}")
+    
+            # Interests are after email
+            if email_index < len(lines) - 1:
+                interests_lines = lines[email_index + 1:]
+                # Check if the first line starts with "interests" or contains it
+                if interests_lines and re.match(r'^interests', interests_lines[0], re.IGNORECASE):
+                    # Extract just the part after "interests"
+                    interests_match = re.search(r'interests:?\s*(.+)', interests_lines[0], re.IGNORECASE)
+                    if interests_match:
+                        interests_lines[0] = interests_match.group(1)
+                
+                parsed_data["intro"]["interests"] = "; ".join(interests_lines)
+                logging.info(f"Parsed interests: {parsed_data['intro']['interests']}")
+        else:
+            # Email not found, try to parse as much as possible
+            if len(lines) > 0:
+                name_parts = lines[0].split()
+                if name_parts:
+                    parsed_data["first_name"] = name_parts[0]
+                    parsed_data["last_name"] = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+                    logging.info(f"Parsed name (no email): {parsed_data['first_name']} {parsed_data['last_name']}")
+            
+            if len(lines) > 1:
+                parsed_data["intro"]["organization"] = lines[1]
+                logging.info(f"Parsed organization (no email): {parsed_data['intro']['organization']}")
+            
+            if len(lines) > 2:
+                # Check if this line contains "invited by" text
+                invited_line = lines[2].lower()
+                if "invited" in invited_line and "by" in invited_line:
+                    # Try to extract just the name part after "invited by"
+                    invited_match = re.search(r'invited\s+by\s+(.+)', invited_line, re.IGNORECASE)
+                    if invited_match:
+                        parsed_data["invited_by"] = invited_match.group(1).strip()
+                    else:
+                        parsed_data["invited_by"] = lines[2]
+                else:
+                    parsed_data["invited_by"] = lines[2]
+                logging.info(f"Parsed invited_by (no email): {parsed_data['invited_by']}")
+            
+            if len(lines) > 3:
+                interests_lines = lines[3:]
+                # Check if the first line starts with "interests" or contains it
+                if interests_lines and re.match(r'^interests', interests_lines[0], re.IGNORECASE):
+                    # Extract just the part after "interests"
+                    interests_match = re.search(r'interests:?\s*(.+)', interests_lines[0], re.IGNORECASE)
+                    if interests_match:
+                        interests_lines[0] = interests_match.group(1)
+                
+                parsed_data["intro"]["interests"] = "; ".join(interests_lines)
+                logging.info(f"Parsed interests (no email): {parsed_data['intro']['interests']}")
+    
+    # Handle organization and interests if not already set
+    # If we have multiple interests but no organization, move the first interest to organization
+    if not parsed_data["intro"]["organization"] and ";" in parsed_data["intro"]["interests"]:
+        interests = parsed_data["intro"]["interests"].split(";")
+        parsed_data["intro"]["organization"] = interests[0].strip()
+        parsed_data["intro"]["interests"] = "; ".join([i.strip() for i in interests[1:]])
     
     # Final validation check
     if not parsed_data["first_name"] and not parsed_data["last_name"]:
@@ -132,9 +296,32 @@ def determine_input_format(input_text):
         logging.warning("Empty input provided to determine_input_format")
         return None, False
     
+    # Check for form-style format with field labels (common when copying from forms)
+    form_labels = [
+        r'first\s*name\s*:',
+        r'last\s*name\s*:',
+        r'name\s*:',
+        r'email\s*:',
+        r'email\s*address\s*:',
+        r'organization\s*:',
+        r'invited\s*by\s*:',
+        r'interests\s*:'
+    ]
+    
+    form_label_count = 0
+    lines = text.split('\n')
+    for line in lines:
+        line_lower = line.lower().strip()
+        if any(re.search(pattern, line_lower) for pattern in form_labels):
+            form_label_count += 1
+    
+    # If multiple form-style labels are found, treat as numbered format (which will strip labels)
+    if form_label_count >= 2:
+        logging.info(f"Detected form-style format with {form_label_count} labeled fields")
+        return 'numbered', True
+    
     # Check for numbered list format - supports numbers, hashes, dashes, and bullets
     numbered_pattern = r'^(?:\d+[\.\-\)]|#|\-|\•|\*)\s+'
-    lines = text.split('\n')
     
     # Count lines with numbering patterns to determine confidence
     numbered_lines = 0

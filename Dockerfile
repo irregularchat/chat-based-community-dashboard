@@ -12,7 +12,8 @@ WORKDIR /app
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential gcc libssl-dev libffi-dev \
-    libxml2-dev libxslt1-dev zlib1g-dev curl dos2unix && \
+    libxml2-dev libxslt1-dev zlib1g-dev curl dos2unix \
+    postgresql-client netcat-openbsd && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy the requirements.txt first to leverage Docker cache
@@ -41,6 +42,9 @@ RUN pip install -e .
 
 # Set Python path
 ENV PYTHONPATH=/app
+
+# Set environment variable for Docker detection
+ENV IN_DOCKER=true
 
 # Use the entrypoint script
 ENTRYPOINT ["/app/entrypoint.sh"]

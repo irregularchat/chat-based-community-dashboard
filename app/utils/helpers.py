@@ -37,6 +37,7 @@ from datetime import timedelta
 from typing import Dict, Any, Union
 from app.db.operations import AdminEvent
 import asyncio
+import traceback
 
 # Import the reset_create_user_form_fields function from ui.forms
 # Use a try/except block to handle potential circular imports
@@ -362,14 +363,14 @@ def send_email(to, subject, body):
         
         # Create a MIMEText object to represent the email
         msg = MIMEMultipart()
-        msg['From'] = Config.SMTP_FROM
+        msg['From'] = Config.SMTP_FROM_EMAIL
         msg['To'] = to
         if Config.SMTP_BCC:
             msg['Bcc'] = Config.SMTP_BCC
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'html'))
 
-        logging.info(f"Email content prepared. From: {Config.SMTP_FROM}, To: {to}, Subject: {subject}")
+        logging.info(f"Email content prepared. From: {Config.SMTP_FROM_EMAIL}, To: {to}, Subject: {subject}")
 
         # Connect to the SMTP server and send the email
         logging.info(f"Connecting to SMTP server: {Config.SMTP_SERVER}:{Config.SMTP_PORT}")
@@ -380,13 +381,13 @@ def send_email(to, subject, body):
         server.starttls()
         
         logging.info("Attempting SMTP login")
-        server.login(Config.SMTP_USER, Config.SMTP_PASSWORD)
+        server.login(Config.SMTP_USERNAME, Config.SMTP_PASSWORD)
         
         logging.info("Sending email message")
         recipients = [to]
         if Config.SMTP_BCC:
             recipients.append(Config.SMTP_BCC)
-        server.sendmail(Config.SMTP_FROM, recipients, msg.as_string())
+        server.sendmail(Config.SMTP_FROM_EMAIL, recipients, msg.as_string())
         
         logging.info("Closing SMTP connection")
         server.quit()
@@ -395,12 +396,12 @@ def send_email(to, subject, body):
         return True
     except smtplib.SMTPException as smtp_e:
         logging.error(f"SMTP error sending email to {to}: {smtp_e}")
-        logging.error(f"SMTP Configuration: Server={Config.SMTP_SERVER}, Port={Config.SMTP_PORT}, From={Config.SMTP_FROM}")
+        logging.error(f"SMTP Configuration: Server={Config.SMTP_SERVER}, Port={Config.SMTP_PORT}, From={Config.SMTP_FROM_EMAIL}")
         logging.error(f"Error details: {str(smtp_e)}")
         return False
     except Exception as e:
         logging.error(f"Unexpected error sending email to {to}: {e}")
-        logging.error(f"SMTP Configuration: Server={Config.SMTP_SERVER}, Port={Config.SMTP_PORT}, From={Config.SMTP_FROM}")
+        logging.error(f"SMTP Configuration: Server={Config.SMTP_SERVER}, Port={Config.SMTP_PORT}, From={Config.SMTP_FROM_EMAIL}")
         logging.error(f"Error type: {type(e).__name__}")
         logging.error(f"Error details: {str(e)}")
         return False
@@ -535,11 +536,26 @@ def community_intro_email(to, subject, full_name, username, password, topic_id, 
     """
     try:
         logging.info(f"Preparing community intro email for {username}")
+        logging.info(f"Email configuration active: {Config.SMTP_ACTIVE}")
+        
+        if not Config.SMTP_ACTIVE:
+            logging.warning("SMTP is not active. Enable it in settings to send emails.")
+            return False
+            
+        if not all([Config.SMTP_SERVER, Config.SMTP_PORT, Config.SMTP_USERNAME, Config.SMTP_PASSWORD, Config.SMTP_FROM_EMAIL]):
+            logging.error("Missing SMTP configuration. Check all SMTP settings are provided.")
+            logging.error(f"SMTP_SERVER: {'Set' if Config.SMTP_SERVER else 'Missing'}")
+            logging.error(f"SMTP_PORT: {'Set' if Config.SMTP_PORT else 'Missing'}")
+            logging.error(f"SMTP_USERNAME: {'Set' if Config.SMTP_USERNAME else 'Missing'}")
+            logging.error(f"SMTP_PASSWORD: {'Set' if Config.SMTP_PASSWORD else 'Missing (or empty)'}")
+            logging.error(f"SMTP_FROM_EMAIL: {'Set' if Config.SMTP_FROM_EMAIL else 'Missing'}")
+            return False
         
         # Get the HTML content for the email
         html_content = get_email_html_content(full_name, username, password, topic_id, discourse_post_url)
         
         # Send the email and get the result
+        logging.info(f"Attempting to send email to {to} using SMTP server {Config.SMTP_SERVER}:{Config.SMTP_PORT}")
         result = send_email(to, subject, html_content)
         
         if result:
@@ -550,6 +566,7 @@ def community_intro_email(to, subject, full_name, username, password, topic_id, 
             return False
     except Exception as e:
         logging.error(f"Error preparing or sending community intro email: {e}")
+        logging.error(f"Error details: {traceback.format_exc()}")
         return False
 
 def generate_unique_code(length=6):
@@ -643,7 +660,7 @@ def test_email_connection():
             
         # Try login
         try:
-            server.login(Config.SMTP_USER, Config.SMTP_PASSWORD)
+            server.login(Config.SMTP_USERNAME, Config.SMTP_PASSWORD)
             logging.info("SMTP login successful")
         except Exception as e:
             logging.error(f"SMTP login failed: {e}")

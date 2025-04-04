@@ -6,11 +6,11 @@ from datetime import datetime
 import logging
 from app.utils.config import Config  # Fixed import path
 
-def create_user_message(new_username, temp_password, discourse_post_url=None):
+def create_user_message(new_username, temp_password, discourse_post_url=None, password_reset_successful=True):
     """Generate and display the welcome message after user creation with temp password."""
     
     # Special case for failed password reset
-    if temp_password == "PASSWORD_NEEDS_RESET":
+    if not password_reset_successful or temp_password == "PASSWORD_NEEDS_RESET":
         welcome_message = f"""
         🌟 User Created But Password Reset Failed 🌟
         
@@ -31,62 +31,48 @@ def create_user_message(new_username, temp_password, discourse_post_url=None):
         st.session_state['user_list'] = None  # Clear user list if there was any
         st.warning("User created but password reset failed. Manual reset required.")
         
-        # Add buttons to control next actions
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Clear Message", key="clear_message_btn_reset"):
-                # Clear message from session state
-                if 'message' in st.session_state:
-                    del st.session_state['message']
-                st.rerun()
-        with col2:
-            if st.button("Create Another User", key="create_another_reset"):
-                # Clear form fields and message
-                if 'message' in st.session_state:
-                    del st.session_state['message']
-                st.session_state['should_clear_form'] = True
-                st.rerun()
-        
-        return
-    
-    # Normal case with successful password reset
-    welcome_message = f"""
-    🌟 Your First Step Into the IrregularChat! 🌟
-    You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans.
-    ---
-    Use This Username and Temporary Password ⬇️
-    Username: {new_username}
-    Temporary Password: {temp_password}
-    Exactly as shown above 👆🏼
+    else:
+        # Normal case with successful password reset
+        welcome_message = f"""
+        🌟 Your First Step Into the IrregularChat! 🌟
+        You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans.
+        ---
+        Use This Username and Temporary Password ⬇️
+        Username: {new_username}
+        Temporary Password: {temp_password}
+        Exactly as shown above 👆🏼
 
-    
-    1️⃣ Step 1:
-    - Use the username and temporary password to log in to https://sso.irregularchat.com
-    
-    2️⃣ Step 2:
-    - Update your email, important to be able to recover your account and verify your identity
-    - Save your Login Username and New Password to a Password Manager
-    - Visit the welcome page while logged in https://forum.irregularchat.com/t/84
-    """
-    
-    # Add Discourse post URL if available
-    if discourse_post_url:
-        welcome_message += f"""
-    3️⃣ Step 3:
-    - Check out your introduction post: {discourse_post_url}
-    - Feel free to update it with more information about yourself!
+        
+        1️⃣ Step 1:
+        - Use the username and temporary password to log in to https://sso.irregularchat.com
+        
+        2️⃣ Step 2:
+        - Update your email, important to be able to recover your account and verify your identity
+        - Save your Login Username and New Password to a Password Manager
+        - Visit the welcome page while logged in https://forum.irregularchat.com/t/84
         """
-    
-    welcome_message += """
-    Please take a moment to learn about the community before you jump in.
-    """
-    
-    st.code(welcome_message)
-    st.session_state['message'] = welcome_message
-    st.session_state['user_list'] = None  # Clear user list if there was any
-    st.success("User created successfully!")
-    
-    # Add buttons to control next actions
+        
+        # Add Discourse post URL if available
+        if discourse_post_url:
+            logging.info(f"Including discourse post URL in welcome message: {discourse_post_url}")
+            welcome_message += f"""
+        3️⃣ Step 3:
+        - Check out your introduction post: {discourse_post_url}
+        - Feel free to update it with more information about yourself!
+            """
+        else:
+            logging.info("No discourse post URL available for welcome message")
+        
+        welcome_message += """
+        Please take a moment to learn about the community before you jump in.
+        """
+        
+        st.code(welcome_message)
+        st.session_state['message'] = welcome_message
+        st.session_state['user_list'] = None  # Clear user list if there was any
+        st.success("User created successfully!")
+        
+    # Add buttons to control next actions - outside of any form
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Clear Message", key="clear_message_btn"):

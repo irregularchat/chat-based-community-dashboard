@@ -8,6 +8,12 @@ services:
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1  # Enable unbuffered output
+      - IN_DOCKER=true      # Indicate we're running in Docker
+      - DB_HOST=db          # Explicitly set database host
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_PORT=5432  # This is the internal port in the container
     depends_on:
       db:
         condition: service_healthy
@@ -28,7 +34,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     ports:
-      - "${POSTGRES_PORT:-5436}:5432" # Default to port 5432 if POSTGRES_PORT not set
+      - "${POSTGRES_PORT:-5436}:5432" # Default to port 5436 if POSTGRES_PORT not set
       # it will still work on the new port 
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]

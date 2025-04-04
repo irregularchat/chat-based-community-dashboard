@@ -3,9 +3,9 @@
 ## About
 See [forum post about this fork](https://forum.irregularchat.com/t/forking-authentik-distro-for-better-community-management/647?u=sac) for more information.
 
-While platforms like Discord and Slack are great for general communities, and tools like Matrix/Element Messenger offer self-hosting and encryption, many users are hesitant to adopt new platforms. Signal’s wide adoption and default status make it an ideal starting point for community interaction.
+While platforms like Discord and Slack are great for general communities, and tools like Matrix/Element Messenger offer self-hosting and encryption, many users are hesitant to adopt new platforms. Signal's wide adoption and default status make it an ideal starting point for community interaction.
 
-This repo bridges the gap by providing community management tools that extend Signal’s capabilities, along with integration options like:
+This repo bridges the gap by providing community management tools that extend Signal's capabilities, along with integration options like:
 
 Signal Bots: Enable interaction and updates directly through Signal.
 Maubot for Matrix: Allow easy management and messaging in Matrix ecosystems.
@@ -78,6 +78,36 @@ See [ROADMAP.md](ROADMAP.md) for more information.
 ### Local Development
 1. **Access the Application**
    - Open a web browser and navigate to `http://localhost:8501` to access the application.
+
+### Running Without Docker
+To run the application directly on your local machine without Docker, you have two options:
+
+#### Option 1: Local PostgreSQL
+1. **Ensure PostgreSQL is installed** on your local machine
+2. **Create a database** with the credentials specified in your `.env` file:
+   ```bash
+   createdb -U dashboarduser dashboarddb
+   ```
+3. **Run the local development script**:
+   ```bash
+   ./run_local.sh
+   ```
+   This script will:
+   - Configure the application to connect to PostgreSQL on localhost
+   - Check if PostgreSQL is running
+   - Start the Streamlit application
+
+#### Option 2: SQLite (Simplest)
+If you don't want to install PostgreSQL, you can use SQLite:
+1. **Run the SQLite development script**:
+   ```bash
+   ./run_sqlite.sh
+   ```
+   This script will:
+   - Configure the application to use a SQLite database file (local_dev.db)
+   - Start the Streamlit application
+
+Note: Some features that rely on PostgreSQL-specific functionality may not work correctly in SQLite mode.
 
 ### Production Deployment
 1. **Setup Cloudflared Tunnel**

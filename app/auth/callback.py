@@ -50,12 +50,12 @@ def auth_callback():
             
             # Force a rerun to refresh the page
             try:
-                st.experimental_rerun()
+                st.rerun()
             except Exception as e:
                 logging.error(f"Error during rerun: {e}")
-                # Fallback to manual redirect
-                st.markdown(f'''
-                <meta http-equiv="refresh" content="1;url={st.experimental_get_query_params()['get']}">
+                # Fallback to manual redirect - use base URL instead of trying to get query params
+                st.markdown('''
+                <meta http-equiv="refresh" content="1;url=/">
                 ''', unsafe_allow_html=True)
         else:
             logging.error("Authentication failed")

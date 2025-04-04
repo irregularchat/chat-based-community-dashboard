@@ -18,6 +18,7 @@ import hmac
 import hashlib
 from typing import Optional, List, Dict, Any
 import string
+import traceback
 
 # Initialize a session with retry strategy
 # auth/api.py
@@ -187,64 +188,183 @@ def reset_user_password(auth_api_url, headers, user_id, new_password):
         logging.error(f"Error resetting password for user {user_id}: {e}")
         return False
 
-async def create_user(username, password, email=None, name=None, is_admin=False):
-    """Create a new user in Authentik."""
+def create_user(username, password=None, email=None, name=None, invited_by=None, intro=None, is_admin=False, attributes=None, groups=None):
+    """Create a new user in Authentik with proper password reset, email, and forum post creation."""
     try:
-        # Create user in Authentik
-        user_data = {
-            'username': username,
-            'name': name or username,
-            'email': email,
-            'is_active': True,
-            'password': password
-        }
-        
+        # Use provided password or generate a temporary one
+        temp_password = password if password else generate_secure_passphrase()
+        full_name = name  # Map name parameter to full_name used internally
+        discourse_post_url = None  # Initialize post URL variable
+        password_reset_successful = False
+
+        # Check for existing usernames and modify if necessary
+        original_username = username
+        counter = 1
         headers = {
             'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
             'Content-Type': 'application/json'
         }
         
-        response = requests.post(
-            f"{Config.AUTHENTIK_API_URL}/core/users/",
-            headers=headers,
-            json=user_data
-        )
-        
-        if response.status_code == 201:
-            # User created successfully
-            user_id = response.json().get('pk')
+        try:
+            # Check for existing username
+            while True:
+                user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
+                response = session.get(user_search_url, headers=headers, timeout=10)
+                response.raise_for_status()
+                users = response.json().get('results', [])
+                
+                # Explicitly check for exact username match
+                if not any(user['username'] == username for user in users):
+                    break  # Unique username found
+                else:
+                    username = f"{original_username}{counter}"
+                    counter += 1
             
-            # Send welcome message asynchronously
-            if Config.MATRIX_ENABLED:
-                from app.utils.matrix_actions import send_welcome_message_async
-                import asyncio
-                # Create task for welcome message
-                asyncio.create_task(send_welcome_message_async(user_id, username))
+            # Log if username was modified
+            if username != original_username:
+                logging.info(f"Username modified for uniqueness: {original_username} -> {username}")
+
+            user_data = {
+                "username": username,
+                "name": full_name,
+                "is_active": True,
+                "email": email
+            }
+
+            # Add groups if provided, otherwise use main group if configured
+            if groups:
+                user_data["groups"] = groups
+            elif Config.MAIN_GROUP_ID:
+                user_data["groups"] = [Config.MAIN_GROUP_ID]
+
+            # Add combined attributes from both parameters
+            user_data['attributes'] = attributes or {}
             
-            # Generate welcome message with credentials
-            from app.utils.messages import WELCOME_MESSAGE
-            welcome_text = WELCOME_MESSAGE.format(username=username)
-            welcome_text += f"\n\nYour username is: {username}"
-            welcome_text += f"\nYour password is: {password}"
-            welcome_text += "\n\nPlease change your password after your first login."
+            # Add 'invited_by' and 'intro' to attributes if provided and not already set
+            if invited_by and 'invited_by' not in user_data['attributes']:
+                user_data['attributes']['invited_by'] = invited_by
+            if intro and 'intro' not in user_data['attributes']:
+                user_data['attributes']['intro'] = intro
+
+            # Create user in Authentik
+            user_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
+            response = requests.post(user_api_url, headers=headers, json=user_data, timeout=10)
+            response.raise_for_status()
+            user = response.json()
+
+            if not isinstance(user, dict):
+                logging.error("Unexpected response format: user is not a dictionary.")
+                return {
+                    'error': "Unexpected response format from API",
+                    'user_id': None
+                }
+
+            logging.info(f"User created: {user.get('username')}")
+            user_id = user.get('pk')
+
+            # Reset the user's password
+            password_reset_successful = reset_user_password(Config.AUTHENTIK_API_URL, headers, user_id, temp_password)
+            if not password_reset_successful:
+                logging.error(f"Failed to reset password for user {user.get('username')}")
+                # Continue anyway, we'll note the password reset failure in the return
+
+            # Send welcome message via Matrix if enabled - do this in a non-blocking way
+            if Config.MATRIX_ACTIVE:
+                try:
+                    # Import here to avoid circular imports
+                    from app.utils.matrix_actions import send_welcome_message
+                    # Use threading to send the welcome message in background
+                    import threading
+                    welcome_thread = threading.Thread(
+                        target=send_welcome_message,
+                        args=(user_id, username, full_name),
+                        daemon=True
+                    )
+                    welcome_thread.start()
+                    logging.info(f"Started Matrix welcome message thread for {username}")
+                except Exception as matrix_error:
+                    logging.error(f"Failed to send Matrix welcome message: {matrix_error}")
             
+            # Create Discourse post if all requirements are met
+            discourse_post_url = None  # Initialize to None
+            if Config.DISCOURSE_ACTIVE and username and intro and 'intro' in user_data['attributes']:
+                # Create a title for the post using the username
+                post_title = f"Introduction: {username}"
+                
+                # Call Discourse API to create the post
+                discourse_success, discourse_post_url = create_discourse_post(
+                    headers=headers,
+                    title=post_title,
+                    content="",  # Content will be built by the function
+                    username=username,
+                    intro=user_data['attributes']['intro'],
+                    invited_by=user_data['attributes'].get('invited_by')
+                )
+                
+                if discourse_success and discourse_post_url:
+                    logging.info(f"Successfully created Discourse post for {username}: {discourse_post_url}")
+                else:
+                    logging.warning(f"Failed to create Discourse post for {username}")
+            else:
+                if not Config.DISCOURSE_ACTIVE:
+                    logging.info("Discourse integration is disabled. Skipping post creation.")
+                elif not intro or 'intro' not in user_data['attributes']:
+                    logging.info(f"Skipping Discourse post creation for {username}: No introduction text provided")
+
+            # Sync the new user with local database
+            with SessionLocal() as db:
+                try:
+                    # Sync user with local database
+                    user_obj = sync_user_data(db, [user])
+                    
+                    # Add creation event to admin events
+                    admin_event = AdminEvent(
+                        timestamp=datetime.now(),
+                        event_type='user_created',
+                        username=username,
+                        details=f'User created successfully'
+                    )
+                    db.add(admin_event)
+                    db.commit()
+                    
+                    logging.info(f"Successfully created and synced user {username}")
+                except Exception as e:
+                    logging.error(f"Error syncing user to local database: {e}")
+                    # Continue even if sync fails
+                
             return {
-                'success': True,
                 'user_id': user_id,
-                'message': welcome_text
+                'username': username,
+                'password': temp_password,
+                'discourse_url': discourse_post_url,
+                'password_reset_successful': password_reset_successful
             }
-        else:
-            error_msg = response.json().get('detail', 'Unknown error')
-            return {
-                'success': False,
-                'error': f'Failed to create user: {error_msg}'
-            }
+        
+        except requests.exceptions.HTTPError as http_err:
+            error_message = f"HTTP error occurred while creating user"
+            if 'response' in locals():
+                try:
+                    error_detail = response.json()
+                    error_message += f": {error_detail.get('detail', '')}"
+                except:
+                    error_message += f": {response.text}"
             
+            logging.error(f"{error_message}: {http_err}")
+            return {
+                'error': error_message
+            }
+        except Exception as e:
+            error_message = f"Error creating user: {e}"
+            logging.error(error_message)
+            return {
+                'error': error_message
+            }
+
     except Exception as e:
-        logging.error(f"Error creating user: {e}")
+        error_message = f"Error in create_user: {e}"
+        logging.error(error_message)
         return {
-            'success': False,
-            'error': str(e)
+            'error': error_message
         }
 
 
@@ -786,6 +906,10 @@ def create_discourse_post(headers, title, content, username=None, intro=None, in
         logging.warning(f"Discourse integration not fully configured. Missing: {', '.join(missing_configs)}. Skipping post creation.")
         return False, None
     
+    if not Config.DISCOURSE_ACTIVE:
+        logging.info("Discourse integration is disabled (DISCOURSE_ACTIVE=False). Skipping post creation.")
+        return False, None
+    
     logging.info(f"Starting Discourse post creation for user {username}")
     logging.info(f"Using Discourse URL: {Config.DISCOURSE_URL}")
     logging.info(f"Using Discourse category ID: {Config.DISCOURSE_CATEGORY_ID}")
@@ -866,9 +990,11 @@ Notice that Login is required to view any of the Community posts. Please help ma
                 return True, None
         except Exception as e:
             logging.error(f"Error parsing post response: {e}")
+            logging.error(traceback.format_exc())
             return True, None
     except Exception as e:
         logging.error(f"Error creating Discourse post for {username}: {e}")
+        logging.error(traceback.format_exc())
         return False, None
 
 async def verify_email(verification_code: str, db: Session) -> dict:
@@ -1205,7 +1331,7 @@ async def handle_registration(user_data: dict, db: Session) -> dict:
         invited_by = user_data.get('invited_by')
         
         # Create user in Authentik
-        success, created_username, temp_password, error = await create_user(
+        success, created_username, temp_password, discourse_post_url = await create_user(
             username=username,
             full_name=full_name,
             email=email,
@@ -1236,7 +1362,8 @@ async def handle_registration(user_data: dict, db: Session) -> dict:
             "success": True,
             "username": created_username,
             "verification_sent": verification_sent,
-            "temp_password": temp_password  # Include temporary password in response
+            "temp_password": temp_password,  # Include temporary password in response
+            "discourse_post_url": discourse_post_url
         }
         
     except Exception as e:

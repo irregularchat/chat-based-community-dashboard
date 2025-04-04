@@ -286,8 +286,31 @@ def create_user(username, password=None, email=None, name=None, invited_by=None,
                     logging.error(f"Failed to send Matrix welcome message: {matrix_error}")
             
             # Create Discourse post if all requirements are met
-            discourse_post_url = None  # Initialize to None
-            if Config.DISCOURSE_ACTIVE and username and intro and 'intro' in user_data['attributes']:
+            discourse_post_url = None
+            
+            # Enhanced logging of discourse post creation parameters
+            logging.info(f"Checking Discourse post creation requirements:")
+            logging.info(f"DISCOURSE_ACTIVE: {Config.DISCOURSE_ACTIVE}")
+            logging.info(f"Username provided: {bool(username)}")
+            
+            # Check for intro data in both direct parameters and attributes
+            has_intro_param = intro is not None and intro.strip() != ""
+            has_intro_attr = 'attributes' in user_data and 'intro' in user_data['attributes'] and user_data['attributes']['intro'].strip() != ""
+            
+            logging.info(f"Has intro parameter: {has_intro_param}")
+            logging.info(f"Has intro in attributes: {has_intro_attr}")
+            
+            # Use intro from direct parameter if available, otherwise from attributes
+            effective_intro = None
+            if has_intro_param:
+                effective_intro = intro
+                logging.info("Using intro from direct parameter")
+            elif has_intro_attr:
+                effective_intro = user_data['attributes']['intro']
+                logging.info("Using intro from attributes")
+                
+            if Config.DISCOURSE_ACTIVE and username and effective_intro:
+                logging.info(f"All requirements met, creating Discourse post for {username}")
                 # Create a title for the post using the username
                 post_title = f"Introduction: {username}"
                 
@@ -297,8 +320,8 @@ def create_user(username, password=None, email=None, name=None, invited_by=None,
                     title=post_title,
                     content="",  # Content will be built by the function
                     username=username,
-                    intro=user_data['attributes']['intro'],
-                    invited_by=user_data['attributes'].get('invited_by')
+                    intro=effective_intro,
+                    invited_by=user_data['attributes'].get('invited_by') if 'attributes' in user_data else None
                 )
                 
                 if discourse_success and discourse_post_url:
@@ -308,7 +331,9 @@ def create_user(username, password=None, email=None, name=None, invited_by=None,
             else:
                 if not Config.DISCOURSE_ACTIVE:
                     logging.info("Discourse integration is disabled. Skipping post creation.")
-                elif not intro or 'intro' not in user_data['attributes']:
+                elif not username:
+                    logging.info("Skipping Discourse post creation: No username provided")
+                elif not effective_intro:
                     logging.info(f"Skipping Discourse post creation for {username}: No introduction text provided")
 
             # Sync the new user with local database

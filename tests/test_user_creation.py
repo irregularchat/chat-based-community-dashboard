@@ -210,27 +210,114 @@ def test_generate_secure_passphrase():
 
 def test_create_user_message():
     """Test the create_user_message function for displaying welcome message"""
-    with patch('app.messages.st.code') as mock_code, \
-         patch('app.messages.st.success') as mock_success, \
-         patch('app.messages.st.session_state', {}):
-        # Call function
-        username = "testuser"
-        password = "securepass123"
+    # Mock streamlit functions
+    with patch('streamlit.code') as mock_code, \
+         patch('streamlit.success') as mock_success, \
+         patch('streamlit.warning') as mock_warning, \
+         patch('streamlit.button') as mock_button, \
+         patch('streamlit.columns') as mock_columns:
         
+        # Set up a username and password for testing
+        username = 'testuser'
+        password = 'temp-password123'
+        mock_columns.return_value = [MagicMock(), MagicMock()]
+        
+        # Test without discourse url
         create_user_message(username, password)
-        
-        # Verify expectations
         mock_code.assert_called_once()
-        welcome_message = mock_code.call_args[0][0]
-        
-        # Verify message content
-        assert username in welcome_message
-        assert password in welcome_message
-        assert "Step 1" in welcome_message
-        
-        # Verify success message
         mock_success.assert_called_once_with("User created successfully!")
+        assert "Username: testuser" in mock_code.call_args[0][0]
+        assert "Temporary Password: temp-password123" in mock_code.call_args[0][0]
+        assert "introduction post" not in mock_code.call_args[0][0]
         
-        # Verify session state was updated
-        assert "message" in st.session_state
-        assert st.session_state["message"] == welcome_message 
+        # Reset mocks
+        mock_code.reset_mock()
+        mock_success.reset_mock()
+        
+        # Test with discourse url
+        discourse_url = "https://forum.example.com/t/123"
+        create_user_message(username, password, discourse_post_url=discourse_url)
+        mock_code.assert_called_once()
+        mock_success.assert_called_once_with("User created successfully!")
+        assert "Username: testuser" in mock_code.call_args[0][0]
+        assert "Temporary Password: temp-password123" in mock_code.call_args[0][0]
+        assert f"Check out your introduction post: {discourse_url}" in mock_code.call_args[0][0]
+        
+        # Reset mocks
+        mock_code.reset_mock()
+        mock_success.reset_mock()
+        mock_warning.reset_mock()
+        
+        # Test with failed password reset
+        create_user_message(username, password, password_reset_successful=False)
+        mock_code.assert_called_once()
+        mock_warning.assert_called_once_with("User created but password reset failed. Manual reset required.")
+        assert "User Created But Password Reset Failed" in mock_code.call_args[0][0]
+        assert "Reset Password" in mock_code.call_args[0][0]
+
+def test_create_user_with_discourse_post():
+    """Test the create_user function's handling of Discourse post creation"""
+    with patch('app.auth.api.requests.post') as mock_post, \
+         patch('app.auth.api.reset_user_password', return_value=True) as mock_reset, \
+         patch('app.auth.api.create_discourse_post') as mock_discourse, \
+         patch('app.auth.api.session.get') as mock_get, \
+         patch('app.auth.api.SessionLocal') as mock_db:
+        
+        # Mock database session
+        mock_db_instance = MagicMock()
+        mock_db.return_value.__enter__.return_value = mock_db_instance
+        
+        # Mock user creation response
+        mock_post.return_value.json.return_value = {"pk": "123", "username": "testuser"}
+        mock_post.return_value.status_code = 201
+        
+        # Mock user search response (no existing users)
+        mock_get.return_value.json.return_value = {"results": []}
+        mock_get.return_value.status_code = 200
+        
+        # Test 1: Successful Discourse post creation
+        mock_discourse.return_value = (True, "https://forum.example.com/t/123")
+        
+        # Call create_user with intro
+        result = create_user(
+            username="testuser",
+            name="Test User",
+            email="test@example.com",
+            intro="This is my introduction"
+        )
+        
+        # Verify Discourse post was created and URL was returned
+        mock_discourse.assert_called_once()
+        assert result["discourse_url"] == "https://forum.example.com/t/123"
+        
+        # Reset mocks
+        mock_discourse.reset_mock()
+        
+        # Test 2: Failed Discourse post creation
+        mock_discourse.return_value = (False, None)
+        
+        # Call create_user with intro
+        result = create_user(
+            username="testuser2",
+            name="Test User 2",
+            email="test2@example.com",
+            intro="This is my introduction"
+        )
+        
+        # Verify Discourse was attempted but no URL was returned
+        mock_discourse.assert_called_once()
+        assert result["discourse_url"] is None
+        
+        # Reset mocks
+        mock_discourse.reset_mock()
+        
+        # Test 3: No intro provided, Discourse post not attempted
+        result = create_user(
+            username="testuser3",
+            name="Test User 3",
+            email="test3@example.com"
+        )
+        
+        # Verify Discourse post was not attempted
+        mock_discourse.assert_not_called()
+        assert result["discourse_url"] is None 

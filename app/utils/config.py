@@ -1,5 +1,6 @@
 # app/utils/config.py
 import os
+import re
 from dotenv import load_dotenv
 import logging
 import uuid
@@ -18,6 +19,82 @@ env_path = os.path.join(ROOT_DIR, '.env')
 # Load environment variables from the .env file
 load_dotenv(dotenv_path=env_path)
 
+def parse_database_url(url):
+    """
+    Parse a PostgreSQL database URL into its components.
+    Returns a dictionary with host, port, user, password, dbname.
+    """
+    result = {}
+    
+    # Extract hostname
+    host_match = re.search(r'@([^:/]+)[:/]', url)
+    result['host'] = host_match.group(1) if host_match else None
+    
+    # Extract port
+    port_match = re.search(r'@[^:]+:(\d+)', url)
+    result['port'] = port_match.group(1) if port_match else '5432'
+    
+    # Extract username
+    user_match = re.search(r'://([^:]+):', url)
+    result['user'] = user_match.group(1) if user_match else None
+    
+    # Extract password (careful with logging this)
+    pass_match = re.search(r'://[^:]+:([^@]+)@', url)
+    result['password'] = pass_match.group(1) if pass_match else None
+    
+    # Extract database name
+    db_match = re.search(r'[:/]([^:/]+)$', url)
+    result['dbname'] = db_match.group(1) if db_match else None
+    
+    return result
+
+# Initialize database URL handling
+def get_database_url():
+    """
+    Build and return the correct DATABASE_URL based on environment variables.
+    This function consolidates database URL logic to avoid duplication.
+    """
+    # If directly specified, use the environment DATABASE_URL
+    if os.getenv("DATABASE_URL"):
+        db_url = os.getenv("DATABASE_URL")
+        try:
+            components = parse_database_url(db_url)
+            logger.info(f"Using DATABASE_URL from environment variables: {components['user']}:****@{components['host']}:{components['port']}/{components['dbname']}")
+        except Exception as e:
+            logger.warning(f"Error parsing DATABASE_URL: {str(e)}")
+            # Log a masked version of the URL
+            masked_url = db_url.split('@')[0].split(':')[0] + ':****@' + db_url.split('@')[1] if '@' in db_url else db_url
+            logger.info(f"Using DATABASE_URL from environment variables: {masked_url}")
+        return db_url
+    
+    # If in Docker, build URL with 'db' as host
+    if os.getenv('IN_DOCKER') == 'true':
+        db_host = os.getenv('DB_HOST', 'db')
+        postgres_user = os.getenv('POSTGRES_USER', 'dashboarduser')
+        postgres_password = os.getenv('POSTGRES_PASSWORD', 'password_for_db')
+        postgres_db = os.getenv('POSTGRES_DB', 'dashboarddb')
+        postgres_port = os.getenv('POSTGRES_PORT', '5432')
+        
+        db_url = f"postgresql://{postgres_user}:{postgres_password}@{db_host}:{postgres_port}/{postgres_db}"
+        logger.info(f"Built Docker DATABASE_URL using host: {db_host}")
+        return db_url
+        
+    # If not in Docker, build URL with localhost
+    postgres_user = os.getenv('POSTGRES_USER', 'dashboarduser')
+    postgres_password = os.getenv('POSTGRES_PASSWORD', 'password_for_db')
+    postgres_db = os.getenv('POSTGRES_DB', 'dashboarddb')
+    postgres_port = os.getenv('POSTGRES_PORT', '5432')
+    
+    db_url = f"postgresql://{postgres_user}:{postgres_password}@localhost:{postgres_port}/{postgres_db}"
+    logger.info(f"Built local DATABASE_URL using localhost")
+    return db_url
+
+# Set DATABASE_URL in environment for other modules to use
+if not os.getenv("DATABASE_URL") and os.getenv('IN_DOCKER') == 'true':
+    db_url = get_database_url()
+    os.environ['DATABASE_URL'] = db_url
+    logger.info(f"Set DATABASE_URL in environment")
+
 class Config:
     AUTHENTIK_API_TOKEN = os.getenv("AUTHENTIK_API_TOKEN")
     MAIN_GROUP_ID = os.getenv("MAIN_GROUP_ID")
@@ -35,7 +112,7 @@ class Config:
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
     WEBHOOK_ACTIVE = os.getenv("WEBHOOK_ACTIVE", "False").lower() == "true"
-    DATABASE_URL = os.getenv("DATABASE_URL")
+    DATABASE_URL = os.getenv("DATABASE_URL") or get_database_url()  # Use helper function if not set
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     SMTP_SERVER = os.getenv("SMTP_SERVER")
     SMTP_PORT = os.getenv("SMTP_PORT")
@@ -56,6 +133,7 @@ class Config:
     
     # Matrix integration (optional)
     MATRIX_ACTIVE = os.getenv("MATRIX_ACTIVE", "False").lower() == "true"
+    MATRIX_ENABLED = MATRIX_ACTIVE  # Add this alias for compatibility with create_user function
     MATRIX_HOMESERVER_URL = os.getenv("MATRIX_HOMESERVER_URL")
     MATRIX_USER_ID = os.getenv("MATRIX_USER_ID")
     MATRIX_ACCESS_TOKEN = os.getenv("MATRIX_ACCESS_TOKEN")

@@ -204,7 +204,8 @@ def test_token_handler_page_with_manual_code_entry(mock_session_state, mock_stre
     # Setup for initial page with no code, user selects "Enter code manually"
     mock_streamlit['query_params'] = {}
     mock_streamlit['radio'].return_value = "Enter code manually"
-    mock_streamlit['text_input'].side_effect = ["manual_code", "manual_state"]
+    # Add more values to prevent StopIteration
+    mock_streamlit['text_input'].side_effect = ["manual_code", "manual_state", "manual_code", "manual_state", "manual_code"]
     
     # Mock button click for manual authentication
     with patch('streamlit.button', side_effect=[False, True]):

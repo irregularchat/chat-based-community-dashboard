@@ -2,6 +2,8 @@ import pytest
 import os
 import streamlit as st
 import requests
+import traceback
+import logging
 from unittest.mock import patch, MagicMock
 import urllib.parse
 from app.auth.authentication import handle_auth_callback, get_login_url, is_authenticated, logout

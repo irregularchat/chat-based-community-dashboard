@@ -167,52 +167,111 @@ async def render_create_user_form():
     <style>
     /* Form styling */
     .form-container {
-        background-color: #f8f9fa;
+        background-color: #212529;
         padding: 20px;
         border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        margin-bottom: 20px;
     }
     
     /* Input field styling */
     input[type="text"], input[type="email"], textarea {
         margin-bottom: 10px;
         border-radius: 5px !important;
-        border: 1px solid #ced4da !important;
+        border: 1px solid #495057 !important;
+        background-color: #343a40;
+        color: #f8f9fa;
     }
     
     /* Button styling */
     .stButton button {
         border-radius: 5px;
         padding: 8px 16px;
+        transition: all 0.3s;
+    }
+    
+    .create-btn button {
         background-color: #4CAF50;
         color: white;
         border: none;
-        transition: background-color 0.3s;
     }
     
-    .stButton button:hover {
+    .create-btn button:hover {
         background-color: #45a049;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    
+    .parse-btn button {
+        background-color: #007bff;
+        color: white;
+        border: none;
+    }
+    
+    .parse-btn button:hover {
+        background-color: #0069d9;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    
+    .clear-btn button {
+        background-color: #6c757d;
+        color: white;
+        border: none;
+    }
+    
+    .clear-btn button:hover {
+        background-color: #5a6268;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    
+    .check-btn button {
+        background-color: #17a2b8;
+        color: white;
+        border: none;
+    }
+    
+    .check-btn button:hover {
+        background-color: #138496;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
     
     /* Custom help text styling */
     .help-text {
         font-size: 0.8rem;
-        color: #6c757d;
+        color: #adb5bd;
         margin-bottom: 5px;
     }
     
     /* Divider styling */
     .divider {
         margin: 20px 0;
-        border-top: 1px solid #dee2e6;
+        border-top: 1px solid #495057;
     }
     
     /* Parse data section styling */
     .data-to-parse {
-        background-color: #e9ecef;
+        background-color: #343a40;
         padding: 15px;
         border-radius: 5px;
-        border: 1px solid #dee2e6;
+        border: 1px solid #495057;
+        margin-bottom: 20px;
+    }
+    
+    /* Section headers */
+    .stSubheader {
+        color: #f8f9fa;
+        margin-bottom: 15px;
+    }
+    
+    /* Row spacing */
+    .row-container {
+        margin-bottom: 15px;
+    }
+    
+    /* Button container */
+    .button-container {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 20px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -282,61 +341,70 @@ async def render_create_user_form():
         # User information section
         st.subheader("Basic Information")
         
-        # First Name - First
-        first_name = st.text_input(
-            "First Name *",
-            value=st.session_state.get('first_name_input', ""),
-            key="first_name_input_outside",
-            on_change=on_first_name_change,
-            help="Required: User's first name"
-        )
+        # Row 1: First Name and Last Name side by side
+        col1, col2 = st.columns(2)
+        with col1:
+            first_name = st.text_input(
+                "First Name *",
+                value=st.session_state.get('first_name_input', ""),
+                key="first_name_input_outside",
+                on_change=on_first_name_change,
+                help="Required: User's first name"
+            )
         
-        # Last Name - Second 
-        last_name = st.text_input(
-            "Last Name",
-            value=st.session_state.get('last_name_input', ""),
-            key="last_name_input_outside",
-            on_change=on_last_name_change,
-            help="User's last name (optional)"
-        )
+        with col2:
+            last_name = st.text_input(
+                "Last Name",
+                value=st.session_state.get('last_name_input', ""),
+                key="last_name_input_outside",
+                on_change=on_last_name_change,
+                help="User's last name (optional)"
+            )
         
-        # Email - Third
-        email = st.text_input(
-            "Email Address *",
-            value=st.session_state.get('email_input', ""),
-            key="email_input_outside",
-            help="Required: User's email address",
-            placeholder="user@example.com"
-        )
+        # Row 2: Email Address and Invited By side by side
+        col1, col2 = st.columns(2)
+        with col1:
+            email = st.text_input(
+                "Email Address *",
+                value=st.session_state.get('email_input', ""),
+                key="email_input_outside",
+                help="Required: User's email address",
+                placeholder="user@example.com"
+            )
         
-        # Invited By - Fourth
-        invited_by = st.text_input(
-            "Invited by",
-            value=st.session_state.get('invited_by_input', ""),
-            key="invited_by_input_outside",
-            help="Who invited this person (optional)",
-            placeholder="username or name"
-        )
+        with col2:
+            invited_by = st.text_input(
+                "Invited by",
+                value=st.session_state.get('invited_by_input', ""),
+                key="invited_by_input_outside",
+                help="Who invited this person (optional)",
+                placeholder="username or name"
+            )
         
-        # Username - Last to allow auto-generation based on other fields
-        username = st.text_input(
-            "Username *",
-            value=st.session_state.get('username_input', ""),
-            key="username_input_outside",
-            on_change=on_username_manual_edit,
-            help="Required: Unique username (auto-generated)",
-            placeholder="firstname-l"
-        )
+        # Row 3: Username and Check Username button
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            username = st.text_input(
+                "Username *",
+                value=st.session_state.get('username_input', ""),
+                key="username_input_outside",
+                on_change=on_username_manual_edit,
+                help="Required: Unique username (auto-generated)",
+                placeholder="firstname-l"
+            )
+            st.markdown("<div class='help-text'>Username auto-generated. Edit to create custom username.</div>", unsafe_allow_html=True)
         
-        # Show help text for username
-        st.markdown("<div class='help-text'>Username auto-generated. Edit to create custom username.</div>", unsafe_allow_html=True)
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)  # Add spacing to align with text input
+            st.markdown("<div class='check-btn'>", unsafe_allow_html=True)
+            check_button = st.button("Check Username")
+            st.markdown("</div>", unsafe_allow_html=True)
         
-        # Check Username button
-        if st.button("Check Username Availability"):
+        # Handle Check Username logic
+        if check_button:
             if not username:
                 st.warning("Please enter a username to check")
             else:
-                # Check username availability locally first
                 try:
                     from app.db.database import get_db
                     from app.db.models import User
@@ -357,68 +425,69 @@ async def render_create_user_form():
                             response = requests.get(user_check_url, headers=headers)
                             
                             if response.status_code == 200:
-                                users = response.json().get('results', [])
-                                if users:
-                                    st.warning(f"Username '{username}' already exists in SSO.")
+                                auth_data = response.json()
+                                if auth_data.get('count', 0) > 0:
+                                    st.warning(f"Username '{username}' already exists in Authentik.")
                                 else:
                                     st.success(f"Username '{username}' is available!")
                             else:
-                                st.error(f"Error checking username in SSO: {response.status_code}")
-                    except Exception as e:
-                        st.error(f"Error checking username: {str(e)}")
+                                st.error(f"Error checking username in Authentik: {response.status_code}")
                     finally:
                         db.close()
                 except Exception as e:
                     st.error(f"Database connection error: {str(e)}")
         
-        # Group assignment (if applicable)
+        # Row 4: Group Assignment section
         st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
-        st.subheader("Group Assignment & Introduction")
         
-        # Group selection multi-select
-        from app.auth.admin import get_authentik_groups
-        groups = get_authentik_groups()
-        if groups:
-            # Group formatting function
-            def format_group(group_id):
-                for group in groups:
-                    if group.get('pk') == group_id:
-                        return group.get('name', group_id)
-                return group_id
-                
-            # Initialize selected_groups if not in session state
-            if 'selected_groups' not in st.session_state:
-                # Pre-select main group if it exists
-                from app.utils.config import Config
-                main_group_id = Config.MAIN_GROUP_ID
-                st.session_state['selected_groups'] = [main_group_id] if main_group_id else []
-                
-            # Group selection with multiselect
-            st.multiselect(
-                "Assign to Groups",
-                options=[g.get('pk') for g in groups],
-                default=st.session_state['selected_groups'],
-                format_func=format_group,
-                key="group_selection",
-                help="Select groups to assign user to"
+        # Group selection and Intro in same row
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            st.subheader("Group Assignment")
+            # Group selection multi-select
+            from app.auth.admin import get_authentik_groups
+            groups = get_authentik_groups()
+            if groups:
+                # Group formatting function
+                def format_group(group_id):
+                    for group in groups:
+                        if group.get('pk') == group_id:
+                            return group.get('name', group_id)
+                    return group_id
+                    
+                # Initialize selected_groups if not in session state
+                if 'selected_groups' not in st.session_state:
+                    # Pre-select main group if it exists
+                    from app.utils.config import Config
+                    main_group_id = Config.MAIN_GROUP_ID
+                    st.session_state['selected_groups'] = [main_group_id] if main_group_id else []
+                    
+                # Group selection with multiselect
+                st.multiselect(
+                    "Assign to Groups",
+                    options=[g.get('pk') for g in groups],
+                    default=st.session_state['selected_groups'],
+                    format_func=format_group,
+                    key="group_selection",
+                    help="Select groups to assign user to"
+                )
+        
+        with col2:
+            # Introduction text for the user
+            st.subheader("Introduction")
+            intro_text = st.text_area(
+                "User Introduction",
+                value=st.session_state.get('intro_text_input', ""),
+                key="intro_text_input_outside",
+                placeholder="A few sentences about the new user",
+                help="Brief introduction for the new user",
+                height=100
             )
         
-        # Introduction text for the user 
-        intro_text = st.text_area(
-            "Introduction",
-            value=st.session_state.get('intro_text_input', ""),
-            key="intro_text_input_outside",
-            placeholder="A few sentences about the new user",
-            help="Brief introduction for the new user",
-            height=100
-        )
-        
-        # Data parsing section - at the end of the form
+        # Data parsing section
         st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
         st.subheader("Parse User Data")
-        
-        # Help text for data parsing
-        st.markdown("<div class='data-to-parse'>", unsafe_allow_html=True)
         
         # Parse data textarea
         parse_data = st.text_area(
@@ -430,22 +499,28 @@ async def render_create_user_form():
             height=100
         )
         
-        # Parse and Clear buttons
-        col1, col2 = st.columns(2)
+        # Bottom row with all buttons
+        col1, col2, col3 = st.columns([1, 1, 1])
+        
         with col1:
+            st.markdown("<div class='parse-btn'>", unsafe_allow_html=True)
             if st.button("Parse Data"):
                 parse_and_rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+            
         with col2:
+            st.markdown("<div class='clear-btn'>", unsafe_allow_html=True)
             if st.button("Clear Parse Data"):
                 clear_parse_data()
-                
-        st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
         
-        # Form submission area
-        st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
+        with col3:
+            st.markdown("<div class='create-btn'>", unsafe_allow_html=True)
+            create_user_button = st.button("Create User")
+            st.markdown("</div>", unsafe_allow_html=True)
         
-        # Submit button
-        if st.button("Create User"):
+        # Handle Create User button logic
+        if create_user_button:
             # Check required fields
             if not username or not first_name or not email:
                 st.error("Please fill in all required fields (marked with *)")

@@ -686,8 +686,16 @@ def render_user_management():
             eastern_now = datetime.now(eastern)
             expires_default = eastern_now + timedelta(hours=2)
             
-            expires_date = st.date_input("Expiration Date", value=expires_default.date())
-            expires_time = st.time_input("Expiration Time", value=expires_default.time())
+            # Show the expiration time but default to 2 hours
+            hours_options = [2, 4, 8, 12, 24, 48, 72]
+            selected_hours = st.selectbox(
+                "Expires in (hours)", 
+                options=hours_options,
+                index=0, 
+                help="How long the invite link will be valid"
+            )
+            
+            expires = eastern_now + timedelta(hours=selected_hours)
             
             submitted = st.form_submit_button("Create Invite")
             
@@ -695,57 +703,36 @@ def render_user_management():
                 if not invite_label:
                     st.error("Invite Label is required")
                 else:
-                    # Combine date and time into a datetime
-                    import pytz
-                    from datetime import datetime
-                    expires = datetime.combine(expires_date, expires_time)
-                    expires = pytz.timezone('US/Eastern').localize(expires)
-                    
                     # Call the create_invite function
                     from app.auth.api import create_invite
-                    headers = {
-                        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-                        'Content-Type': 'application/json'
-                    }
+                    from app.messages import create_invite_message
                     try:
-                        result = create_invite(headers, invite_label, expires.isoformat())
-                        logging.info(f"Create invite result: {result}")
+                        result = create_invite(
+                            email=f"{invite_label}@example.com",  # Use label as email prefix
+                            name=invite_label,
+                            expiry=expires.strftime('%Y-%m-%d'),
+                            created_by=st.session_state.get("username", "system"),
+                            groups=[]  # No pre-assigned groups
+                        )
                         
                         if result and isinstance(result, dict) and result.get('success', False):
-                            st.success("Invite created successfully!")
-                            invite_link = result.get('link')
-                            st.code(invite_link)
+                            invite_link = result.get('invite_link')
                             
-                            # Add shorten URL option if Shlink is configured
-                            if Config.SHLINK_URL and Config.SHLINK_API_TOKEN:
-                                if st.button("Create Shortened URL", key="invite_shorten_button"):
-                                    try:
-                                        from app.auth.api import shorten_url
-                                        short_url = shorten_url(invite_link, "invite", invite_label)
-                                        if short_url:
-                                            st.success(f"Shortened URL: {short_url}")
-                                        else:
-                                            st.error("Failed to create shortened URL")
-                                    except Exception as e:
-                                        st.error(f"Error creating shortened URL: {str(e)}")
-                                        logging.error(f"Error in shorten_url: {str(e)}", exc_info=True)
-                            else:
-                                st.info("URL shortening is not configured. Set SHLINK_URL and SHLINK_API_TOKEN to enable this feature.")
+                            # Display the invite message
+                            create_invite_message(invite_label, invite_link, expires)
+                            
+                            # Add copy button
+                            if st.button("Copy Invite Link"):
+                                st.markdown(f"""
+                                <script>
+                                    navigator.clipboard.writeText('{invite_link}');
+                                    alert('Invite link copied to clipboard!');
+                                </script>
+                                """, unsafe_allow_html=True)
                         else:
                             error_msg = "Unknown error"
                             if isinstance(result, dict):
                                 error_msg = result.get('error', 'Unknown error')
-                                if 'details' in result:
-                                    error_details = result.get('details')
-                                    st.error(f"Error details: {error_details}")
-                            elif isinstance(result, tuple) and len(result) == 2:
-                                # Handle old tuple format (invite_link, expires)
-                                invite_link, expiry = result
-                                if invite_link:
-                                    st.success("Invite created successfully!")
-                                    st.code(invite_link)
-                                    return
-                                    
                             st.error(f"Failed to create invite: {error_msg}")
                     except Exception as e:
                         st.error(f"Error creating invite: {str(e)}")

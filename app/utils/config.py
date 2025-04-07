@@ -18,6 +18,7 @@ env_path = os.path.join(ROOT_DIR, '.env')
 
 # Load environment variables from the .env file
 load_dotenv(dotenv_path=env_path)
+logger.info(f"Loaded environment from {env_path}")
 
 def parse_database_url(url):
     """
@@ -344,6 +345,56 @@ class Config:
         }
         if cls.DISCOURSE_URL:
             return {k: v for k, v in vars(cls).items() if not k.startswith('_')}
+    
+    @classmethod
+    def validate_oidc_config(cls):
+        """Validate OIDC configuration and log debugging information."""
+        valid = True
+        logger.info("=== OIDC Configuration Validation ===")
+        
+        # Check OIDC client ID
+        if not cls.OIDC_CLIENT_ID:
+            logger.error("❌ OIDC_CLIENT_ID is missing")
+            valid = False
+        else:
+            logger.info(f"✅ OIDC_CLIENT_ID is configured: {cls.OIDC_CLIENT_ID}")
+            
+        # Check OIDC client secret
+        if not cls.OIDC_CLIENT_SECRET:
+            logger.error("❌ OIDC_CLIENT_SECRET is missing")
+            valid = False
+        else:
+            logger.info("✅ OIDC_CLIENT_SECRET is configured")
+            
+        # Check OIDC endpoints
+        for endpoint_name, endpoint_value in [
+            ('OIDC_AUTHORIZATION_ENDPOINT', cls.OIDC_AUTHORIZATION_ENDPOINT),
+            ('OIDC_TOKEN_ENDPOINT', cls.OIDC_TOKEN_ENDPOINT),
+            ('OIDC_USERINFO_ENDPOINT', cls.OIDC_USERINFO_ENDPOINT),
+            ('OIDC_END_SESSION_ENDPOINT', cls.OIDC_END_SESSION_ENDPOINT),
+        ]:
+            if not endpoint_value:
+                logger.error(f"❌ {endpoint_name} is missing")
+                valid = False
+            else:
+                logger.info(f"✅ {endpoint_name} is configured: {endpoint_value}")
+                
+        # Check OIDC redirect URI
+        if not cls.OIDC_REDIRECT_URI:
+            logger.error("❌ OIDC_REDIRECT_URI is missing")
+            valid = False
+        else:
+            logger.info(f"✅ OIDC_REDIRECT_URI is configured: {cls.OIDC_REDIRECT_URI}")
+            
+        # Check OIDC scopes
+        if not cls.OIDC_SCOPES:
+            logger.error("❌ OIDC_SCOPES is missing")
+            valid = False
+        else:
+            logger.info(f"✅ OIDC_SCOPES is configured: {cls.OIDC_SCOPES}")
+            
+        logger.info(f"OIDC Configuration is {'valid' if valid else 'INVALID'}")
+        return valid
 
 # Initialize Fernet outside the Config class
 # Completely remove or comment out the following lines

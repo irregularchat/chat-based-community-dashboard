@@ -1,7 +1,7 @@
 #!/bin/bash
-# Script to run the application locally with improved authentication
+# Script to run the application locally with direct authentication (no Flask server)
 
-echo "Starting Community Dashboard with enhanced authentication..."
+echo "Starting Community Dashboard with direct authentication..."
 
 # Check if Python is installed
 if ! command -v python3 &> /dev/null; then
@@ -13,12 +13,6 @@ fi
 if ! command -v pip3 &> /dev/null; then
     echo "pip3 is required but not found. Please install pip3."
     exit 1
-fi
-
-# Check if required packages are installed
-if ! python3 -c "import flask" &> /dev/null; then
-    echo "Installing Flask package..."
-    pip3 install flask requests
 fi
 
 # Check if streamlit is installed
@@ -33,9 +27,9 @@ if [ ! -f .env ]; then
     exit 1
 fi
 
-# Make the Python script executable
-chmod +x run_servers.py
+# Export direct authentication flag
+export USE_DIRECT_AUTH=true
 
-# Run the script
-echo "Starting servers..."
-python3 run_servers.py 
+# Run Streamlit directly
+echo "Starting Streamlit app with direct authentication..."
+python3 -m streamlit run app/main.py --server.port 8503 

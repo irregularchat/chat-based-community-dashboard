@@ -30,6 +30,9 @@ from app.db.models import *  # Import models to ensure tables are created
 from app.auth.callback import auth_callback
 from app.auth.auth_middleware import auth_middleware, admin_middleware
 from app.auth.authentication import is_authenticated, require_authentication
+import traceback
+import requests
+import os
 
 # Initialize logging first
 setup_logging()
@@ -149,13 +152,568 @@ async def render_main_content():
     """Render the main content area"""
     st.title("Community Dashboard")
     
-    # Check for auth callback parameters first
+    # Check for special routes first
+    if st.query_params.get('page') == 'test_login':
+        # Import and render the test login page
+        try:
+            from app.auth.test_login import test_login_page
+            test_login_page()
+        except ImportError as e:
+            st.error(f"Error importing test_login_page: {e}")
+            st.write("Diagnostic information:")
+            import sys
+            import os
+            
+            st.code(f"Python path: {sys.path}")
+            
+            test_file = os.path.join('app', 'auth', 'test_login.py')
+            if os.path.exists(test_file):
+                st.success(f"File {test_file} exists")
+            else:
+                st.error(f"File {test_file} does not exist")
+                
+            # Check auth dir contents
+            auth_dir = os.path.join('app', 'auth')
+            if os.path.exists(auth_dir):
+                st.success(f"Directory {auth_dir} exists")
+                st.write("Files in directory:")
+                for file in os.listdir(auth_dir):
+                    st.write(f"- {file}")
+            else:
+                st.error(f"Directory {auth_dir} does not exist")
+                
+            # Create a direct link to manually try the auth flow
+            auth_url = f"{Config.OIDC_AUTHORIZATION_ENDPOINT}?client_id={Config.OIDC_CLIENT_ID}&response_type=code&scope={'+'.join(Config.OIDC_SCOPES)}&redirect_uri={Config.OIDC_REDIRECT_URI}&state=manual-test"
+            st.markdown(f"Try direct authentication: [Login]({auth_url})")
+            
+        return  # Return early to avoid rendering other content
+    
+    # Direct auth debug pathway (alternative to test_login)
+    if st.query_params.get('page') == 'auth_debug':
+        st.header("Authentication Debug Page")
+        st.write("This page helps troubleshoot OIDC authentication issues")
+        
+        # Import Config here to fix the local variable error
+        from app.utils.config import Config
+        
+        # Display OIDC configuration
+        st.subheader("OIDC Configuration")
+        oidc_config = {
+            "OIDC_CLIENT_ID": Config.OIDC_CLIENT_ID,
+            "OIDC_AUTHORIZATION_ENDPOINT": Config.OIDC_AUTHORIZATION_ENDPOINT,
+            "OIDC_TOKEN_ENDPOINT": Config.OIDC_TOKEN_ENDPOINT,
+            "OIDC_USERINFO_ENDPOINT": Config.OIDC_USERINFO_ENDPOINT,
+            "OIDC_REDIRECT_URI": Config.OIDC_REDIRECT_URI,
+            "OIDC_SCOPES": Config.OIDC_SCOPES
+        }
+        st.json(oidc_config)
+        
+        # Display session state
+        st.subheader("Current Session State")
+        session_state = {k: v for k, v in st.session_state.items() if k not in ['_secrets', 'password']}
+        st.json(session_state)
+        
+        # Special login option with blank page prevention
+        st.subheader("Special Login Options")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("Login with Auto-Redirect"):
+                # Set flag to auto-redirect in callback
+                st.session_state['auto_redirect'] = True
+                # Generate state parameter
+                import uuid
+                state = str(uuid.uuid4())
+                st.session_state['auth_state'] = state
+                
+                # Create login URL
+                import urllib.parse
+                params = {
+                    'client_id': Config.OIDC_CLIENT_ID,
+                    'response_type': 'code',
+                    'scope': ' '.join(Config.OIDC_SCOPES),
+                    'redirect_uri': Config.OIDC_REDIRECT_URI,
+                    'state': state
+                }
+                login_url = f"{Config.OIDC_AUTHORIZATION_ENDPOINT}?{urllib.parse.urlencode(params)}"
+                
+                # Redirect to login page
+                st.markdown(f'<meta http-equiv="refresh" content="0;URL=\'{login_url}\'">', unsafe_allow_html=True)
+        
+        with col2:
+            if st.button("Bypass State Validation"):
+                # Use a fixed state to prevent validation failures
+                fixed_state = "fixed-state-for-testing"
+                
+                # Create URL with fixed state
+                import urllib.parse
+                params = {
+                    'client_id': Config.OIDC_CLIENT_ID,
+                    'response_type': 'code',
+                    'scope': ' '.join(Config.OIDC_SCOPES),
+                    'redirect_uri': Config.OIDC_REDIRECT_URI,
+                    'state': fixed_state
+                }
+                auth_url = f"{Config.OIDC_AUTHORIZATION_ENDPOINT}?{urllib.parse.urlencode(params)}"
+                
+                # Redirect to login page with fixed state
+                st.markdown(f'<meta http-equiv="refresh" content="0;URL=\'{auth_url}\'">', unsafe_allow_html=True)
+        
+        # Instructions for users
+        st.info("If you encounter a blank white page after login, wait 5 seconds and then manually navigate to /?page=auth_debug")
+        
+        # Add "try again" button at the bottom
+        if st.button("Return to Home Page"):
+            st.markdown('<meta http-equiv="refresh" content="0;URL=\'/\'">', unsafe_allow_html=True)
+        
+        return  # Return early
+    
+    # Check for auth callback parameters
     query_params = st.query_params
     if 'code' in query_params and 'state' in query_params:
         # Process authentication callback if present
         logging.info("Authentication callback detected in URL, processing...")
-        auth_callback()
-        return  # Return early after handling callback
+        
+        # OPTION 1: Try to directly handle the code without going to callback page
+        # This provides a fallback in case the callback page shows blank
+        try:
+            from app.auth.authentication import handle_auth_callback
+            code = query_params.get('code')
+            state = query_params.get('state')
+            
+            success = handle_auth_callback(code, state)
+            if success:
+                logging.info("Direct authentication successful!")
+                st.success("Authentication successful!")
+                
+                # Display user info and navigation options
+                user_info = st.session_state.get('user_info', {})
+                st.write(f"Welcome, {user_info.get('preferred_username', 'User')}!")
+                
+                # Add navigation buttons
+                if st.button("Go to Dashboard"):
+                    # Clear query parameters and redirect to home
+                    st.query_params.clear()
+                    st.rerun()
+                
+                # Always rerun after a short delay to clear the URL
+                import time
+                time.sleep(1)
+                st.query_params.clear()
+                st.rerun()
+                return
+            else:
+                # Fall back to normal callback handling
+                logging.warning("Direct authentication failed, falling back to callback page")
+                auth_callback()
+                return
+        except Exception as e:
+            logging.error(f"Error in direct auth handling: {str(e)}")
+            logging.error(traceback.format_exc())
+            # Fall back to normal callback handling
+            auth_callback()
+        return
+    
+    # Simple direct login route (no session state dependence)
+    if st.query_params.get('page') == 'direct_login':
+        st.header("Direct Login Test")
+        st.info("This page provides a direct login link that doesn't rely on session state")
+        
+        # Import Config to avoid variable errors
+        from app.utils.config import Config
+        
+        # Create state in URL (not session state)
+        direct_state = "fixed-state-for-testing" 
+        
+        # Create URL-encoded parameters manually
+        import urllib.parse
+        auth_params = {
+            'client_id': Config.OIDC_CLIENT_ID,
+            'response_type': 'code',
+            'scope': ' '.join(Config.OIDC_SCOPES),
+            'redirect_uri': Config.OIDC_REDIRECT_URI,
+            'state': direct_state
+        }
+        
+        auth_url = f"{Config.OIDC_AUTHORIZATION_ENDPOINT}?{urllib.parse.urlencode(auth_params)}"
+        
+        # Display direct link
+        st.markdown(f"""
+        <div style="text-align: center; margin: 30px 0; padding: 20px; background-color: #f0f7ff; border-radius: 10px;">
+            <h3>Follow these steps to test authentication:</h3>
+            <ol style="text-align: left; max-width: 600px; margin: 0 auto; padding: 15px 30px;">
+                <li>Click the green button below to initiate authentication with Authentik</li>
+                <li>Log in with your Authentik credentials when prompted</li>
+                <li>You will be redirected back to this application</li>
+                <li>If you see a blank white page after redirect, wait 5 seconds and then go to: 
+                   <a href="/?page=auth_debug">Authentication Debug Page</a>
+                </li>
+            </ol>
+            <div style="margin-top: 20px;">
+                <a href="{auth_url}" style="background-color: #4CAF50; color: white; padding: 15px 30px; 
+                            text-decoration: none; border-radius: 4px; font-size: 18px; display: inline-block;">
+                    Start Authentication Test
+                </a>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Display configuration information
+        st.subheader("Configuration Information")
+        st.json({
+            "Client ID": Config.OIDC_CLIENT_ID,
+            "Redirect URI": Config.OIDC_REDIRECT_URI,
+            "Authorization Endpoint": Config.OIDC_AUTHORIZATION_ENDPOINT,
+            "Token Endpoint": Config.OIDC_TOKEN_ENDPOINT,
+            "Userinfo Endpoint": Config.OIDC_USERINFO_ENDPOINT
+        })
+        
+        # Display troubleshooting info
+        with st.expander("Troubleshooting Tips"):
+            st.markdown("""
+            ### Common Issues
+            
+            1. **Blank white page after authentication**: This is often caused by Streamlit session state issues.
+               - Navigate to `/?page=auth_debug` manually to see debugging information
+               - Check that your OIDC configuration is correct
+            
+            2. **Authentication failure**: This can be caused by:
+               - Mismatched redirect URI
+               - Invalid client ID or secret
+               - CSRF state validation failures
+               
+            3. **Import errors**: If you're seeing Python import errors, ensure:
+               - All files have proper `__init__.py` files
+               - The application is properly installed or in the Python path
+            """)
+        
+        return  # Return early
+    
+    # Ultra direct HTML-only login page
+    if st.query_params.get('page') == 'html_login':
+        # Import Config explicitly to avoid variable errors
+        from app.utils.config import Config
+        
+        st.markdown(f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Login</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f5f5f5; }}
+                .login-container {{ background-color: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 500px; width: 100%; }}
+                .login-button {{ display: inline-block; background-color: #4285f4; color: white; padding: 12px 20px; border-radius: 4px; text-decoration: none; font-weight: bold; }}
+                h1 {{ color: #333; text-align: center; }}
+                p {{ margin: 20px 0; line-height: 1.5; }}
+            </style>
+        </head>
+        <body>
+            <div class="login-container">
+                <h1>Community Dashboard Login</h1>
+                <p>Click the button below to login with your Authentik account.</p>
+                <p style="text-align: center;">
+                    <a href="{Config.OIDC_AUTHORIZATION_ENDPOINT}?client_id={Config.OIDC_CLIENT_ID}&response_type=code&scope={'+'.join(Config.OIDC_SCOPES)}&redirect_uri={Config.OIDC_REDIRECT_URI}&state=direct-html-login" class="login-button">
+                        Login with Authentik
+                    </a>
+                </p>
+                <p style="font-size: 0.9em; margin-top: 30px; color: #666; text-align: center;">
+                    If you encounter any issues, please contact the administrator.
+                </p>
+            </div>
+        </body>
+        </html>
+        """, unsafe_allow_html=True)
+        return
+    
+    # Token handler page - more robust OIDC callback handling
+    if st.query_params.get('page') == 'token':
+        from app.auth.token_handler import token_handler_page
+        token_handler_page()
+        return
+    
+    # OIDC endpoint diagnostic page
+    if st.query_params.get('page') == 'oidc_debug':
+        # Import Config for endpoint diagnostics
+        from app.utils.config import Config
+        
+        st.title("OIDC Endpoint Diagnostics")
+        
+        # Display all OIDC endpoints
+        st.subheader("OIDC Configuration")
+        st.json({
+            "OIDC_CLIENT_ID": Config.OIDC_CLIENT_ID,
+            "OIDC_AUTHORIZATION_ENDPOINT": Config.OIDC_AUTHORIZATION_ENDPOINT,
+            "OIDC_TOKEN_ENDPOINT": Config.OIDC_TOKEN_ENDPOINT,
+            "OIDC_USERINFO_ENDPOINT": Config.OIDC_USERINFO_ENDPOINT,
+            "OIDC_END_SESSION_ENDPOINT": Config.OIDC_END_SESSION_ENDPOINT,
+            "OIDC_REDIRECT_URI": Config.OIDC_REDIRECT_URI,
+            "OIDC_SCOPES": Config.OIDC_SCOPES
+        })
+        
+        # Test token endpoint methods
+        st.subheader("Token Endpoint Test")
+        if st.button("Test Token Endpoint Methods"):
+            try:
+                # Test OPTIONS request to get allowed methods
+                st.write("Testing OPTIONS request...")
+                options_response = requests.options(
+                    Config.OIDC_TOKEN_ENDPOINT,
+                    timeout=5
+                )
+                st.write(f"OPTIONS Status: {options_response.status_code}")
+                if 'Allow' in options_response.headers:
+                    st.success(f"Allowed methods: {options_response.headers['Allow']}")
+                else:
+                    st.warning("No 'Allow' header in OPTIONS response")
+                
+                # Test HEAD request
+                st.write("Testing HEAD request...")
+                head_response = requests.head(
+                    Config.OIDC_TOKEN_ENDPOINT,
+                    timeout=5
+                )
+                st.write(f"HEAD Status: {head_response.status_code}")
+                
+                # Test GET request
+                st.write("Testing GET request...")
+                get_response = requests.get(
+                    Config.OIDC_TOKEN_ENDPOINT,
+                    timeout=5
+                )
+                st.write(f"GET Status: {get_response.status_code}")
+                
+                # Test empty POST request
+                st.write("Testing empty POST request...")
+                post_response = requests.post(
+                    Config.OIDC_TOKEN_ENDPOINT,
+                    timeout=5
+                )
+                st.write(f"POST Status: {post_response.status_code}")
+                
+            except Exception as e:
+                st.error(f"Error testing endpoint: {str(e)}")
+        
+        return
+    
+    # Special alternative login page with custom redirect
+    if st.query_params.get('page') == 'alt_login':
+        from app.utils.config import Config
+        import uuid
+        import urllib.parse
+        
+        st.title("Alternative Login Method")
+        st.info("This page provides an alternative login method that might work better with your SSO provider.")
+        
+        # Create columns for the options
+        c1, c2 = st.columns(2)
+        
+        with c1:
+            st.subheader("Option 1: Use Configured Redirect URI")
+            st.write("This uses the URI configured in Authentik.")
+            
+            # Generate state parameter
+            state = str(uuid.uuid4())
+            st.session_state['auth_state'] = state
+            
+            # Use the configured redirect URI from config
+            redirect_uri = Config.OIDC_REDIRECT_URI
+            
+            # Create login URL with alternative redirect
+            params = {
+                'client_id': Config.OIDC_CLIENT_ID,
+                'response_type': 'code',
+                'scope': ' '.join(Config.OIDC_SCOPES),
+                'redirect_uri': redirect_uri,
+                'state': state
+            }
+            login_url = f"{Config.OIDC_AUTHORIZATION_ENDPOINT}?{urllib.parse.urlencode(params)}"
+            
+            if st.button("Standard Login"):
+                st.markdown(f'<meta http-equiv="refresh" content="0;URL=\'{login_url}\'">', unsafe_allow_html=True)
+                
+        with c2:
+            st.subheader("Option 2: Debug Connection")
+            st.write("Test the OIDC endpoints to diagnose connection issues.")
+            
+            if st.button("Go to OIDC Diagnostics"):
+                st.markdown('<meta http-equiv="refresh" content="0;URL=\'/?page=oidc_debug\'">', unsafe_allow_html=True)
+        
+        # Show the configured redirect URI
+        st.markdown("---")
+        st.warning(f"**Your Configured Redirect URI**: `{Config.OIDC_REDIRECT_URI}`")
+        st.info("Make sure this exact URI is configured in Authentik as an allowed redirect URI.")
+        
+        # Add direct URL link as fallback
+        st.markdown("---")
+        st.markdown(f"If the button doesn't work, [click this link]({login_url})")
+        
+        return
+    
+    # Config update page
+    if st.query_params.get('page') == 'update_config':
+        from app.utils.config import Config
+        
+        st.title("Update OIDC Configuration")
+        st.info("This page helps fix redirect URI mismatches between your app and Authentik.")
+        
+        # Display current configuration
+        st.subheader("Current Configuration")
+        st.json({
+            "OIDC_CLIENT_ID": Config.OIDC_CLIENT_ID,
+            "OIDC_REDIRECT_URI": Config.OIDC_REDIRECT_URI,
+            "CONFIGURED_IN_AUTHENTIK": "http://localhost:8503/?page=token"
+        })
+        
+        # Option to update the redirect URI
+        st.subheader("Update Redirect URI")
+        st.warning("There's a mismatch between your configured redirect URI and what Authentik expects")
+        
+        # Options for fixing
+        fix_method = st.radio(
+            "Choose a fix method:",
+            [
+                "Option 1: Change .env to match Authentik (http://localhost:8503/?page=token)",
+                "Option 2: Keep .env as is and update Authentik configuration"
+            ],
+            index=0
+        )
+        
+        if st.button("Apply Selected Fix"):
+            if "Option 1" in fix_method:
+                # Update the .env file
+                try:
+                    # Read the current .env file
+                    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
+                    with open(env_path, 'r') as f:
+                        env_content = f.readlines()
+                    
+                    # Update the OIDC_REDIRECT_URI line
+                    updated_content = []
+                    for line in env_content:
+                        if line.startswith('OIDC_REDIRECT_URI'):
+                            updated_content.append('OIDC_REDIRECT_URI = http://localhost:8503/?page=token\n')
+                        else:
+                            updated_content.append(line)
+                    
+                    # Write the updated content back
+                    with open(env_path, 'w') as f:
+                        f.writelines(updated_content)
+                    
+                    st.success("Updated .env file with new redirect URI: http://localhost:8503/?page=token")
+                    st.info("Please restart the application for changes to take effect.")
+                    
+                    if st.button("Restart Now"):
+                        # This will cause a rerun, which effectively restarts the app
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error updating .env file: {str(e)}")
+            else:
+                # Instructions for updating Authentik
+                st.info("To update Authentik configuration:")
+                st.code("""
+1. Log in to your Authentik admin interface
+2. Navigate to Applications > Applications
+3. Find and select your OIDC application
+4. Under "Settings" tab, find the "Redirect URIs/Origins" section
+5. Add this URI as an allowed redirect URI: http://localhost:8503/auth/callback
+6. Save changes
+                """)
+                st.warning("After updating Authentik, you'll need to wait a few minutes for changes to propagate.")
+        
+        # Add navigation buttons
+        st.markdown("---")
+        if st.button("Go Back to Login Page"):
+            st.markdown('<meta http-equiv="refresh" content="0;URL=\'/\'">', unsafe_allow_html=True)
+        
+        return
+    
+    # Authentik client authentication config page
+    if st.query_params.get('page') == 'auth_config':
+        from app.utils.config import Config
+        import json
+        
+        st.title("Authentik Client Authentication Configuration")
+        st.info("This page helps troubleshoot and fix client authentication issues with Authentik.")
+        
+        # Display current error
+        st.error("Current Error: **invalid_client** - Client authentication failed")
+        st.warning("Authentik may be expecting a different authentication method than what we're using.")
+        
+        # Display OIDC configuration
+        st.subheader("Current OIDC Configuration")
+        client_config = {
+            "OIDC_CLIENT_ID": Config.OIDC_CLIENT_ID,
+            "OIDC_TOKEN_ENDPOINT": Config.OIDC_TOKEN_ENDPOINT,
+            "OIDC_REDIRECT_URI": Config.OIDC_REDIRECT_URI,
+            "Authentik Redirect URI (from screenshot)": "http://localhost:8503/auth/callback"
+        }
+        st.json(client_config)
+        
+        # Authentication methods
+        st.subheader("Authentication Methods")
+        st.write("Select which authentication method to try:")
+        
+        auth_method = st.radio(
+            "Client Authentication Method",
+            [
+                "HTTP Basic Auth (send credentials in Authorization header)",
+                "Client Secret Post (send credentials in request body)",
+                "None (public client)",
+                "Try all methods (recommended)"
+            ],
+            index=3
+        )
+        
+        if st.button("Save Configuration"):
+            # Set in session state for now
+            method_map = {
+                "HTTP Basic Auth (send credentials in Authorization header)": "basic",
+                "Client Secret Post (send credentials in request body)": "post",
+                "None (public client)": "none",
+                "Try all methods (recommended)": "all"
+            }
+            
+            st.session_state['auth_method_preference'] = method_map.get(auth_method, "all")
+            st.success(f"Set authentication method preference to: {method_map.get(auth_method, 'all')}")
+            
+            # Create a new auth URL to try
+            import uuid
+            from urllib.parse import urlencode
+            
+            state = str(uuid.uuid4())
+            st.session_state['auth_state'] = state
+            
+            params = {
+                'client_id': Config.OIDC_CLIENT_ID,
+                'response_type': 'code',
+                'scope': ' '.join(Config.OIDC_SCOPES),
+                'redirect_uri': Config.OIDC_REDIRECT_URI,
+                'state': state
+            }
+            
+            auth_url = f"{Config.OIDC_AUTHORIZATION_ENDPOINT}?{urlencode(params)}"
+            st.info("Ready to try authentication with new method")
+            
+            if st.button("Start Authentication"):
+                st.markdown(f'<meta http-equiv="refresh" content="0;URL=\'{auth_url}\'">', unsafe_allow_html=True)
+        
+        # Manual configuration for Authentik
+        st.subheader("Authentik Provider Configuration")
+        st.write("You may need to configure Authentik to match the expected authentication method:")
+        
+        st.code("""
+1. In Authentik admin, go to Providers > OAuth2/OpenID Providers
+2. Find and edit your provider (mod dashboard)
+3. Under "Client Authentication" make sure the expected method is selected:
+   - For public clients: Select "None"
+   - For confidential clients: Select "client_secret_post" or "client_secret_basic"
+4. Save changes and try authenticating again
+        """)
+        
+        if st.button("Go Back"):
+            st.markdown('<meta http-equiv="refresh" content="0;URL=\'/\'">', unsafe_allow_html=True)
+        
+        return
     
     # Get the current page from session state
     page = st.session_state.get('current_page', 'Create User')
@@ -252,6 +810,18 @@ async def main():
         
         # Initialize database
         init_db()
+        
+        # Using direct authentication instead of Flask auth server
+        logging.info("Using direct authentication instead of Flask auth server")
+        
+        # Validate OIDC configuration
+        logging.info("=== Validating OIDC Configuration ===")
+        if Config.validate_oidc_config():
+            logging.info("✅ OIDC configuration validated successfully")
+        else:
+            logging.error("⚠️ OIDC configuration has issues - authentication may not work properly")
+            if st.session_state.get('is_admin', False):
+                st.warning("The OIDC configuration has issues - authentication may not work properly. Please check the application logs.")
         
         # Log configuration status
         logging.info("=== Checking Discourse Integration Configuration ===")

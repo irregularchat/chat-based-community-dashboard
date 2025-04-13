@@ -27,7 +27,7 @@ import threading
 from app.db.session import get_db
 
 # Define user path constant for Authentik
-USER_PATH = "users"  # Removed trailing slash
+USER_PATH = "users/"  # Added trailing slash
 
 # Initialize a session with retry strategy
 # auth/api.py

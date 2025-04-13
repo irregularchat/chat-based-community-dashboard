@@ -167,26 +167,46 @@ async def render_create_user_form():
     <style>
     /* Form styling */
     .form-container {
-        background-color: #212529;
-        padding: 20px;
+        background-color: #f8f9fa;
+        padding: 24px;
         border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        margin-bottom: 20px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        margin-bottom: 24px;
     }
     
     /* Input field styling */
-    input[type="text"], input[type="email"], textarea {
-        margin-bottom: 10px;
+    .stTextInput>div>div>input, 
+    .stTextArea>div>div>textarea {
+        margin-bottom: 10px !important;
         border-radius: 5px !important;
-        border: 1px solid #495057 !important;
-        background-color: #343a40;
-        color: #f8f9fa;
+        border: 1px solid #ced4da !important;
+        background-color: #ffffff !important;
+        color: #212529 !important;
+        padding: 12px !important;
+        box-shadow: none !important;
+        transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+    }
+    
+    /* Input field focus states */
+    .stTextInput>div>div>input:focus,
+    .stTextArea>div>div>textarea:focus {
+        border-color: #4CAF50 !important;
+        box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.25) !important;
+        outline: 0 !important;
+    }
+    
+    /* Label styling */
+    .stTextInput label, .stTextArea label, .stSelectbox label {
+        font-weight: 500 !important;
+        color: #212529 !important;
+        margin-bottom: 5px !important;
     }
     
     /* Button styling */
     .stButton button {
         border-radius: 5px;
-        padding: 8px 16px;
+        padding: 10px 18px;
+        font-weight: 500;
         transition: all 0.3s;
     }
     
@@ -237,41 +257,52 @@ async def render_create_user_form():
     /* Custom help text styling */
     .help-text {
         font-size: 0.8rem;
-        color: #adb5bd;
+        color: #6c757d;
         margin-bottom: 5px;
+    }
+    
+    /* Help icon styling */
+    .stTextInput div svg, .stTextArea div svg, .stSelectbox div svg {
+        color: #6c757d !important;
+    }
+    
+    /* Help text tooltips */
+    .stTextInput div small, .stTextArea div small, .stSelectbox div small {
+        color: #6c757d !important;
     }
     
     /* Divider styling */
     .divider {
-        margin: 20px 0;
-        border-top: 1px solid #495057;
+        margin: 24px 0;
+        border-top: 1px solid #dee2e6;
     }
     
     /* Parse data section styling */
     .data-to-parse {
-        background-color: #343a40;
+        background-color: #f8f9fa;
         padding: 15px;
         border-radius: 5px;
-        border: 1px solid #495057;
+        border: 1px solid #dee2e6;
         margin-bottom: 20px;
     }
     
     /* Section headers */
     .stSubheader {
-        color: #f8f9fa;
-        margin-bottom: 15px;
+        color: #212529;
+        margin-bottom: 20px;
+        font-weight: 600;
     }
     
     /* Row spacing */
     .row-container {
-        margin-bottom: 15px;
+        margin-bottom: 20px;
     }
     
     /* Button container */
     .button-container {
         display: flex;
         justify-content: space-between;
-        margin-top: 20px;
+        margin-top: 24px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -452,36 +483,79 @@ async def render_create_user_form():
                 st.warning("Please enter a username to check")
             else:
                 try:
+                    # First, clean the username to ensure it follows proper format
+                    import re
+                    cleaned_username = re.sub(r'[^a-z0-9-]', '', username.lower())
+                    
+                    if cleaned_username != username:
+                        st.warning(f"Username has been cleaned to '{cleaned_username}'. Please use this version.")
+                        username = cleaned_username
+                        st.session_state['username_input'] = cleaned_username
+                        st.session_state['username_input_outside'] = cleaned_username
+                    
+                    # Check local database
                     from app.db.database import get_db
                     from app.db.models import User
                     db = next(get_db())
+                    
+                    local_exists = False
+                    sso_exists = False
+                    
                     try:
+                        # Check local database first
                         existing_user = db.query(User).filter(User.username == username).first()
                         if existing_user:
+                            local_exists = True
                             st.warning(f"Username '{username}' already exists in local database.")
-                        else:
-                            # Also check in Authentik SSO
-                            import requests
-                            from app.utils.config import Config
-                            headers = {
-                                'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-                                'Content-Type': 'application/json'
-                            }
-                            user_check_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
-                            response = requests.get(user_check_url, headers=headers)
-                            
+                        
+                        # Also check in Authentik SSO
+                        import requests
+                        from app.utils.config import Config
+                        headers = {
+                            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                            'Content-Type': 'application/json'
+                        }
+                        user_check_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
+                        
+                        try:
+                            response = requests.get(user_check_url, headers=headers, timeout=10)
                             if response.status_code == 200:
                                 auth_data = response.json()
                                 if auth_data.get('count', 0) > 0:
-                                    st.warning(f"Username '{username}' already exists in Authentik.")
-                                else:
-                                    st.success(f"Username '{username}' is available!")
+                                    sso_exists = True
+                                    st.warning(f"Username '{username}' already exists in Authentik SSO.")
                             else:
-                                st.error(f"Error checking username in Authentik: {response.status_code}")
+                                st.error(f"Error checking username in Authentik: {response.status_code} - {response.text}")
+                                logging.error(f"Error checking username: {response.status_code} - {response.text}")
+                        except requests.exceptions.RequestException as req_err:
+                            st.error(f"Network error checking username in Authentik: {str(req_err)}")
+                            logging.error(f"Network error checking username: {str(req_err)}")
+                        
+                        # If username exists in either system, suggest alternatives
+                        if local_exists or sso_exists:
+                            # Generate alternative username suggestions
+                            import random
+                            base_username = username.rstrip('0123456789')  # Remove any trailing numbers
+                            
+                            # Try sequential numbers first
+                            suggestions = []
+                            for i in range(1, 4):
+                                suggestions.append(f"{base_username}{i}")
+                            
+                            # Also add a random suggestion
+                            random_suffix = random.randint(100, 999)
+                            suggestions.append(f"{base_username}{random_suffix}")
+                            
+                            # Show suggestions
+                            st.info(f"Suggested alternatives: {', '.join(suggestions)}")
+                        else:
+                            st.success(f"Username '{username}' is available!")
                     finally:
                         db.close()
                 except Exception as e:
-                    st.error(f"Database connection error: {str(e)}")
+                    logging.error(f"Error checking username: {str(e)}")
+                    logging.error(traceback.format_exc())
+                    st.error(f"An error occurred while checking username: {str(e)}")
         
         # Row 4: Group Assignment section
         st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
@@ -618,13 +692,14 @@ async def render_create_user_form():
                         # Import the create_user function
                         from app.auth.api import create_user
                         
-                        # Create user synchronously
+                        # Create user synchronously - use parameters that match the API function
                         result = create_user(
-                            username=username,
-                            name=user_data["name"],
                             email=email,
+                            first_name=first_name,
+                            last_name=last_name,
                             attributes=user_data.get("attributes", {}),
-                            groups=selected_groups
+                            groups=selected_groups,
+                            desired_username=username
                         )
                         
                         # Handle the result
@@ -644,9 +719,9 @@ async def render_create_user_form():
                             
                             create_user_message(
                                 new_username=final_username,
-                                temp_password=result.get('password', 'unknown'),
+                                temp_password=result.get('temp_password', 'unknown'),
                                 discourse_post_url=discourse_post_url,
-                                password_reset_successful=result.get('password_reset_successful', False)
+                                password_reset_successful=result.get('password_reset', False)
                             )
                             
                             # Store success flag but DON'T rerun immediately
@@ -1249,6 +1324,100 @@ def update_username_from_inputs():
 
 async def render_invite_form():
     """Render the form for creating invite links"""
+    # Custom CSS for better form styling
+    st.markdown("""
+    <style>
+    /* Form styling */
+    .stForm > div:first-child {
+        background-color: #f8f9fa;
+        padding: 24px;
+        border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        margin-bottom: 24px;
+    }
+    
+    /* Input field styling */
+    .stTextInput>div>div>input, 
+    .stTextArea>div>div>textarea,
+    .stNumberInput>div>div>input {
+        margin-bottom: 10px !important;
+        border-radius: 5px !important;
+        border: 1px solid #ced4da !important;
+        background-color: #ffffff !important;
+        color: #212529 !important;
+        padding: 12px !important;
+        box-shadow: none !important;
+        transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+    }
+    
+    /* Input field focus states */
+    .stTextInput>div>div>input:focus,
+    .stTextArea>div>div>textarea:focus,
+    .stNumberInput>div>div>input:focus {
+        border-color: #4CAF50 !important;
+        box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.25) !important;
+        outline: 0 !important;
+    }
+    
+    /* Label styling */
+    .stTextInput label, 
+    .stTextArea label, 
+    .stNumberInput label,
+    .stMultiselect label {
+        font-weight: 500 !important;
+        color: #212529 !important;
+        margin-bottom: 5px !important;
+    }
+    
+    /* Form submit button styling */
+    .stButton button {
+        border-radius: 5px;
+        padding: 10px 18px;
+        font-weight: 500;
+        transition: all 0.3s;
+    }
+    
+    /* Primary button styling */
+    .stButton button[kind="primary"] {
+        background-color: #4CAF50;
+        color: white;
+        border: none;
+    }
+    
+    .stButton button[kind="primary"]:hover {
+        background-color: #45a049;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    
+    /* Secondary button styling */
+    .stButton button[kind="secondary"] {
+        background-color: #6c757d;
+        color: white;
+        border: none;
+    }
+    
+    .stButton button[kind="secondary"]:hover {
+        background-color: #5a6268;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    
+    /* MultiSelect styling */
+    .stMultiselect > div > div {
+        background-color: #ffffff !important;
+        border: 1px solid #ced4da !important;
+        border-radius: 5px !important;
+    }
+    
+    /* Code block styling */
+    .stCodeBlock {
+        background-color: #f1f3f5 !important;
+        border: 1px solid #dee2e6 !important;
+        border-radius: 5px !important;
+        padding: 12px !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
     st.subheader("Create Invite Link")
     
     # Initialize session state for invite form

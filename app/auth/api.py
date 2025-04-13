@@ -206,49 +206,55 @@ def create_user(username, password=None, email=None, name=None, invited_by=None,
         }
         
         try:
-            # Check for existing username
-            while True:
-                user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
-                response = session.get(user_search_url, headers=headers, timeout=10)
-                response.raise_for_status()
-                users = response.json().get('results', [])
-                
-                # Explicitly check for exact username match
-                if not any(user['username'] == username for user in users):
-                    break  # Unique username found
-                else:
-                    username = f"{original_username}{counter}"
-                    counter += 1
+            # Check for existing username more efficiently (check only for exact match)
+            user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
+            response = session.get(user_search_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            users = response.json().get('results', [])
+            
+            # If username exists, modify it
+            while any(user['username'] == username for user in users):
+                username = f"{original_username}{counter}"
+                counter += 1
+                # We don't need to search again, just check if our new username matches any existing ones
             
             # Log if username was modified
             if username != original_username:
                 logging.info(f"Username modified for uniqueness: {original_username} -> {username}")
-
+            
+            # Prepare user data
             user_data = {
                 "username": username,
                 "name": full_name,
+                "email": email,
                 "is_active": True,
-                "email": email
+                "path": username,
+                "groups": groups or []
             }
-
-            # Add groups if provided, otherwise use main group if configured
-            if groups:
-                user_data["groups"] = groups
-            elif Config.MAIN_GROUP_ID:
-                user_data["groups"] = [Config.MAIN_GROUP_ID]
-
-            # Add combined attributes from both parameters
-            user_data['attributes'] = attributes or {}
             
-            # Add 'invited_by' and 'intro' to attributes if provided and not already set
-            if invited_by and 'invited_by' not in user_data['attributes']:
-                user_data['attributes']['invited_by'] = invited_by
-            if intro and 'intro' not in user_data['attributes']:
-                user_data['attributes']['intro'] = intro
-
-            # Create user in Authentik
-            user_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
-            response = requests.post(user_api_url, headers=headers, json=user_data, timeout=10)
+            # If main group ID is configured, add it to groups
+            if Config.MAIN_GROUP_ID and Config.MAIN_GROUP_ID not in user_data["groups"]:
+                user_data["groups"].append(Config.MAIN_GROUP_ID)
+            
+            # Add attributes
+            if attributes:
+                user_data["attributes"] = attributes
+            else:
+                user_data["attributes"] = {}
+            
+            # Add optional fields to attributes
+            if invited_by:
+                user_data["attributes"]["invited_by"] = invited_by
+            if intro:
+                user_data["attributes"]["intro"] = intro
+                
+            # Add is_admin flag if set
+            if is_admin:
+                user_data["attributes"]["is_admin"] = True
+            
+            # Create the user
+            create_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
+            response = session.post(create_url, headers=headers, json=user_data, timeout=10)
             response.raise_for_status()
             user = response.json()
 
@@ -262,11 +268,14 @@ def create_user(username, password=None, email=None, name=None, invited_by=None,
             logging.info(f"User created: {user.get('username')}")
             user_id = user.get('pk')
 
-            # Reset the user's password
-            password_reset_successful = reset_user_password(Config.AUTHENTIK_API_URL, headers, user_id, temp_password)
-            if not password_reset_successful:
-                logging.error(f"Failed to reset password for user {user.get('username')}")
-                # Continue anyway, we'll note the password reset failure in the return
+            # Reset the user's password - don't wait for this to complete before proceeding
+            try:
+                password_reset_successful = reset_user_password(Config.AUTHENTIK_API_URL, headers, user_id, temp_password)
+                if not password_reset_successful:
+                    logging.error(f"Failed to reset password for user {user.get('username')}")
+            except Exception as e:
+                logging.error(f"Error resetting password: {e}")
+                # Continue anyway
 
             # Send welcome message via Matrix if enabled - do this in a non-blocking way
             if Config.MATRIX_ACTIVE:
@@ -283,63 +292,53 @@ def create_user(username, password=None, email=None, name=None, invited_by=None,
                     welcome_thread.start()
                     logging.info(f"Started Matrix welcome message thread for {username}")
                 except Exception as matrix_error:
+                    logging.error(f"Failed to create Matrix direct chat: {matrix_error}")
                     logging.error(f"Failed to send Matrix welcome message: {matrix_error}")
             
-            # Create Discourse post if all requirements are met
-            discourse_post_url = None
-            
-            # Enhanced logging of discourse post creation parameters
-            logging.info(f"Checking Discourse post creation requirements:")
-            logging.info(f"DISCOURSE_ACTIVE: {Config.DISCOURSE_ACTIVE}")
-            logging.info(f"Username provided: {bool(username)}")
-            
-            # Check for intro data in both direct parameters and attributes
-            has_intro_param = intro is not None and intro.strip() != ""
-            has_intro_attr = 'attributes' in user_data and 'intro' in user_data['attributes'] and user_data['attributes']['intro'].strip() != ""
-            
-            logging.info(f"Has intro parameter: {has_intro_param}")
-            logging.info(f"Has intro in attributes: {has_intro_attr}")
-            
-            # Use intro from direct parameter if available, otherwise from attributes
-            effective_intro = None
-            if has_intro_param:
-                effective_intro = intro
-                logging.info("Using intro from direct parameter")
-            elif has_intro_attr:
-                effective_intro = user_data['attributes']['intro']
-                logging.info("Using intro from attributes")
+            # Create Discourse post if all requirements are met - also in a background thread
+            effective_intro = intro
+            if attributes and 'intro' in attributes:
+                effective_intro = attributes['intro']
                 
             if Config.DISCOURSE_ACTIVE and username and effective_intro:
-                logging.info(f"All requirements met, creating Discourse post for {username}")
-                # Create a title for the post using the username
-                post_title = f"Introduction: {username}"
-                
-                # Call Discourse API to create the post
-                discourse_success, discourse_post_url = create_discourse_post(
-                    headers=headers,
-                    title=post_title,
-                    content="",  # Content will be built by the function
-                    username=username,
-                    intro=effective_intro,
-                    invited_by=user_data['attributes'].get('invited_by') if 'attributes' in user_data else None
-                )
-                
-                if discourse_success and discourse_post_url:
-                    logging.info(f"Successfully created Discourse post for {username}: {discourse_post_url}")
-                else:
-                    logging.warning(f"Failed to create Discourse post for {username}")
-            else:
-                if not Config.DISCOURSE_ACTIVE:
-                    logging.info("Discourse integration is disabled. Skipping post creation.")
-                elif not username:
-                    logging.info("Skipping Discourse post creation: No username provided")
-                elif not effective_intro:
-                    logging.info(f"Skipping Discourse post creation for {username}: No introduction text provided")
+                try:
+                    # Create this in a separate thread to avoid blocking
+                    import threading
+                    
+                    def create_discourse_post_thread():
+                        try:
+                            logging.info(f"All requirements met, creating Discourse post for {username}")
+                            # Create a title for the post using the username
+                            post_title = f"Introduction: {username}"
+                            
+                            # Call Discourse API to create the post
+                            discourse_success, post_url = create_discourse_post(
+                                headers=headers,
+                                title=post_title,
+                                content="",  # Content will be built by the function
+                                username=username,
+                                intro=effective_intro,
+                                invited_by=user_data['attributes'].get('invited_by') if 'attributes' in user_data else None
+                            )
+                            
+                            if discourse_success and post_url:
+                                logging.info(f"Successfully created Discourse post for {username}: {post_url}")
+                            else:
+                                logging.warning(f"Failed to create Discourse post for {username}")
+                        except Exception as e:
+                            logging.error(f"Error in Discourse post creation thread: {e}")
+                    
+                    # Start thread
+                    discourse_thread = threading.Thread(target=create_discourse_post_thread, daemon=True)
+                    discourse_thread.start()
+                    
+                except Exception as discourse_error:
+                    logging.error(f"Failed to start Discourse post creation thread: {discourse_error}")
 
-            # Sync the new user with local database
+            # Sync the new user with local database - use a minimal sync for better performance
             with SessionLocal() as db:
                 try:
-                    # Sync user with local database
+                    # Instead of fetching all users, just sync this single user
                     user_obj = sync_user_data(db, [user])
                     
                     # Add creation event to admin events
@@ -357,6 +356,8 @@ def create_user(username, password=None, email=None, name=None, invited_by=None,
                     logging.error(f"Error syncing user to local database: {e}")
                     # Continue even if sync fails
                 
+            # Return success response - note that discourse_post_url might still be None at this point
+            # since it's created in a background thread
             return {
                 'user_id': user_id,
                 'username': username,

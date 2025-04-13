@@ -344,54 +344,100 @@ async def render_create_user_form():
         # Row 1: First Name and Last Name side by side
         col1, col2 = st.columns(2)
         with col1:
-            first_name = st.text_input(
-                "First Name *",
-                value=st.session_state.get('first_name_input', ""),
-                key="first_name_input_outside",
-                on_change=on_first_name_change,
-                help="Required: User's first name"
-            )
+            # Fix for the widget key conflict
+            if 'first_name_input_outside' in st.session_state:
+                first_name = st.text_input(
+                    "First Name *",
+                    key="first_name_input_outside",
+                    on_change=on_first_name_change,
+                    help="Required: User's first name"
+                )
+            else:
+                first_name = st.text_input(
+                    "First Name *",
+                    value=st.session_state.get('first_name_input', ""),
+                    key="first_name_input_outside",
+                    on_change=on_first_name_change,
+                    help="Required: User's first name"
+                )
         
         with col2:
-            last_name = st.text_input(
-                "Last Name",
-                value=st.session_state.get('last_name_input', ""),
-                key="last_name_input_outside",
-                on_change=on_last_name_change,
-                help="User's last name (optional)"
-            )
+            # Fix for the widget key conflict
+            if 'last_name_input_outside' in st.session_state:
+                last_name = st.text_input(
+                    "Last Name",
+                    key="last_name_input_outside",
+                    on_change=on_last_name_change,
+                    help="User's last name (optional)"
+                )
+            else:
+                last_name = st.text_input(
+                    "Last Name",
+                    value=st.session_state.get('last_name_input', ""),
+                    key="last_name_input_outside",
+                    on_change=on_last_name_change,
+                    help="User's last name (optional)"
+                )
         
         # Row 2: Email Address and Invited By side by side
         col1, col2 = st.columns(2)
         with col1:
-            email = st.text_input(
-                "Email Address *",
-                value=st.session_state.get('email_input', ""),
-                key="email_input_outside",
-                help="Required: User's email address",
-                placeholder="user@example.com"
-            )
+            # Fix for the widget key conflict
+            if 'email_input_outside' in st.session_state:
+                email = st.text_input(
+                    "Email Address *",
+                    key="email_input_outside",
+                    help="Required: User's email address",
+                    placeholder="user@example.com"
+                )
+            else:
+                email = st.text_input(
+                    "Email Address *",
+                    value=st.session_state.get('email_input', ""),
+                    key="email_input_outside",
+                    help="Required: User's email address",
+                    placeholder="user@example.com"
+                )
         
         with col2:
-            invited_by = st.text_input(
-                "Invited by",
-                value=st.session_state.get('invited_by_input', ""),
-                key="invited_by_input_outside",
-                help="Who invited this person (optional)",
-                placeholder="username or name"
-            )
+            # Fix for the widget key conflict
+            if 'invited_by_input_outside' in st.session_state:
+                invited_by = st.text_input(
+                    "Invited by",
+                    key="invited_by_input_outside",
+                    help="Who invited this person (optional)",
+                    placeholder="username or name"
+                )
+            else:
+                invited_by = st.text_input(
+                    "Invited by",
+                    value=st.session_state.get('invited_by_input', ""),
+                    key="invited_by_input_outside",
+                    help="Who invited this person (optional)",
+                    placeholder="username or name"
+                )
         
         # Row 3: Username and Check Username button
         col1, col2 = st.columns([3, 1])
         with col1:
-            username = st.text_input(
-                "Username *",
-                value=st.session_state.get('username_input', ""),
-                key="username_input_outside",
-                on_change=on_username_manual_edit,
-                help="Required: Unique username (auto-generated)",
-                placeholder="firstname-l"
-            )
+            # Fix for the widget key conflict - don't use value when the key is in session state
+            if 'username_input_outside' in st.session_state:
+                username = st.text_input(
+                    "Username *",
+                    key="username_input_outside",
+                    on_change=on_username_manual_edit,
+                    help="Required: Unique username (auto-generated)",
+                    placeholder="firstname-l"
+                )
+            else:
+                username = st.text_input(
+                    "Username *",
+                    value=st.session_state.get('username_input', ""),
+                    key="username_input_outside",
+                    on_change=on_username_manual_edit,
+                    help="Required: Unique username (auto-generated)",
+                    placeholder="firstname-l"
+                )
             st.markdown("<div class='help-text'>Username auto-generated. Edit to create custom username.</div>", unsafe_allow_html=True)
         
         with col2:
@@ -476,28 +522,47 @@ async def render_create_user_form():
         with col2:
             # Introduction text for the user
             st.subheader("Introduction")
-            intro_text = st.text_area(
-                "User Introduction",
-                value=st.session_state.get('intro_text_input', ""),
-                key="intro_text_input_outside",
-                placeholder="A few sentences about the new user",
-                help="Brief introduction for the new user",
-                height=100
-            )
+            # Fix for the widget key conflict
+            if 'intro_text_input_outside' in st.session_state:
+                intro_text = st.text_area(
+                    "User Introduction",
+                    key="intro_text_input_outside",
+                    placeholder="A few sentences about the new user",
+                    help="Brief introduction for the new user",
+                    height=100
+                )
+            else:
+                intro_text = st.text_area(
+                    "User Introduction",
+                    value=st.session_state.get('intro_text_input', ""),
+                    key="intro_text_input_outside",
+                    placeholder="A few sentences about the new user",
+                    help="Brief introduction for the new user",
+                    height=100
+                )
         
         # Data parsing section
         st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
         st.subheader("Parse User Data")
         
-        # Parse data textarea
-        parse_data = st.text_area(
-            "Enter data to parse",
-            value=st.session_state.get('parse_data_input', ""),
-            key="parse_data_input_outside",
-            help="Enter multiple lines of information to parse into user fields",
-            placeholder="First Name: John\nLast Name: Doe\nEmail: john.doe@example.com",
-            height=100
-        )
+        # Parse data textarea with fix for widget key conflict
+        if 'parse_data_input_outside' in st.session_state:
+            parse_data = st.text_area(
+                "Enter data to parse",
+                key="parse_data_input_outside",
+                help="Enter multiple lines of information to parse into user fields",
+                placeholder="First Name: John\nLast Name: Doe\nEmail: john.doe@example.com",
+                height=100
+            )
+        else:
+            parse_data = st.text_area(
+                "Enter data to parse",
+                value=st.session_state.get('parse_data_input', ""),
+                key="parse_data_input_outside",
+                help="Enter multiple lines of information to parse into user fields",
+                placeholder="First Name: John\nLast Name: Doe\nEmail: john.doe@example.com",
+                height=100
+            )
         
         # Bottom row with all buttons
         col1, col2, col3 = st.columns([1, 1, 1])
@@ -621,7 +686,7 @@ def on_first_name_change():
         if username_updated:
             # Set flag to indicate username needs update on next rerun
             st.session_state['username_needs_update'] = True
-            # Force rerun after username update for immediate feedback
+            # We need to rerun to show the updated username immediately
             st.rerun()
         
 def on_last_name_change():
@@ -637,7 +702,7 @@ def on_last_name_change():
         if username_updated:
             # Set flag to indicate username needs update on next rerun
             st.session_state['username_needs_update'] = True
-            # Force rerun after username update for immediate feedback
+            # We need to rerun to show the updated username immediately
             st.rerun()
         
 def on_username_manual_edit():
@@ -662,8 +727,8 @@ def on_username_manual_edit():
                 st.session_state['username_input'] = cleaned_username
                 # Set flag to indicate username needs update on next rerun
                 st.session_state['username_needs_update'] = True
-                # Schedule a rerun
-                st.rerun()
+                # Don't rerun immediately - apply changes on next form submission
+                # st.rerun()
 
     # Return false to indicate no username was generated
     return False

@@ -232,6 +232,10 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
                 loop.close()
                 
                 if result:
+                    # Log if username was modified for uniqueness
+                    if final_username != username:
+                        logging.info(f"Username was modified for uniqueness: {username} -> {final_username}")
+                        
                     # Use the final_username which may have been modified for uniqueness
                     add_timeline_event(db, "user_created", final_username, f"User created by admin")
                     create_user_message(final_username, temp_password, discourse_post_url)

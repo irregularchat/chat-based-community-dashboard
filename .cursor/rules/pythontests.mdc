@@ -1,0 +1,12 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# Your rule content
+ignore venv and env dirs
+when running python tests use python3 and make sure env is set and requirements.txt is installed. link commands when possible to be efficient 
+
+- You can @ files here
+- You can use markdown but dont have to

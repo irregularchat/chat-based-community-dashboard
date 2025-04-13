@@ -75,15 +75,31 @@ def display_login_button(location="sidebar"):
     if location == "sidebar":
         st.sidebar.markdown("### Login Options")
         
-        # Local login option - prominently displayed
-        with st.sidebar.expander("**LOCAL LOGIN**", expanded=True):
-            st.write("Use local admin credentials from .env file:")
-            if display_local_login_form():
+        # Create columns for the two main login options
+        col1, col2 = st.sidebar.columns(2)
+        
+        with col1:
+            # SSO login button
+            st.button("Login with SSO", key="sso_login_sidebar", on_click=lambda: st.markdown(
+                f'<meta http-equiv="refresh" content="0;URL=\'{login_url}\'">', unsafe_allow_html=True))
+        
+        with col2:
+            # Local login toggle
+            if st.button("Local Admin Login", key="show_local_login"):
+                st.session_state['show_local_login'] = True
                 st.rerun()
         
-        # SSO login button
-        if st.sidebar.button("Login with Authentik SSO"):
-            st.markdown(f'<meta http-equiv="refresh" content="0;URL=\'{login_url}\'">', unsafe_allow_html=True)
+        # Display local login form if requested
+        if st.session_state.get('show_local_login', False):
+            with st.sidebar.expander("**LOCAL ADMIN LOGIN**", expanded=True):
+                st.write("Use local admin credentials from .env file:")
+                if display_local_login_form():
+                    st.session_state['show_local_login'] = False
+                    st.rerun()
+                
+                if st.button("Cancel", key="cancel_local_login"):
+                    st.session_state['show_local_login'] = False
+                    st.rerun()
         
         # Alternative login options in an expander
         with st.sidebar.expander("Having issues? Try alternative login methods"):
@@ -116,22 +132,37 @@ def display_login_button(location="sidebar"):
                 st.markdown('<meta http-equiv="refresh" content="0;URL=\'/?page=auth_debug\'">', unsafe_allow_html=True)
     else:
         # Login options in the main content area
-        cols = st.columns(2)
+        st.markdown("### Login to Access Dashboard")
         
-        with cols[0]:
-            st.markdown("### Login to Access Dashboard")
+        # Create tabs for different login methods
+        sso_tab, local_tab = st.tabs(["Login with SSO", "Local Admin Login"])
+        
+        with sso_tab:
+            st.markdown("""
+            <div style="text-align: center; margin: 20px 0;">
+                <p>Use your community SSO credentials to login:</p>
+            </div>
+            """, unsafe_allow_html=True)
             
-            # Standard login button
-            if st.button("Login with Authentik", key="main_login"):
+            if st.button("Login with Authentik", key="main_login", use_container_width=True):
                 st.markdown(f'<meta http-equiv="refresh" content="0;URL=\'{login_url}\'">', unsafe_allow_html=True)
                 
-        with cols[1]:
-            st.markdown("### Alternative Login Methods")
-            st.markdown("If you're experiencing issues with the standard login:")
+        with local_tab:
+            st.markdown("""
+            <div style="text-align: center; margin: 10px 0;">
+                <p>For administrators with local access credentials:</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            display_local_login_form()
+        
+        # Alternative login methods in an expander
+        with st.expander("Having trouble with login?"):
+            st.markdown("If you see a blank white page after login, try one of these alternative methods:")
             
             login_method = st.radio(
-                "Choose login method:",
-                ["Standard Login", "HTML-Only Login", "Manual Token Handler", "Debug Login"],
+                "Choose alternative login method:",
+                ["HTML-Only Login", "Manual Token Handler", "Debug Login"],
                 index=0
             )
             
@@ -142,13 +173,3 @@ def display_login_button(location="sidebar"):
                     st.markdown('<meta http-equiv="refresh" content="0;URL=\'/?page=token\'">', unsafe_allow_html=True)
                 elif login_method == "Debug Login":
                     st.markdown('<meta http-equiv="refresh" content="0;URL=\'/?page=auth_debug\'">', unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<meta http-equiv="refresh" content="0;URL=\'{login_url}\'">', unsafe_allow_html=True)
-        
-        # Full HTML login option
-        st.markdown("""
-        <div style="margin-top: 30px; padding: 20px; background-color: #f8f9fa; border-radius: 10px; text-align: center;">
-            <h3>Having trouble with login?</h3>
-            <p>If you see a blank white page after login, try our <a href="/?page=token">Manual Token Handler</a></p>
-        </div>
-        """, unsafe_allow_html=True)

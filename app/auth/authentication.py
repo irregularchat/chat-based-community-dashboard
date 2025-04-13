@@ -349,29 +349,36 @@ def require_authentication(page_path=None):
                 if display_local_login_form():
                     # If login was successful, refresh the page
                     st.rerun()
-        except ValueError:
+        except ValueError as e:
+            # Log the error for debugging
+            logging.error(f"Error creating tabs for login: {str(e)}")
+            
             # Fallback for test environments where tabs might not work properly
             login_url = get_login_url(page_path)
             
-            # Display login options without tabs
-            st.markdown("### Login with SSO")
-            st.markdown(
-                f"""
-                <div style="text-align: center; margin: 30px 0;">
-                    <a href="{login_url}" class="login-button" style="font-size: 16px; padding: 12px 24px;">
-                        Login with Authentik
-                    </a>
-                </div>
-                """, 
-                unsafe_allow_html=True
-            )
+            # Display both login options side by side in columns
+            col1, col2 = st.columns(2)
             
-            st.markdown("### Local Admin Login")
-            # Always call display_local_login_form in the fallback path to ensure it's called in tests
-            login_result = display_local_login_form()
-            if login_result:
-                # If login was successful, refresh the page
-                st.rerun()
+            with col1:
+                st.markdown("### Login with SSO")
+                st.markdown(
+                    f"""
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="{login_url}" class="login-button" style="font-size: 16px; padding: 12px 24px;">
+                            Login with Authentik
+                        </a>
+                    </div>
+                    """, 
+                    unsafe_allow_html=True
+                )
+            
+            with col2:
+                st.markdown("### Local Admin Login")
+                # Always call display_local_login_form in the fallback path to ensure it's called in tests
+                login_result = display_local_login_form()
+                if login_result:
+                    # If login was successful, refresh the page
+                    st.rerun()
         
         return False
     

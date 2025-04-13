@@ -36,18 +36,27 @@ def display_useful_links():
             st.markdown(f"<a href='{login_url}' class='login-button'>SSO Login</a>", unsafe_allow_html=True)
         
         with col2:
-            if st.button("Local Admin", key="local_admin_sidebar"):
+            # Initialize this state variable before button creation
+            if 'show_local_login' not in st.session_state:
+                st.session_state['show_local_login'] = False
+                
+            # Use a different key to avoid the state modification error
+            if st.button("Local Admin", key="local_admin_login_btn"):
                 st.session_state['show_local_login'] = True
                 st.rerun()
     
     # Show local login form if requested
     if st.session_state.get('show_local_login', False) and not is_authenticated():
         with st.sidebar.expander("Local Admin Login", expanded=True):
-            if display_local_login_form():
-                st.session_state['show_local_login'] = False
-                st.rerun()
+            # Initialize cancel_clicked state before we create the button
+            if 'cancel_clicked' not in st.session_state:
+                st.session_state['cancel_clicked'] = False
+                
+            # Display the login form - no need to call st.rerun() anymore as the function handles redirect
+            display_local_login_form()
             
-            if st.button("Cancel"):
+            # Use a different key for the cancel button to avoid state conflict
+            if st.button("Cancel", key="cancel_local_login_btn"):
                 st.session_state['show_local_login'] = False
                 st.rerun()
     
@@ -84,8 +93,12 @@ def display_login_button(location="sidebar"):
                 f'<meta http-equiv="refresh" content="0;URL=\'{login_url}\'">', unsafe_allow_html=True))
         
         with col2:
-            # Local login toggle
-            if st.button("Local Admin Login", key="show_local_login"):
+            # Initialize this state variable before button creation
+            if 'show_local_login' not in st.session_state:
+                st.session_state['show_local_login'] = False
+                
+            # Local login toggle - use a unique key 
+            if st.button("Local Admin Login", key="show_local_login_btn"):
                 st.session_state['show_local_login'] = True
                 st.rerun()
         
@@ -93,14 +106,14 @@ def display_login_button(location="sidebar"):
         if st.session_state.get('show_local_login', False):
             with st.sidebar.expander("**LOCAL ADMIN LOGIN**", expanded=True):
                 st.write("Use local admin credentials from .env file:")
-                if display_local_login_form():
-                    st.session_state['show_local_login'] = False
-                    st.rerun()
+                # Display the login form - it now handles redirection internally
+                display_local_login_form()
                 
-                if st.button("Cancel", key="cancel_local_login"):
+                # Use a different key for the cancel button
+                if st.button("Cancel", key="cancel_login_form_btn"):
                     st.session_state['show_local_login'] = False
                     st.rerun()
-        
+
         # Alternative login options in an expander
         with st.sidebar.expander("Having issues? Try alternative login methods"):
             st.markdown("If you're experiencing blank pages with the standard login, try one of these:")
@@ -154,6 +167,7 @@ def display_login_button(location="sidebar"):
             </div>
             """, unsafe_allow_html=True)
             
+            # Display the login form directly - it now handles redirection internally
             display_local_login_form()
         
         # Alternative login methods in an expander

@@ -23,10 +23,28 @@ body {
 .stTextArea>div>div>textarea, 
 .stSelectbox>div>div>div>div>div {
     border-radius: 5px;
-    border: 1px solid #bdc3c7;
-    padding: 10px;
+    border: 1px solid #bdc3c7 !important;
+    padding: 10px !important;
     font-size: 16px;
     width: 100%;
+    box-shadow: none !important;
+    background-color: white !important;
+    color: #333 !important;
+}
+
+/* Focus states for input fields */
+.stTextInput>div>div>input:focus, 
+.stTextArea>div>div>textarea:focus, 
+.stSelectbox>div:focus-within {
+    border-color: #3498db !important;
+    box-shadow: 0 0 0 1px rgba(52, 152, 219, 0.5) !important;
+}
+
+/* Label styling */
+.stTextInput label, .stTextArea label, .stSelectbox label {
+    font-weight: 500;
+    color: #2c3e50;
+    margin-bottom: 5px;
 }
 
 .stCodeBlock {
@@ -48,4 +66,15 @@ hr {
 #send_signal_notification {
     display: block; /* or inline-block, depending on your layout */
     margin: 10px 0; /* optional: add some margin for spacing */
+}
+
+/* Help text styling */
+.stTextInput div small, .stTextArea div small, .stSelectbox div small {
+    color: #7f8c8d !important;
+    margin-top: 2px;
+}
+
+/* Info icons styling */
+.stTextInput div svg, .stTextArea div svg, .stSelectbox div svg {
+    color: #95a5a6 !important;
 }

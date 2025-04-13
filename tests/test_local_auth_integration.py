@@ -4,6 +4,8 @@ import streamlit as st
 from app.auth.local_auth import display_local_login_form, handle_local_login, validate_local_admin
 from app.ui.common import display_login_button
 from app.utils.config import Config
+import time
+import urllib.parse
 
 @pytest.fixture
 def mock_session_state():
@@ -225,3 +227,53 @@ def test_rerun_after_local_login(mock_session_state, mock_streamlit, mock_config
         # We can't test the rerun directly as it's not called in handle_local_login
         # but we can verify the session state is set up correctly
         assert st.session_state['auth_method'] == 'local' 
+
+def test_local_login_redirect_with_query_params(mock_session_state, mock_streamlit, mock_config):
+    """Test that local login redirects with auth query parameters"""
+    # Set up form submission behavior
+    mock_streamlit['form_submit_button'].return_value = True
+    mock_streamlit['text_input'].side_effect = ['adminuser', 'adminpass']
+    
+    # Call the display_local_login_form function
+    with patch('app.auth.local_auth.time.sleep') as mock_sleep:
+        result = display_local_login_form()
+        
+        # Verify results
+        assert result is True
+        mock_streamlit['success'].assert_called_once()  # Success message should be shown
+        
+        # Check that redirect is called with the right query parameters
+        mock_streamlit['markdown'].assert_called()
+        redirect_url = mock_streamlit['markdown'].call_args[0][0]
+        
+        # URL should contain proper auth parameters
+        assert 'meta http-equiv="refresh"' in redirect_url
+        assert 'auth_success=true' in redirect_url
+        assert 'auth_method=local' in redirect_url
+        assert 'username=adminuser' in redirect_url
+        assert 'admin=true' in redirect_url
+        
+        # Session state should be updated properly
+        assert st.session_state['is_authenticated'] is True
+        assert st.session_state['auth_method'] == 'local'
+        assert st.session_state['is_admin'] is True
+        assert st.session_state['permanent_auth'] is True
+        assert st.session_state['permanent_admin'] is True
+        assert 'auth_timestamp' in st.session_state
+
+def test_local_login_sets_persistence_flags(mock_session_state, mock_config):
+    """Test that local login sets persistence flags for session resumption"""
+    # Call handle_local_login with valid credentials
+    result = handle_local_login('adminuser', 'adminpass')
+    
+    # Verify persistence flags are set in session state
+    assert result is True
+    assert st.session_state['is_authenticated'] is True
+    assert st.session_state['auth_method'] == 'local'
+    assert st.session_state['is_admin'] is True
+    
+    # Verify persistence flags specifically
+    assert st.session_state['permanent_auth'] is True
+    assert st.session_state['permanent_admin'] is True
+    assert 'auth_timestamp' in st.session_state
+    assert 'username' in st.session_state 

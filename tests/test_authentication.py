@@ -6,7 +6,7 @@ import traceback
 import logging
 from unittest.mock import patch, MagicMock
 import urllib.parse
-from app.auth.authentication import handle_auth_callback, get_login_url, is_authenticated, logout
+from app.auth.authentication import handle_auth_callback, get_login_url, is_authenticated, logout, require_authentication
 from app.utils.config import Config
 
 # ------ Test Fixtures ------
@@ -333,4 +333,92 @@ def test_logout_clears_session(mock_session_state):
     assert 'user_info' not in st.session_state
     assert 'access_token' not in st.session_state
     assert 'auth_state' not in st.session_state
-    assert 'auth_method' not in st.session_state 
+    assert 'auth_method' not in st.session_state
+
+# Add these tests to check the query parameter auth method
+def test_require_authentication_with_query_params(mock_session_state, mock_config):
+    """Test that require_authentication correctly processes auth query parameters"""
+    # Set up mock query_params
+    mock_query_params = {
+        'auth_success': 'true',
+        'username': 'testuser',
+        'auth_method': 'local',
+        'admin': 'true'
+    }
+    
+    # Test with query params
+    with patch.object(st, 'query_params', mock_query_params):
+        # Call require_authentication
+        result = require_authentication()
+        
+        # Should be authenticated without showing login forms
+        assert result is True
+        assert st.session_state.get('is_authenticated') is True
+        assert st.session_state.get('auth_method') == 'local'
+        assert st.session_state.get('is_admin') is True
+        assert st.session_state.get('permanent_auth') is True
+        assert st.session_state.get('permanent_admin') is True
+        assert st.session_state.get('username') == 'testuser'
+        
+        # Query params should be cleaned
+        assert 'auth_success' not in mock_query_params
+
+def test_require_authentication_with_query_params_non_admin(mock_session_state, mock_config):
+    """Test query parameter auth with non-admin user"""
+    # Set up mock query_params for non-admin
+    mock_query_params = {
+        'auth_success': 'true',
+        'username': 'regularuser',
+        'auth_method': 'local',
+        'admin': 'false'
+    }
+    
+    # Test with query params
+    with patch.object(st, 'query_params', mock_query_params):
+        # Call require_authentication
+        result = require_authentication()
+        
+        # Should be authenticated but not admin
+        assert result is True
+        assert st.session_state.get('is_authenticated') is True
+        assert st.session_state.get('auth_method') == 'local'
+        assert st.session_state.get('is_admin') is False
+        assert st.session_state.get('permanent_auth') is True
+        assert st.session_state.get('permanent_admin') is False
+        assert st.session_state.get('username') == 'regularuser'
+        
+        # Query params should be cleaned
+        assert 'auth_success' not in mock_query_params
+
+def test_require_authentication_preserves_other_query_params(mock_session_state, mock_config):
+    """Test that other query parameters are preserved during auth"""
+    # Set up mock query_params
+    mock_query_params = {
+        'auth_success': 'true',
+        'username': 'testuser',
+        'auth_method': 'local',
+        'admin': 'true',
+        'page': 'dashboard',  # Other parameter
+        'filter': 'active'    # Other parameter
+    }
+    
+    # Test with mixed query params
+    with patch.object(st, 'query_params', mock_query_params):
+        # Call require_authentication
+        result = require_authentication()
+        
+        # Should be authenticated
+        assert result is True
+        assert st.session_state.get('is_authenticated') is True
+        
+        # Auth params should be removed
+        assert 'auth_success' not in mock_query_params
+        assert 'username' not in mock_query_params
+        assert 'auth_method' not in mock_query_params
+        assert 'admin' not in mock_query_params
+        
+        # Other params should be preserved
+        assert 'page' in mock_query_params
+        assert mock_query_params['page'] == 'dashboard'
+        assert 'filter' in mock_query_params
+        assert mock_query_params['filter'] == 'active' 

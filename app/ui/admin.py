@@ -24,6 +24,7 @@ from app.db.operations import (
     delete_user_note,
     get_note_by_id
 )
+from app.utils.helpers import send_email
 import pandas as pd
 from datetime import datetime
 import time
@@ -540,7 +541,7 @@ def render_user_management():
                             st.error(f"Failed to grant admin privileges: {result.get('error')}")
             
             # Create tabs for different user detail sections
-            detail_tabs = st.tabs(["User Notes", "Activity"])
+            detail_tabs = st.tabs(["User Notes", "Send Email", "Activity"])
             
             # Tab 1: User Notes
             with detail_tabs[0]:
@@ -676,8 +677,92 @@ def render_user_management():
                         logging.error(f"Error loading user notes: {e}")
                         st.error(f"Error loading user notes: {str(e)}")
             
-            # Tab 2: Activity (placeholder for future expansion)
+            # Tab 2: Send Email
             with detail_tabs[1]:
+                st.subheader("Send Email to User")
+                
+                # Check if SMTP is configured and active
+                if not Config.SMTP_ACTIVE:
+                    st.warning("SMTP is not active. Please enable SMTP in the settings to send emails.")
+                elif not all([Config.SMTP_SERVER, Config.SMTP_PORT, Config.SMTP_USERNAME, Config.SMTP_PASSWORD, Config.SMTP_FROM_EMAIL]):
+                    st.error("SMTP configuration is incomplete. Please check your SMTP settings.")
+                else:
+                    # Email form
+                    with st.form("send_email_form"):
+                        # Pre-fill the recipient field with the user's email
+                        recipient_email = user.get('Email', '')
+                        st.text_input("To", value=recipient_email, disabled=True, key="email_recipient")
+                        
+                        # Email subject
+                        email_subject = st.text_input("Subject", key="email_subject", placeholder="Enter email subject")
+                        
+                        # Email body
+                        email_body = st.text_area("Message", key="email_body", height=200, placeholder="Enter your message here...")
+                        
+                        # Add HTML checkbox
+                        is_html = st.checkbox("Send as HTML", value=True, key="email_is_html")
+                        
+                        # Submit button
+                        submit_email = st.form_submit_button("Send Email")
+                        
+                        if submit_email:
+                            if not email_subject:
+                                st.error("Please enter a subject for the email.")
+                            elif not email_body:
+                                st.error("Please enter a message for the email.")
+                            else:
+                                try:
+                                    # Add admin signature if not already in the email body
+                                    admin_username = st.session_state.get("username", "Admin")
+                                    signature = f"\n\nSent by {admin_username} from the Admin Dashboard"
+                                    
+                                    # Format the email body based on HTML setting
+                                    if is_html:
+                                        # Convert newlines to <br> tags if not already HTML
+                                        if not email_body.strip().startswith("<"):
+                                            email_body = email_body.replace("\n", "<br>")
+                                        
+                                        # Add HTML signature
+                                        if not email_body.lower().endswith("</body>") and not email_body.lower().endswith("</html>"):
+                                            email_body += f"<br><br><em>Sent by {admin_username} from the Admin Dashboard</em>"
+                                    else:
+                                        # Add plain text signature
+                                        email_body += signature
+                                    
+                                    # Send the email
+                                    result = send_email(
+                                        to=recipient_email,
+                                        subject=email_subject,
+                                        body=email_body
+                                    )
+                                    
+                                    if result:
+                                        # Log the email action
+                                        with SessionLocal() as db:
+                                            create_admin_event(
+                                                db,
+                                                "email_sent",
+                                                st.session_state.get("username", "unknown"),
+                                                f"Email sent to {user.get('Username')} ({recipient_email}) with subject: {email_subject}"
+                                            )
+                                        
+                                        st.success(f"Email sent successfully to {user.get('Username')} ({recipient_email})")
+                                        
+                                        # Clear the form fields
+                                        st.session_state["email_subject"] = ""
+                                        st.session_state["email_body"] = ""
+                                    else:
+                                        st.error(f"Failed to send email to {recipient_email}. Check SMTP settings and try again.")
+                                except Exception as e:
+                                    logging.error(f"Error sending email: {str(e)}")
+                                    st.error(f"An error occurred while sending the email: {str(e)}")
+                    
+                    # Show email history (placeholder for future enhancement)
+                    with st.expander("Email History", expanded=False):
+                        st.info("Email history tracking will be available in a future update.")
+            
+            # Tab 3: Activity (placeholder for future expansion)
+            with detail_tabs[2]:
                 st.info("User activity tracking will be available in a future update.")
 
 def render_group_management():

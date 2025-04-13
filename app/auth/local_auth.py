@@ -75,10 +75,17 @@ def display_local_login_form():
     """
     st.subheader("Local Admin Login")
     
-    with st.form("local_login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submit_button = st.form_submit_button("Login")
+    # Add a brief explanation
+    st.info("Use local admin credentials to access the dashboard.")
+    
+    with st.form("local_login_form", clear_on_submit=True):
+        username = st.text_input("Username", placeholder="Enter admin username")
+        password = st.text_input("Password", type="password", placeholder="Enter admin password")
+        
+        # Make the login button more prominent
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            submit_button = st.form_submit_button("Login", use_container_width=True)
         
         if submit_button:
             if handle_local_login(username, password):

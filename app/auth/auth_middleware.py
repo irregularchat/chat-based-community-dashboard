@@ -58,6 +58,7 @@ def admin_middleware(page_function):
                 return
             
             # Then check admin permissions (either SSO admin or local admin)
+            # Local admin check is important to ensure local login works alongside OIDC testing
             is_admin = st.session_state.get('is_admin', False) or is_local_admin()
             
             if not is_admin:

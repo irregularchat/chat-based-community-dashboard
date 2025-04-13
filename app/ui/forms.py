@@ -34,6 +34,7 @@ from app.auth.api import (
     create_discourse_post,
     create_user
 )
+from app.auth.utils import generate_username_with_random_word
 from app.db.operations import search_users
 from app.messages import create_invite_message, create_user_message
 from app.utils.messages import WELCOME_MESSAGE
@@ -756,7 +757,18 @@ async def render_create_user_form():
                             # No st.rerun() here - let user see the message with buttons
                         else:
                             # Handle failure case
-                            st.error(f"Failed to create user: {result.get('error', 'Unknown error')}")
+                            error_message = result.get('error', 'Unknown error')
+                            if "username" in error_message and "unique" in error_message:
+                                st.error(f"Failed to create user: Username is not unique. Please try a different username or let the system generate one for you.")
+                                # Generate a new username suggestion
+                                new_username = generate_username_with_random_word(first_name)
+                                st.info(f"Suggested username: {new_username}")
+                                # Update the username field
+                                st.session_state['username_input'] = new_username
+                                st.session_state['username_input_outside'] = new_username
+                                st.session_state['username_was_auto_generated'] = True
+                            else:
+                                st.error(f"Failed to create user: {error_message}")
                 except Exception as e:
                     logging.error(f"Error creating user: {str(e)}")
                     logging.error(traceback.format_exc())
@@ -1203,7 +1215,7 @@ def format_date(date_str):
 
 def update_username_from_inputs():
     """
-    Generate a username based on first and last name inputs.
+    Generate a username based on first name and a random word.
     Checks both local database and SSO service for existing usernames.
     """
     # Only auto-generate username if username is empty or matches previous auto-generation
@@ -1212,136 +1224,108 @@ def update_username_from_inputs():
         st.session_state.get('username_was_auto_generated', False)):
         
         first_name = st.session_state.get('first_name_input', '').strip().lower()
-        last_name = st.session_state.get('last_name_input', '').strip().lower()
         
-        logging.info(f"Attempting username generation with first_name='{first_name}', last_name='{last_name}'")
+        logging.info(f"Attempting username generation with first_name='{first_name}'")
         
-        # Generate username even with partial information
-        if first_name or last_name:
-            # Handle different combinations of first/last name
-            if first_name and last_name:
-                # First name and first letter of last name
-                base_username = f"{first_name}-{last_name[0]}"
-                logging.info(f"Generated base username from first+last: {base_username}")
-            elif first_name:
-                # Just first name if that's all we have
-                base_username = first_name
-                logging.info(f"Generated base username from first name only: {base_username}")
-            else:
-                # Just last name if that's all we have
-                base_username = last_name
-                logging.info(f"Generated base username from last name only: {base_username}")
-            
-            # Replace spaces with hyphens
-            base_username = base_username.replace(" ", "-")
-            
-            # Remove any special characters except hyphens
-            import re
-            base_username = re.sub(r'[^a-z0-9-]', '', base_username)
-            
-            # Ensure we have at least one character
-            if not base_username:
-                base_username = "user"
-                logging.info(f"Empty base username, using default: {base_username}")
-            
-            # Check for existing username in local database
-            existing_usernames = []
+        # Generate username with first name and random word
+        if first_name:
+            # Use the new function to generate a username with random word
+            base_username = generate_username_with_random_word(first_name)
+            logging.info(f"Generated base username with random word: {base_username}")
+        else:
+            # Just use a default if no first name
+            import random
+            random_suffix = random.randint(100, 999)
+            base_username = f"user-{random_suffix}"
+            logging.info(f"No first name provided, using default: {base_username}")
+        
+        # Check for existing username in local database
+        existing_usernames = []
+        try:
+            # Get a database session
+            from app.db.database import get_db
+            db = next(get_db())
             try:
-                # Get a database session
-                from app.db.database import get_db
-                db = next(get_db())
-                try:
-                    from app.db.models import User
-                    # Use a SQL query that works with both SQLite and PostgreSQL
-                    local_existing = db.query(User).filter(User.username.like(f"{base_username}%")).all()
+                from app.db.models import User
+                # Use a SQL query that works with both SQLite and PostgreSQL
+                local_existing = db.query(User).filter(User.username == base_username).all()
+                if local_existing:
                     existing_usernames = [user.username for user in local_existing]
-                    logging.info(f"Found {len(existing_usernames)} existing usernames in local DB with prefix {base_username}")
-                except Exception as db_err:
-                    logging.error(f"Database error checking existing usernames: {db_err}")
-                    existing_usernames = []
-                finally:
-                    db.close()
-            except Exception as e:
-                logging.error(f"Error with database connection: {e}")
+                    logging.info(f"Username {base_username} already exists in local DB")
+            except Exception as db_err:
+                logging.error(f"Database error checking existing usernames: {db_err}")
                 existing_usernames = []
+            finally:
+                db.close()
+        except Exception as e:
+            logging.error(f"Error with database connection: {e}")
+            existing_usernames = []
+        
+        # Also check for existing username in Authentik SSO
+        try:
+            import requests
+            from app.utils.config import Config
             
-            # Also check for existing username in Authentik SSO
-            try:
-                import requests
-                from app.utils.config import Config
-                
-                sso_usernames = []
-                # Define headers before using them
-                headers = {
-                    'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-                    'Content-Type': 'application/json'
-                }
-                user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username__startswith={base_username}"
-                response = requests.get(user_search_url, headers=headers, timeout=10)
-                
-                if response.status_code == 200:
-                    users = response.json().get('results', [])
-                    sso_usernames = [user['username'] for user in users]
-                    logging.info(f"Found {len(sso_usernames)} existing usernames in SSO starting with {base_username}")
-                else:
-                    logging.warning(f"Failed to check SSO for existing usernames: {response.status_code}")
-                
-                # Combine both lists of existing usernames
-                all_existing_usernames = list(set(existing_usernames + sso_usernames))
-                logging.info(f"Total existing usernames: {len(all_existing_usernames)}")
-                
-                # Generate unique username
+            sso_exists = False
+            # Define headers before using them
+            headers = {
+                'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                'Content-Type': 'application/json'
+            }
+            user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={base_username}"
+            response = requests.get(user_search_url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                users = response.json().get('results', [])
+                if any(user['username'] == base_username for user in users):
+                    sso_exists = True
+                    logging.info(f"Username {base_username} already exists in SSO")
+            else:
+                logging.warning(f"Failed to check SSO for existing username: {response.status_code}")
+            
+            # If username exists in either system, generate a new one with a suffix
+            if base_username in existing_usernames or sso_exists:
+                # Generate a new username with a random suffix
+                import random
+                random_suffix = random.randint(100, 999)
+                final_username = f"{base_username}-{random_suffix}"
+                logging.info(f"Username already exists, using random suffix: {final_username}")
+            else:
                 final_username = base_username
-                if final_username in all_existing_usernames:
-                    # Try to add numeric suffix
-                    suffix = 1
-                    while f"{base_username}{suffix}" in all_existing_usernames:
-                        suffix += 1
-                        # Safety check to avoid infinite loop
-                        if suffix > 100:
-                            import random
-                            # Add random suffix as fallback
-                            random_suffix = random.randint(100, 999)
-                            final_username = f"{base_username}{random_suffix}"
-                            logging.warning(f"Using random suffix after trying 100 sequential numbers: {final_username}")
-                            break
-                    else:
-                        final_username = f"{base_username}{suffix}"
+            
+            logging.info(f"Final generated username: {final_username}")
+            
+            # Update session state - update both username_input and username_input_outside
+            st.session_state['username_input'] = final_username
+            st.session_state['username_input_outside'] = final_username
+            st.session_state['username_was_auto_generated'] = True
+            
+            # Set flag to indicate username needs update on next rerun
+            st.session_state['username_needs_update'] = True
+            
+            # Return true to indicate username was generated
+            return True
                 
-                logging.info(f"Final generated username: {final_username}")
+        except Exception as e:
+            # If there's an error checking SSO, fall back to just local check
+            logging.error(f"Error checking SSO for existing username: {e}")
+            if base_username in existing_usernames:
+                # Generate a unique suffix
+                import random
+                random_suffix = random.randint(100, 999)
+                suggested_username = f"{base_username}-{random_suffix}"
+            else:
+                suggested_username = base_username
                 
-                # Update session state - update both username_input and username_input_outside
-                st.session_state['username_input'] = final_username
-                st.session_state['username_input_outside'] = final_username
-                st.session_state['username_was_auto_generated'] = True
-                
-                # Set flag to indicate username needs update on next rerun
-                st.session_state['username_needs_update'] = True
-                
-                # Return true to indicate username was generated
-                return True
-                
-            except Exception as e:
-                # If there's an error checking SSO, fall back to just local check
-                logging.error(f"Error checking SSO for existing usernames: {e}")
-                if base_username in existing_usernames:
-                    # Generate a unique suffix
-                    suffix = 1
-                    while f"{base_username}{suffix}" in existing_usernames:
-                        suffix += 1
-                    suggested_username = f"{base_username}{suffix}"
-                else:
-                    suggested_username = base_username
-                    
-                # Update both internal value and widget value
-                st.session_state['username_input'] = suggested_username
-                st.session_state['username_input_outside'] = suggested_username
-                st.session_state['username_was_auto_generated'] = True
-                st.session_state['username_needs_update'] = True
-                logging.info(f"Generated username (fallback): {suggested_username}")
-                
-                # Return true to indicate username was generated
-                return True
+            # Update both internal value and widget value
+            st.session_state['username_input'] = suggested_username
+            st.session_state['username_input_outside'] = suggested_username
+            st.session_state['username_was_auto_generated'] = True
+            st.session_state['username_needs_update'] = True
+            logging.info(f"Generated username (fallback): {suggested_username}")
+            
+            # Return true to indicate username was generated
+            return True
                 
     # Return false to indicate no username was generated
     return False

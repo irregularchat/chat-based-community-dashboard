@@ -29,6 +29,34 @@ def generate_secure_passphrase():
     passphrase = xp.generate_xkcdpassword(wordlist, numwords=2, delimiter=delimiter)
     return passphrase
 
+def generate_username_with_random_word(first_name):
+    """
+    Generate a username using first name and a random word from xkcdpass.
+    
+    Args:
+        first_name (str): The first name to use in the username
+        
+    Returns:
+        str: A username in the format first-randomword
+    """
+    # Clean up the first name
+    if not first_name:
+        first_name = "user"
+    
+    # Convert to lowercase and remove special characters
+    import re
+    first_name = first_name.strip().lower()
+    first_name = re.sub(r'[^a-z0-9-]', '', first_name)
+    first_name = first_name.replace(" ", "-")
+    
+    # Generate a random word using xkcdpass
+    random_word = xp.generate_xkcdpassword(wordlist, numwords=1, delimiter="")
+    
+    # Combine first name and random word
+    username = f"{first_name}-{random_word}"
+    
+    return username
+
 def force_password_reset(username):
     """Force a password reset for a user."""
     headers = {

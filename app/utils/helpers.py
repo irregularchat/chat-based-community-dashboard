@@ -391,13 +391,36 @@ def send_email(to, subject, body):
         recipients = [to]
         if Config.SMTP_BCC:
             recipients.append(Config.SMTP_BCC)
-        server.sendmail(Config.SMTP_FROM_EMAIL, recipients, msg.as_string())
+            
+        # For AWS SES, the sender email domain must be verified in AWS SES
+        # Default to a known verified domain for this account
+        sender_email = "no-reply@irregularchat.com"
         
-        logging.info("Closing SMTP connection")
-        server.quit()
-        
-        logging.info(f"Email sent successfully to {to}")
-        return True
+        # Make sure we're using a domain that's verified in AWS SES
+        if "amazonaws.com" in Config.SMTP_SERVER:
+            logging.info(f"Using verified domain sender: {sender_email}")
+            
+            # Update the From header in the message
+            if msg['From'] != sender_email:
+                msg.replace_header('From', sender_email)
+                
+        try:
+            server.sendmail(sender_email, recipients, msg.as_string())
+            logging.info("Closing SMTP connection")
+            server.quit()
+            logging.info(f"Email sent successfully to {to}")
+            return True
+        except smtplib.SMTPSenderRefused as e:
+            logging.error(f"Sender refused: {e}")
+            server.quit()
+            logging.error(f"Email could not be sent. Make sure {sender_email} is verified in AWS SES.")
+            return False
+                
+        except smtplib.SMTPRecipientsRefused as e:
+            logging.error(f"Recipients refused: {e}")
+            server.quit()
+            return False
+            
     except smtplib.SMTPException as smtp_e:
         logging.error(f"SMTP error sending email to {to}: {smtp_e}")
         logging.error(f"SMTP Configuration: Server={Config.SMTP_SERVER}, Port={Config.SMTP_PORT}, From={Config.SMTP_FROM_EMAIL}")

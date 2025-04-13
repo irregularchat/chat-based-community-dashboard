@@ -415,6 +415,110 @@ def render_user_management():
                             st.success(f"Successfully removed {success_count} users from the selected groups")
                         else:
                             st.warning(f"Partially successful: Removed {success_count} out of {len(selected_users)} users from the selected groups")
+                
+                # Add Bulk Email section
+                st.markdown("---")
+                st.subheader("Bulk Email")
+                
+                # Check if SMTP is configured
+                if not Config.SMTP_ACTIVE:
+                    st.warning("SMTP is not active. Please configure SMTP settings in your .env file to enable email functionality.")
+                else:
+                    with st.form("bulk_email_form"):
+                        st.write(f"Send email to {len(selected_users)} selected users:")
+                        
+                        # Display email addresses that will receive the message
+                        recipient_emails = [user.get('Email') for user in selected_users if user.get('Email')]
+                        st.write(f"Recipients: {', '.join(recipient_emails)}")
+                        
+                        # Email form fields
+                        email_subject = st.text_input("Subject", key="bulk_email_subject", placeholder="Enter email subject")
+                        email_body = st.text_area("Message", key="bulk_email_body", height=200, placeholder="Enter your message here...")
+                        
+                        # Add HTML checkbox
+                        is_html = st.checkbox("Send as HTML", value=True, key="bulk_email_is_html")
+                        
+                        # Submit button
+                        submit_email = st.form_submit_button("Send Email to All Selected Users")
+                        
+                        if submit_email:
+                            if not email_subject:
+                                st.error("Please enter a subject for the email.")
+                            elif not email_body:
+                                st.error("Please enter a message for the email.")
+                            else:
+                                try:
+                                    # Add admin signature
+                                    admin_username = st.session_state.get("username", "Admin")
+                                    signature = f"\n\nSent by {admin_username} from the Admin Dashboard"
+                                    
+                                    # Format the email body based on HTML setting
+                                    if is_html:
+                                        # Convert newlines to <br> tags if not already HTML
+                                        if not email_body.strip().startswith("<"):
+                                            email_body = email_body.replace("\n", "<br>")
+                                        
+                                        # Add HTML signature
+                                        if not email_body.lower().endswith("</body>") and not email_body.lower().endswith("</html>"):
+                                            email_body += f"<br><br><em>Sent by {admin_username} from the Admin Dashboard</em>"
+                                    else:
+                                        # Add plain text signature
+                                        email_body += signature
+                                    
+                                    # Initialize counters
+                                    success_count = 0
+                                    failed_users = []
+                                    
+                                    # Create a progress bar
+                                    progress = st.progress(0)
+                                    total_users = len(recipient_emails)
+                                    
+                                    # Send emails to all selected users
+                                    for idx, (user, email) in enumerate([(u, u.get('Email')) for u in selected_users if u.get('Email')]):
+                                        try:
+                                            # Update progress
+                                            progress.progress((idx + 1) / total_users)
+                                            
+                                            # Send the email
+                                            result = send_email(
+                                                to=email,
+                                                subject=email_subject,
+                                                body=email_body
+                                            )
+                                            
+                                            if result:
+                                                # Log the email action
+                                                with SessionLocal() as db:
+                                                    create_admin_event(
+                                                        db,
+                                                        "email_sent",
+                                                        st.session_state.get("username", "unknown"),
+                                                        f"Bulk email sent to {user.get('Username')} ({email}) with subject: {email_subject}"
+                                                    )
+                                                success_count += 1
+                                            else:
+                                                failed_users.append(f"{user.get('Username')} ({email})")
+                                        except Exception as e:
+                                            logging.error(f"Error sending email to {email}: {str(e)}")
+                                            failed_users.append(f"{user.get('Username')} ({email}): {str(e)}")
+                                    
+                                    # Display final results
+                                    if success_count == total_users:
+                                        st.success(f"Successfully sent emails to all {success_count} users")
+                                    elif success_count > 0:
+                                        st.warning(f"Partially successful: Sent emails to {success_count} out of {total_users} users")
+                                        with st.expander("Failed recipients"):
+                                            for user in failed_users:
+                                                st.write(f"- {user}")
+                                    else:
+                                        st.error("Failed to send any emails. Check SMTP settings and try again.")
+                                        with st.expander("Failed recipients"):
+                                            for user in failed_users:
+                                                st.write(f"- {user}")
+                                
+                                except Exception as e:
+                                    logging.error(f"Error in bulk email: {str(e)}")
+                                    st.error(f"An error occurred while sending emails: {str(e)}")
     
     # Tab 3: User Details
     with user_tabs[2]:

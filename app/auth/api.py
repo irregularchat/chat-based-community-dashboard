@@ -27,7 +27,7 @@ import threading
 from app.db.session import get_db
 
 # Define user path constant for Authentik
-USER_PATH = "users/"  # Added trailing slash
+USER_PATH = "users/"
 
 # Initialize a session with retry strategy
 # auth/api.py
@@ -1396,3 +1396,56 @@ async def sync_admin_status() -> bool:
     except Exception as e:
         logger.error(f"Error syncing admin status: {e}")
         return False
+
+# Function to create a user in Authentik
+def create_authentik_user(user_data):
+    """
+    Create a user in Authentik using the API.
+    
+    Args:
+        user_data (dict): User data containing username, name, email, password, etc.
+        
+    Returns:
+        dict: Response from the Authentik API
+    """
+    try:
+        headers = {
+            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+            'Content-Type': 'application/json'
+        }
+        
+        # Log detailed payload for debugging (excluding sensitive data)
+        log_data = user_data.copy()
+        if 'password' in log_data:
+            log_data['password'] = '********'  # Mask password
+        logger.info(f"Creating user with data: {json.dumps(log_data, indent=2)}")
+        
+        response_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
+        api_response = requests.post(response_url, headers=headers, json=user_data, timeout=10)
+        
+        # Log response status
+        logger.info(f"API Response status: {api_response.status_code}")
+        
+        # Try to decode the response as JSON
+        try:
+            response_data = api_response.json()
+            logger.info(f"API Response body: {json.dumps(response_data, indent=2)}")
+        except:
+            logger.info(f"API Response text (not JSON): {api_response.text}")
+        
+        api_response.raise_for_status()
+        return api_response.json()
+        
+    except requests.exceptions.HTTPError as http_err:
+        # Get the response JSON if possible for more detailed error info
+        error_detail = "Unknown error"
+        try:
+            error_detail = api_response.json()
+        except:
+            error_detail = api_response.text
+            
+        logger.error(f"HTTP error creating user: {api_response.status_code} - {error_detail}")
+        raise
+    except Exception as req_err:
+        logger.error(f"Request error creating user: {str(req_err)}")
+        raise

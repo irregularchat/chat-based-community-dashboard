@@ -36,7 +36,10 @@ def simple_parse_input(input_text):
         "intro": {
             "organization": "",
             "interests": ""
-        }
+        },
+        "signal_username": "",
+        "phone_number": "",
+        "linkedin_username": ""
     }
     
     # Check for empty input - return empty dictionary with default values
@@ -59,7 +62,10 @@ def simple_parse_input(input_text):
         'email': r'^(?:Email\s*(?:Address)?\s*[:,-]?\s*)(.*)',
         'organization': r'^(?:Organization\s*[:,-]?\s*)(.*)',
         'invited_by': r'^(?:Invited\s*by\s*[:,-]?\s*)(.*)',
-        'interests': r'^(?:Interests\s*[:,-]?\s*)(.*)'
+        'interests': r'^(?:Interests\s*[:,-]?\s*)(.*)',
+        'signal_username': r'^(?:Signal\s*(?:Username|ID)?\s*[:,-]?\s*)(.*)',
+        'phone_number': r'^(?:Phone\s*(?:Number)?\s*[:,-]?\s*)(.*)',
+        'linkedin_username': r'^(?:LinkedIn\s*(?:Username|ID|Profile)?\s*[:,-]?\s*)(.*)'
     }
     
     # Check if this is likely a form input
@@ -137,6 +143,24 @@ def simple_parse_input(input_text):
                 parsed_data["intro"]["interests"] = match.group(1).strip()
                 continue
                 
+            # Signal username
+            match = re.search(form_patterns['signal_username'], line, re.IGNORECASE)
+            if match and match.group(1).strip():
+                parsed_data["signal_username"] = match.group(1).strip()
+                continue
+                
+            # Phone number
+            match = re.search(form_patterns['phone_number'], line, re.IGNORECASE)
+            if match and match.group(1).strip():
+                parsed_data["phone_number"] = match.group(1).strip()
+                continue
+                
+            # LinkedIn username
+            match = re.search(form_patterns['linkedin_username'], line, re.IGNORECASE)
+            if match and match.group(1).strip():
+                parsed_data["linkedin_username"] = match.group(1).strip()
+                continue
+                
             # Also check for lines that just have "Invited by" text without the colon
             invited_match = re.search(r'^Invited\s+by\s+(.+)', line, re.IGNORECASE)
             if invited_match and invited_match.group(1).strip():
@@ -180,7 +204,10 @@ def simple_parse_input(input_text):
             r'^(Email\s*Address\s*[:,-]?\s*)',
             r'^(Organization\s*[:,-]?\s*)',
             r'^(Invited\s*by\s*[:,-]?\s*)',
-            r'^(Interests\s*[:,-]?\s*)'
+            r'^(Interests\s*[:,-]?\s*)',
+            r'^(Signal\s*Username\s*[:,-]?\s*)',
+            r'^(Phone\s*Number\s*[:,-]?\s*)',
+            r'^(LinkedIn\s*Username\s*[:,-]?\s*)'
         ]
         
         cleaned_lines = []

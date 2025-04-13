@@ -4,8 +4,6 @@ This roadmap outlines the key features and milestones planned for the Chat-Based
 
 ## Features and Milestones
 
-- [ ] **NoCoDB for User Verification**
-   - Integrate NoCoDB to manage and verify users via a no-code database interface.
 
 - [ ] **Fix List of Users**
    - Fix the list of users to allow actions on the users selected.
@@ -16,9 +14,6 @@ This roadmap outlines the key features and milestones planned for the Chat-Based
          - Safety Number Verification
          - Add Intro 
          - Add Email
-- [ ] **Fix and Improve the Stability of N8N integration**
-   - Use header tokens to authenticate with N8N
-   - N8N workflow should run based off of the dashboard action
 
 - [ ] **Admin Email to User Email**
    - Add a way to send an email to a user from the dashboard.

@@ -35,7 +35,14 @@ from app.auth.api import (
     create_user
 )
 from app.auth.utils import generate_username_with_random_word
-from app.db.operations import search_users
+from app.db.operations import (
+    search_users,
+    create_user_note,
+    get_user_notes,
+    update_user_note,
+    delete_user_note,
+    get_note_by_id
+)
 from app.messages import create_invite_message, create_user_message
 from app.utils.messages import WELCOME_MESSAGE
 
@@ -91,6 +98,12 @@ def parse_and_rerun():
         logging.warning("Parsing called with empty data")
         st.warning("Nothing to parse. Please enter some data first.")
         return  # Just return if there's no data to parse
+    
+    # Debug: Log all session state keys and values before parsing
+    logging.info("===== SESSION STATE BEFORE PARSING =====")
+    for key, value in st.session_state.items():
+        if key.startswith('_parsed') or key.endswith('_input') or key.endswith('_input_outside'):
+            logging.info(f"Session state key: {key}, value: {value}")
     
     # Log the input data for debugging
     input_data = st.session_state.get("parse_data_input_outside", "")
@@ -168,6 +181,12 @@ def parse_and_rerun():
         
         # Set a flag to indicate parsing was successful
         st.session_state["parsing_successful"] = True
+        
+        # Debug: Log all session state keys and values after parsing
+        logging.info("===== SESSION STATE AFTER PARSING =====")
+        for key, value in st.session_state.items():
+            if key.startswith('_parsed') or key.endswith('_input') or key.endswith('_input_outside') or key == 'parsing_successful':
+                logging.info(f"Session state key: {key}, value: {value}")
         
         # Rerun so the fields can be updated with the parsed data
         logging.info("Rerunning with temporary parsed data in session state")
@@ -356,43 +375,59 @@ async def render_create_user_form():
         # Update session state variables from parsed data
         if '_parsed_first_name' in st.session_state:
             st.session_state['first_name_input'] = st.session_state['_parsed_first_name']
+            st.session_state['first_name_input_outside'] = st.session_state['_parsed_first_name']
             logging.info(f"Updated first_name_input from parsed data: {st.session_state['_parsed_first_name']}")
             
         if '_parsed_last_name' in st.session_state:
             st.session_state['last_name_input'] = st.session_state['_parsed_last_name']
+            st.session_state['last_name_input_outside'] = st.session_state['_parsed_last_name']
             logging.info(f"Updated last_name_input from parsed data: {st.session_state['_parsed_last_name']}")
             
         if '_parsed_email' in st.session_state:
             st.session_state['email_input'] = st.session_state['_parsed_email']
+            st.session_state['email_input_outside'] = st.session_state['_parsed_email']
             logging.info(f"Updated email_input from parsed data: {st.session_state['_parsed_email']}")
             
         if '_parsed_invited_by' in st.session_state:
             st.session_state['invited_by_input'] = st.session_state['_parsed_invited_by']
+            st.session_state['invited_by_input_outside'] = st.session_state['_parsed_invited_by']
             logging.info(f"Updated invited_by_input from parsed data: {st.session_state['_parsed_invited_by']}")
             
         if '_parsed_intro' in st.session_state:
-            st.session_state['intro_text_input'] = st.session_state['_parsed_intro']
-            logging.info(f"Updated intro_text_input from parsed data: {st.session_state['_parsed_intro']}")
+            # Fix: Use the correct key for the intro text input widget
+            if 'intro_text_input' not in st.session_state:
+                st.session_state['intro_text_input'] = st.session_state['_parsed_intro']
+            if 'intro_text_input_outside' not in st.session_state:
+                st.session_state['intro_text_input_outside'] = st.session_state['_parsed_intro']
+            else:
+                st.session_state['intro_text_input'] = st.session_state['_parsed_intro']
+                st.session_state['intro_text_input_outside'] = st.session_state['_parsed_intro']
+            logging.info(f"Updated intro_text_input and intro_text_input_outside from parsed data: {st.session_state['_parsed_intro']}")
             
         # Update new fields from parsed data
         if '_parsed_organization' in st.session_state:
             st.session_state['organization_input'] = st.session_state['_parsed_organization']
+            st.session_state['organization_input_outside'] = st.session_state['_parsed_organization']
             logging.info(f"Updated organization_input from parsed data: {st.session_state['_parsed_organization']}")
             
         if '_parsed_interests' in st.session_state:
             st.session_state['interests_input'] = st.session_state['_parsed_interests']
+            st.session_state['interests_input_outside'] = st.session_state['_parsed_interests']
             logging.info(f"Updated interests_input from parsed data: {st.session_state['_parsed_interests']}")
             
         if '_parsed_signal_username' in st.session_state:
             st.session_state['signal_username_input'] = st.session_state['_parsed_signal_username']
+            st.session_state['signal_username_input_outside'] = st.session_state['_parsed_signal_username']
             logging.info(f"Updated signal_username_input from parsed data: {st.session_state['_parsed_signal_username']}")
             
         if '_parsed_phone_number' in st.session_state:
             st.session_state['phone_number_input'] = st.session_state['_parsed_phone_number']
+            st.session_state['phone_number_input_outside'] = st.session_state['_parsed_phone_number']
             logging.info(f"Updated phone_number_input from parsed data: {st.session_state['_parsed_phone_number']}")
             
         if '_parsed_linkedin_username' in st.session_state:
             st.session_state['linkedin_username_input'] = st.session_state['_parsed_linkedin_username']
+            st.session_state['linkedin_username_input_outside'] = st.session_state['_parsed_linkedin_username']
             logging.info(f"Updated linkedin_username_input from parsed data: {st.session_state['_parsed_linkedin_username']}")
         
         # Generate username from updated names
@@ -401,6 +436,9 @@ async def render_create_user_form():
             st.session_state['username_was_auto_generated'] = True
             # Update username
             update_username_from_inputs()
+            # Also ensure the username_input_outside is updated
+            if 'username_input' in st.session_state:
+                st.session_state['username_input_outside'] = st.session_state['username_input']
             
         # Clear the flag to prevent reprocessing
         st.session_state['parsing_successful'] = False
@@ -817,8 +855,8 @@ async def render_create_user_form():
                 "Enter data to parse",
                 key="parse_data_input_outside",
                 help="Enter multiple lines of information to parse into user fields",
-                placeholder="First Name: John\nLast Name: Doe\nEmail: john.doe@example.com",
-                height=100
+                placeholder="1. John Doe\n2. ACME Corporation\n3. Jane Smith\n4. john.doe@example.com\n5. AI, Python, Security\n6. johndoe",
+                height=150
             )
         else:
             parse_data = st.text_area(
@@ -826,8 +864,8 @@ async def render_create_user_form():
                 value=st.session_state.get('parse_data_input', ""),
                 key="parse_data_input_outside",
                 help="Enter multiple lines of information to parse into user fields",
-                placeholder="First Name: John\nLast Name: Doe\nEmail: john.doe@example.com",
-                height=100
+                placeholder="1. John Doe\n2. ACME Corporation\n3. Jane Smith\n4. john.doe@example.com\n5. AI, Python, Security\n6. johndoe",
+                height=150
             )
         
         # Bottom row with all buttons
@@ -1873,10 +1911,26 @@ async def display_user_list(auth_api_url=None, headers=None):
                     axis=1
                 )
                 
+                # Get note counts for users
+                with get_db() as db:
+                    # Create a note_count column
+                    df['note_count'] = 0
+                    
+                    # For each user in the dataframe, get the note count
+                    for idx, row in df.iterrows():
+                        username = row.get('username')
+                        if username:
+                            # Find the user in our database by username
+                            db_user = db.query(User).filter(User.username == username).first()
+                            if db_user:
+                                # Get the note count
+                                note_count = db.query(User).filter(User.id == db_user.id).first().notes
+                                df.at[idx, 'note_count'] = len(note_count) if note_count else 0
+                
                 # Create selection columns with unique IDs for each row
                 if 'pk' in df.columns:
                     # Display the table with selection columns
-                    cols_to_display = ['username', 'name', 'email', 'is_active', 'last_login']
+                    cols_to_display = ['username', 'name', 'email', 'is_active', 'last_login', 'note_count']
                     st.write(f"Found {len(df)} users matching your filters")
                     
                     # Using Streamlit's data editor for selection
@@ -1894,7 +1948,12 @@ async def display_user_list(auth_api_url=None, headers=None):
                             "name": st.column_config.TextColumn("Name"),
                             "email": st.column_config.TextColumn("Email"),
                             "is_active": st.column_config.TextColumn("Status"),
-                            "last_login": st.column_config.TextColumn("Last Login")
+                            "last_login": st.column_config.TextColumn("Last Login"),
+                            "note_count": st.column_config.NumberColumn(
+                                "Notes",
+                                help="Number of moderator notes for this user",
+                                format="%d"
+                            )
                         },
                         disabled=cols_to_display,
                         height=400
@@ -1946,7 +2005,7 @@ async def display_user_list(auth_api_url=None, headers=None):
             st.write(f"**Selected Users:** {', '.join(selected_usernames)}")
             
             # Create tabs for different action categories
-            action_tabs = st.tabs(["Account Actions", "Group Management", "Profile Updates"])
+            action_tabs = st.tabs(["Account Actions", "Group Management", "Profile Updates", "User Notes"])
             
             # Tab 1: Account Actions
             with action_tabs[0]:
@@ -2098,16 +2157,157 @@ async def display_user_list(auth_api_url=None, headers=None):
                     }
                     st.rerun()
             
+            # Tab 4: User Notes (New)
+            with action_tabs[3]:
+                st.subheader("User Notes")
+                
+                # User notes only make sense for a single user
+                if len(selected_users) > 1:
+                    st.warning("Please select only one user to manage notes.")
+                else:
+                    user = selected_users[0]
+                    username = user.get('username', 'Unknown')
+                    authentik_user_id = user.get('pk')  # This is the authentik user ID
+                    
+                    st.write(f"### Notes for {username}")
+                    
+                    # First, we need to find the local user ID that corresponds to this authentik user
+                    with get_db() as db:
+                        # Find the local user by username (which should be unique)
+                        db_user = db.query(User).filter(User.username == username).first()
+                        
+                        if not db_user:
+                            st.warning(f"User {username} not found in local database. Notes cannot be managed.")
+                        else:
+                            user_id = db_user.id  # This is the local user ID
+                            
+                            # Fetch existing notes for this user from our database
+                            notes = get_user_notes(db, user_id)
+                            
+                            # Display existing notes
+                            if notes:
+                                st.write(f"Found {len(notes)} notes for this user:")
+                                
+                                for i, note in enumerate(notes):
+                                    with st.expander(f"Note {i+1} - {note.created_at.strftime('%Y-%m-%d %H:%M')} by {note.created_by}", expanded=i==0):
+                                        # Initialize session state for editing
+                                        edit_key = f"edit_note_{note.id}"
+                                        if edit_key not in st.session_state:
+                                            st.session_state[edit_key] = False
+                                        
+                                        # Display note content or edit form
+                                        if st.session_state[edit_key]:
+                                            # Edit form
+                                            edited_content = st.text_area(
+                                                "Edit Note", 
+                                                value=note.content, 
+                                                key=f"edit_content_{note.id}",
+                                                height=100
+                                            )
+                                            
+                                            col1, col2 = st.columns(2)
+                                            with col1:
+                                                if st.button("Save Changes", key=f"save_note_{note.id}"):
+                                                    result = update_user_note(
+                                                        db,
+                                                        note.id,
+                                                        edited_content,
+                                                        st.session_state.get("username", "unknown")
+                                                    )
+                                                    
+                                                    if result:
+                                                        st.success("Note updated successfully")
+                                                        st.session_state[edit_key] = False
+                                                        time.sleep(1)
+                                                        st.rerun()
+                                                    else:
+                                                        st.error("Failed to update note")
+                                            with col2:
+                                                if st.button("Cancel", key=f"cancel_edit_{note.id}"):
+                                                    st.session_state[edit_key] = False
+                                                    st.rerun()
+                                        else:
+                                            # Display note content
+                                            st.markdown(note.content)
+                                            
+                                            # Display metadata
+                                            created_time = note.created_at.strftime("%Y-%m-%d %H:%M")
+                                            updated_time = note.updated_at.strftime("%Y-%m-%d %H:%M")
+                                            
+                                            meta_col1, meta_col2 = st.columns(2)
+                                            with meta_col1:
+                                                st.caption(f"Created: {created_time} by {note.created_by}")
+                                            with meta_col2:
+                                                if note.last_edited_by:
+                                                    st.caption(f"Last edited: {updated_time} by {note.last_edited_by}")
+                                            
+                                            # Edit and Delete buttons
+                                            action_col1, action_col2 = st.columns(2)
+                                            with action_col1:
+                                                if st.button("Edit", key=f"edit_{note.id}"):
+                                                    st.session_state[edit_key] = True
+                                                    st.rerun()
+                                            with action_col2:
+                                                if st.button("Delete", key=f"delete_{note.id}"):
+                                                    # Confirm deletion
+                                                    if st.session_state.get(f"confirm_delete_{note.id}", False):
+                                                        # Delete the note
+                                                        success = delete_user_note(
+                                                            db, 
+                                                            note.id, 
+                                                            st.session_state.get("username", "unknown")
+                                                        )
+                                                        if success:
+                                                            st.success("Note deleted successfully")
+                                                            time.sleep(1)
+                                                            st.rerun()
+                                                        else:
+                                                            st.error("Failed to delete note")
+                                                    else:
+                                                        st.session_state[f"confirm_delete_{note.id}"] = True
+                                                        st.warning("Are you sure you want to delete this note? Click Delete again to confirm.")
+                            else:
+                                st.info("No notes found for this user.")
+                            
+                            # Add new note form
+                            st.write("### Add New Note")
+                            new_note_content = st.text_area(
+                                "Note Content", 
+                                key="new_note_content",
+                                height=150,
+                                placeholder="Enter your note here..."
+                            )
+                            
+                            if st.button("Add Note"):
+                                if new_note_content.strip():
+                                    result = create_user_note(
+                                        db,
+                                        user_id,  # Using the local user ID
+                                        new_note_content,
+                                        st.session_state.get("username", "unknown")
+                                    )
+                                    
+                                    if result:
+                                        st.success("Note added successfully")
+                                        # Clear the form
+                                        st.session_state["new_note_content"] = ""
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        st.error("Failed to add note")
+                                else:
+                                    st.warning("Note content cannot be empty")
+            
             # Back button
-            if st.button("Back to Selection", key="back_button"):
+            if st.button("Back to User Selection"):
                 st.session_state['selection_state'] = 'viewing'
+                st.session_state['selected_user_ids'] = []
                 st.rerun()
     
     except Exception as e:
-        logging.error(f"Error in display_user_list: {str(e)}")
-        st.error(f"An error occurred: {str(e)}")
-        import traceback
+        logging.error(f"Error displaying user list: {e}")
         logging.error(traceback.format_exc())
+        st.error(f"An error occurred: {str(e)}")
 
 # Add new functions for user management
 def update_user_status(api_url: str, headers: dict, user_id: str, is_active: bool) -> bool:

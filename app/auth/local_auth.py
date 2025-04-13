@@ -3,6 +3,7 @@ import logging
 import hashlib
 from datetime import datetime
 from app.utils.config import Config
+import time
 
 
 def validate_local_admin(username, password):
@@ -61,6 +62,15 @@ def handle_local_login(username, password):
         # Set admin privileges
         st.session_state['is_admin'] = True
         
+        # Add persistence flags to avoid losing login state on redirect
+        st.session_state['permanent_auth'] = True
+        st.session_state['permanent_admin'] = True
+        st.session_state['auth_timestamp'] = datetime.timestamp(datetime.now())
+        st.session_state['username'] = username
+        
+        # Log successful login with persistence
+        logging.info(f"Local admin login successful with persistence flags set")
+        
         return True
     
     return False
@@ -90,6 +100,15 @@ def display_local_login_form():
         if submit_button:
             if handle_local_login(username, password):
                 st.success("Login successful!")
+                
+                # Delay slightly to ensure session state is saved
+                time.sleep(0.5)
+                
+                # Redirect to special login success page with auth params 
+                # This creates a much more reliable way to maintain session state
+                st.markdown(f'<meta http-equiv="refresh" content="1;URL=\'/?auth_success=true&auth_method=local&username={username}&admin=true\'">', unsafe_allow_html=True)
+                
+                # Return True to signal successful login to parent components
                 return True
             else:
                 st.error("Invalid username or password")

@@ -33,6 +33,7 @@ from app.auth.authentication import is_authenticated, require_authentication
 import traceback
 import requests
 import os
+import time
 
 # Initialize logging first
 setup_logging()
@@ -77,6 +78,12 @@ async def render_sidebar():
     is_authenticated = st.session_state.get('is_authenticated', False)
     is_admin = st.session_state.get('is_admin', False)
     
+    # Check if we just completed authentication (within the last 5 seconds)
+    recent_auth = False
+    if is_authenticated and 'auth_timestamp' in st.session_state:
+        auth_time = st.session_state.get('auth_timestamp', 0)
+        recent_auth = (time.time() - auth_time) < 5  # Consider auth "recent" if within 5 seconds
+    
     # Define page options based on authentication and admin status
     if is_authenticated:
         if is_admin:
@@ -112,12 +119,34 @@ async def render_sidebar():
         current_page = page_options[0]
         st.session_state['current_page'] = current_page
     
+    # Check for sidebar_selection query parameter
+    selected_index = 0  # Default index
+    if 'sidebar_selection' in st.query_params:
+        try:
+            # Get the index from the query parameter
+            selection_index = int(st.query_params.get('sidebar_selection'))
+            
+            # Make sure the index is valid
+            if 0 <= selection_index < len(page_options):
+                selected_index = selection_index
+                # Set the current page in session state based on the index
+                current_page = page_options[selected_index]
+                
+                # Clear the sidebar_selection parameter to prevent redirect loops
+                st.query_params.clear()
+        except (ValueError, TypeError):
+            # Handle invalid index values
+            pass
+    else:
+        # Use the current page's index if it's in page_options
+        selected_index = page_options.index(current_page) if current_page in page_options else 0
+    
     # Create the page selection dropdown
     if page_options:
         selected_page = st.sidebar.selectbox(
             "Select Page",
             page_options,
-            index=page_options.index(current_page) if current_page in page_options else 0,
+            index=selected_index,
             key='current_page'
         )
     else:
@@ -146,13 +175,111 @@ async def render_sidebar():
         from app.ui.common import display_login_button
         display_login_button(location="sidebar")
     
+    # If we just completed authentication and it's still recent, don't rerun again
+    # This helps prevent the logout loop after login
+    if is_authenticated and recent_auth:
+        # Add a small visual indicator that login was successful
+        st.sidebar.success("✅ Login successful!")
+    
     return selected_page
 
 async def render_main_content():
     """Render the main content area"""
     st.title("Community Dashboard")
     
-    # Check for special routes first
+    # Handle redirect query parameter first (before any other processing)
+    query_params = st.query_params
+    if 'redirect' in query_params:
+        redirect_to = query_params.get('redirect')
+        
+        # Clear the redirect parameter to prevent redirect loops
+        query_params.clear()
+        
+        # Handle specific redirects - these will be managed by the sidebar selectbox
+        if redirect_to == 'admin_dashboard':
+            # Initialize page options based on user's authentication status
+            is_authenticated = st.session_state.get('is_authenticated', False)
+            is_admin = st.session_state.get('is_admin', False)
+            
+            # Only redirect to Admin Dashboard if user is authenticated and admin
+            if is_authenticated and is_admin:
+                # We'll manually select this in the sidebar on the next rerun
+                page_options = [
+                    "Create User", 
+                    "List & Manage Users",
+                    "Create Invite",
+                    "Matrix Messages and Rooms",
+                    "Signal Association",
+                    "Settings",
+                    "Prompts Manager",
+                    "Admin Dashboard",
+                    "Test SMTP"
+                ]
+                
+                # Find the index of the Admin Dashboard option
+                if "Admin Dashboard" in page_options:
+                    admin_index = page_options.index("Admin Dashboard")
+                    # Force a rerun using URL parameters to rerender the sidebar
+                    st.query_params["sidebar_selection"] = admin_index
+                    st.rerun()
+        
+        # For other redirects, just rerun to reset the page
+        st.rerun()
+    
+    # Check for auth_success query params next (high priority)
+    if 'auth_success' in query_params and query_params.get('auth_success') == 'true':
+        # Handle login success
+        username = query_params.get('username', 'admin')
+        is_admin = query_params.get('admin', 'false').lower() == 'true'
+        auth_method = query_params.get('auth_method', 'local')
+        
+        # Update session state
+        st.session_state['is_authenticated'] = True
+        st.session_state['permanent_auth'] = True
+        st.session_state['username'] = username
+        st.session_state['auth_method'] = auth_method
+        st.session_state['is_admin'] = is_admin
+        st.session_state['permanent_admin'] = is_admin
+        st.session_state['auth_timestamp'] = time.time()
+        
+        # Create user info
+        st.session_state['user_info'] = {
+            'preferred_username': username,
+            'name': 'Local Administrator' if auth_method == 'local' else username,
+            'email': '',
+            'is_local_admin': auth_method == 'local'
+        }
+        
+        # Show a welcome message
+        st.success(f"👋 Welcome, {username}!")
+        
+        # Display a prominent message about admin status
+        if is_admin:
+            st.info("✅ You have administrator privileges")
+            
+        # Log the successful login
+        logging.info(f"Login success page: user={username}, admin={is_admin}, method={auth_method}")
+        
+        # Continue rendering the normal dashboard after short delay
+        time.sleep(0.5)
+        
+        # Clear the auth params but preserve current page
+        current_page = st.session_state.get('current_page', 'Create User')
+        
+        # Instead of directly modifying st.session_state['current_page'], use query params for redirection
+        if is_admin:
+            # Set redirect query param instead of modifying session state directly
+            st.query_params.clear()
+            st.query_params['redirect'] = 'admin_dashboard'
+        else:
+            # Just clear query params and preserve current page
+            st.query_params.clear()
+        
+        st.rerun()
+        
+        return
+    
+    # Check for special routes next
     if st.query_params.get('page') == 'test_login':
         # Import and render the test login page
         try:
@@ -290,17 +417,13 @@ async def render_main_content():
                 user_info = st.session_state.get('user_info', {})
                 st.write(f"Welcome, {user_info.get('preferred_username', 'User')}!")
                 
-                # Add navigation buttons
-                if st.button("Go to Dashboard"):
-                    # Clear query parameters and redirect to home
-                    st.query_params.clear()
-                    st.rerun()
+                # Update session state to prevent reruns from losing auth state
+                st.session_state['permanent_auth'] = True
+                st.session_state['is_authenticated'] = True
+                st.session_state['username'] = user_info.get('preferred_username', 'User')
                 
-                # Always rerun after a short delay to clear the URL
-                import time
-                time.sleep(1)
-                st.query_params.clear()
-                st.rerun()
+                # Force a browser refresh to the main page to update UI state properly
+                st.markdown('<meta http-equiv="refresh" content="1;URL=\'/\'">', unsafe_allow_html=True)
                 return
             else:
                 # Fall back to normal callback handling
@@ -807,6 +930,57 @@ async def main():
         # Initialize the application
         setup_page_config()
         initialize_session_state()
+        
+        # Check for auth_success query parameter (more reliable than session state persistence)
+        query_params = st.query_params
+        if 'auth_success' in query_params and query_params.get('auth_success') == 'true':
+            logging.info("Detected auth_success query parameter - setting auth state")
+            st.session_state['is_authenticated'] = True
+            st.session_state['permanent_auth'] = True
+            
+            # Get username and auth method from query params
+            username = query_params.get('username', 'admin')
+            auth_method = query_params.get('auth_method', 'local')
+            
+            # Set admin status from query params
+            is_admin = query_params.get('admin', 'false').lower() == 'true'
+            st.session_state['is_admin'] = is_admin
+            st.session_state['permanent_admin'] = is_admin
+            
+            # Set additional session info
+            st.session_state['username'] = username
+            st.session_state['auth_method'] = auth_method
+            st.session_state['auth_timestamp'] = time.time()
+            
+            # Create minimal user info
+            st.session_state['user_info'] = {
+                'preferred_username': username,
+                'name': username,
+                'email': '',
+                'is_local_admin': auth_method == 'local'
+            }
+            
+            # Clear the URL to avoid repeating the login on refresh
+            logging.info(f"Auth state restored from query params: user={username}, admin={is_admin}")
+            
+            # Replace URL with clean one without losing other query params
+            clean_params = {k: v for k, v in query_params.items() 
+                           if k not in ['auth_success', 'username', 'auth_method', 'admin']}
+            st.query_params.update(clean_params)
+        
+        # Also check for permanent auth flag as a backup method
+        elif st.session_state.get('permanent_auth', False) and not st.session_state.get('is_authenticated', False):
+            # Restore authentication state from permanent flag
+            logging.info("Restoring authentication state from permanent flag")
+            st.session_state['is_authenticated'] = True
+            
+            # Also restore admin status if it was set
+            if st.session_state.get('permanent_admin', False):
+                logging.info("Restoring admin status from permanent flag")
+                st.session_state['is_admin'] = True
+                
+            # Log detailed session restoration for debugging
+            logging.info(f"Session state after restoration: auth={st.session_state.get('is_authenticated')}, admin={st.session_state.get('is_admin')}")
         
         # Initialize database
         init_db()

@@ -1,6 +1,5 @@
 import requests
 import random
-from xkcdpass import xkcd_password as xp
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from app.utils.config import Config # This will import the Config class from the config module
@@ -19,6 +18,12 @@ import hashlib
 from typing import Optional, List, Dict, Any
 import string
 import traceback
+from app.auth.utils import generate_secure_passphrase, force_password_reset, shorten_url
+import threading
+from app.db.session import get_db
+
+# Define user path constant for Authentik
+USER_PATH = "users/"
 
 # Initialize a session with retry strategy
 # auth/api.py
@@ -109,62 +114,9 @@ def generate_webhook_signature(payload: dict) -> str:
 #         return {"success": False, "error": str(e)}
 
 
-def shorten_url(long_url, url_type, name=None):
-    if not Config.SHLINK_API_TOKEN or not Config.SHLINK_URL:
-        return long_url  # Return original if no Shlink setup
-
-    eastern = timezone('US/Eastern')
-    current_time_eastern = datetime.now(eastern)
-
-    # Use the name parameter properly
-    if not name:
-        name = f"{current_time_eastern.strftime('%d%H%M')}-{url_type}"
-    else:
-        name = f"{current_time_eastern.strftime('%d%H%M')}-{url_type}-{name}"
-    # Sanitize the slug
-    name = name.replace(' ', '-').lower()
-
-    headers = {
-        'X-Api-Key': Config.SHLINK_API_TOKEN,
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
-    }
-
-
-    try:
-        response = requests.post(Config.SHLINK_URL, json=payload, headers=headers, timeout=10)
-        response.raise_for_status()
-        response_data = response.json()
-
-        short_url = response_data.get('shortUrl')
-        if short_url:
-            return short_url.replace('http://', 'https://')  # Ensure HTTPS
-        else:
-            logging.error('API response missing "shortUrl".')
-            return long_url
-    except requests.exceptions.HTTPError as http_err:
-        logging.error(f'HTTP error occurred while shortening URL: {http_err}')
-        logging.error(f'Response: {response.text}')
-        return long_url
-    except requests.exceptions.RequestException as e:
-        logging.error(f'Error shortening URL: {e}')
-        return long_url
-
 # Function to generate a secure password
+from app.auth.utils import generate_secure_passphrase
 
-# Locate the default wordlist provided by xkcdpass
-wordfile = xp.locate_wordfile()
-# Generate a wordlist with words of length between 5 and 8 characters
-wordlist = xp.generate_wordlist(wordfile=wordfile, min_length=3, max_length=6)
-# Create a passphrase using 4 words and optional special characters
-def generate_secure_passphrase():
-    # Generate a random number to use as part of the delimiter
-    random_number = str(random.randint(10, 99))  # Generates a 2-digit number
-    # Use the random number as a delimiter
-    delimiter = random_number
-    # Generate the passphrase with the random number as the delimiter
-    passphrase = xp.generate_xkcdpassword(wordlist, numwords=2, delimiter=delimiter)
-    return passphrase
 def list_events_cached(api_url, headers):
     response = requests.get(f"{api_url}/events", headers=headers)
     response.raise_for_status()  # Raise an error for bad responses
@@ -188,210 +140,171 @@ def reset_user_password(auth_api_url, headers, user_id, new_password):
         logging.error(f"Error resetting password for user {user_id}: {e}")
         return False
 
-def create_user(username, password=None, email=None, name=None, invited_by=None, intro=None, is_admin=False, attributes=None, groups=None):
-    """Create a new user in Authentik with proper password reset, email, and forum post creation."""
+def create_user(
+    email,
+    first_name,
+    last_name,
+    attributes=None,
+    groups=None,
+    send_welcome=True,
+    create_discourse_post=False,
+    desired_username=None,
+):
+    """
+    Create a new user in Authentik and optionally send a welcome message
+    """
+    # Import inside function to avoid circular imports
+    from app.utils.helpers import create_unique_username
+    from app.messages import create_user_message
+    import threading
+    
+    # Initialize the response dictionary
+    response = {
+        "success": False,
+        "error": None,
+        "user_id": None,
+        "username": None,
+        "temp_password": None,
+        "password_reset": None,
+    }
+    
+    # Generate a unique username based on input or first/last name
+    if not desired_username:
+        # Use first name and last name to create a username
+        username_base = f"{first_name.lower()}-{last_name.lower()}"
+    else:
+        username_base = desired_username
+    
+    # Create a unique username (handles cleaning and incrementing if needed)
     try:
-        # Use provided password or generate a temporary one
-        temp_password = password if password else generate_secure_passphrase()
-        full_name = name  # Map name parameter to full_name used internally
-        discourse_post_url = None  # Initialize post URL variable
-        password_reset_successful = False
+        # Get a database session
+        db = next(get_db())
+        
+        # Create a unique username with the DB session
+        username = create_unique_username(db, username_base)
+        
+        # Close the database session
+        db.close()
+    except Exception as e:
+        logging.error(f"Error generating unique username: {e}")
+        # Fallback without database check
+        import re
+        username = username_base.strip().lower().replace(" ", "-")
+        username = re.sub(r'[^a-z0-9-]', '', username)
+        if not username:
+            username = "user"
+        # Add a random suffix to avoid collisions in this fallback case
+        import random
+        username = f"{username}-{random.randint(1000, 9999)}"
+        logging.warning(f"Using fallback username generation: {username}")
+    
+    # Store the username for later use in response
+    response["username"] = username
+    
+    # Create a temporary password for the user
+    temp_password = generate_secure_passphrase()
+    response["temp_password"] = temp_password
+    
+    # Initialize user data with attributes and groups
+    user_data = {
+        "username": username,
+        "name": f"{first_name} {last_name}",
+        "email": email,
+        "password": temp_password,
+        "path": USER_PATH,
+    }
 
-        # Check for existing usernames and modify if necessary
-        original_username = username
-        counter = 1
+    # Add attributes if provided
+    if attributes:
+        user_data["attributes"] = attributes
+    
+    # Add main group ID if configured
+    main_group_id = os.getenv("AUTHENTIK_MAIN_GROUP_ID")
+    if main_group_id:
+        user_data["groups"] = [main_group_id]
+    
+    # Add any additional groups if specified
+    if groups:
+        if "groups" not in user_data:
+            user_data["groups"] = []
+        user_data["groups"].extend(groups)
+
+    try:
+        # Create the user in Authentik
         headers = {
             'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
             'Content-Type': 'application/json'
         }
         
-        try:
-            # Check for existing username more efficiently (check only for exact match)
-            user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
-            response = session.get(user_search_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            users = response.json().get('results', [])
-            
-            # If username exists, modify it
-            while any(user['username'] == username for user in users):
-                username = f"{original_username}{counter}"
-                counter += 1
-                # We don't need to search again, just check if our new username matches any existing ones
-            
-            # Log if username was modified
-            if username != original_username:
-                logging.info(f"Username modified for uniqueness: {original_username} -> {username}")
-            
-            # Prepare user data
-            user_data = {
-                "username": username,
-                "name": full_name,
-                "email": email,
-                "is_active": True,
-                "path": username,
-                "groups": groups or []
-            }
-            
-            # If main group ID is configured, add it to groups
-            if Config.MAIN_GROUP_ID and Config.MAIN_GROUP_ID not in user_data["groups"]:
-                user_data["groups"].append(Config.MAIN_GROUP_ID)
-            
-            # Add attributes
-            if attributes:
-                user_data["attributes"] = attributes
-            else:
-                user_data["attributes"] = {}
-            
-            # Add optional fields to attributes
-            if invited_by:
-                user_data["attributes"]["invited_by"] = invited_by
-            if intro:
-                user_data["attributes"]["intro"] = intro
-                
-            # Add is_admin flag if set
-            if is_admin:
-                user_data["attributes"]["is_admin"] = True
-            
-            # Create the user
-            create_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
-            response = session.post(create_url, headers=headers, json=user_data, timeout=10)
-            response.raise_for_status()
-            user = response.json()
-
-            if not isinstance(user, dict):
-                logging.error("Unexpected response format: user is not a dictionary.")
-                return {
-                    'error': "Unexpected response format from API",
-                    'user_id': None
-                }
-
-            logging.info(f"User created: {user.get('username')}")
-            user_id = user.get('pk')
-
-            # Reset the user's password - don't wait for this to complete before proceeding
-            try:
-                password_reset_successful = reset_user_password(Config.AUTHENTIK_API_URL, headers, user_id, temp_password)
-                if not password_reset_successful:
-                    logging.error(f"Failed to reset password for user {user.get('username')}")
-            except Exception as e:
-                logging.error(f"Error resetting password: {e}")
-                # Continue anyway
-
-            # Send welcome message via Matrix if enabled - do this in a non-blocking way
-            if Config.MATRIX_ACTIVE:
-                try:
-                    # Import here to avoid circular imports
-                    from app.utils.matrix_actions import send_welcome_message
-                    # Use threading to send the welcome message in background
-                    import threading
-                    welcome_thread = threading.Thread(
-                        target=send_welcome_message,
-                        args=(user_id, username, full_name),
-                        daemon=True
-                    )
-                    welcome_thread.start()
-                    logging.info(f"Started Matrix welcome message thread for {username}")
-                except Exception as matrix_error:
-                    logging.error(f"Failed to create Matrix direct chat: {matrix_error}")
-                    logging.error(f"Failed to send Matrix welcome message: {matrix_error}")
-            
-            # Create Discourse post if all requirements are met - also in a background thread
-            effective_intro = intro
-            if attributes and 'intro' in attributes:
-                effective_intro = attributes['intro']
-                
-            if Config.DISCOURSE_ACTIVE and username and effective_intro:
-                try:
-                    # Create this in a separate thread to avoid blocking
-                    import threading
-                    
-                    def create_discourse_post_thread():
-                        try:
-                            logging.info(f"All requirements met, creating Discourse post for {username}")
-                            # Create a title for the post using the username
-                            post_title = f"Introduction: {username}"
-                            
-                            # Call Discourse API to create the post
-                            discourse_success, post_url = create_discourse_post(
-                                headers=headers,
-                                title=post_title,
-                                content="",  # Content will be built by the function
-                                username=username,
-                                intro=effective_intro,
-                                invited_by=user_data['attributes'].get('invited_by') if 'attributes' in user_data else None
-                            )
-                            
-                            if discourse_success and post_url:
-                                logging.info(f"Successfully created Discourse post for {username}: {post_url}")
-                            else:
-                                logging.warning(f"Failed to create Discourse post for {username}")
-                        except Exception as e:
-                            logging.error(f"Error in Discourse post creation thread: {e}")
-                    
-                    # Start thread
-                    discourse_thread = threading.Thread(target=create_discourse_post_thread, daemon=True)
-                    discourse_thread.start()
-                    
-                except Exception as discourse_error:
-                    logging.error(f"Failed to start Discourse post creation thread: {discourse_error}")
-
-            # Sync the new user with local database - use a minimal sync for better performance
-            with SessionLocal() as db:
-                try:
-                    # Instead of fetching all users, just sync this single user
-                    user_obj = sync_user_data(db, [user])
-                    
-                    # Add creation event to admin events
-                    admin_event = AdminEvent(
-                        timestamp=datetime.now(),
-                        event_type='user_created',
-                        username=username,
-                        details=f'User created successfully'
-                    )
-                    db.add(admin_event)
-                    db.commit()
-                    
-                    logging.info(f"Successfully created and synced user {username}")
-                except Exception as e:
-                    logging.error(f"Error syncing user to local database: {e}")
-                    # Continue even if sync fails
-                
-            # Return success response - note that discourse_post_url might still be None at this point
-            # since it's created in a background thread
-            return {
-                'user_id': user_id,
-                'username': username,
-                'password': temp_password,
-                'discourse_url': discourse_post_url,
-                'password_reset_successful': password_reset_successful
-            }
+        response_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
+        api_response = requests.post(response_url, headers=headers, json=user_data, timeout=10)
+        api_response.raise_for_status()
+        response_json = api_response.json()
         
-        except requests.exceptions.HTTPError as http_err:
-            error_message = f"HTTP error occurred while creating user"
-            if 'response' in locals():
+        if not response_json.get("pk"):
+            response["error"] = f"Failed to create user: {response_json}"
+            logging.error(f"Error creating user: {response_json}")
+            return response
+        
+        # User created successfully
+        user_id = response_json.get("pk")
+        response["user_id"] = user_id
+        response["success"] = True
+        
+        # Reset the user's password in a separate thread to avoid blocking
+        def reset_password_task():
+            try:
+                password_reset_response = reset_user_password(Config.AUTHENTIK_API_URL, headers, user_id, temp_password)
+                if password_reset_response:
+                    logging.info(f"Password reset link created for user {username}")
+                    response["password_reset"] = True
+                else:
+                    logging.error(f"Failed to create password reset link for user {username}")
+                    response["password_reset"] = False
+            except Exception as e:
+                logging.error(f"Error in password reset task: {str(e)}")
+                response["password_reset"] = False
+        
+        # Start the password reset thread
+        threading.Thread(target=reset_password_task).start()
+        
+        # Send welcome message if requested
+        if send_welcome:
+            def send_welcome_message_task():
                 try:
-                    error_detail = response.json()
-                    error_message += f": {error_detail.get('detail', '')}"
-                except:
-                    error_message += f": {response.text}"
+                    # Create welcome message using the unique username
+                    message = create_user_message(username, temp_password)
+                    
+                    # Log the message for debugging
+                    logging.info(f"Sending welcome message to {username}")
+                    
+                    # Send message via Matrix
+                    send_welcome_to_user(message)
+                    logging.info(f"Welcome message sent to {username}")
+                except Exception as e:
+                    logging.error(f"Error sending welcome message: {str(e)}")
             
-            logging.error(f"{error_message}: {http_err}")
-            return {
-                'error': error_message
-            }
-        except Exception as e:
-            error_message = f"Error creating user: {e}"
-            logging.error(error_message)
-            return {
-                'error': error_message
-            }
-
+            # Start welcome message thread
+            threading.Thread(target=send_welcome_message_task).start()
+        
+        # Create Discourse post if requested
+        if create_discourse_post:
+            def create_discourse_post_task():
+                try:
+                    create_new_user_post(username, email)
+                    logging.info(f"Created Discourse post for new user {username}")
+                except Exception as e:
+                    logging.error(f"Error creating Discourse post: {str(e)}")
+            
+            # Start Discourse post thread
+            threading.Thread(target=create_discourse_post_task).start()
+        
+        return response
+    
     except Exception as e:
-        error_message = f"Error in create_user: {e}"
-        logging.error(error_message)
-        return {
-            'error': error_message
-        }
+        logging.error(f"Error in create_user: {str(e)}")
+        response["error"] = str(e)
+        return response
 
 
 # List Users Function is needed and works better than the new methos session.get(f"{auth_api_url}/users/", headers=headers, timeout=10)
@@ -705,62 +618,6 @@ def generate_recovery_link(username):
     except requests.exceptions.RequestException as e:
         logging.error(f"Error generating recovery link for {username}: {e}")
         return None
-
-def force_password_reset(username):
-    """Force a password reset for a user."""
-    headers = {
-        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-        'Content-Type': 'application/json'
-    }
-    try:
-        # First, get the user ID by username
-        user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?search={username}"
-        response = session.get(user_search_url, headers=headers, timeout=10)
-        response.raise_for_status()
-        users = response.json().get('results', [])
-        if not users:
-            logging.error(f"No user found with username: {username}")
-            return False
-        user_id = users[0]['pk']
-
-        # Now, force the password reset using the correct method
-        # The 405 error indicates Method Not Allowed, so we need to check the API documentation
-        # for the correct method (GET, PUT, or PATCH instead of POST)
-        reset_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/force_password_reset/"
-        logging.info(f"Sending password reset request for user {username} (ID: {user_id})")
-        
-        # Try GET method first
-        response = session.get(reset_api_url, headers=headers, timeout=10)
-        
-        # If GET fails, try PUT
-        if response.status_code == 405:  # Method Not Allowed
-            logging.info(f"GET method not allowed for password reset, trying PUT")
-            response = session.put(reset_api_url, headers=headers, json={}, timeout=10)
-            
-        # If PUT fails, try PATCH
-        if response.status_code == 405:  # Method Not Allowed
-            logging.info(f"PUT method not allowed for password reset, trying PATCH")
-            response = session.patch(reset_api_url, headers=headers, json={}, timeout=10)
-        
-        # Check if the response has content before trying to parse JSON
-        if response.status_code in [200, 201, 202, 204]:  # Success codes
-            logging.info(f"Password reset successful for user {username} (ID: {user_id}) with status code {response.status_code}")
-            return True
-            
-        if response.content:  # Only try to parse JSON if there's content
-            try:
-                response_data = response.json()
-                logging.error(f"Error forcing password reset for {username}: {response_data.get('detail', 'Unknown error')}")
-            except ValueError:
-                logging.error(f"Invalid JSON response for password reset: {response.content}")
-        else:
-            logging.error(f"Password reset failed for user {username} (ID: {user_id}) with status code {response.status_code}")
-            
-        return False
-            
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error forcing password reset for {username}: {e}")
-        return False
 
 def update_user_email(auth_api_url, headers, user_id, new_email):
     """Update a user's email address in Authentik.
@@ -1359,7 +1216,8 @@ async def handle_registration(user_data: dict, db: Session) -> dict:
         # Create user in Authentik
         success, created_username, temp_password, discourse_post_url = await create_user(
             username=username,
-            full_name=full_name,
+            first_name=full_name.split()[0],
+            last_name=full_name.split()[1],
             email=email,
             invited_by=invited_by,
             intro=organization

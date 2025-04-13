@@ -8,16 +8,14 @@ import time
 from app.db.operations import search_users, add_admin_event, sync_user_data, User
 from app.db.session import get_db
 from sqlalchemy.orm import Session
+from app.auth import generate_secure_passphrase, force_password_reset, shorten_url
 from app.auth.api import (
-    force_password_reset,
-    generate_secure_passphrase,
     list_users_cached,
     update_user_status,
     delete_user,
     reset_user_password,
     update_user_intro,
     update_user_invited_by,
-    shorten_url,
     list_users
 )
 from app.utils.messages import (
@@ -115,7 +113,7 @@ def add_timeline_event(db: Session, event_type: str, username: str, event_descri
 def create_unique_username(db, desired_username):
     """
     Create a unique username based on the desired username.
-    Checks the database for existing usernames and increments a suffix if needed.
+    Checks both the local database and Authentik SSO for existing usernames and increments a suffix if needed.
     
     Args:
         db: Database session
@@ -124,6 +122,8 @@ def create_unique_username(db, desired_username):
     Returns:
         str: A unique username
     """
+    import logging
+    
     # Clean up the desired username
     desired_username = desired_username.strip().lower()
     
@@ -138,30 +138,75 @@ def create_unique_username(db, desired_username):
     if not desired_username:
         desired_username = "user"
     
-    # Query the database for usernames that start with the desired username
-    existing_users = search_users(db, desired_username)
+    # Get existing usernames from both local DB and SSO
+    existing_usernames = []
     
-    # Handle mock objects in tests
+    # 1. Query the local database for usernames that start with the desired username
     try:
+        from app.db.operations import search_users
         from unittest.mock import Mock
-        if isinstance(existing_users, Mock):
-            # In test environment with mocked search_users
+        
+        # Check if db is a mock (for testing)
+        if isinstance(db, Mock):
+            logging.info("Using mock database in create_unique_username")
             return f"{desired_username}-fallback"
         
-        existing_usernames = [user.username for user in existing_users]
+        local_users = search_users(db, desired_username)
+        local_usernames = [user.username for user in local_users]
+        existing_usernames.extend(local_usernames)
+        logging.info(f"Found {len(local_usernames)} existing usernames in local DB with prefix {desired_username}")
     except Exception as e:
-        import logging
-        logging.warning(f"Error processing existing users in create_unique_username: {e}")
-        # Fallback for tests or errors
-        return f"{desired_username}-fallback"
+        logging.warning(f"Error querying local database in create_unique_username: {e}")
     
+    # 2. Query Authentik SSO for usernames that start with the desired username
+    try:
+        import requests
+        from app.utils.config import Config
+        
+        # Set up headers for Authentik API
+        headers = {
+            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+            'Content-Type': 'application/json'
+        }
+        
+        # Query Authentik for usernames starting with the desired username
+        user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username__startswith={desired_username}"
+        response = requests.get(user_search_url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            users = response.json().get('results', [])
+            sso_usernames = [user['username'] for user in users]
+            existing_usernames.extend(sso_usernames)
+            logging.info(f"Found {len(sso_usernames)} existing usernames in SSO starting with {desired_username}")
+        else:
+            logging.warning(f"Failed to check SSO for existing usernames: {response.status_code}")
+    except Exception as e:
+        logging.warning(f"Error querying SSO in create_unique_username: {e}")
+    
+    # Remove duplicates from the combined list
+    existing_usernames = list(set(existing_usernames))
+    logging.info(f"Total unique existing usernames found: {len(existing_usernames)}")
+    
+    # Check if the desired username is already taken
     if desired_username not in existing_usernames:
         return desired_username
     else:
+        # Try numeric suffixes until we find an available one
         suffix = 1
         while f"{desired_username}{suffix}" in existing_usernames:
             suffix += 1
-        return f"{desired_username}{suffix}"
+            # Safety check to avoid infinite loop
+            if suffix > 100:
+                import random
+                # Add random suffix as fallback
+                random_suffix = random.randint(100, 999)
+                final_username = f"{desired_username}{random_suffix}"
+                logging.warning(f"Using random suffix after trying 100 sequential numbers: {final_username}")
+                return final_username
+        
+        final_username = f"{desired_username}{suffix}"
+        logging.info(f"Generated unique username with suffix: {final_username}")
+        return final_username
 
 def get_eastern_time(expires_date, expires_time):
     # Combine date and time

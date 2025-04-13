@@ -55,7 +55,18 @@ def reset_create_user_form_fields():
         "is_admin_checkbox",
         "selected_groups",
         "group_selection",
-        "username_was_auto_generated"
+        "username_was_auto_generated",
+        # New fields
+        "organization_input",
+        "organization_input_outside",
+        "interests_input",
+        "interests_input_outside",
+        "signal_username_input",
+        "signal_username_input_outside",
+        "phone_number_input",
+        "phone_number_input_outside",
+        "linkedin_username_input",
+        "linkedin_username_input_outside"
     ]
     
     # Set a flag in session state to indicate we should clear fields
@@ -127,9 +138,33 @@ def parse_and_rerun():
             intro_data = parsed.get("intro", {})
             org = intro_data.get("organization", "")
             interests = intro_data.get("interests", "")
+            
+            # Set organization and interests as separate fields
+            if org:
+                st.session_state["_parsed_organization"] = org
+                logging.info(f"Set _parsed_organization to: '{org}'")
+                
+            if interests:
+                st.session_state["_parsed_interests"] = interests
+                logging.info(f"Set _parsed_interests to: '{interests}'")
+            
+            # Also keep the combined intro for backward compatibility
             combined_intro = f"{org}\n\nInterests: {interests}" if interests else org
             st.session_state["_parsed_intro"] = combined_intro
             logging.info(f"Set _parsed_intro to organization: '{org}' and interests: '{interests}'")
+        
+        # Handle additional fields if present in parsed data
+        if "signal_username" in parsed:
+            st.session_state["_parsed_signal_username"] = parsed.get("signal_username", "")
+            logging.info(f"Set _parsed_signal_username to: '{parsed.get('signal_username', '')}'")
+            
+        if "phone_number" in parsed:
+            st.session_state["_parsed_phone_number"] = parsed.get("phone_number", "")
+            logging.info(f"Set _parsed_phone_number to: '{parsed.get('phone_number', '')}'")
+            
+        if "linkedin_username" in parsed:
+            st.session_state["_parsed_linkedin_username"] = parsed.get("linkedin_username", "")
+            logging.info(f"Set _parsed_linkedin_username to: '{parsed.get('linkedin_username', '')}'")
         
         # Set a flag to indicate parsing was successful
         st.session_state["parsing_successful"] = True
@@ -150,7 +185,9 @@ def clear_parse_data():
     # Clear all temporary parsed data fields
     for key in [
         '_parsed_first_name', '_parsed_last_name', '_parsed_email',
-        '_parsed_invited_by', '_parsed_intro'
+        '_parsed_invited_by', '_parsed_intro', '_parsed_organization',
+        '_parsed_interests', '_parsed_signal_username', '_parsed_phone_number',
+        '_parsed_linkedin_username'
     ]:
         if key in st.session_state:
             del st.session_state[key]
@@ -336,6 +373,27 @@ async def render_create_user_form():
         if '_parsed_intro' in st.session_state:
             st.session_state['intro_text_input'] = st.session_state['_parsed_intro']
             logging.info(f"Updated intro_text_input from parsed data: {st.session_state['_parsed_intro']}")
+            
+        # Update new fields from parsed data
+        if '_parsed_organization' in st.session_state:
+            st.session_state['organization_input'] = st.session_state['_parsed_organization']
+            logging.info(f"Updated organization_input from parsed data: {st.session_state['_parsed_organization']}")
+            
+        if '_parsed_interests' in st.session_state:
+            st.session_state['interests_input'] = st.session_state['_parsed_interests']
+            logging.info(f"Updated interests_input from parsed data: {st.session_state['_parsed_interests']}")
+            
+        if '_parsed_signal_username' in st.session_state:
+            st.session_state['signal_username_input'] = st.session_state['_parsed_signal_username']
+            logging.info(f"Updated signal_username_input from parsed data: {st.session_state['_parsed_signal_username']}")
+            
+        if '_parsed_phone_number' in st.session_state:
+            st.session_state['phone_number_input'] = st.session_state['_parsed_phone_number']
+            logging.info(f"Updated phone_number_input from parsed data: {st.session_state['_parsed_phone_number']}")
+            
+        if '_parsed_linkedin_username' in st.session_state:
+            st.session_state['linkedin_username_input'] = st.session_state['_parsed_linkedin_username']
+            logging.info(f"Updated linkedin_username_input from parsed data: {st.session_state['_parsed_linkedin_username']}")
         
         # Generate username from updated names
         if '_parsed_first_name' in st.session_state or '_parsed_last_name' in st.session_state:
@@ -363,6 +421,17 @@ async def render_create_user_form():
         st.session_state['username_input'] = ""
     if 'parse_data_input' not in st.session_state:
         st.session_state['parse_data_input'] = ""
+    # Initialize new fields
+    if 'organization_input' not in st.session_state:
+        st.session_state['organization_input'] = ""
+    if 'interests_input' not in st.session_state:
+        st.session_state['interests_input'] = ""
+    if 'signal_username_input' not in st.session_state:
+        st.session_state['signal_username_input'] = ""
+    if 'phone_number_input' not in st.session_state:
+        st.session_state['phone_number_input'] = ""
+    if 'linkedin_username_input' not in st.session_state:
+        st.session_state['linkedin_username_input'] = ""
         
     # Create tabs for main form and advanced options
     create_tabs = st.tabs(["Create User", "Advanced Options"])
@@ -582,7 +651,105 @@ async def render_create_user_form():
                     logging.error(traceback.format_exc())
                     st.error(f"An error occurred while checking username: {str(e)}")
         
-        # Row 4: Group Assignment section
+        # Row 4: Additional user attributes
+        st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
+        st.subheader("Additional Information")
+        
+        # Organization and Interests
+        col1, col2 = st.columns(2)
+        with col1:
+            # Organization field
+            if 'organization_input_outside' in st.session_state:
+                organization = st.text_input(
+                    "Organization",
+                    key="organization_input_outside",
+                    help="User's organization or company (optional)",
+                    placeholder="Company or organization name"
+                )
+            else:
+                organization = st.text_input(
+                    "Organization",
+                    value=st.session_state.get('organization_input', ""),
+                    key="organization_input_outside",
+                    help="User's organization or company (optional)",
+                    placeholder="Company or organization name"
+                )
+        
+        with col2:
+            # Interests field
+            if 'interests_input_outside' in st.session_state:
+                interests = st.text_input(
+                    "Interests",
+                    key="interests_input_outside",
+                    help="User's interests or areas of expertise (optional)",
+                    placeholder="AI, Security, Development, etc."
+                )
+            else:
+                interests = st.text_input(
+                    "Interests",
+                    value=st.session_state.get('interests_input', ""),
+                    key="interests_input_outside",
+                    help="User's interests or areas of expertise (optional)",
+                    placeholder="AI, Security, Development, etc."
+                )
+        
+        # Signal, Phone, LinkedIn
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            # Signal username field
+            if 'signal_username_input_outside' in st.session_state:
+                signal_username = st.text_input(
+                    "Signal Username",
+                    key="signal_username_input_outside",
+                    help="User's Signal username (optional)",
+                    placeholder="@username"
+                )
+            else:
+                signal_username = st.text_input(
+                    "Signal Username",
+                    value=st.session_state.get('signal_username_input', ""),
+                    key="signal_username_input_outside",
+                    help="User's Signal username (optional)",
+                    placeholder="@username"
+                )
+        
+        with col2:
+            # Phone number field
+            if 'phone_number_input_outside' in st.session_state:
+                phone_number = st.text_input(
+                    "Phone Number",
+                    key="phone_number_input_outside",
+                    help="User's phone number (optional)",
+                    placeholder="+1234567890"
+                )
+            else:
+                phone_number = st.text_input(
+                    "Phone Number",
+                    value=st.session_state.get('phone_number_input', ""),
+                    key="phone_number_input_outside",
+                    help="User's phone number (optional)",
+                    placeholder="+1234567890"
+                )
+        
+        with col3:
+            # LinkedIn username field
+            if 'linkedin_username_input_outside' in st.session_state:
+                linkedin_username = st.text_input(
+                    "LinkedIn Username",
+                    key="linkedin_username_input_outside",
+                    help="User's LinkedIn username (optional)",
+                    placeholder="username"
+                )
+            else:
+                linkedin_username = st.text_input(
+                    "LinkedIn Username",
+                    value=st.session_state.get('linkedin_username_input', ""),
+                    key="linkedin_username_input_outside",
+                    help="User's LinkedIn username (optional)",
+                    placeholder="username"
+                )
+        
+        # Row 5: Group Assignment section
         st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
         
         # Group selection and Intro in same row
@@ -697,13 +864,35 @@ async def render_create_user_form():
                         "email": email
                     }
                     
+                    # Initialize attributes dictionary
+                    attributes = {}
+                    
                     # Add optional fields if provided
                     if invited_by:
-                        user_data["attributes"] = {"invited_by": invited_by}
+                        attributes["invited_by"] = invited_by
                     
                     if intro_text:
-                        user_data["attributes"] = user_data.get("attributes", {})
-                        user_data["attributes"]["intro"] = intro_text
+                        attributes["intro"] = intro_text
+                    
+                    # Add new optional fields if provided
+                    if organization:
+                        attributes["organization"] = organization
+                    
+                    if interests:
+                        attributes["interests"] = interests
+                    
+                    if signal_username:
+                        attributes["signal_username"] = signal_username
+                    
+                    if phone_number:
+                        attributes["phone_number"] = phone_number
+                    
+                    if linkedin_username:
+                        attributes["linkedin_username"] = linkedin_username
+                    
+                    # Add attributes to user_data if any were provided
+                    if attributes:
+                        user_data["attributes"] = attributes
                     
                     # Get selected groups
                     selected_groups = st.session_state.get('group_selection', [])

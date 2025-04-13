@@ -481,4 +481,136 @@ async def test_widget_default_and_session_state_conflict(mock_streamlit):
     # Check that the specific username_input_outside conflict was detected
     username_conflicts = [d for d in tracker.conflict_details if d['key'] == 'username_input_outside']
     assert len(username_conflicts) > 0, "No conflict detected for username_input_outside"
-    assert "Widget" in username_conflicts[0]['error'], "Error message not specific to widget conflict" 
+    assert "Widget" in username_conflicts[0]['error'], "Error message not specific to widget conflict"
+
+# Add a new test for query parameter authentication in the main module
+def test_main_function_handles_auth_query_params(mock_session_state, mock_streamlit):
+    """Test that main function properly processes auth query parameters"""
+    # Setup query parameters
+    mock_query_params = {
+        'auth_success': 'true',
+        'username': 'testuser',
+        'auth_method': 'local',
+        'admin': 'true'
+    }
+    
+    # Mock the query_params attribute of st
+    with patch.object(st, 'query_params', mock_query_params):
+        # Also patch other dependencies
+        with patch('app.main.init_db') as mock_init_db, \
+             patch('app.main.setup_page_config') as mock_setup_config, \
+             patch('app.main.render_sidebar') as mock_render_sidebar, \
+             patch('app.main.render_main_content') as mock_render_main, \
+             patch('app.main.initialize_session_state') as mock_init_session, \
+             patch('app.main.time.time', return_value=12345.0), \
+             patch('app.main.logging') as mock_logging:
+            
+            # Import the function
+            from app.main import main
+            
+            # Call the function
+            import asyncio
+            asyncio.run(main())
+            
+            # Verify that auth state is set correctly
+            assert st.session_state.get('is_authenticated') is True
+            assert st.session_state.get('username') == 'testuser'
+            assert st.session_state.get('auth_method') == 'local'
+            assert st.session_state.get('is_admin') is True
+            assert st.session_state.get('permanent_auth') is True
+            assert st.session_state.get('permanent_admin') is True
+            assert st.session_state.get('auth_timestamp') == 12345.0
+            
+            # Verify all expected functions were called
+            mock_init_db.assert_called_once()
+            mock_setup_config.assert_called_once()
+            mock_init_session.assert_called_once()
+            mock_render_sidebar.assert_called_once()
+            mock_render_main.assert_called_once()
+            
+            # Query parameters should be cleaned up
+            assert 'auth_success' not in mock_query_params
+
+# Add a test for the main content rendering with auth query parameters
+def test_render_main_content_with_auth_success(mock_session_state, mock_streamlit):
+    """Test that render_main_content handles auth_success query parameter properly"""
+    # Setup query parameters
+    mock_query_params = {
+        'auth_success': 'true',
+        'username': 'testuser',
+        'auth_method': 'local',
+        'admin': 'true'
+    }
+    
+    # Mock the query_params attribute of st
+    with patch.object(st, 'query_params', mock_query_params):
+        # Mock other dependencies
+        with patch('app.main.time.sleep') as mock_sleep, \
+             patch('app.main.time.time', return_value=12345.0), \
+             patch('app.main.logging') as mock_logging:
+            
+            # Import the function
+            from app.main import render_main_content
+            
+            # Call the function
+            import asyncio
+            asyncio.run(render_main_content())
+            
+            # Verify session state is updated
+            assert st.session_state.get('is_authenticated') is True
+            assert st.session_state.get('username') == 'testuser'
+            assert st.session_state.get('is_admin') is True
+            
+            # Verify welcome message is shown
+            mock_streamlit['success'].assert_called_once()
+            welcome_msg = mock_streamlit['success'].call_args[0][0]
+            assert 'Welcome' in welcome_msg
+            assert 'testuser' in welcome_msg
+            
+            # Verify admin message is shown
+            mock_streamlit['info'].assert_called_once()
+            admin_msg = mock_streamlit['info'].call_args[0][0]
+            assert 'administrator privileges' in admin_msg
+            
+            # Verify correct page is set and rerun is called
+            assert st.session_state.get('current_page') == 'Admin Dashboard'
+            mock_streamlit['rerun'].assert_called_once()
+            
+            # Query parameters should be cleaned
+            assert len(mock_query_params) == 0
+
+# Add a test for the persistent auth backup mechanism
+def test_main_function_restores_from_permanent_flags(mock_session_state, mock_streamlit):
+    """Test that main function restores auth state from permanent flags"""
+    # Setup session state with permanent flags but no auth state
+    st.session_state['permanent_auth'] = True
+    st.session_state['permanent_admin'] = True
+    st.session_state['username'] = 'persistentuser'
+    
+    # Mock dependencies
+    with patch('app.main.init_db') as mock_init_db, \
+         patch('app.main.setup_page_config') as mock_setup_config, \
+         patch('app.main.render_sidebar') as mock_render_sidebar, \
+         patch('app.main.render_main_content') as mock_render_main, \
+         patch('app.main.initialize_session_state') as mock_init_session, \
+         patch('app.main.logging') as mock_logging:
+        
+        # Import the function
+        from app.main import main
+        
+        # Call the function
+        import asyncio
+        asyncio.run(main())
+        
+        # Verify auth state is restored from permanent flags
+        assert st.session_state.get('is_authenticated') is True
+        assert st.session_state.get('is_admin') is True
+        
+        # Verify it logged the restoration
+        mock_logging.info.assert_any_call("Restoring authentication state from permanent flag")
+        mock_logging.info.assert_any_call("Restoring admin status from permanent flag")
+        
+        # Verify expected functions were still called
+        mock_init_db.assert_called_once()
+        mock_render_sidebar.assert_called_once()
+        mock_render_main.assert_called_once() 

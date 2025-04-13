@@ -6,6 +6,10 @@ from app.utils.config import Config # This will import the Config class from the
 from datetime import datetime, timedelta
 from pytz import timezone  
 import logging
+
+# Initialize the logger
+logger = logging.getLogger(__name__)
+
 import os
 from sqlalchemy.orm import Session
 from app.db.operations import AdminEvent, sync_user_data, User, VerificationCode
@@ -18,12 +22,12 @@ import hashlib
 from typing import Optional, List, Dict, Any
 import string
 import traceback
-from app.auth.utils import generate_secure_passphrase, force_password_reset, shorten_url
+from app.auth.utils import generate_secure_passphrase, force_password_reset, shorten_url, generate_username_with_random_word
 import threading
 from app.db.session import get_db
 
 # Define user path constant for Authentik
-USER_PATH = "users/"
+USER_PATH = "users"  # Removed trailing slash
 
 # Initialize a session with retry strategy
 # auth/api.py
@@ -156,6 +160,7 @@ def create_user(
     # Import inside function to avoid circular imports
     from app.utils.helpers import create_unique_username
     from app.messages import create_user_message
+    from app.auth.utils import generate_username_with_random_word
     import threading
     
     # Initialize the response dictionary
@@ -168,35 +173,14 @@ def create_user(
         "password_reset": None,
     }
     
-    # Generate a unique username based on input or first/last name
+    # Generate username with a random word based on first name
     if not desired_username:
-        # Use first name and last name to create a username
-        username_base = f"{first_name.lower()}-{last_name.lower()}"
+        # Use generate_username_with_random_word to create a unique username
+        username = generate_username_with_random_word(first_name)
+        logger.info(f"Generated username with random word: {username}")
     else:
-        username_base = desired_username
-    
-    # Create a unique username (handles cleaning and incrementing if needed)
-    try:
-        # Get a database session
-        db = next(get_db())
-        
-        # Create a unique username with the DB session
-        username = create_unique_username(db, username_base)
-        
-        # Close the database session
-        db.close()
-    except Exception as e:
-        logging.error(f"Error generating unique username: {e}")
-        # Fallback without database check
-        import re
-        username = username_base.strip().lower().replace(" ", "-")
-        username = re.sub(r'[^a-z0-9-]', '', username)
-        if not username:
-            username = "user"
-        # Add a random suffix to avoid collisions in this fallback case
-        import random
-        username = f"{username}-{random.randint(1000, 9999)}"
-        logging.warning(f"Using fallback username generation: {username}")
+        username = desired_username
+        logger.info(f"Using provided username: {username}")
     
     # Store the username for later use in response
     response["username"] = username
@@ -208,26 +192,48 @@ def create_user(
     # Initialize user data with attributes and groups
     user_data = {
         "username": username,
-        "name": f"{first_name} {last_name}",
+        "name": f"{first_name} {last_name}".strip(),
         "email": email,
         "password": temp_password,
-        "path": USER_PATH,
+        "is_active": True,  # Explicitly set is_active
     }
+
+    # Set the path only if USER_PATH is defined and not empty
+    if USER_PATH and USER_PATH.strip():
+        user_data["path"] = USER_PATH
 
     # Add attributes if provided
     if attributes:
+        # Make sure attributes is a dictionary
+        if not isinstance(attributes, dict):
+            attributes = {}
         user_data["attributes"] = attributes
     
     # Add main group ID if configured
     main_group_id = os.getenv("AUTHENTIK_MAIN_GROUP_ID")
     if main_group_id:
-        user_data["groups"] = [main_group_id]
+        user_data["groups"] = [str(main_group_id)]  # Convert to string to ensure correct format
     
-    # Add any additional groups if specified
+    # Add groups if provided and convert to strings
     if groups:
-        if "groups" not in user_data:
-            user_data["groups"] = []
-        user_data["groups"].extend(groups)
+        try:
+            # Ensure groups is a list of strings
+            if isinstance(groups, str):
+                groups = [groups]
+            
+            # Convert any non-string group IDs to strings
+            string_groups = [str(group) for group in groups]
+            
+            # Remove duplicates while preserving order
+            unique_groups = []
+            for group in string_groups:
+                if group not in unique_groups:
+                    unique_groups.append(group)
+                    
+            user_data["groups"] = unique_groups
+        except Exception as e:
+            logger.error(f"Error processing groups: {e}")
+            # Continue without groups if there's an error
 
     try:
         # Create the user in Authentik
@@ -236,14 +242,55 @@ def create_user(
             'Content-Type': 'application/json'
         }
         
-        response_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
-        api_response = requests.post(response_url, headers=headers, json=user_data, timeout=10)
-        api_response.raise_for_status()
-        response_json = api_response.json()
+        # Log detailed payload for debugging
+        logger.info(f"Creating user with data: {json.dumps(user_data, indent=2)}")
         
-        if not response_json.get("pk"):
-            response["error"] = f"Failed to create user: {response_json}"
-            logging.error(f"Error creating user: {response_json}")
+        response_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
+        try:
+            api_response = requests.post(response_url, headers=headers, json=user_data, timeout=10)
+            
+            # Log response status and body for diagnostics
+            logger.info(f"API Response status: {api_response.status_code}")
+            
+            # Try to decode the response as JSON
+            try:
+                response_data = api_response.json()
+                logger.info(f"API Response body: {json.dumps(response_data, indent=2)}")
+            except:
+                logger.info(f"API Response text (not JSON): {api_response.text}")
+            
+            # Handle username uniqueness error specially
+            if api_response.status_code == 400:
+                error_details = api_response.json()
+                if 'username' in error_details and any('unique' in err.lower() for err in error_details['username']):
+                    # Username is not unique, try again with a different random word
+                    logger.warning(f"Username '{username}' already exists. Generating a new one.")
+                    response["error"] = f"Failed to create user: Username '{username}' already exists."
+                    return response
+            
+            # Only raise for status here after logging
+            api_response.raise_for_status()
+            response_json = api_response.json()
+            
+            if not response_json.get("pk"):
+                response["error"] = f"Failed to create user: {response_json}"
+                logger.error(f"Error creating user: {response_json}")
+                return response
+                
+        except requests.exceptions.HTTPError as http_err:
+            # Get the response JSON if possible for more detailed error info
+            error_detail = "Unknown error"
+            try:
+                error_detail = api_response.json()
+            except:
+                error_detail = api_response.text
+                
+            response["error"] = f"HTTP error {api_response.status_code}: {error_detail}"
+            logger.error(f"HTTP error creating user: {api_response.status_code} - {error_detail}")
+            return response
+        except Exception as req_err:
+            response["error"] = f"Request error: {str(req_err)}"
+            logger.error(f"Request error creating user: {str(req_err)}")
             return response
         
         # User created successfully
@@ -256,13 +303,13 @@ def create_user(
             try:
                 password_reset_response = reset_user_password(Config.AUTHENTIK_API_URL, headers, user_id, temp_password)
                 if password_reset_response:
-                    logging.info(f"Password reset link created for user {username}")
+                    logger.info(f"Password reset link created for user {username}")
                     response["password_reset"] = True
                 else:
-                    logging.error(f"Failed to create password reset link for user {username}")
+                    logger.error(f"Failed to create password reset link for user {username}")
                     response["password_reset"] = False
             except Exception as e:
-                logging.error(f"Error in password reset task: {str(e)}")
+                logger.error(f"Error in password reset task: {str(e)}")
                 response["password_reset"] = False
         
         # Start the password reset thread
@@ -276,13 +323,13 @@ def create_user(
                     message = create_user_message(username, temp_password)
                     
                     # Log the message for debugging
-                    logging.info(f"Sending welcome message to {username}")
+                    logger.info(f"Sending welcome message to {username}")
                     
                     # Send message via Matrix
                     send_welcome_to_user(message)
-                    logging.info(f"Welcome message sent to {username}")
+                    logger.info(f"Welcome message sent to {username}")
                 except Exception as e:
-                    logging.error(f"Error sending welcome message: {str(e)}")
+                    logger.error(f"Error sending welcome message: {str(e)}")
             
             # Start welcome message thread
             threading.Thread(target=send_welcome_message_task).start()
@@ -292,9 +339,9 @@ def create_user(
             def create_discourse_post_task():
                 try:
                     create_new_user_post(username, email)
-                    logging.info(f"Created Discourse post for new user {username}")
+                    logger.info(f"Created Discourse post for new user {username}")
                 except Exception as e:
-                    logging.error(f"Error creating Discourse post: {str(e)}")
+                    logger.error(f"Error creating Discourse post: {str(e)}")
             
             # Start Discourse post thread
             threading.Thread(target=create_discourse_post_task).start()
@@ -302,7 +349,7 @@ def create_user(
         return response
     
     except Exception as e:
-        logging.error(f"Error in create_user: {str(e)}")
+        logger.error(f"Error in create_user: {str(e)}")
         response["error"] = str(e)
         return response
 
@@ -323,7 +370,7 @@ def list_users(auth_api_url, headers, search_term=None):
 
         while url:
             page_count += 1
-            logging.info(f"Fetching users page {page_count}...")
+            logger.info(f"Fetching users page {page_count}...")
             
             # Try with retries for each page
             for retry in range(max_retries):
@@ -334,15 +381,15 @@ def list_users(auth_api_url, headers, search_term=None):
                     break  # Success, exit retry loop
                 except Exception as e:
                     if retry < max_retries - 1:
-                        logging.warning(f"Error fetching page {page_count}, retrying ({retry+1}/{max_retries}): {e}")
+                        logger.warning(f"Error fetching page {page_count}, retrying ({retry+1}/{max_retries}): {e}")
                         time.sleep(2)  # Wait before retrying
                     else:
-                        logging.error(f"Failed to fetch page {page_count} after {max_retries} attempts: {e}")
+                        logger.error(f"Failed to fetch page {page_count} after {max_retries} attempts: {e}")
                         raise  # Re-raise the exception after all retries failed
             
             results = data.get('results', [])
             total_fetched += len(results)
-            logging.info(f"Fetched {len(results)} users (total so far: {total_fetched})")
+            logger.info(f"Fetched {len(results)} users (total so far: {total_fetched})")
             
             if search_term:
                 search_term_lower = search_term.lower()
@@ -375,10 +422,10 @@ def list_users(auth_api_url, headers, search_term=None):
             url = data.get('next')
             params = {}  # Clear params after first request
 
-        logging.info(f"Total users fetched: {len(users)}")
+        logger.info(f"Total users fetched: {len(users)}")
         return users
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error listing users: {e}")
+        logger.error(f"Error listing users: {e}")
         return []
        
 def list_users_cached(auth_api_url, headers):
@@ -389,7 +436,7 @@ def list_users_cached(auth_api_url, headers):
         users = response.json().get('results', [])
         return users
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error listing users: {e}")
+        logger.error(f"Error listing users: {e}")
         return []
 
 
@@ -405,11 +452,11 @@ def create_invite(headers, label, expires=None):
     Returns:
         dict: Dictionary containing 'link', 'expiry', 'success' and error message if applicable.
     """
-    logging.info(f"Creating invite with label: {label}")
+    logger.info(f"Creating invite with label: {label}")
     eastern = timezone('US/Eastern')
     if not label:
         label = datetime.now(eastern).strftime('%H-%M')
-        logging.info(f"No label provided, using timestamp: {label}")
+        logger.info(f"No label provided, using timestamp: {label}")
 
     # Fix the label to ensure it is a valid slug:
     # - Convert to lowercase
@@ -421,12 +468,12 @@ def create_invite(headers, label, expires=None):
     fixed_label = re.sub(r'[^a-z0-9_-]', '', fixed_label)
     
     if fixed_label != label:
-        logging.info(f"Label modified for validity: {label} -> {fixed_label}")
+        logger.info(f"Label modified for validity: {label} -> {fixed_label}")
         label = fixed_label
 
     if expires is None:
         expires = (datetime.now(eastern) + timedelta(hours=2)).isoformat()
-        logging.info(f"No expiry provided, using default: {expires}")
+        logger.info(f"No expiry provided, using default: {expires}")
 
     data = {
         "name": label,
@@ -437,18 +484,18 @@ def create_invite(headers, label, expires=None):
     }
 
     invite_api_url = f"{Config.AUTHENTIK_API_URL}/stages/invitation/invitations/"
-    logging.info(f"Sending request to: {invite_api_url}")
+    logger.info(f"Sending request to: {invite_api_url}")
     
     try:
         response = requests.post(invite_api_url, headers=headers, json=data, timeout=10)
         response.raise_for_status()
         response_data = response.json()
-        logging.info(f"Received response data: {response_data}")
+        logger.info(f"Received response data: {response_data}")
 
         # Get the invite ID from the API response
         invite_id = response_data.get('pk')
         if not invite_id:
-            logging.error("API response missing 'pk' field.")
+            logger.error("API response missing 'pk' field.")
             return {
                 'success': False,
                 'error': "API response missing 'pk' field."
@@ -456,7 +503,7 @@ def create_invite(headers, label, expires=None):
 
         # Construct the full invite URL
         invite_link = f"https://sso.{Config.BASE_DOMAIN}/if/flow/{Config.INVITE_LABEL}/?itoken={invite_id}"
-        logging.info(f"Created invite link: {invite_link}")
+        logger.info(f"Created invite link: {invite_link}")
         
         # Return as dictionary with success flag
         return {
@@ -466,7 +513,7 @@ def create_invite(headers, label, expires=None):
         }
 
     except requests.exceptions.HTTPError as http_err:
-        logging.error(f"HTTP error occurred: {http_err}")
+        logger.error(f"HTTP error occurred: {http_err}")
         error_detail = ""
         try:
             error_detail = response.json()
@@ -475,7 +522,7 @@ def create_invite(headers, label, expires=None):
                 error_detail = response.text
             except Exception:
                 error_detail = "Unknown error"
-        logging.error(f"API Error response: {error_detail}")
+        logger.error(f"API Error response: {error_detail}")
         
         return {
             'success': False,
@@ -483,7 +530,7 @@ def create_invite(headers, label, expires=None):
             'details': error_detail
         }
     except Exception as err:
-        logging.error(f"An error occurred: {err}")
+        logger.error(f"An error occurred: {err}")
         return {
             'success': False,
             'error': f"Error: {err}"
@@ -505,18 +552,18 @@ def update_user_status(auth_api_url, headers, user_id, is_active):
     url = f"{auth_api_url}/core/users/{user_id}/"
     data = {"is_active": is_active}
     try:
-        logging.info(f"Updating user {user_id} status to {'active' if is_active else 'inactive'}")
+        logger.info(f"Updating user {user_id} status to {'active' if is_active else 'inactive'}")
         response = session.patch(url, headers=headers, json=data, timeout=10)
         
         if response.status_code in [200, 201, 202, 204]:
-            logging.info(f"User {user_id} status updated to {'active' if is_active else 'inactive'}.")
+            logger.info(f"User {user_id} status updated to {'active' if is_active else 'inactive'}.")
             return True
         else:
-            logging.error(f"Failed to update user {user_id} status. Status code: {response.status_code}")
+            logger.error(f"Failed to update user {user_id} status. Status code: {response.status_code}")
             return False
             
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error updating user status: {e}")
+        logger.error(f"Error updating user status: {e}")
         return False
 
 def delete_user(auth_api_url, headers, user_id):
@@ -524,13 +571,13 @@ def delete_user(auth_api_url, headers, user_id):
     try:
         response = session.delete(url, headers=headers, timeout=10)
         if response.status_code == 204:
-            logging.info(f"User {user_id} deleted successfully.")
+            logger.info(f"User {user_id} deleted successfully.")
             return True
         else:
-            logging.error(f"Failed to delete user {user_id}. Status Code: {response.status_code}")
+            logger.error(f"Failed to delete user {user_id}. Status Code: {response.status_code}")
             return False
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error deleting user: {e}")
+        logger.error(f"Error deleting user: {e}")
         return False
 
 
@@ -549,17 +596,17 @@ def update_user_intro(auth_api_url, headers, user_id, intro_text):
     url = f"{auth_api_url}/core/users/{user_id}/"
     data = {"attributes": {"intro": intro_text}}
     try:
-        logging.info(f"Updating intro for user {user_id}")
+        logger.info(f"Updating intro for user {user_id}")
         response = session.patch(url, headers=headers, json=data, timeout=10)
         
         if response.status_code in [200, 201, 202, 204]:
-            logging.info(f"Intro for user {user_id} updated successfully.")
+            logger.info(f"Intro for user {user_id} updated successfully.")
             return True
         else:
-            logging.error(f"Failed to update intro for user {user_id}. Status code: {response.status_code}")
+            logger.error(f"Failed to update intro for user {user_id}. Status code: {response.status_code}")
             return False
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error updating user intro: {e}")
+        logger.error(f"Error updating user intro: {e}")
         return False
 
 def update_user_invited_by(auth_api_url, headers, user_id, invited_by):
@@ -577,17 +624,17 @@ def update_user_invited_by(auth_api_url, headers, user_id, invited_by):
     url = f"{auth_api_url}/core/users/{user_id}/"
     data = {"attributes": {"invited_by": invited_by}}
     try:
-        logging.info(f"Updating 'invited by' for user {user_id}")
+        logger.info(f"Updating 'invited by' for user {user_id}")
         response = session.patch(url, headers=headers, json=data, timeout=10)
         
         if response.status_code in [200, 201, 202, 204]:
-            logging.info(f"'Invited By' for user {user_id} updated successfully.")
+            logger.info(f"'Invited By' for user {user_id} updated successfully.")
             return True
         else:
-            logging.error(f"Failed to update 'invited by' for user {user_id}. Status code: {response.status_code}")
+            logger.error(f"Failed to update 'invited by' for user {user_id}. Status code: {response.status_code}")
             return False
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error updating 'Invited By': {e}")
+        logger.error(f"Error updating 'Invited By': {e}")
         return False
 
 def generate_recovery_link(username):
@@ -603,7 +650,7 @@ def generate_recovery_link(username):
         response.raise_for_status()
         users = response.json().get('results', [])
         if not users:
-            logging.error(f"No user found with username: {username}")
+            logger.error(f"No user found with username: {username}")
             return None
         user_id = users[0]['pk']
 
@@ -612,11 +659,11 @@ def generate_recovery_link(username):
         response = requests.post(recovery_api_url, headers=headers, timeout=10)
         response.raise_for_status()
         recovery_link = response.json().get('link')
-        logging.info(f"Recovery link generated for user: {username}")
+        logger.info(f"Recovery link generated for user: {username}")
         return recovery_link
 
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error generating recovery link for {username}: {e}")
+        logger.error(f"Error generating recovery link for {username}: {e}")
         return None
 
 def update_user_email(auth_api_url, headers, user_id, new_email):
@@ -634,22 +681,22 @@ def update_user_email(auth_api_url, headers, user_id, new_email):
     url = f"{auth_api_url}/core/users/{user_id}/"
     data = {"email": new_email}
     
-    logging.info(f"Attempting to update email for user {user_id} to {new_email}")
+    logger.info(f"Attempting to update email for user {user_id} to {new_email}")
     try:
         response = session.patch(url, headers=headers, json=data, timeout=10)
         
         if response.status_code in [200, 201, 202, 204]:
-            logging.info(f"Email for user {user_id} updated successfully to {new_email}")
+            logger.info(f"Email for user {user_id} updated successfully to {new_email}")
             return True
         else:
-            logging.error(f"Failed to update email for user {user_id}. Status code: {response.status_code}")
+            logger.error(f"Failed to update email for user {user_id}. Status code: {response.status_code}")
             return False
     except requests.exceptions.HTTPError as http_err:
-        logging.error(f"HTTP error updating email: {http_err}")
-        logging.error(f"Response content: {http_err.response.text if http_err.response else 'No response content'}")
+        logger.error(f"HTTP error updating email: {http_err}")
+        logger.error(f"Response content: {http_err.response.text if http_err.response else 'No response content'}")
         return False
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error updating user email: {e}")
+        logger.error(f"Error updating user email: {e}")
         return False
 
 def get_last_modified_timestamp(auth_api_url, headers):
@@ -688,12 +735,12 @@ def get_last_modified_timestamp(auth_api_url, headers):
                     # Convert to datetime
                     return datetime.fromisoformat(last_updated.replace('Z', '+00:00'))
                 except (ValueError, TypeError):
-                    logging.error(f"Invalid last_updated format: {last_updated}")
+                    logger.error(f"Invalid last_updated format: {last_updated}")
         
         # Fallback: return the current time
         return datetime.now()
     except Exception as e:
-        logging.error(f"Error getting last modified timestamp: {e}")
+        logger.error(f"Error getting last modified timestamp: {e}")
         return None
 
 def get_users_modified_since(auth_api_url, headers, since_timestamp):
@@ -727,7 +774,7 @@ def get_users_modified_since(auth_api_url, headers, since_timestamp):
 
         while url:
             page_count += 1
-            logging.info(f"Fetching modified users page {page_count}...")
+            logger.info(f"Fetching modified users page {page_count}...")
             
             # Try with retries for each page
             for retry in range(max_retries):
@@ -738,25 +785,25 @@ def get_users_modified_since(auth_api_url, headers, since_timestamp):
                     break  # Success, exit retry loop
                 except Exception as e:
                     if retry < max_retries - 1:
-                        logging.warning(f"Error fetching page {page_count}, retrying ({retry+1}/{max_retries}): {e}")
+                        logger.warning(f"Error fetching page {page_count}, retrying ({retry+1}/{max_retries}): {e}")
                         time.sleep(2)  # Wait before retrying
                     else:
-                        logging.error(f"Failed to fetch page {page_count} after {max_retries} attempts: {e}")
+                        logger.error(f"Failed to fetch page {page_count} after {max_retries} attempts: {e}")
                         raise  # Re-raise the exception after all retries failed
             
             results = data.get('results', [])
             total_fetched += len(results)
-            logging.info(f"Fetched {len(results)} modified users (total so far: {total_fetched})")
+            logger.info(f"Fetched {len(results)} modified users (total so far: {total_fetched})")
             
             users.extend(results)
             
             url = data.get('next')
             params = {}  # Clear params after first request
 
-        logging.info(f"Total modified users fetched: {len(users)}")
+        logger.info(f"Total modified users fetched: {len(users)}")
         return users
     except Exception as e:
-        logging.error(f"Error getting modified users: {e}")
+        logger.error(f"Error getting modified users: {e}")
         return []
 
 
@@ -786,18 +833,18 @@ def create_discourse_post(headers, title, content, username=None, intro=None, in
         missing_configs.append("DISCOURSE_CATEGORY_ID")
     
     if missing_configs:
-        logging.warning(f"Discourse integration not fully configured. Missing: {', '.join(missing_configs)}. Skipping post creation.")
+        logger.warning(f"Discourse integration not fully configured. Missing: {', '.join(missing_configs)}. Skipping post creation.")
         return False, None
     
     if not Config.DISCOURSE_ACTIVE:
-        logging.info("Discourse integration is disabled (DISCOURSE_ACTIVE=False). Skipping post creation.")
+        logger.info("Discourse integration is disabled (DISCOURSE_ACTIVE=False). Skipping post creation.")
         return False, None
     
-    logging.info(f"Starting Discourse post creation for user {username}")
-    logging.info(f"Using Discourse URL: {Config.DISCOURSE_URL}")
-    logging.info(f"Using Discourse category ID: {Config.DISCOURSE_CATEGORY_ID}")
-    logging.info(f"Using Discourse API username: {Config.DISCOURSE_API_USERNAME}")
-    logging.info(f"Discourse API key is {'configured' if Config.DISCOURSE_API_KEY else 'missing'}")
+    logger.info(f"Starting Discourse post creation for user {username}")
+    logger.info(f"Using Discourse URL: {Config.DISCOURSE_URL}")
+    logger.info(f"Using Discourse category ID: {Config.DISCOURSE_CATEGORY_ID}")
+    logger.info(f"Using Discourse API username: {Config.DISCOURSE_API_USERNAME}")
+    logger.info(f"Discourse API key is {'configured' if Config.DISCOURSE_API_KEY else 'missing'}")
         
     try:
         # Create the post content with the exact template format specified
@@ -833,11 +880,11 @@ Notice that Login is required to view any of the Community posts. Please help ma
             "tags": [Config.DISCOURSE_INTRO_TAG] if Config.DISCOURSE_INTRO_TAG else []
         }
         
-        logging.info(f"Attempting to create Discourse post for {username} at URL: {url}")
-        logging.info(f"Request data: {json.dumps(data)}")
+        logger.info(f"Attempting to create Discourse post for {username} at URL: {url}")
+        logger.info(f"Request data: {json.dumps(data)}")
         response = requests.post(url, headers=discourse_headers, json=data, timeout=10)
         
-        logging.info(f"Discourse API response status code: {response.status_code}")
+        logger.info(f"Discourse API response status code: {response.status_code}")
         
         if response.status_code >= 400:
             error_detail = "Unknown error"
@@ -846,13 +893,13 @@ Notice that Login is required to view any of the Community posts. Please help ma
             except:
                 error_detail = response.text if response.text else "Unknown error"
                 
-            logging.error(f"Error creating Discourse post: {error_detail}")
+            logger.error(f"Error creating Discourse post: {error_detail}")
             return False, None
         
         # Get the post's topic URL from the response
         try:
             response_data = response.json()
-            logging.info(f"Discourse API response data: {json.dumps(response_data)}")
+            logger.info(f"Discourse API response data: {json.dumps(response_data)}")
             
             post_id = response_data.get('id')
             topic_id = response_data.get('topic_id')
@@ -860,7 +907,7 @@ Notice that Login is required to view any of the Community posts. Please help ma
             # Construct the post URL
             if topic_id:
                 post_url = f"{base_url}/t/{topic_id}"
-                logging.info(f"Successfully created Discourse post for {username} at URL: {post_url}")
+                logger.info(f"Successfully created Discourse post for {username} at URL: {post_url}")
                 
                 # Store success in session state for UI display
                 if hasattr(st, 'session_state'):
@@ -869,15 +916,15 @@ Notice that Login is required to view any of the Community posts. Please help ma
                 
                 return True, post_url
             else:
-                logging.warning(f"Created post but couldn't get topic_id from response: {response_data}")
+                logger.warning(f"Created post but couldn't get topic_id from response: {response_data}")
                 return True, None
         except Exception as e:
-            logging.error(f"Error parsing post response: {e}")
-            logging.error(traceback.format_exc())
+            logger.error(f"Error parsing post response: {e}")
+            logger.error(traceback.format_exc())
             return True, None
     except Exception as e:
-        logging.error(f"Error creating Discourse post for {username}: {e}")
-        logging.error(traceback.format_exc())
+        logger.error(f"Error creating Discourse post for {username}: {e}")
+        logger.error(traceback.format_exc())
         return False, None
 
 async def verify_email(verification_code: str, db: Session) -> dict:
@@ -907,7 +954,7 @@ async def verify_email(verification_code: str, db: Session) -> dict:
         return {"success": False, "error": "Failed to verify email"}
         
     except Exception as e:
-        logging.error(f"Error verifying email: {e}")
+        logger.error(f"Error verifying email: {e}")
         return {"success": False, "error": str(e)}
 
 async def reset_password(email: str, db: Session) -> dict:
@@ -945,7 +992,7 @@ async def reset_password(email: str, db: Session) -> dict:
         }
         
     except Exception as e:
-        logging.error(f"Error in reset_password: {e}")
+        logger.error(f"Error in reset_password: {e}")
         return {
             "success": False,
             "error": str(e)
@@ -978,7 +1025,7 @@ async def process_auth_webhook(webhook_data: dict) -> dict:
         }
         
     except Exception as e:
-        logging.error(f"Error processing auth webhook: {e}")
+        logger.error(f"Error processing auth webhook: {e}")
         return {
             "success": False,
             "error": str(e)
@@ -997,7 +1044,7 @@ def validate_webhook_signature(signature: str, body: bytes) -> bool:
     """
     try:
         if not Config.WEBHOOK_SECRET:
-            logging.warning("Webhook secret not configured")
+            logger.warning("Webhook secret not configured")
             return False
             
         # Calculate expected signature
@@ -1011,7 +1058,7 @@ def validate_webhook_signature(signature: str, body: bytes) -> bool:
         return hmac.compare_digest(signature, expected)
         
     except Exception as e:
-        logging.error(f"Error validating webhook signature: {e}")
+        logger.error(f"Error validating webhook signature: {e}")
         return False
 
 async def handle_webhook(request) -> dict:
@@ -1049,7 +1096,7 @@ async def handle_webhook(request) -> dict:
         try:
                 webhook_data = json.loads(body.decode('utf-8'))
         except json.JSONDecodeError as e:
-            logging.error(f"Error parsing webhook data: {e}")
+            logger.error(f"Error parsing webhook data: {e}")
             return {
                 "success": False,
                 "error": "Invalid JSON data"
@@ -1060,7 +1107,7 @@ async def handle_webhook(request) -> dict:
         return result
         
     except Exception as e:
-        logging.error(f"Error handling webhook: {e}")
+        logger.error(f"Error handling webhook: {e}")
         return {
             "success": False,
             "error": str(e)
@@ -1074,10 +1121,10 @@ async def send_verification_email(email: str, code: str) -> bool:
         
         # Use your email sending logic here
         # For now, just log it
-        logging.info(f"Would send verification email to {email} with code {code}")
+        logger.info(f"Would send verification email to {email} with code {code}")
         return True
     except Exception as e:
-        logging.error(f"Error sending verification email: {e}")
+        logger.error(f"Error sending verification email: {e}")
         return False
 
 async def get_user_by_email(email: str, db: Session) -> Optional[User]:
@@ -1085,7 +1132,7 @@ async def get_user_by_email(email: str, db: Session) -> Optional[User]:
     try:
         return db.query(User).filter(User.email == email).first()
     except Exception as e:
-        logging.error(f"Error getting user by email: {e}")
+        logger.error(f"Error getting user by email: {e}")
         return None
 
 async def send_reset_code(email: str, code: str) -> bool:
@@ -1096,10 +1143,10 @@ async def send_reset_code(email: str, code: str) -> bool:
         
         # Use your email sending logic here
         # For now, just log it
-        logging.info(f"Would send reset code to {email}: {code}")
+        logger.info(f"Would send reset code to {email}: {code}")
         return True
     except Exception as e:
-        logging.error(f"Error sending reset code: {e}")
+        logger.error(f"Error sending reset code: {e}")
         return False
 
 async def update_user_data(username: str, data: dict, db: Session) -> bool:
@@ -1117,7 +1164,7 @@ async def update_user_data(username: str, data: dict, db: Session) -> bool:
         db.commit()
         return True
     except Exception as e:
-        logging.error(f"Error updating user data: {e}")
+        logger.error(f"Error updating user data: {e}")
         db.rollback()
         return False
 
@@ -1140,7 +1187,7 @@ async def get_verification_code(code: str, db: Session) -> Optional[dict]:
             "code": verification.code
         }
     except Exception as e:
-        logging.error(f"Error getting verification code: {e}")
+        logger.error(f"Error getting verification code: {e}")
         return None
 
 async def mark_email_verified(user_id: int, db: Session) -> bool:
@@ -1154,7 +1201,7 @@ async def mark_email_verified(user_id: int, db: Session) -> bool:
         db.commit()
         return True
     except Exception as e:
-        logging.error(f"Error marking email as verified: {e}")
+        logger.error(f"Error marking email as verified: {e}")
         db.rollback()
         return False
 
@@ -1188,7 +1235,7 @@ async def process_webhook(webhook_data: dict) -> dict:
             }
             
     except Exception as e:
-        logging.error(f"Error processing webhook: {e}")
+        logger.error(f"Error processing webhook: {e}")
         return {
             "success": False,
             "error": str(e)
@@ -1251,7 +1298,7 @@ async def handle_registration(user_data: dict, db: Session) -> dict:
         }
         
     except Exception as e:
-        logging.error(f"Error handling registration: {e}")
+        logger.error(f"Error handling registration: {e}")
         if hasattr(db, 'rollback'):
             db.rollback()
         return {
@@ -1274,7 +1321,7 @@ async def grant_admin_privileges(username: str) -> bool:
             from app.db.operations import update_admin_status
             return update_admin_status(db, username, True)
     except Exception as e:
-        logging.error(f"Error granting admin privileges to {username}: {e}")
+        logger.error(f"Error granting admin privileges to {username}: {e}")
         return False
 
 async def revoke_admin_privileges(username: str) -> bool:
@@ -1292,7 +1339,7 @@ async def revoke_admin_privileges(username: str) -> bool:
             from app.db.operations import update_admin_status
             return update_admin_status(db, username, False)
     except Exception as e:
-        logging.error(f"Error revoking admin privileges from {username}: {e}")
+        logger.error(f"Error revoking admin privileges from {username}: {e}")
         return False
 
 async def is_admin(username: str) -> bool:
@@ -1316,7 +1363,7 @@ async def is_admin(username: str) -> bool:
             from app.db.operations import is_admin as db_is_admin
             return db_is_admin(db, username)
     except Exception as e:
-        logging.error(f"Error checking admin status for {username}: {e}")
+        logger.error(f"Error checking admin status for {username}: {e}")
         return False
 
 async def get_admin_users() -> List[Dict[str, Any]]:
@@ -1332,7 +1379,7 @@ async def get_admin_users() -> List[Dict[str, Any]]:
             admin_users = db_get_admin_users(db)
             return [user.to_dict() for user in admin_users]
     except Exception as e:
-        logging.error(f"Error getting admin users: {e}")
+        logger.error(f"Error getting admin users: {e}")
         return []
 
 async def sync_admin_status() -> bool:
@@ -1347,5 +1394,5 @@ async def sync_admin_status() -> bool:
             from app.db.operations import sync_admin_status as db_sync_admin_status
             return db_sync_admin_status(db)
     except Exception as e:
-        logging.error(f"Error syncing admin status: {e}")
+        logger.error(f"Error syncing admin status: {e}")
         return False

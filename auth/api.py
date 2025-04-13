@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, date
 import logging
 import os
 from pytz import timezone  # Add this import at the top with other imports
+from app.auth.utils import generate_username_with_random_word
 
 # Initialize a session with retry strategy
 # auth/api.py
@@ -167,9 +168,12 @@ async def create_user(username, full_name, email, invited_by=None, intro=None):
         temp_password = generate_secure_passphrase()
         discourse_post_url = None  # Initialize post URL variable
 
+        # Parse full_name to get first_name for username generation
+        name_parts = full_name.split(maxsplit=1)
+        first_name = name_parts[0] if name_parts else ""
+
         # Check for existing usernames and modify if necessary
         original_username = username
-        counter = 1
         headers = {
             'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
             'Content-Type': 'application/json'
@@ -177,18 +181,28 @@ async def create_user(username, full_name, email, invited_by=None, intro=None):
         
         try:
             # Check for existing username
-            while True:
+            user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
+            response = session.get(user_search_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            users = response.json().get('results', [])
+            
+            # If username already exists, generate a new one with first name and random word
+            if any(user['username'] == username for user in users):
+                username = generate_username_with_random_word(first_name)
+                logging.info(f"Username already exists, generated new username: {username}")
+                
+                # Check if the new username also exists
                 user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
                 response = session.get(user_search_url, headers=headers, timeout=10)
                 response.raise_for_status()
                 users = response.json().get('results', [])
                 
-                # Explicitly check for exact username match
-                if not any(user['username'] == username for user in users):
-                    break  # Unique username found
-                else:
-                    username = f"{original_username}{counter}"
-                    counter += 1
+                # If the new username also exists, add a random suffix
+                if any(user['username'] == username for user in users):
+                    import random
+                    random_suffix = random.randint(100, 999)
+                    username = f"{username}-{random_suffix}"
+                    logging.info(f"Generated username with random suffix: {username}")
             
             # Log if username was modified
             if username != original_username:
@@ -212,6 +226,12 @@ async def create_user(username, full_name, email, invited_by=None, intro=None):
             # Create user in Authentik
             user_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
             response = requests.post(user_api_url, headers=headers, json=user_data, timeout=10)
+            
+            # Check for username uniqueness error
+            if response.status_code == 400 and "username" in response.text and "unique" in response.text:
+                logging.error(f"Username uniqueness error: {response.text}")
+                return False, username, f"Username '{username}' is not unique. Please try a different username.", None
+            
             response.raise_for_status()
             user = response.json()
 
@@ -271,6 +291,11 @@ async def create_user(username, full_name, email, invited_by=None, intro=None):
         except requests.exceptions.HTTPError as http_err:
             logging.error(f"HTTP error occurred while creating user: {http_err}")
             logging.error(f"Response: {response.text}")  # Log the response text for more context
+            
+            # Check for username uniqueness error
+            if response.status_code == 400 and "username" in response.text and "unique" in response.text:
+                return False, username, f"Username '{username}' is not unique. Please try a different username.", None
+            
             return False, username, 'default_pass_issue', None
         except Exception as e:
             logging.error(f"Error creating user: {e}")

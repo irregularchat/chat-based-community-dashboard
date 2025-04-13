@@ -515,13 +515,17 @@ async def render_create_user_form():
                             'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
                             'Content-Type': 'application/json'
                         }
-                        user_check_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
                         
+                        # Check two ways: exact match and prefix match
+                        sso_exists = False
+                        
+                        # 1. Check for exact match first
+                        exact_check_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
                         try:
-                            response = requests.get(user_check_url, headers=headers, timeout=10)
+                            response = requests.get(exact_check_url, headers=headers, timeout=10)
                             if response.status_code == 200:
                                 auth_data = response.json()
-                                if auth_data.get('count', 0) > 0:
+                                if auth_data.get('count', 0) > 0 or len(auth_data.get('results', [])) > 0:
                                     sso_exists = True
                                     st.warning(f"Username '{username}' already exists in Authentik SSO.")
                             else:
@@ -530,6 +534,26 @@ async def render_create_user_form():
                         except requests.exceptions.RequestException as req_err:
                             st.error(f"Network error checking username in Authentik: {str(req_err)}")
                             logging.error(f"Network error checking username: {str(req_err)}")
+                            
+                        # 2. If exact match doesn't exist, check if it starts with the username (for incremented usernames)
+                        if not sso_exists:
+                            prefix_check_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username__startswith={username}"
+                            try:
+                                response = requests.get(prefix_check_url, headers=headers, timeout=10)
+                                if response.status_code == 200:
+                                    auth_data = response.json()
+                                    matches = auth_data.get('results', [])
+                                    # Check if there's an exact match in the results
+                                    exact_matches = [u for u in matches if u.get('username') == username]
+                                    if exact_matches:
+                                        sso_exists = True
+                                        st.warning(f"Username '{username}' already exists in Authentik SSO.")
+                                    elif matches:
+                                        # Show how many similar usernames exist
+                                        similar_count = len(matches)
+                                        st.info(f"Found {similar_count} similar usernames starting with '{username}' in Authentik SSO.")
+                            except requests.exceptions.RequestException as req_err:
+                                logging.error(f"Network error checking username prefix in Authentik: {str(req_err)}")
                         
                         # If username exists in either system, suggest alternatives
                         if local_exists or sso_exists:

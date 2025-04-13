@@ -225,6 +225,12 @@ def handle_auth_callback(code, state):
             # Get expiration time
             expires_in = tokens.get('expires_in', 3600)
             st.session_state['token_expiry'] = time.time() + expires_in
+
+            # Mark session as authenticated before getting user info
+            st.session_state['is_authenticated'] = True
+            
+            # Set a permanent flag to help with session restoration after reruns
+            st.session_state['permanent_auth'] = True
             
             logging.info("Tokens stored in session state")
         except Exception as e:
@@ -252,13 +258,22 @@ def handle_auth_callback(code, state):
             # Check if user is admin
             admin_usernames = Config.ADMIN_USERNAMES
             username = user_info.get('preferred_username', '')
-            st.session_state['is_admin'] = username in admin_usernames if admin_usernames else False
+            is_admin = username in admin_usernames if admin_usernames else False
+            st.session_state['is_admin'] = is_admin
             
-            # Mark as authenticated
-            st.session_state['is_authenticated'] = True
+            # Add a timestamp to track when authentication completed
+            st.session_state['auth_timestamp'] = time.time()
+            
+            # Set auth_method to 'sso' to distinguish from local logins
+            st.session_state['auth_method'] = 'sso'
             
             logging.info(f"Authentication successful for user: {username}")
             logging.info(f"Admin status: {st.session_state['is_admin']}")
+            
+            # If user is an admin, set a permanent admin flag for session restoration
+            if is_admin:
+                st.session_state['permanent_admin'] = True
+                logging.info("Set permanent admin flag")
             
             return True
         except Exception as e:
@@ -304,7 +319,11 @@ def logout():
         'auth_redirect_path',
         'session_start_time',
         'is_admin',
-        'auth_method'  # Add auth_method to the list of keys to clear
+        'auth_method',  # Add auth_method to the list of keys to clear
+        'permanent_auth',  # Clear permanent auth flag
+        'permanent_admin',  # Clear permanent admin flag
+        'auth_timestamp',   # Clear auth timestamp
+        'auth_processed'    # Clear auth processed flag
     ]
     
     for key in auth_keys:
@@ -321,6 +340,38 @@ def require_authentication(page_path=None):
     Returns:
         bool: True if authenticated, False if redirecting to login
     """
+    # Also check query parameters for direct auth flags
+    query_params = st.query_params
+    if 'auth_success' in query_params and query_params.get('auth_success') == 'true':
+        # Set auth state from query params - this happens for redirects
+        st.session_state['is_authenticated'] = True
+        username = query_params.get('username', 'admin')
+        auth_method = query_params.get('auth_method', 'local')
+        is_admin = query_params.get('admin', 'false').lower() == 'true'
+        
+        # Set session values
+        st.session_state['username'] = username
+        st.session_state['auth_method'] = auth_method
+        st.session_state['is_admin'] = is_admin
+        st.session_state['permanent_auth'] = True
+        st.session_state['permanent_admin'] = is_admin
+        
+        # Create user info
+        st.session_state['user_info'] = {
+            'preferred_username': username,
+            'name': username,
+            'email': '',
+        }
+        
+        # Clear the auth params
+        clean_params = {k: v for k, v in query_params.items() 
+                       if k not in ['auth_success', 'username', 'auth_method', 'admin']}
+        st.query_params.update(clean_params)
+        
+        # Return success - no need to show login form
+        return True
+    
+    # Normal authentication check
     if not is_authenticated():
         st.warning("You must be logged in to access this page")
         
@@ -345,10 +396,9 @@ def require_authentication(page_path=None):
                 )
             
             with local_tab:
-                # Display local login form
-                if display_local_login_form():
-                    # If login was successful, refresh the page
-                    st.rerun()
+                # Display local login form - no need to check return value 
+                # since the function now handles redirection internally
+                display_local_login_form()
         except ValueError as e:
             # Log the error for debugging
             logging.error(f"Error creating tabs for login: {str(e)}")
@@ -374,11 +424,8 @@ def require_authentication(page_path=None):
             
             with col2:
                 st.markdown("### Local Admin Login")
-                # Always call display_local_login_form in the fallback path to ensure it's called in tests
-                login_result = display_local_login_form()
-                if login_result:
-                    # If login was successful, refresh the page
-                    st.rerun()
+                # Display local login form directly - it now handles redirection internally
+                display_local_login_form()
         
         return False
     

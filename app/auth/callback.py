@@ -2,6 +2,7 @@ import streamlit as st
 import logging
 import traceback
 from app.auth.authentication import handle_auth_callback
+import time
 
 def auth_callback():
     """
@@ -47,6 +48,12 @@ def auth_callback():
     # Create a title to ensure the page isn't blank
     st.title("Authentication Response")
     
+    # Check if auth has already been processed to prevent double processing
+    if st.session_state.get('auth_processed'):
+        st.success("Authentication already processed. Redirecting to dashboard...")
+        st.markdown('<meta http-equiv="refresh" content="1;URL=\'/\'">', unsafe_allow_html=True)
+        return
+    
     # Display debug info on screen for troubleshooting
     st.write("### Authentication Debug Info")
     st.write(f"Query Parameters: {dict(query_params)}")
@@ -78,8 +85,14 @@ def auth_callback():
             if success:
                 logging.info("Authentication successful")
                 
+                # Mark that we've processed this authentication to prevent loops
+                st.session_state['auth_processed'] = True
+                
                 # Show success message with direct links for navigation
                 st.success("Authentication successful!")
+                
+                # Add small delay to allow session state to stabilize before redirect
+                time.sleep(0.5)
                 
                 # Provide navigation buttons
                 col1, col2, col3 = st.columns(3)

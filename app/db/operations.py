@@ -260,6 +260,14 @@ def sync_user_data_incremental(db: Session, authentik_users: List[Dict[str, Any]
                     # Update the Authentik ID if found by username
                     existing_user.authentik_id = authentik_id
                 
+                # Handle last_login conversion for both update and create cases
+                last_login = authentik_user.get('last_login')
+                if isinstance(last_login, str):
+                    try:
+                        last_login = datetime.fromisoformat(last_login.replace('Z', '+00:00'))
+                    except (ValueError, TypeError):
+                        last_login = None
+                
                 # Update existing user
                 if existing_user:
                     # Check if user data has changed before updating
@@ -267,15 +275,7 @@ def sync_user_data_incremental(db: Session, authentik_users: List[Dict[str, Any]
                     last_name = authentik_user.get('last_name', '')
                     email = authentik_user.get('email', '')
                     is_active = authentik_user.get('is_active', True)
-                    last_login = authentik_user.get('last_login')
                     attributes = authentik_user.get('attributes', {})
-                    
-                    # Convert last_login to datetime if it's a string
-                    if isinstance(last_login, str):
-                        try:
-                            last_login = datetime.fromisoformat(last_login.replace('Z', '+00:00'))
-                        except (ValueError, TypeError):
-                            last_login = None
                     
                     # Check if any field has changed
                     if (existing_user.first_name != first_name or 
@@ -299,13 +299,14 @@ def sync_user_data_incremental(db: Session, authentik_users: List[Dict[str, Any]
                 
                 # Create new user
                 else:
+                    # For new users, ensure a proper datetime object for last_login
                     new_user = User(
                         username=username,
                         first_name=authentik_user.get('first_name', ''),
                         last_name=authentik_user.get('last_name', ''),
                         email=authentik_user.get('email', ''),
                         is_active=authentik_user.get('is_active', True),
-                        last_login=authentik_user.get('last_login'),
+                        last_login=last_login,  # Already converted to datetime above
                         attributes=authentik_user.get('attributes', {}),
                         authentik_id=authentik_id
                     )

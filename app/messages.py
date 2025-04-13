@@ -1,6 +1,7 @@
 # app/messages.py
 import streamlit as st
-from app.auth.api import shorten_url, force_password_reset, generate_secure_passphrase, create_invite
+from app.auth import generate_secure_passphrase, force_password_reset, shorten_url
+from app.auth.api import create_invite  # Keep this import for now
 from pytz import timezone
 from datetime import datetime
 import logging
@@ -8,6 +9,10 @@ from app.utils.config import Config  # Fixed import path
 
 def create_user_message(new_username, temp_password, discourse_post_url=None, password_reset_successful=True):
     """Generate and display the welcome message after user creation with temp password."""
+    
+    # new_username is the final username that may have been incremented for uniqueness
+    # This is passed from the create_user function and already has any numeric suffixes
+    logging.info(f"Generating welcome message for user: {new_username}")
     
     # Special case for failed password reset
     if not password_reset_successful or temp_password == "PASSWORD_NEEDS_RESET":
@@ -71,7 +76,7 @@ def create_user_message(new_username, temp_password, discourse_post_url=None, pa
         st.session_state['message'] = welcome_message
         st.session_state['user_list'] = None  # Clear user list if there was any
         st.success("User created successfully!")
-        
+    
     # Add buttons to control next actions - outside of any form
     col1, col2 = st.columns(2)
     with col1:

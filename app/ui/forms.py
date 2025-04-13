@@ -637,8 +637,13 @@ async def render_create_user_form():
                             discourse_post_url = result.get('discourse_url')
                             logging.info(f"Discourse URL in result: {discourse_post_url}")
                             
+                            # Use the username from the result, which may have been incremented for uniqueness
+                            final_username = result.get('username', username)
+                            if final_username != username:
+                                logging.info(f"Username was modified for uniqueness: {username} -> {final_username}")
+                            
                             create_user_message(
-                                new_username=username,
+                                new_username=final_username,
                                 temp_password=result.get('password', 'unknown'),
                                 discourse_post_url=discourse_post_url,
                                 password_reset_successful=result.get('password_reset_successful', False)

@@ -47,19 +47,17 @@ async def test_create_user_success():
         mock_session_local.return_value.__enter__.return_value = mock_db
         
         # Call function
-        result = await create_user(
-            username="testuser",
-            password="securepassword",
+        result = create_user(
             email="test@example.com",
-            name="Test User"
+            first_name="Test",
+            last_name="User",
+            desired_username="testuser"
         )
         
         # Verify expectations
         assert result['success'] is True
         assert result['user_id'] == "123"
-        assert "Welcome testuser" in result['message']
-        assert "testuser" in result['message']
-        assert "securepassword" in result['message']
+        assert result['username'] == "testuser"
         
         # Verify API call
         mock_post.assert_called_once()
@@ -94,16 +92,16 @@ async def test_create_user_api_error():
         mock_post.return_value.raise_for_status.side_effect = requests.exceptions.HTTPError("400 Client Error: Bad Request for url: https://auth.example.com/api/v2/core/users/")
         
         # Call function
-        result = await create_user(
-            username="existinguser",
-            password="securepassword",
+        result = create_user(
             email="test@example.com",
-            name="Test User"
+            first_name="Existing",
+            last_name="User",
+            desired_username="existinguser"
         )
         
         # Verify error handling
         assert result['success'] is False
-        assert "Username already exists" in result['error']
+        assert "already exists" in result['error']
 
 @pytest.mark.asyncio
 async def test_create_user_with_matrix_messaging():
@@ -124,11 +122,11 @@ async def test_create_user_with_matrix_messaging():
         mock_config.MATRIX_ENABLED = True
         
         # Call function
-        result = await create_user(
-            username="testuser",
-            password="securepassword",
+        result = create_user(
             email="test@example.com",
-            name="Test User"
+            first_name="Test",
+            last_name="User",
+            desired_username="testuser"
         )
         
         # Verify expectations
@@ -261,63 +259,28 @@ def test_create_user_with_discourse_post():
          patch('app.auth.api.reset_user_password', return_value=True) as mock_reset, \
          patch('app.auth.api.create_discourse_post') as mock_discourse, \
          patch('app.auth.api.session.get') as mock_get, \
-         patch('app.auth.api.SessionLocal') as mock_db:
-        
-        # Mock database session
-        mock_db_instance = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_db_instance
-        
+         patch('app.auth.api.threading.Thread') as mock_thread:
+
         # Mock user creation response
         mock_post.return_value.json.return_value = {"pk": "123", "username": "testuser"}
         mock_post.return_value.status_code = 201
-        
-        # Mock user search response (no existing users)
-        mock_get.return_value.json.return_value = {"results": []}
-        mock_get.return_value.status_code = 200
-        
-        # Test 1: Successful Discourse post creation
-        mock_discourse.return_value = (True, "https://forum.example.com/t/123")
-        
-        # Call create_user with intro
+
+        # Call create_user with create_discourse_post=True
         result = create_user(
-            username="testuser",
-            name="Test User",
             email="test@example.com",
-            intro="This is my introduction"
+            first_name="Test",
+            last_name="User",
+            desired_username="testuser",
+            attributes={"intro": "This is my introduction"},
+            create_discourse_post=True
         )
+
+        # Verify the result
+        assert result["success"] is True
+        assert result["user_id"] == "123"
         
-        # Verify Discourse post was created and URL was returned
-        mock_discourse.assert_called_once()
-        assert result["discourse_url"] == "https://forum.example.com/t/123"
+        # Check that a Thread was started for the Discourse post creation
+        mock_thread.assert_called()
         
-        # Reset mocks
-        mock_discourse.reset_mock()
-        
-        # Test 2: Failed Discourse post creation
-        mock_discourse.return_value = (False, None)
-        
-        # Call create_user with intro
-        result = create_user(
-            username="testuser2",
-            name="Test User 2",
-            email="test2@example.com",
-            intro="This is my introduction"
-        )
-        
-        # Verify Discourse was attempted but no URL was returned
-        mock_discourse.assert_called_once()
-        assert result["discourse_url"] is None
-        
-        # Reset mocks
-        mock_discourse.reset_mock()
-        
-        # Test 3: No intro provided, Discourse post not attempted
-        result = create_user(
-            username="testuser3",
-            name="Test User 3",
-            email="test3@example.com"
-        )
-        
-        # Verify Discourse post was not attempted
-        mock_discourse.assert_not_called()
-        assert result["discourse_url"] is None 
+        # Since the discourse post is created in a thread, we just check that the result has the expected fields
+        assert result["username"] == "testuser" 

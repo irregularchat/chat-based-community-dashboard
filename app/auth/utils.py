@@ -46,8 +46,13 @@ def generate_username_with_random_word(first_name):
     # Convert to lowercase and remove special characters
     import re
     first_name = first_name.strip().lower()
+    
+    # Extract just the first part if there are spaces
+    if ' ' in first_name:
+        first_name = first_name.split(' ')[0]
+    
+    # Remove any special characters
     first_name = re.sub(r'[^a-z0-9-]', '', first_name)
-    first_name = first_name.replace(" ", "-")
     
     # Generate a random word using xkcdpass
     random_word = xp.generate_xkcdpassword(wordlist, numwords=1, delimiter="")

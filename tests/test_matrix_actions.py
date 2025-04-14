@@ -1,14 +1,22 @@
 import pytest
-from unittest.mock import patch, AsyncMock
+import unittest
+from unittest.mock import patch, AsyncMock, MagicMock
 from nio import AsyncClient, AsyncClientConfig, RoomSendResponse, RoomCreateResponse, RoomInviteResponse
 from app.utils.matrix_actions import (
     send_matrix_message,
     create_matrix_direct_chat,
     invite_to_matrix_room,
     send_matrix_message_to_multiple_rooms,
-    get_matrix_client
+    get_matrix_client,
+    get_all_accessible_users
+)
+from app.utils.recommendation import (
+    get_room_recommendations_sync,
+    invite_user_to_recommended_rooms_sync
 )
 from app.utils.config import Config
+from app.db.models import User, Group
+from app.db.session import get_db
 
 @pytest.mark.asyncio
 async def test_send_matrix_message():
@@ -136,3 +144,100 @@ async def test_get_matrix_client():
         
         # Verify client was not closed
         client.close.assert_not_called()
+
+class TestMatrixActions(unittest.TestCase):
+    def setUp(self):
+        # Mock the database session
+        self.mock_db = MagicMock()
+        self.mock_db.query.return_value = self.mock_db
+        self.mock_db.filter.return_value = self.mock_db
+        self.mock_db.first.return_value = None
+        self.mock_db.all.return_value = []
+
+    @patch('app.utils.matrix_actions.get_matrix_client')
+    async def test_get_all_accessible_users(self, mock_get_client):
+        # Mock the Matrix client and its responses
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        
+        # Mock joined rooms response
+        mock_client.joined_rooms.return_value = MagicMock(rooms=['!room1:example.com'])
+        
+        # Mock room members response
+        mock_client.room_get_joined_members.return_value = MagicMock(
+            members={
+                '@user1:example.com': {'display_name': 'User One'},
+                '@user2:example.com': {'display_name': 'User Two'}
+            }
+        )
+        
+        # Test the function
+        users = await get_all_accessible_users()
+        
+        # Verify results
+        self.assertEqual(len(users), 2)
+        self.assertEqual(users[0]['user_id'], '@user1:example.com')
+        self.assertEqual(users[0]['display_name'], 'User One')
+
+    @patch('app.utils.matrix_actions.get_matrix_client')
+    async def test_invite_to_matrix_room(self, mock_get_client):
+        # Mock the Matrix client and its responses
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        
+        # Mock successful room invite
+        mock_client.room_invite.return_value = MagicMock(event_id='event123')
+        
+        # Test the function
+        result = await invite_to_matrix_room('!room1:example.com', '@user1:example.com')
+        
+        # Verify results
+        self.assertTrue(result)
+        mock_client.room_invite.assert_called_once_with('!room1:example.com', '@user1:example.com')
+
+    def test_get_room_recommendations_sync(self):
+        # Mock user interests
+        user_interests = 'python, machine learning'
+        
+        # Mock room data
+        mock_rooms = [
+            {'name': 'Python Room', 'room_id': '!python:example.com', 'categories': ['python']},
+            {'name': 'ML Room', 'room_id': '!ml:example.com', 'categories': ['machine learning']},
+            {'name': 'Other Room', 'room_id': '!other:example.com', 'categories': ['other']}
+        ]
+        
+        # Mock the match_interests_with_rooms function
+        async def mock_match_interests(*args, **kwargs):
+            return [mock_rooms[0], mock_rooms[1]]  # Return only matching rooms
+            
+        with patch('app.utils.recommendation.match_interests_with_rooms', side_effect=mock_match_interests):
+            # Test the function
+            recommendations = get_room_recommendations_sync('@user1:example.com', user_interests)
+            
+            # Verify results
+            self.assertEqual(len(recommendations), 2)
+            self.assertEqual(recommendations[0]['name'], 'Python Room')
+            self.assertEqual(recommendations[1]['name'], 'ML Room')
+
+    def test_invite_user_to_recommended_rooms_sync(self):
+        # Mock user data
+        user_id = '@user1:example.com'
+        interests = ['python', 'machine learning']
+        
+        # Mock room data
+        mock_rooms = [
+            {'name': 'Python Room', 'room_id': '!python:example.com', 'categories': ['python']},
+            {'name': 'ML Room', 'room_id': '!ml:example.com', 'categories': ['machine learning']}
+        ]
+        
+        # Test the function
+        with patch('app.utils.matrix_actions.invite_to_matrix_room') as mock_invite:
+            mock_invite.return_value = True
+            result = invite_user_to_recommended_rooms_sync(user_id, interests)
+            
+            # Verify results
+            self.assertTrue(result)
+            self.assertEqual(mock_invite.call_count, 2)
+
+if __name__ == '__main__':
+    unittest.main()

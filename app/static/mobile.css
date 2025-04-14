@@ -1,0 +1,170 @@
+/* Mobile-specific styles */
+@media (max-width: 768px) {
+    /* General typography adjustments */
+    body {
+        font-size: 14px;
+    }
+    
+    h1 {
+        font-size: 1.8rem !important;
+        margin-bottom: 15px !important;
+    }
+    
+    h2 {
+        font-size: 1.5rem !important;
+        margin-bottom: 12px !important;
+    }
+    
+    h3 {
+        font-size: 1.2rem !important;
+        margin-bottom: 10px !important;
+    }
+    
+    p {
+        font-size: 14px !important;
+        line-height: 1.4 !important;
+    }
+    
+    /* Improve button touch targets */
+    .stButton > button {
+        min-height: 44px !important; /* Minimum touch target size */
+        width: 100% !important;
+        margin-bottom: 10px !important;
+        padding: 12px 15px !important;
+    }
+    
+    /* Make login buttons more touch-friendly */
+    .login-button {
+        display: block !important;
+        width: 100% !important;
+        padding: 12px 15px !important;
+        text-align: center !important;
+        font-size: 16px !important;
+        min-height: 44px !important;
+    }
+    
+    /* Adjust form elements for touch */
+    .stTextInput>div>div>input, 
+    .stTextArea>div>div>textarea,
+    .stNumberInput>div>div>input,
+    .stSelectbox>div>div>div>div>div,
+    .stMultiselect>div>div>div>div>div {
+        min-height: 44px !important;
+        padding: 12px 10px !important;
+        font-size: 16px !important; /* Prevent auto-zoom on iOS */
+    }
+    
+    /* Adjust spacing for mobile */
+    .stForm > div:first-child {
+        padding: 15px !important;
+    }
+    
+    .card, .user-info {
+        padding: 15px !important;
+        margin-bottom: 15px !important;
+    }
+    
+    /* Improve tab touch targets */
+    .stTabs [data-baseweb="tab"] {
+        padding: 12px 15px !important;
+        min-height: 44px !important;
+    }
+    
+    /* Adjust expander for mobile */
+    .streamlit-expanderHeader {
+        padding: 12px 15px !important;
+        min-height: 44px !important;
+    }
+    
+    /* Adjust radio and checkbox for touch */
+    .stRadio > div > div > label,
+    .stCheckbox > div > div > label {
+        min-height: 44px !important;
+        padding: 12px 10px !important;
+        display: flex !important;
+        align-items: center !important;
+    }
+    
+    /* Adjust table for mobile */
+    .stTable, .dataframe {
+        font-size: 14px !important;
+        display: block !important;
+        overflow-x: auto !important;
+        white-space: nowrap !important;
+    }
+    
+    .stTable th, .dataframe th,
+    .stTable td, .dataframe td {
+        padding: 8px 10px !important;
+    }
+    
+    /* Adjust sidebar width */
+    .css-1d391kg, .css-12oz5g7 {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+    
+    /* Improve column layout on mobile */
+    .row-widget.stHorizontal {
+        flex-wrap: wrap !important;
+    }
+    
+    .row-widget.stHorizontal > div {
+        flex: 1 1 100% !important;
+        min-width: 100% !important;
+    }
+    
+    /* Fix for multi-column layouts */
+    [data-testid="column"] {
+        width: 100% !important;
+        flex: 1 1 100% !important;
+        margin-bottom: 10px !important;
+    }
+    
+    /* Adjust alert messages */
+    .stAlert > div {
+        padding: 12px !important;
+    }
+    
+    /* Fix for selectbox on mobile */
+    .stSelectbox > div > div > div {
+        min-height: 44px !important;
+    }
+    
+    /* Fix for multiselect on mobile */
+    .stMultiselect > div > div > div {
+        min-height: 44px !important;
+    }
+}
+
+/* Small phone screens */
+@media (max-width: 480px) {
+    /* Further reduce font sizes */
+    h1 {
+        font-size: 1.5rem !important;
+    }
+    
+    h2 {
+        font-size: 1.3rem !important;
+    }
+    
+    h3 {
+        font-size: 1.1rem !important;
+    }
+    
+    /* Reduce padding to maximize space */
+    .card, .user-info, .stForm > div:first-child {
+        padding: 12px !important;
+    }
+    
+    /* Stack all columns */
+    [data-testid="column"] {
+        width: 100% !important;
+        margin-bottom: 8px !important;
+    }
+    
+    /* Adjust container padding */
+    .container {
+        padding: 0 8px !important;
+    }
+}

@@ -48,4 +48,56 @@ def test_parse_input_edge_cases():
     result = simple_parse_input(input_text)
     assert result["first_name"] == "John"
     assert result["last_name"] == "O'Doe"
-    assert result["email"] == "test@example.com" 
+    assert result["email"] == "test@example.com"
+
+def test_numbered_formats_with_special_chars():
+    """Test parsing of numbered lists with various special characters"""
+    
+    test_inputs = [
+        """1: John Doe
+2: Acme Corporation
+3: Jane Smith
+4: john.doe@example.com
+5: Python, AI""",
+
+        """1.. John Doe
+2.. Acme Corporation
+3.. Jane Smith
+4.. john.doe@example.com
+5.. Python, AI""",
+
+        """1- John Doe
+2- Acme Corporation
+3- Jane Smith
+4- john.doe@example.com
+5- Python, AI""",
+
+        """1) John Doe
+2) Acme Corporation
+3) Jane Smith
+4) john.doe@example.com
+5) Python, AI""",
+
+        """1_ John Doe
+2_ Acme Corporation
+3_ Jane Smith
+4_ john.doe@example.com
+5_ Python, AI""",
+
+        """1] John Doe
+2] Acme Corporation
+3] Jane Smith
+4] john.doe@example.com
+5] Python, AI"""
+    ]
+    
+    for input_text in test_inputs:
+        result = simple_parse_input(input_text)
+        
+        # Check that the parsing was successful
+        assert result["first_name"] == "John"
+        assert result["last_name"] == "Doe"
+        assert result["email"] == "john.doe@example.com"
+        assert result["invited_by"] == "Jane Smith"
+        assert result["intro"]["organization"] == "Acme Corporation"
+        assert result["intro"]["interests"] == "Python, AI" 

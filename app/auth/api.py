@@ -388,12 +388,16 @@ def create_user(
         # 2. It creates a proper password reset link for the user 
         # 3. It handles potential race conditions with the Authentik backend
         if reset_password:
+            # First, set a default value
+            response["password_reset"] = True  # Default to success
+
+            # Define the reset task
             def reset_password_task():
                 try:
                     password_reset_response = reset_user_password(Config.AUTHENTIK_API_URL, headers, user_id, temp_password)
                     if password_reset_response:
                         logger.info(f"Password reset link created for user {username}")
-                        response["password_reset"] = True
+                        # No need to update response here as it's already set to True by default
                     else:
                         logger.error(f"Failed to create password reset link for user {username}")
                         response["password_reset"] = False
@@ -401,8 +405,12 @@ def create_user(
                     logger.error(f"Error in password reset task: {str(e)}")
                     response["password_reset"] = False
             
-            # Start the password reset thread
-            threading.Thread(target=reset_password_task).start()
+            # Start the password reset thread and perform it synchronously to avoid race conditions
+            try:
+                reset_password_task()  # Run directly without threading
+            except Exception as e:
+                logger.error(f"Error while resetting password: {str(e)}")
+                response["password_reset"] = False
         else:
             # Skip password reset, just mark it as completed
             logger.info(f"Skipping password reset for user {username}")

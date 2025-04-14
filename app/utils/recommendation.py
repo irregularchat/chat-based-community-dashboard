@@ -9,7 +9,7 @@ This module provides functions to:
 
 import asyncio
 import logging
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Union
 import re
 import traceback
 
@@ -119,12 +119,12 @@ async def get_all_accessible_rooms_with_details() -> List[Dict[str, Any]]:
     
     return matrix_rooms
 
-async def match_interests_with_rooms(interests: str) -> List[Dict[str, Any]]:
+async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[Dict[str, Any]]:
     """
     Match user interests with available rooms using pattern matching.
     
     Args:
-        interests: User interests as a string
+        interests: User interests as a string or list of strings
         
     Returns:
         List[Dict[str, Any]]: List of recommended room dictionaries
@@ -133,7 +133,10 @@ async def match_interests_with_rooms(interests: str) -> List[Dict[str, Any]]:
     all_rooms = await get_all_accessible_rooms_with_details()
     
     # Extract interest keywords
-    interest_keywords = [kw.strip().lower() for kw in interests.split(',')]
+    if isinstance(interests, str):
+        interest_keywords = [kw.strip().lower() for kw in interests.split(',')]
+    else:
+        interest_keywords = [kw.strip().lower() for kw in interests]
     
     # Match rooms with interests
     matched_rooms = []
@@ -156,13 +159,13 @@ async def match_interests_with_rooms(interests: str) -> List[Dict[str, Any]]:
     
     return matched_rooms
 
-async def gpt_recommend_rooms(user_id: str, interests: str) -> List[Tuple[str, str]]:
+async def gpt_recommend_rooms(user_id: str, interests: Union[str, List[str]]) -> List[Tuple[str, str]]:
     """
     Use GPT to recommend rooms based on user interests.
     
     Args:
         user_id: Matrix user ID
-        interests: User interests as a string
+        interests: User interests as a string or list of strings
         
     Returns:
         List[Tuple[str, str]]: List of (room_id, room_name) tuples
@@ -196,8 +199,9 @@ async def gpt_recommend_rooms(user_id: str, interests: str) -> List[Tuple[str, s
             room_data.append(f"Room: {room_name}\nID: {room_id}\nCategories: {categories}")
         
         # Create the GPT prompt
-        # Construct parts separately to avoid backslash issues
-        interests_line = "User Interests: " + interests
+        # Convert interests to string if it's a list
+        interests_str = ", ".join(interests) if isinstance(interests, list) else interests
+        interests_line = "User Interests: " + interests_str
         
         # Join room data manually
         rooms_text = "Available Rooms:"
@@ -366,3 +370,24 @@ def get_entrance_room_users_sync() -> List[Dict[str, Any]]:
         logger.error(f"Error fetching Matrix users (sync wrapper): {str(e)}")
         logger.error(traceback.format_exc())
         return [] 
+
+def get_room_recommendations_sync(user_id: str, interests: str) -> List[Dict[str, Any]]:
+    """
+    Synchronous wrapper for match_interests_with_rooms.
+    
+    Args:
+        user_id: Matrix user ID (not used in current implementation)
+        interests: User interests as a string
+        
+    Returns:
+        List[Dict[str, Any]]: List of recommended room dictionaries
+    """
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(match_interests_with_rooms(interests))
+    except Exception as e:
+        logger.error(f"Error getting room recommendations: {e}")
+        return []
+    finally:
+        loop.close() 

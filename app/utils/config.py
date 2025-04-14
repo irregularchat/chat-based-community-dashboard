@@ -254,7 +254,7 @@ class Config:
         Returns:
             List[Dict]: Combined list of rooms with configuration data when available
         """
-        from utils.matrix_actions import merge_room_data
+        from app.utils.matrix_actions import merge_room_data
         return merge_room_data()
     
     @classmethod

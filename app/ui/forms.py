@@ -5,6 +5,7 @@ import io
 import csv
 import json
 import uuid
+import pandas as pd
 import logging
 import traceback
 import asyncio
@@ -94,6 +95,7 @@ def run_async_safely(async_func, *args, **kwargs):
 
 def reset_create_user_form_fields():
     """Helper function to reset all fields related to create user."""
+    # List of keys to reset
     keys_to_reset = [
         "username_input",
         "username_input_outside",
@@ -107,7 +109,6 @@ def reset_create_user_form_fields():
         "intro_input",
         "is_admin_checkbox",
         "username_was_auto_generated",
-        # New fields
         "organization_input",
         "organization_input_outside",
         "interests_input",
@@ -120,6 +121,24 @@ def reset_create_user_form_fields():
         "linkedin_username_input_outside",
         "parse_data_input_outside"
     ]
+    
+    # Clear the values in session state
+    for key in keys_to_reset:
+        if key in st.session_state:
+            del st.session_state[key]
+    
+    # Clear any parsed data
+    for key in list(st.session_state.keys()):
+        if key.startswith('_parsed'):
+            del st.session_state[key]
+    
+    # Clear parsing flags
+    if 'parsing_successful' in st.session_state:
+        del st.session_state['parsing_successful']
+    if 'clear_fields' in st.session_state:
+        del st.session_state['clear_fields']
+    if 'old_values' in st.session_state:
+        del st.session_state['old_values']
     
     # Set a flag in session state to indicate we should clear fields
     st.session_state['clear_fields'] = True
@@ -990,311 +1009,112 @@ async def render_create_user_form():
     st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
     st.subheader("Connect with Matrix User")
     
-    # Get INDOC room users for Matrix connection
-    try:
-        # Check if we have the background fetched users ready
-        if 'fetch_indoc_users_finished' in st.session_state and st.session_state['fetch_indoc_users_finished']:
-            # We have finished the background fetch, use the data
-            if 'indoc_users' in st.session_state and st.session_state['indoc_users']:
-                entrance_users = st.session_state['indoc_users']
+    # Load Matrix users from INDOC room if not already loaded
+    if not st.session_state.matrix_users:
+        with st.spinner("Loading Matrix users from INDOC room..."):
+            try:
+                # Create a new event loop for the background thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
                 
-                # Format Matrix users for selection
-                matrix_user_options = []
-                for user in entrance_users:
-                    user_id = user['user_id']
-                    display_name = user['display_name']
-                    is_admin = user.get('is_admin', False)
-                    
-                    # Add admin label if applicable
-                    display_text = f"{user_id.split(':')[0].lstrip('@')} ({display_name})"
-                    if is_admin:
-                        display_text += " [Admin]"
-                        
-                    matrix_user_options.append((user_id, display_text))
+                # Apply nest_asyncio to allow nested event loops
+                import nest_asyncio
+                nest_asyncio.apply()
                 
-                # Select Matrix user to connect
-                matrix_user_id = st.selectbox(
-                    "Select Matrix User to Connect",
-                    options=[user[0] for user in matrix_user_options],
-                    format_func=lambda x: next((user[1] for user in matrix_user_options if user[0] == x), ""),
-                    key="matrix_user_select"
-                )
+                # Fetch Matrix users from INDOC room
+                st.session_state.matrix_users = await get_all_accessible_users()
                 
-                # Store selection in session state
-                if matrix_user_id:
-                    st.session_state['matrix_user_id'] = matrix_user_id
-                    st.info(f"Selected Matrix user: {matrix_user_id}")
-                    
-                    # Add option to send direct message to the selected user
-                    with st.expander("Send Direct Message"):
-                        dm_message = st.text_area(
-                            "Message to send via Matrix bot",
-                            key="matrix_dm_message",
-                            placeholder="Enter your message here..."
-                        )
-                        
-                        if st.button("Send Direct Message", key="send_matrix_dm"):
-                            if dm_message:
-                                try:
-                                    # Import Matrix actions
-                                    from app.utils.matrix_actions import send_direct_message
-                                    
-                                    # Create a synchronous wrapper to send the direct message
-                                    def send_direct_message_sync(user_id, message):
-                                        try:
-                                            # Import necessary modules
-                                            import traceback
-                                            
-                                            # Check if this is a signal bridge user that might need special handling
-                                            is_signal_user = 'signal_' in user_id
-                                            if is_signal_user:
-                                                st.info(f"Sending message to Signal bridge user: {user_id}")
-                                                logging.info(f"Sending message to Signal bridge user: {user_id}")
-                                                
-                                                # Import the special Signal function
-                                                from app.utils.matrix_actions import send_signal_message
-                                                
-                                                # Use the special Signal function
-                                                result = send_signal_message(user_id, message)
-                                            else:
-                                                # For regular Matrix users, use the normal function
-                                                from app.utils.matrix_actions import _send_direct_message_async
-                                                result = run_async_safely(_send_direct_message_async, user_id, message)
-                                            
-                                            if result:
-                                                logging.info(f"Successfully sent message to {user_id}")
-                                                if is_signal_user:
-                                                    st.success(f"Message sent to Signal bridge user via Matrix. Note that the Signal user will receive the message in their Signal app, not in Matrix.")
-                                                else:
-                                                    st.success(f"Message sent to {user_id}")
-                                                return True
-                                            else:
-                                                logging.error(f"Failed to send message to {user_id}")
-                                                # If this is a signal user, add helpful message
-                                                if is_signal_user:
-                                                    st.error("Failed to send message to Signal bridge user. Signal bridge users require proper configuration in Matrix. Please check with your administrator.")
-                                                else:
-                                                    st.error(f"Failed to send message to {user_id}")
-                                                return False
-                                        except Exception as e:
-                                            logging.error(f"Error sending direct message: {str(e)}")
-                                            logging.error(traceback.format_exc())
-                                            return False
-                                    
-                                    # Send the message
-                                    success = send_direct_message_sync(matrix_user_id, dm_message)
-                                    
-                                    if success:
-                                        st.success(f"Message sent to {matrix_user_id}")
-                                    else:
-                                        st.error(f"Failed to send message to {matrix_user_id}")
-                                except Exception as e:
-                                    st.error(f"Error sending direct message: {str(e)}")
-                                    logging.error(f"Error sending direct message: {str(e)}")
-                                    logging.error(traceback.format_exc())
-                            else:
-                                st.warning("Please enter a message to send")
-                        
-                        # Add room recommendation section
-                        with st.expander("Room Recommendations"):
-                            # Input for user interests to match with rooms
-                            user_interests = st.text_input(
-                                "User Interests (comma separated):",
-                                key="matrix_user_interests",
-                                help="Enter user interests to match with room categories"
-                            )
-                            
-                            # Button to get room recommendations
-                            if st.button("Get Room Recommendations", key="get_room_recommendations"):
-                                if user_interests:
-                                    try:
-                                        # Import the room recommendation function
-                                        get_room_recommendations_sync = None
-                                        
-                                        # Create a synchronous wrapper for gpt_recommend_rooms
-                                        def get_room_recommendations_sync(user_id, interests):
-                                            """Synchronous wrapper for getting room recommendations"""
-                                            try:
-                                                # Create a new event loop
-                                                loop = asyncio.new_event_loop()
-                                                asyncio.set_event_loop(loop)
-                                                
-                                                # Apply nest_asyncio to allow nested event loops
-                                                import nest_asyncio
-                                                nest_asyncio.apply(loop)
-                                                
-                                                try:
-                                                    from app.utils.recommendation import get_room_recommendations
-                                                    future = asyncio.ensure_future(get_room_recommendations(user_id, interests), loop=loop)
-                                                    return loop.run_until_complete(future)
-                                                finally:
-                                                    loop.close()
-                                            except Exception as e:
-                                                logging.error(f"Error getting room recommendations: {str(e)}")
-                                                logging.error(traceback.format_exc())
-                                                return []
-                                        
-                                        # Get room recommendations
-                                        with st.spinner("Finding recommended rooms..."):
-                                            recommended_rooms = get_room_recommendations_sync(matrix_user_id, user_interests)
-                                            
-                                            # Store recommendations in session state
-                                            st.session_state['recommended_rooms'] = recommended_rooms
-                                            
-                                            # Display recommended rooms
-                                            if recommended_rooms:
-                                                st.success(f"Found {len(recommended_rooms)} recommended rooms")
-                                                
-                                                # Initialize selected rooms list in session state if not already present
-                                                if 'selected_rooms' not in st.session_state:
-                                                    st.session_state['selected_rooms'] = []
-                                                
-                                                # Select all checkbox
-                                                select_all = st.checkbox("Select All Rooms", key="select_all_rooms")
-                                                
-                                                # Create a container for room checkboxes
-                                                room_container = st.container()
-                                                
-                                                # Display rooms with checkboxes
-                                                with room_container:
-                                                    # Create a multiselect instead of individual checkboxes
-                                                    # This works better with Streamlit's state management
-                                                    room_options = [(f"{room_id}||{room_name}", f"{room_name} ({room_id})") for room_id, room_name in recommended_rooms]
-                                                    
-                                                    # Prepare default selection based on select_all
-                                                    default_selection = [option[0] for option in room_options] if select_all else []
-                                                    
-                                                    # Create the multiselect
-                                                    selected_options = st.multiselect(
-                                                        "Select rooms to invite to:",
-                                                        options=[option[0] for option in room_options],
-                                                        default=default_selection,
-                                                        format_func=lambda x: next((option[1] for option in room_options if option[0] == x), x),
-                                                        key="room_multiselect"
-                                                    )
-                                                    
-                                                    # Update selected_rooms in session state
-                                                    st.session_state['selected_rooms'] = []
-                                                    for option in selected_options:
-                                                        room_id, room_name = option.split("||", 1)
-                                                        st.session_state['selected_rooms'].append((room_id, room_name))
-                                                
-                                                # Button to invite to selected rooms
-                                                if st.button("Invite to Selected Rooms", key="invite_to_rooms"):
-                                                    if st.session_state.get('selected_rooms'):
-                                                        # Create invite function
-                                                        def invite_to_rooms_sync(user_id, rooms):
-                                                            from app.utils.matrix_actions import invite_to_matrix_room
-                                                            
-                                                            results = []
-                                                            
-                                                            try:
-                                                                # Invite to each room
-                                                                for room_id, room_name in rooms:
-                                                                    success = run_async_safely(invite_to_matrix_room, room_id, user_id)
-                                                                    results.append((room_id, room_name, success))
-                                                                
-                                                                return results
-                                                            except Exception as e:
-                                                                logging.error(f"Error inviting to rooms: {str(e)}")
-                                                                logging.error(traceback.format_exc())
-                                                                return []
-                                                        
-                                                        # Show the rooms we're inviting to
-                                                        st.write("Inviting to the following rooms:")
-                                                        for room_id, room_name in st.session_state['selected_rooms']:
-                                                            st.write(f"• {room_name} ({room_id})")
-                                                        
-                                                        # Invite to selected rooms
-                                                        with st.spinner("Inviting user to selected rooms..."):
-                                                            invite_results = invite_to_rooms_sync(matrix_user_id, st.session_state['selected_rooms'])
-                                                            
-                                                            # Display results
-                                                            if invite_results:
-                                                                import pandas as pd
-                                                                
-                                                                # Create results table
-                                                                results_data = []
-                                                                for room_id, room_name, success in invite_results:
-                                                                    results_data.append({
-                                                                        "Room Name": room_name,
-                                                                        "Room ID": room_id,
-                                                                        "Status": "✅ Success" if success else "❌ Failed"
-                                                                    })
-                                                                
-                                                                # Display as dataframe
-                                                                results_df = pd.DataFrame(results_data)
-                                                                st.dataframe(results_df)
-                                                                
-                                                                # Summary
-                                                                success_count = sum(1 for _, _, success in invite_results if success)
-                                                                st.success(f"Successfully invited to {success_count} out of {len(invite_results)} rooms")
-                                                    else:
-                                                        st.warning("Please select at least one room")
-                                            else:
-                                                st.warning("No recommended rooms found for these interests")
-                                    # Correctly indented except block (matches try)
-                                    except Exception as e:
-                                        st.error(f"Error getting room recommendations: {str(e)}")
-                                        logging.error(f"Error getting room recommendations: {str(e)}")
-                                        logging.error(traceback.format_exc())
-                                # Correctly indented else block (matches 'if user_interests:')
-                                else:
-                                    st.warning("Please enter interests to find matching rooms")
-            else:
-                # Fetching is done but no users were found
-                st.warning("No users found in the INDOC room. The room may be empty or there might be an issue with Matrix connectivity.")
+                # Close the loop
+                loop.close()
                 
-                # Add button to retry
-                if st.button("Retry Fetching INDOC Users", key="retry_indoc_fetch"):
-                    # Reset flags to retry the fetch
-                    st.session_state['fetch_indoc_users_started'] = False
-                    st.session_state['fetch_indoc_users_finished'] = False
-                    if 'fetch_indoc_users_error' in st.session_state:
-                        del st.session_state['fetch_indoc_users_error']
-                    if 'indoc_users' in st.session_state:
-                        del st.session_state['indoc_users']
-                    st.rerun()
-                
-                # If there was an error, show it
-                if 'fetch_indoc_users_error' in st.session_state:
-                    st.error(f"Error fetching INDOC users: {st.session_state['fetch_indoc_users_error']}")
+                if not st.session_state.matrix_users:
+                    st.warning("No Matrix users found in INDOC room. Please try again later.")
+            except Exception as e:
+                st.error(f"Error loading Matrix users: {str(e)}")
+                st.session_state.matrix_users = []
+    
+    # Display Matrix user selection
+    if st.session_state.matrix_users:
+        matrix_user_options = [f"{user['display_name']} ({user['user_id']})" for user in st.session_state.matrix_users]
+        selected_user = st.selectbox(
+            "Select Matrix User",
+            options=[""] + matrix_user_options,
+            key="matrix_user_select"
+        )
         
-        elif 'fetch_indoc_users_started' in st.session_state and st.session_state['fetch_indoc_users_started']:
-            # Fetch is in progress, show spinner
-            with st.spinner("Fetching Matrix users from INDOC room..."):
-                st.info("Loading Matrix users from the INDOC room. This might take a moment depending on the room size and network connection.")
-                # We don't need to do anything here, just wait for the background thread to finish
-                # Add a check for errors that might have occurred during the fetch
-                if 'fetch_indoc_users_error' in st.session_state:
-                    st.error(f"An error occurred during background fetch: {st.session_state['fetch_indoc_users_error']}")
-                    # Optionally add a retry button here as well
-                    if st.button("Retry Background Fetch", key="retry_background_fetch"):
-                        st.session_state['fetch_indoc_users_started'] = False
-                        st.session_state['fetch_indoc_users_finished'] = False
-                        if 'fetch_indoc_users_error' in st.session_state:
-                            del st.session_state['fetch_indoc_users_error']
-                        if 'indoc_users' in st.session_state:
-                            del st.session_state['indoc_users']
-                        st.rerun()
-        
-        else:
-            # Not started and not finished - initial state or potential error
-            st.info("Preparing to fetch Matrix user data...")
+        if selected_user:
+            # Extract user_id and display_name from the selected option
+            user_id = selected_user.split("(")[-1].rstrip(")")
+            display_name = selected_user.split("(")[0].strip()
+            st.session_state.matrix_user_selected = user_id
             
-            # Add button to manually trigger fetch
-            if st.button("Force Fetch INDOC Users", key="force_indoc_fetch"):
-                # Reset flags to retry the fetch
-                st.session_state['fetch_indoc_users_started'] = False
-                st.session_state['fetch_indoc_users_finished'] = False
-                if 'fetch_indoc_users_error' in st.session_state:
-                    del st.session_state['fetch_indoc_users_error']
-                if 'indoc_users' in st.session_state:
-                    del st.session_state['indoc_users']
-                st.rerun()
-    except Exception as e:
-        logging.error(f"Error fetching INDOC users: {str(e)}")
-        st.warning("Could not fetch Matrix users. The recommendation module might not be available.")
+            # Store the Matrix username in the database
+            try:
+                db = next(get_db())
+                user = db.query(User).filter(User.email == email).first()
+                if user:
+                    user.matrix_username = display_name
+                    # Update Authentik profile with Matrix username
+                    user.attributes = user.attributes or {}
+                    user.attributes['matrix_username'] = display_name
+                    db.commit()
+                    st.success(f"Matrix username {display_name} linked to account")
+            except Exception as e:
+                st.error(f"Error storing Matrix username: {str(e)}")
+    
+    # Room recommendations based on interests
+    if st.session_state.matrix_user_selected and interests:
+        st.subheader("Recommended Rooms")
+        
+        # Get room recommendations
+        if not st.session_state.recommended_rooms:
+            with st.spinner("Getting room recommendations based on interests..."):
+                try:
+                    st.session_state.recommended_rooms = get_room_recommendations_sync(
+                        st.session_state.matrix_user_selected,
+                        interests
+                    )
+                except Exception as e:
+                    st.error(f"Error getting room recommendations: {str(e)}")
+                    st.session_state.recommended_rooms = []
+        
+        # Display recommended rooms with checkboxes
+        if st.session_state.recommended_rooms:
+            for room in st.session_state.recommended_rooms:
+                room_key = f"room_{room['room_id']}"
+                if st.checkbox(
+                    f"{room['name']} - {room.get('description', '')}",
+                    key=room_key,
+                    value=room_key in st.session_state.selected_rooms
+                ):
+                    st.session_state.selected_rooms.add(room_key)
+                else:
+                    st.session_state.selected_rooms.discard(room_key)
+            
+            # Add to selected rooms button
+            if st.button("Add to Selected Rooms"):
+                selected_room_ids = [
+                    room['room_id'] for room in st.session_state.recommended_rooms
+                    if f"room_{room['room_id']}" in st.session_state.selected_rooms
+                ]
+                
+                if selected_room_ids:
+                    with st.spinner("Adding to rooms..."):
+                        try:
+                            success = invite_user_to_recommended_rooms_sync(
+                                st.session_state.matrix_user_selected,
+                                selected_room_ids
+                            )
+                            if success:
+                                st.success("Successfully added to selected rooms!")
+                            else:
+                                st.error("Failed to add to some rooms. Please try again.")
+                        except Exception as e:
+                            st.error(f"Error adding to rooms: {str(e)}")
+                else:
+                    st.warning("Please select at least one room to join")
+        else:
+            st.warning("No recommended rooms found based on your interests.")
     
     # Parse data textarea with fix for widget key conflict
     st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
@@ -2578,642 +2398,126 @@ async def render_invite_form():
     st.markdown("</div>", unsafe_allow_html=True)
 
 async def display_user_list(auth_api_url=None, headers=None):
-    """Display the list of users with enhanced filtering and UI."""
-    if auth_api_url is None:
-        auth_api_url = Config.AUTHENTIK_API_URL
-    if headers is None:
-        headers = {
-            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-            'Content-Type': 'application/json'
+    """Display the list of users with actions."""
+    # Get users from database
+    users = get_users_from_db()
+    
+    if not users:
+        st.warning("No users found in the database.")
+        return
+    
+    # Convert users to DataFrame for display
+    user_data = []
+    for user in users:
+        user_dict = {
+            "Username": user.username,
+            "Name": f"{user.first_name} {user.last_name}",
+            "Email": user.email,
+            "Matrix Username": user.matrix_username or "Not set",
+            "Status": "Active" if user.is_active else "Inactive",
+            "Admin": "Yes" if user.is_admin else "No",
+            "Date Joined": format_date(user.date_joined),
+            "Last Login": format_date(user.last_login)
         }
+        user_data.append(user_dict)
     
-    # Initialize session state
-    if 'user_list' not in st.session_state:
-        st.session_state['user_list'] = get_users_from_db()
-    if 'selection_state' not in st.session_state:
-        st.session_state['selection_state'] = 'viewing'  # States: viewing, selected
-    if 'selected_user_ids' not in st.session_state:
-        st.session_state['selected_user_ids'] = []
-    if 'filter_term' not in st.session_state:
-        st.session_state['filter_term'] = ""
-    if 'status_filter' not in st.session_state:
-        st.session_state['status_filter'] = "All"
+    df = pd.DataFrame(user_data)
     
-    # Process any pending actions
-    if 'pending_action' in st.session_state:
-        action = st.session_state['pending_action']['action']
-        selected_users = st.session_state['pending_action']['selected_users']
-        action_params = st.session_state['pending_action'].get('action_params', {})
-        
-        # Handle the action
-        success = handle_action(action, selected_users, action_params, headers)
-        
-        # Clear the pending action
-        del st.session_state['pending_action']
-        
-        # Reset state after action
-        if success:
-            st.session_state['user_list'] = get_users_from_db()
-            st.session_state['selected_user_ids'] = []
-            st.session_state['selection_state'] = 'viewing'
-            
-    try:
-        st.write("## User Management")
-        
-        # Create filter section with columns for better layout
-        st.subheader("Filter Users")
-        filter_col1, filter_col2 = st.columns(2)
-        
-        with filter_col1:
-            # Search by name, username, or email
-            filter_term = st.text_input(
-                "Search by name, username, or email", 
-                value=st.session_state['filter_term'],
-                key="filter_input"
-            )
-            st.session_state['filter_term'] = filter_term
-        
-        with filter_col2:
-            # Filter by status
-            status_options = ['All', 'Active', 'Inactive']
-            status_filter = st.selectbox(
-                "Filter by status",
-                options=status_options,
-                index=status_options.index(st.session_state['status_filter']),
-                key="status_filter_select"
-            )
-            st.session_state['status_filter'] = status_filter
-        
-        # Simple UI with two states: selecting users and performing actions
-        if st.session_state['selection_state'] == 'viewing':
-            # STEP 1: SELECT USERS
-            st.write("### Step 1: Select Users")
-            
-            # Convert user list to DataFrame
-            df = pd.DataFrame(st.session_state['user_list'])
-            
-            # Apply filters
-            if st.session_state['filter_term'] and not df.empty:
-                search_term = st.session_state['filter_term'].lower()
-                # Check if 'username', 'name', and 'email' columns exist before filtering
-                if 'username' in df.columns and 'name' in df.columns and 'email' in df.columns:
-                    df = df[
-                        df['username'].str.lower().str.contains(search_term, na=False) |
-                        df['name'].str.lower().str.contains(search_term, na=False) |
-                        df['email'].str.lower().str.contains(search_term, na=False)
-                    ]
-                elif 'username' in df.columns:
-                    df = df[df['username'].str.lower().str.contains(search_term, na=False)]
-                elif 'name' in df.columns:
-                    df = df[df['name'].str.lower().str.contains(search_term, na=False)]
-                elif 'email' in df.columns:
-                    df = df[df['email'].str.lower().str.contains(search_term, na=False)]
-            
-            # Apply status filter
-            if not df.empty and st.session_state['status_filter'] != 'All' and 'is_active' in df.columns:
-                is_active = st.session_state['status_filter'] == 'Active'
-                df = df[df['is_active'] == is_active]
-            
-            # Process fields for display
-            if not df.empty:
-                # Process fields
-                if 'attributes' in df.columns:
-                    df['intro'] = df.apply(
-                        lambda row: row.get('attributes', {}).get('intro', '') 
-                        if isinstance(row.get('attributes'), dict) else '', 
-                        axis=1
+    # Display the DataFrame
+    st.dataframe(df)
+    
+    # Add action buttons
+    st.subheader("User Actions")
+    action = st.selectbox(
+        "Select Action",
+        ["Update Email", "Update Status", "Update Matrix Username", "Delete User"],
+        key="user_action"
+    )
+    
+    # Get selected users
+    selected_users = st.multiselect(
+        "Select Users",
+        options=[user.username for user in users],
+        key="selected_users"
+    )
+    
+    if selected_users:
+        if action == "Update Matrix Username":
+            new_matrix_username = st.text_input("New Matrix Username", key="new_matrix_username")
+            if st.button("Update Matrix Username"):
+                if new_matrix_username:
+                    success = handle_action(
+                        "update_matrix_username",
+                        selected_users,
+                        action_params={"matrix_username": new_matrix_username}
                     )
-                    df['invited_by'] = df.apply(
-                        lambda row: row.get('attributes', {}).get('invited_by', '') 
-                        if isinstance(row.get('attributes'), dict) else '', 
-                        axis=1
-                    )
-                else:
-                    # Add empty columns if attributes don't exist
-                    df['intro'] = ''
-                    df['invited_by'] = ''
-                
-                if 'last_login' in df.columns:
-                    df['last_login'] = df.apply(
-                        lambda row: format_date(row.get('last_login')) if row.get('last_login') else '',
-                        axis=1
-                    )
-                else:
-                    df['last_login'] = ''
-                    
-                if 'is_active' in df.columns:
-                    df['is_active'] = df['is_active'].apply(lambda x: '✅ Active' if x else '❌ Inactive')
-                else:
-                    df['is_active'] = 'Unknown'
-                
-                # Get note counts for users
-                # Create a note_count column
-                df['note_count'] = 0
-                
-                # Use next() to get the first db session yielded by the generator
-                db = next(get_db())
-                try:
-                    # For each user in the dataframe, get the note count
-                    for idx, row in df.iterrows():
-                        username = row.get('username')
-                        if username:
-                            # Find the user in our database by username
-                            db_user = db.query(User).filter(User.username == username).first()
-                            if db_user:
-                                # Get the note count
-                                notes = db.query(User).filter(User.id == db_user.id).first().notes
-                                df.at[idx, 'note_count'] = len(notes) if notes else 0
-                finally:
-                    # Make sure to close the db session
-                    db.close()
-                
-                # Create selection columns with unique IDs for each row
-                if not df.empty and 'pk' in df.columns:
-                    # Ensure all required columns exist
-                    required_columns = ['username', 'name', 'email', 'is_active', 'last_login', 'note_count']
-                    for col in required_columns:
-                        if col not in df.columns:
-                            df[col] = ''  # Add empty column if missing
-                    
-                    # Display the table with selection columns
-                    cols_to_display = ['username', 'name', 'email', 'is_active', 'last_login', 'note_count']
-                    st.write(f"Found {len(df)} users matching your filters")
-                    
-                    # Using Streamlit's data editor for selection
-                    # Store selected rows from previous state if any
-                    if 'selected_rows_indices' not in st.session_state:
-                        st.session_state['selected_rows_indices'] = []
-                    
-                    edited_df = st.data_editor(
-                        df[cols_to_display],
-                        hide_index=True,
-                        key="user_table",
-                        use_container_width=True,
-                        column_config={
-                            "username": st.column_config.TextColumn("Username"),
-                            "name": st.column_config.TextColumn("Name"),
-                            "email": st.column_config.TextColumn("Email"),
-                            "is_active": st.column_config.TextColumn("Status"),
-                            "last_login": st.column_config.TextColumn("Last Login"),
-                            "note_count": st.column_config.NumberColumn(
-                                "Notes",
-                                help="Number of moderator notes for this user",
-                                format="%d"
-                            )
-                        },
-                        disabled=cols_to_display,
-                        height=400
-                    )
-                    
-                    # Add a multi-select to choose users if we have usernames
-                    if 'username' in df.columns and len(df['username']) > 0:
-                        st.write("Select users from the list:")
-                        selected_usernames = st.multiselect(
-                            "Select Users",
-                            options=df['username'].tolist(),
-                            default=[],
-                            key="selected_usernames"
-                        )
-                        
-                        # Get selected rows based on username
-                        if selected_usernames:
-                            # Get the selected user IDs
-                            selected_user_ids = df[df['username'].isin(selected_usernames)]['pk'].tolist()
-                            
-                            # Display selection info
-                            st.success(f"Selected {len(selected_user_ids)} users")
-                            
-                            # Store selected users
-                            st.session_state['selected_user_ids'] = selected_user_ids
-                            st.session_state['selected_users'] = [
-                                df[df['pk'] == user_id].to_dict('records')[0] 
-                                for user_id in selected_user_ids
-                            ]
-                            
-                            # Continue button
-                            if st.button("Continue to Actions", key="continue_button"):
-                                st.session_state['selection_state'] = 'selected'
-                                st.rerun()
-                        else:
-                            st.info("Please select at least one user to continue.")
+                    if success:
+                        st.success(f"Successfully updated Matrix username for selected users")
                     else:
-                        st.warning("No usernames available to select from.")
+                        st.error("Failed to update Matrix username")
                 else:
-                    st.warning("No users with valid IDs found. Cannot display user data.")
-            else:
-                st.warning("No users match the filter criteria.")
-                
-        elif st.session_state['selection_state'] == 'selected':
-            # STEP 2: PERFORM ACTIONS
-            st.write("### Step 2: Choose an Action")
-            
-            # Get selected users data
-            selected_users = st.session_state.get('selected_users', [])
-            
-            # Display selected usernames
-            selected_usernames = [user.get('username', 'Unknown') for user in selected_users]
-            st.write(f"**Selected Users:** {', '.join(selected_usernames)}")
-            
-            # Create tabs for different action categories
-            action_tabs = st.tabs(["Account Actions", "Group Management", "Profile Updates", "User Notes"])
-            
-            # Tab 1: Account Actions
-            with action_tabs[0]:
-                st.subheader("Account Actions")
-                
-                # Action selection
-                account_action = st.selectbox(
-                    "Select Action",
-                    ["Activate Users", "Deactivate Users", "Reset Password", "Delete Users"],
-                    key="account_action_selection"
-                )
-                
-                # Warning for destructive actions
-                if account_action in ["Deactivate Users", "Delete Users"]:
-                    st.warning(f"⚠️ {account_action} is a potentially destructive action. Please confirm you want to proceed.")
-                
-                # Confirmation checkbox for destructive actions
-                confirm = True
-                if account_action in ["Deactivate Users", "Delete Users"]:
-                    confirm = st.checkbox("I confirm I want to perform this action", key="confirm_destructive")
-                
-                if st.button("Apply Account Action", key="apply_account_action", disabled=not confirm):
-                    # Map the action to the internal action name
-                    action_map = {
-                        "Activate Users": "Activate",
-                        "Deactivate Users": "Deactivate",
-                        "Reset Password": "Reset Password",
-                        "Delete Users": "Delete"
-                    }
-                    
-                    # Store action and selected users
-                    st.session_state['pending_action'] = {
-                        'action': action_map[account_action],
-                        'selected_users': selected_users
-                    }
-                    st.rerun()
-            
-            # Tab 2: Group Management
-            with action_tabs[1]:
-                st.subheader("Group Management")
-                
-                # Get all available groups
-                from app.auth.admin import get_authentik_groups
-                all_groups = get_authentik_groups()
-                
-                if not all_groups:
-                    st.info("No groups available. Please create groups first.")
-                else:
-                    # Create two columns for add/remove operations
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.write("**Add to Groups**")
-                        groups_to_add = st.multiselect(
-                            "Select groups to add users to",
-                            options=[g.get('pk') for g in all_groups],
-                            format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
-                            key="groups_to_add"
-                        )
-                        
-                        if groups_to_add and st.button("Add to Selected Groups", key="add_to_groups_btn"):
-                            # Store action and selected users
-                            st.session_state['pending_action'] = {
-                                'action': "Add to Groups",
-                                'selected_users': selected_users,
-                                'action_params': {'groups_to_add': groups_to_add}
-                            }
-                            st.rerun()
-                    
-                    with col2:
-                        st.write("**Remove from Groups**")
-                        groups_to_remove = st.multiselect(
-                            "Select groups to remove users from",
-                            options=[g.get('pk') for g in all_groups],
-                            format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
-                            key="groups_to_remove"
-                        )
-                        
-                        if groups_to_remove and st.button("Remove from Selected Groups", key="remove_from_groups_btn"):
-                            # Store action and selected users
-                            st.session_state['pending_action'] = {
-                                'action': "Remove from Groups",
-                                'selected_users': selected_users,
-                                'action_params': {'groups_to_remove': groups_to_remove}
-                            }
-                            st.rerun()
-            
-            # Tab 3: Profile Updates
-            with action_tabs[2]:
-                st.subheader("Profile Updates")
-                
-                # Profile action selection
-                profile_action = st.selectbox(
-                    "Select Action",
-                    ["Update Email", "Add Intro", "Add Invited By", "Verify Safety Number Change"],
-                    key="profile_action_selection"
-                )
-                
-                # Show additional inputs based on the selected action
-                action_params = {}
-                
-                if profile_action == "Update Email":
-                    st.info("This action is only applicable when a single user is selected.")
-                    if len(selected_users) == 1:
-                        user = selected_users[0]
-                        new_email = st.text_input(
-                            f"New email for {user.get('username')}",
-                            value=user.get('email', ''),
-                            key="new_email_input"
-                        )
-                        action_params['new_email'] = new_email
+                    st.warning("Please enter a Matrix username")
+        elif action == "Update Email":
+            new_email = st.text_input("New Email", key="new_email")
+            if st.button("Update Email"):
+                if new_email:
+                    success = handle_action(
+                        "update_email",
+                        selected_users,
+                        action_params={"email": new_email}
+                    )
+                    if success:
+                        st.success(f"Successfully updated email for selected users")
                     else:
-                        st.warning("Please select only one user for email updates.")
-                
-                elif profile_action == "Add Intro":
-                    intro_text = st.text_area(
-                        "Enter Introduction Text",
-                        key="intro_text_input",
-                        height=100,
-                        help="This will be added to all selected users"
-                    )
-                    action_params['intro_text'] = intro_text
-                
-                elif profile_action == "Add Invited By":
-                    invited_by = st.text_input(
-                        "Enter Invited By",
-                        key="invited_by_input",
-                        help="Who invited these users to the platform"
-                    )
-                    action_params['invited_by'] = invited_by
-                
-                elif profile_action == "Verify Safety Number Change":
-                    st.info("This will send verification emails to all selected users.")
-                
-                if st.button("Apply Profile Action", key="apply_profile_action"):
-                    # Map the action to the internal action name
-                    action_map = {
-                        "Update Email": "Update Email",
-                        "Add Intro": "Add Intro",
-                        "Add Invited By": "Add Invited By",
-                        "Verify Safety Number Change": "Verify Safety Number Change"
-                    }
-                    
-                    # Store action and selected users
-                    st.session_state['pending_action'] = {
-                        'action': action_map[profile_action],
-                        'selected_users': selected_users,
-                        'action_params': action_params
-                    }
-                    st.rerun()
-            
-            # Tab 4: User Notes (New)
-            with action_tabs[3]:
-                st.subheader("User Notes")
-                
-                # User notes only make sense for a single user
-                if len(selected_users) > 1:
-                    st.warning("Please select only one user to manage notes.")
+                        st.error("Failed to update email")
                 else:
-                    user = selected_users[0]
-                    username = user.get('username', 'Unknown')
-                    authentik_user_id = user.get('pk')  # This is the authentik user ID
-                    
-                    st.write(f"### Notes for {username}")
-                    
-                    # First, we need to find the local user ID that corresponds to this authentik user
-                    db = next(get_db())
-                    try:
-                        # Find the local user by username (which should be unique)
-                        db_user = db.query(User).filter(User.username == username).first()
-                        
-                        if not db_user:
-                            st.warning(f"User {username} not found in local database. Notes cannot be managed.")
-                        else:
-                            user_id = db_user.id  # This is the local user ID
-                            
-                            # Fetch existing notes for this user from our database
-                            notes = get_user_notes(db, user_id)
-                            
-                            # Display existing notes
-                            if notes:
-                                st.write(f"Found {len(notes)} notes for this user:")
-                                
-                                for i, note in enumerate(notes):
-                                    with st.expander(f"Note {i+1} - {note.created_at.strftime('%Y-%m-%d %H:%M')} by {note.created_by}", expanded=i==0):
-                                        # Initialize session state for editing
-                                        edit_key = f"edit_note_{note.id}"
-                                        if edit_key not in st.session_state:
-                                            st.session_state[edit_key] = False
-                                        
-                                        # Display note content or edit form
-                                        if st.session_state[edit_key]:
-                                            # Edit form
-                                            edited_content = st.text_area(
-                                                "Edit Note", 
-                                                value=note.content, 
-                                                key=f"edit_content_{note.id}",
-                                                height=100
-                                            )
-                                            
-                                            col1, col2 = st.columns(2)
-                                            with col1:
-                                                if st.button("Save Changes", key=f"save_note_{note.id}"):
-                                                    result = update_user_note(
-                                                        db,
-                                                        note.id,
-                                                        edited_content,
-                                                        st.session_state.get("username", "unknown")
-                                                    )
-                                                    
-                                                    if result:
-                                                        st.success("Note updated successfully")
-                                                        st.session_state[edit_key] = False
-                                                        time.sleep(1)
-                                                        st.rerun()
-                                                    else:
-                                                        st.error("Failed to update note")
-                                            with col2:
-                                                if st.button("Cancel", key=f"cancel_edit_{note.id}"):
-                                                    st.session_state[edit_key] = False
-                                                    st.rerun()
-                                        else:
-                                            # Display note content
-                                            st.markdown(note.content)
-                                            
-                                            # Display metadata
-                                            created_time = note.created_at.strftime("%Y-%m-%d %H:%M")
-                                            updated_time = note.updated_at.strftime("%Y-%m-%d %H:%M")
-                                            
-                                            meta_col1, meta_col2 = st.columns(2)
-                                            with meta_col1:
-                                                st.caption(f"Created: {created_time} by {note.created_by}")
-                                            with meta_col2:
-                                                if note.last_edited_by:
-                                                    st.caption(f"Last edited: {updated_time} by {note.last_edited_by}")
-                                            
-                                            # Edit and Delete buttons
-                                            action_col1, action_col2 = st.columns(2)
-                                            with action_col1:
-                                                if st.button("Edit", key=f"edit_{note.id}"):
-                                                    st.session_state[edit_key] = True
-                                                    st.rerun()
-                                            with action_col2:
-                                                if st.button("Delete", key=f"delete_{note.id}"):
-                                                    # Confirm deletion
-                                                    if st.session_state.get(f"confirm_delete_{note.id}", False):
-                                                        # Delete the note
-                                                        success = delete_user_note(
-                                                            db, 
-                                                            note.id, 
-                                                            st.session_state.get("username", "unknown")
-                                                        )
-                                                        if success:
-                                                            st.success("Note deleted successfully")
-                                                            time.sleep(1)
-                                                            st.rerun()
-                                                        else:
-                                                            st.error("Failed to delete note")
-                                                    else:
-                                                        st.session_state[f"confirm_delete_{note.id}"] = True
-                                                        st.warning("Are you sure you want to delete this note? Click Delete again to confirm.")
-                            else:
-                                st.info("No notes found for this user.")
-                            
-                            # Add new note form
-                            st.write("### Add New Note")
-                            new_note_content = st.text_area(
-                                "Note Content", 
-                                key="new_note_content",
-                                height=150,
-                                placeholder="Enter your note here..."
-                            )
-                            
-                            if st.button("Add Note"):
-                                if new_note_content.strip():
-                                    result = create_user_note(
-                                        db,
-                                        user_id,  # Using the local user ID
-                                        new_note_content,
-                                        st.session_state.get("username", "unknown")
-                                    )
-                                    
-                                    if result:
-                                        st.success("Note added successfully")
-                                        # Clear the form
-                                        st.session_state["new_note_content"] = ""
-                                        time.sleep(1)
-                                        st.rerun()
-                                    else:
-                                        st.error("Failed to add note")
-                                else:
-                                    st.warning("Note content cannot be empty")
-                    finally:
-                        db.close()  # Ensure the database connection is closed
-        
-        # Back button moved one indentation level to the left, outside the action_tabs logic
-        if st.button("Back to User Selection"):
-            st.session_state['selection_state'] = 'viewing'
-            st.session_state['selected_user_ids'] = []
-            st.rerun()
-    
-    except Exception as e:
-        logging.error(f"Error displaying user list: {e}")
-        logging.error(traceback.format_exc())
-        st.error(f"An error occurred: {str(e)}")
+                    st.warning("Please enter an email")
+        elif action == "Update Status":
+            new_status = st.selectbox(
+                "New Status",
+                ["Active", "Inactive"],
+                key="new_status"
+            )
+            if st.button("Update Status"):
+                success = handle_action(
+                    "update_status",
+                    selected_users,
+                    action_params={"is_active": new_status == "Active"}
+                )
+                if success:
+                    st.success(f"Successfully updated status for selected users")
+                else:
+                    st.error("Failed to update status")
+        elif action == "Delete User":
+            if st.button("Delete Selected Users"):
+                success = handle_action("delete", selected_users)
+                if success:
+                    st.success(f"Successfully deleted selected users")
+                else:
+                    st.error("Failed to delete users")
 
-# Add new functions for user management
-def update_user_status(api_url: str, headers: dict, user_id: str, is_active: bool) -> bool:
-    """Update user's active status in Authentik."""
+def handle_action(action, selected_users, action_params=None, headers=None):
+    """Handle user actions."""
     try:
-        url = f"{api_url}/core/users/{user_id}/"
-        data = {'is_active': is_active}
-        response = requests.patch(url, headers=headers, json=data)
-        response.raise_for_status()
+        db = next(get_db())
+        for username in selected_users:
+            user = db.query(User).filter(User.username == username).first()
+            if user:
+                if action == "update_matrix_username":
+                    user.matrix_username = action_params.get("matrix_username")
+                    # Update Authentik profile with Matrix username
+                    user.attributes = user.attributes or {}
+                    user.attributes['matrix_username'] = action_params.get("matrix_username")
+                elif action == "update_email":
+                    user.email = action_params.get("email")
+                elif action == "update_status":
+                    user.is_active = action_params.get("is_active")
+                elif action == "delete":
+                    db.delete(user)
+        db.commit()
         return True
     except Exception as e:
-        logging.error(f"Error updating user status: {e}")
-        return False
-
-def delete_user(api_url: str, headers: dict, user_id: str) -> bool:
-    """Delete a user from Authentik."""
-    try:
-        url = f"{api_url}/core/users/{user_id}/"
-        response = requests.delete(url, headers=headers)
-        response.raise_for_status()
-        return True
-    except Exception as e:
-        logging.error(f"Error deleting user: {e}")
-        return False
-
-def update_user_email(api_url: str, headers: dict, user_id: str, new_email: str) -> bool:
-    """Update user's email in Authentik."""
-    try:
-        url = f"{api_url}/core/users/{user_id}/"
-        data = {'email': new_email}
-        response = requests.patch(url, headers=headers, json=data)
-        response.raise_for_status()
-        return True
-    except Exception as e:
-        logging.error(f"Error updating user email: {e}")
-        return False
-
-def update_user_intro(api_url: str, headers: dict, user_id: str, intro_text: str) -> bool:
-    """Update user's intro in Authentik."""
-    try:
-        # First get current attributes
-        user_details = get_user_details(user_id)
-        if not user_details:
-            return False
-            
-        # Update or add intro to attributes
-        attributes = user_details.get('attributes', {})
-        attributes['intro'] = intro_text
-        
-        # Update user with new attributes
-        url = f"{api_url}/core/users/{user_id}/"
-        data = {'attributes': attributes}
-        response = requests.patch(url, headers=headers, json=data)
-        response.raise_for_status()
-        return True
-    except Exception as e:
-        logging.error(f"Error updating user intro: {e}")
-        return False
-
-def update_user_invited_by(api_url: str, headers: dict, user_id: str, invited_by: str) -> bool:
-    """Update user's invited_by field in Authentik."""
-    try:
-        # First get current attributes
-        user_details = get_user_details(user_id)
-        if not user_details:
-            return False
-            
-        # Update or add invited_by to attributes
-        attributes = user_details.get('attributes', {})
-        attributes['invited_by'] = invited_by
-        
-        # Update user with new attributes
-        url = f"{api_url}/core/users/{user_id}/"
-        data = {'attributes': attributes}
-        response = requests.patch(url, headers=headers, json=data)
-        response.raise_for_status()
-        return True
-    except Exception as e:
-        logging.error(f"Error updating user invited_by: {e}")
-        return False
-
-def handle_form_submission(action: str, username: str, **kwargs) -> bool:
-    """Handle form submissions for various user actions."""
-    try:
-        if action == "reset_password":
-            # Implement password reset logic here
-            return True
-        elif action == "verify_safety_number":
-            # Implement safety number verification logic here
-            return True
-        return False
-    except Exception as e:
-        logging.error(f"Error handling form submission: {e}")
+        st.error(f"Error performing action: {str(e)}")
         return False
 
 def on_organization_change():

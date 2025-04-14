@@ -174,29 +174,30 @@ class MatrixClient:
             
         try:
             client = await self._get_client()
-            
-            # Create a direct message room
+            if not client:
+                logger.error("Failed to create Matrix client")
+                return None
+
             response = await client.room_create(
-                visibility=RoomVisibility.TRUSTED_PRIVATE_CHAT,
+                visibility="private",  # Use string instead of enum
                 is_direct=True,
                 invite=[user_id],
-                preset="trusted_private_chat",
-                initial_state=[]
+                preset="trusted_private_chat"
             )
             
-            if isinstance(response, RoomCreateResponse):
-                room_id = response.room_id
-                logger.info(f"Created direct chat room with {user_id}: {room_id}")
-                return room_id
+            if isinstance(response, RoomCreateResponse) and response.room_id:
+                logger.info(f"Created direct chat room with {user_id}: {response.room_id}")
+                return response.room_id
             else:
                 logger.error(f"Failed to create direct chat with {user_id}: {response}")
                 return None
                 
         except Exception as e:
-            logger.error(f"Error creating direct chat with {user_id}: {e}")
+            logger.error(f"Failed to create Matrix direct chat: {e}")
             return None
         finally:
-            await self.close()
+            if client:
+                await client.close()
     
     async def invite_to_room(self, room_id: str, user_id: str) -> bool:
         """
@@ -339,30 +340,46 @@ async def send_matrix_message(room_id, message, client=None):
         return False
 
 async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
-    """Create a direct chat with a user"""
+    """
+    Create a direct chat with another user.
+    
+    Args:
+        user_id: The Matrix ID of the user to chat with
+        
+    Returns:
+        Optional[str]: The room ID of the created chat, or None if creation failed
+    """
     if not MATRIX_ACTIVE:
-        logging.warning("Matrix integration is disabled")
+        logger.warning("Matrix integration is not active. Skipping create_direct_chat.")
         return None
-
+        
     try:
         client = await get_matrix_client()
         if not client:
+            logger.error("Failed to create Matrix client")
             return None
 
+        # Create a direct message room
         response = await client.room_create(
-            visibility=RoomVisibility.TRUSTED_PRIVATE_CHAT,
+            visibility="private",  # Use string instead of enum
             is_direct=True,
             invite=[user_id],
             preset="trusted_private_chat"
         )
-        await client.close()
         
-        if hasattr(response, 'room_id'):
+        if isinstance(response, RoomCreateResponse) and response.room_id:
+            logger.info(f"Created direct chat room with {user_id}: {response.room_id}")
             return response.room_id
-        return None
+        else:
+            logger.error(f"Failed to create direct chat with {user_id}: {response}")
+            return None
+            
     except Exception as e:
-        logging.error(f"Failed to create Matrix direct chat: {e}")
+        logger.error(f"Failed to create Matrix direct chat: {e}")
         return None
+    finally:
+        if client:
+            await client.close()
 
 async def invite_to_matrix_room(room_id: str, user_id: str) -> bool:
     """

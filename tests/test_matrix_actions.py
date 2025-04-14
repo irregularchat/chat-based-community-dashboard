@@ -10,10 +10,7 @@ from app.utils.matrix_actions import (
     get_matrix_client,
     get_all_accessible_users
 )
-from app.utils.recommendation import (
-    get_room_recommendations_sync,
-    invite_user_to_recommended_rooms_sync
-)
+from app.utils.recommendation import get_room_recommendations_sync, invite_user_to_recommended_rooms_sync
 from app.utils.config import Config
 from app.db.models import User, Group
 from app.db.session import get_db
@@ -60,11 +57,10 @@ async def test_create_matrix_direct_chat_failure():
     mock_client = AsyncMock()
     mock_client.room_create = AsyncMock(side_effect=Exception("Test error"))
     mock_client.close = AsyncMock()
-    
+
     with patch("app.utils.matrix_actions.get_matrix_client", return_value=mock_client):
         result = await create_matrix_direct_chat("test_user")
         assert result is None
-        await mock_client.close()
         mock_client.close.assert_called_once()
 
 @pytest.mark.asyncio
@@ -222,7 +218,7 @@ class TestMatrixActions(unittest.TestCase):
     def test_invite_user_to_recommended_rooms_sync(self):
         # Mock user data
         user_id = '@user1:example.com'
-        interests = ['python', 'machine learning']
+        interests = 'python, machine learning'
         
         # Mock room data
         mock_rooms = [
@@ -231,13 +227,21 @@ class TestMatrixActions(unittest.TestCase):
         ]
         
         # Test the function
-        with patch('app.utils.matrix_actions.invite_to_matrix_room') as mock_invite:
-            mock_invite.return_value = True
-            result = invite_user_to_recommended_rooms_sync(user_id, interests)
-            
-            # Verify results
-            self.assertTrue(result)
-            self.assertEqual(mock_invite.call_count, 2)
+        with patch('app.utils.recommendation.get_room_recommendations_sync') as mock_get_rooms:
+            with patch('app.utils.matrix_actions.invite_to_matrix_room') as mock_invite:
+                # Set up mock returns
+                mock_get_rooms.return_value = mock_rooms
+                mock_invite.return_value = True
+                
+                # Call the function
+                result = invite_user_to_recommended_rooms_sync(user_id, interests)
+                
+                # Verify results
+                self.assertTrue(result)  # Should return True if all invites succeeded
+                mock_get_rooms.assert_called_once_with(user_id, interests)
+                self.assertEqual(mock_invite.call_count, 2)  # Should be called for each room
+                mock_invite.assert_any_call('!python:example.com', user_id)
+                mock_invite.assert_any_call('!ml:example.com', user_id)
 
 if __name__ == '__main__':
     unittest.main()

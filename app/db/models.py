@@ -19,9 +19,12 @@ class User(Base):
     attributes = Column(JSON)
     authentik_id = Column(String)  # Link with Authentik user ID
     signal_identity = Column(String)  # Store Signal name or phone number
+    matrix_username = Column(String)  # Store Matrix username from INDOC room
     
     # Relationship to UserNote model
     notes = relationship("UserNote", back_populates="user", cascade="all, delete-orphan")
+    # Relationship to Group model for Authentik groups
+    groups = relationship("Group", secondary="user_groups", back_populates="users")
 
     def __init__(self, **kwargs):
         if 'full_name' in kwargs:
@@ -45,6 +48,7 @@ class User(Base):
             'attributes': self.attributes,
             'authentik_id': self.authentik_id,
             'signal_identity': self.signal_identity,
+            'matrix_username': self.matrix_username,
             'note_count': len(self.notes) if hasattr(self, 'notes') else 0,
         }
 
@@ -156,17 +160,18 @@ class Invite(Base):
         }
 
 class Group(Base):
-    """Group model for database"""
+    """Group model for Authentik group management"""
     __tablename__ = "groups"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True)
     description = Column(Text, nullable=True)
+    authentik_group_id = Column(String)  # Link with Authentik group ID
     
-    # Add any additional fields or relationships needed
+    # Relationship to User model
     users = relationship("User", secondary="user_groups", back_populates="groups")
 
-# User-Group association table
+# User-Group association table for Authentik group membership
 user_groups = Table('user_groups', Base.metadata,
     Column('user_id', Integer, ForeignKey('users.id'), primary_key=True),
     Column('group_id', Integer, ForeignKey('groups.id'), primary_key=True)

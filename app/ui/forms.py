@@ -1654,116 +1654,205 @@ async def render_invite_form():
     st.subheader("Create Invite Link")
     
     # Initialize session state for invite form
+    if 'invite_label' not in st.session_state:
+        st.session_state['invite_label'] = ""
     if 'invite_email' not in st.session_state:
         st.session_state['invite_email'] = ""
     if 'invite_name' not in st.session_state:
         st.session_state['invite_name'] = ""
-    if 'invite_expiry_days' not in st.session_state:
-        st.session_state['invite_expiry_days'] = 7  # Default 7 days
     
-    with st.form("create_invite_form_alt"):
-        st.text_input(
-            "Name",
-            key="invite_name",
-            placeholder="e.g., John Doe",
-            help="Name of the person you're inviting"
-        )
-        
-        st.text_input(
-            "Email Address",
-            key="invite_email",
-            placeholder="e.g., john.doe@example.com",
-            help="Email address to send the invite to"
-        )
-        
-        st.number_input(
-            "Expiry (days)",
-            key="invite_expiry_days",
-            min_value=1,
-            max_value=30,
-            value=7,
-            help="Number of days before the invite expires"
-        )
-        
-        # Get all available groups
-        from app.auth.admin import get_authentik_groups
-        all_groups = get_authentik_groups()
-        
-        # Group selection
-        if all_groups:
-            # Initialize selected_groups if not in session state
-            if 'invite_selected_groups' not in st.session_state:
-                st.session_state['invite_selected_groups'] = []
-            
-            # Find the main group ID if configured
-            main_group_id = Config.MAIN_GROUP_ID
-            
-            # Pre-select the main group if it exists
-            default_selection = [main_group_id] if main_group_id else []
-            
-            # Group selection with multiselect
-            selected_groups = st.multiselect(
-                "Pre-assign to Groups",
-                options=[g.get('pk') for g in all_groups],
-                default=default_selection,
-                format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
-                help="Select groups to pre-assign the invited user to",
-                key="invite_group_selection"
+    # Create tabs for different invite creation options
+    invite_tab, send_tab = st.tabs(["Create Invite Link", "Create & Send Invite"])
+    
+    with invite_tab:
+        with st.form("create_invite_form"):
+            st.text_input(
+                "Label",
+                key="invite_label",
+                placeholder="e.g., New Member Invite",
+                help="A descriptive label for this invite"
             )
             
-            # Store in session state
-            st.session_state['invite_selected_groups'] = selected_groups
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            submit_button = st.form_submit_button("Create Invite")
-        with col2:
-            clear_button = st.form_submit_button("Clear Form")
+            # Use number_input without setting value from session state to avoid conflict
+            expiry_days = st.number_input(
+                "Expiry (days)",
+                min_value=1,
+                max_value=30,
+                value=7,  # Default value
+                help="Number of days before the invite expires"
+            )
             
-        if submit_button:
-            # Validate inputs
-            email = st.session_state.get('invite_email', '')
-            name = st.session_state.get('invite_name', '')
-            expiry_days = st.session_state.get('invite_expiry_days', 7)
-            selected_groups = st.session_state.get('invite_selected_groups', [])
+            # Get all available groups
+            from app.auth.admin import get_authentik_groups
+            all_groups = get_authentik_groups()
             
-            if not email:
-                st.error("Email address is required")
-            elif not name:
-                st.error("Name is required")
-            else:
-                # Create the invite
-                try:
-                    # Generate expiry date
-                    expiry_date = datetime.now() + timedelta(days=expiry_days)
+            # Group selection
+            if all_groups:
+                # Initialize selected_groups if not in session state
+                if 'invite_selected_groups' not in st.session_state:
+                    st.session_state['invite_selected_groups'] = []
+                
+                # Find the main group ID if configured
+                main_group_id = Config.MAIN_GROUP_ID
+                
+                # Pre-select the main group if it exists
+                default_selection = [main_group_id] if main_group_id else []
+                
+                # Group selection with multiselect
+                selected_groups = st.multiselect(
+                    "Pre-assign to Groups",
+                    options=[g.get('pk') for g in all_groups],
+                    default=default_selection,
+                    format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
+                    help="Select groups to pre-assign the invited user to",
+                    key="invite_group_selection"
+                )
+                
+                # Store in session state
+                st.session_state['invite_selected_groups'] = selected_groups
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                submit_button = st.form_submit_button("Create Invite")
+            with col2:
+                clear_button = st.form_submit_button("Clear Form")
+                
+            if submit_button:
+                # Validate inputs
+                label = st.session_state.get('invite_label', '')
+                selected_groups = st.session_state.get('invite_selected_groups', [])
+                
+                if not label:
+                    st.error("Label is required")
+                else:
+                    # Create the invite
+                    try:
+                        # Generate expiry date (using expiry_days from the form, not session state)
+                        expiry_date = datetime.now() + timedelta(days=expiry_days)
+                        
+                        # Create invite in the system
+                        result = create_invite(
+                            email="",  # No email for basic invite
+                            name=label,  # Use label as name
+                            expiry=expiry_date.strftime('%Y-%m-%d'),
+                            created_by=st.session_state.get("username", "system"),
+                            groups=selected_groups
+                        )
+                        
+                        if result.get('success'):
+                            invite_link = result.get('invite_link')
+                            st.success(f"Invite created successfully!")
+                            
+                            # Display the invite link
+                            st.code(invite_link, language=None)
+                            
+                            # Copy button
+                            if st.button("Copy Invite Link"):
+                                st.markdown(f"""
+                                <script>
+                                    navigator.clipboard.writeText('{invite_link}');
+                                    alert('Invite link copied to clipboard!');
+                                </script>
+                                """, unsafe_allow_html=True)
+                            
+                            # Clear form after successful submission
+                            st.session_state['invite_label'] = ""
+                            st.session_state['invite_selected_groups'] = []
+                        else:
+                            st.error(f"Failed to create invite: {result.get('error', 'Unknown error')}")
                     
-                    # Create invite in the system
-                    result = create_invite(
-                        email=email,
-                        name=name,
-                        expiry=expiry_date.strftime('%Y-%m-%d'),
-                        created_by=st.session_state.get("username", "system"),
-                        groups=selected_groups
-                    )
-                    
-                    if result.get('success'):
-                        invite_link = result.get('invite_link')
-                        st.success(f"Invite created successfully!")
+                    except Exception as e:
+                        logging.error(f"Error creating invite: {e}")
+                        logging.error(traceback.format_exc())
+                        st.error(f"An error occurred: {str(e)}")
+                
+            elif clear_button:
+                # Clear form fields
+                st.session_state['invite_label'] = ""
+                if 'invite_selected_groups' in st.session_state:
+                    st.session_state['invite_selected_groups'] = []
+    
+    with send_tab:
+        with st.form("send_invite_form"):
+            st.text_input(
+                "Name",
+                key="invite_name",
+                placeholder="e.g., John Doe",
+                help="Name of the person you're inviting"
+            )
+            
+            st.text_input(
+                "Email Address",
+                key="invite_email",
+                placeholder="e.g., john.doe@example.com",
+                help="Email address to send the invite to"
+            )
+            
+            # Use number_input without setting value from session state to avoid conflict
+            send_expiry_days = st.number_input(
+                "Expiry (days)",
+                min_value=1,
+                max_value=30,
+                value=7,  # Default value
+                help="Number of days before the invite expires"
+            )
+            
+            # Group selection for send invite
+            if all_groups:
+                # Initialize selected_groups if not in session state
+                if 'send_invite_selected_groups' not in st.session_state:
+                    st.session_state['send_invite_selected_groups'] = []
+                
+                # Pre-select the main group if it exists
+                default_send_selection = [main_group_id] if main_group_id else []
+                
+                # Group selection with multiselect
+                send_selected_groups = st.multiselect(
+                    "Pre-assign to Groups",
+                    options=[g.get('pk') for g in all_groups],
+                    default=default_send_selection,
+                    format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
+                    help="Select groups to pre-assign the invited user to",
+                    key="send_invite_group_selection"
+                )
+                
+                # Store in session state
+                st.session_state['send_invite_selected_groups'] = send_selected_groups
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                send_submit_button = st.form_submit_button("Create & Send Invite")
+            with col2:
+                send_clear_button = st.form_submit_button("Clear Form")
+                
+            if send_submit_button:
+                # Validate inputs
+                email = st.session_state.get('invite_email', '')
+                name = st.session_state.get('invite_name', '')
+                send_selected_groups = st.session_state.get('send_invite_selected_groups', [])
+                
+                if not email:
+                    st.error("Email address is required")
+                elif not name:
+                    st.error("Name is required")
+                else:
+                    # Create the invite
+                    try:
+                        # Generate expiry date (using send_expiry_days from the form, not session state)
+                        expiry_date = datetime.now() + timedelta(days=send_expiry_days)
                         
-                        # Display the invite link
-                        st.code(invite_link, language=None)
+                        # Create invite in the system
+                        result = create_invite(
+                            email=email,
+                            name=name,
+                            expiry=expiry_date.strftime('%Y-%m-%d'),
+                            created_by=st.session_state.get("username", "system"),
+                            groups=send_selected_groups
+                        )
                         
-                        # Copy button
-                        if st.button("Copy Invite Link"):
-                            st.markdown(f"""
-                            <script>
-                                navigator.clipboard.writeText('{invite_link}');
-                                alert('Invite link copied to clipboard!');
-                            </script>
-                            """, unsafe_allow_html=True)
-                        
-                        # Option to send invite email
-                        if st.button("Send Email Invitation"):
+                        if result.get('success'):
+                            invite_link = result.get('invite_link')
+                            
                             # Send email with invite link
                             try:
                                 create_invite_message(
@@ -1772,33 +1861,41 @@ async def render_invite_form():
                                     full_name=name,
                                     invite_link=invite_link
                                 )
-                                st.success(f"Invitation email sent to {email}")
+                                st.success(f"Invitation created and email sent to {email}")
+                                
+                                # Clear form after successful submission
+                                st.session_state['invite_email'] = ""
+                                st.session_state['invite_name'] = ""
+                                st.session_state['send_invite_selected_groups'] = []
                             except Exception as e:
                                 logging.error(f"Error sending invitation email: {e}")
-                                st.error(f"Failed to send invitation email: {str(e)}")
-                        
-                        # Clear form after successful submission
-                        if 'invite_email' in st.session_state:
-                            st.session_state['invite_email'] = ""
-                        if 'invite_name' in st.session_state:
-                            st.session_state['invite_name'] = ""
-                    else:
-                        st.error(f"Failed to create invite: {result.get('error', 'Unknown error')}")
+                                st.warning(f"Invite created, but failed to send email: {str(e)}")
+                                
+                                # Display the invite link in case email sending failed
+                                st.code(invite_link, language=None)
+                        else:
+                            st.error(f"Failed to create invite: {result.get('error', 'Unknown error')}")
+                    
+                    except Exception as e:
+                        logging.error(f"Error creating invite: {e}")
+                        logging.error(traceback.format_exc())
+                        st.error(f"An error occurred: {str(e)}")
                 
-                except Exception as e:
-                    logging.error(f"Error creating invite: {e}")
-                    logging.error(traceback.format_exc())
-                    st.error(f"An error occurred: {str(e)}")
-            
-        elif clear_button:
-            # Clear form fields
-            if 'invite_email' in st.session_state:
+            elif send_clear_button:
+                # Clear form fields
                 st.session_state['invite_email'] = ""
-            if 'invite_name' in st.session_state:
                 st.session_state['invite_name'] = ""
-            if 'invite_selected_groups' in st.session_state:
-                st.session_state['invite_selected_groups'] = []
-            # Don't reset the expiry days to keep the user preference
+                if 'send_invite_selected_groups' in st.session_state:
+                    st.session_state['send_invite_selected_groups'] = []
+    
+    # Add a separator between tabs
+    st.markdown("---")
+    
+    # Add a button to go back to the main form
+    if st.button("Back to Main Form"):
+        st.session_state['invite_tab'] = "invite_tab"
+        st.session_state['send_tab'] = "send_tab"
+        st.rerun()
 
 async def display_user_list(auth_api_url=None, headers=None):
     """Display the list of users with enhanced filtering and UI."""
@@ -1910,10 +2007,12 @@ async def display_user_list(auth_api_url=None, headers=None):
                 )
                 
                 # Get note counts for users
-                with get_db() as db:
-                    # Create a note_count column
-                    df['note_count'] = 0
-                    
+                # Create a note_count column
+                df['note_count'] = 0
+                
+                # Use next() to get the first db session yielded by the generator
+                db = next(get_db())
+                try:
                     # For each user in the dataframe, get the note count
                     for idx, row in df.iterrows():
                         username = row.get('username')
@@ -1924,6 +2023,9 @@ async def display_user_list(auth_api_url=None, headers=None):
                                 # Get the note count
                                 note_count = db.query(User).filter(User.id == db_user.id).first().notes
                                 df.at[idx, 'note_count'] = len(note_count) if note_count else 0
+                finally:
+                    # Make sure to close the db session
+                    db.close()
                 
                 # Create selection columns with unique IDs for each row
                 if 'pk' in df.columns:
@@ -2170,7 +2272,8 @@ async def display_user_list(auth_api_url=None, headers=None):
                     st.write(f"### Notes for {username}")
                     
                     # First, we need to find the local user ID that corresponds to this authentik user
-                    with get_db() as db:
+                    db = next(get_db())
+                    try:
                         # Find the local user by username (which should be unique)
                         db_user = db.query(User).filter(User.username == username).first()
                         
@@ -2295,6 +2398,8 @@ async def display_user_list(auth_api_url=None, headers=None):
                                         st.error("Failed to add note")
                                 else:
                                     st.warning("Note content cannot be empty")
+                    finally:
+                        db.close()  # Ensure the database connection is closed
             
             # Back button
             if st.button("Back to User Selection"):

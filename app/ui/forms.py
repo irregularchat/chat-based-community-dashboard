@@ -1973,38 +1973,58 @@ async def display_user_list(auth_api_url=None, headers=None):
             df = pd.DataFrame(st.session_state['user_list'])
             
             # Apply filters
-            if st.session_state['filter_term']:
-                # Search in username, name, and email
+            if st.session_state['filter_term'] and not df.empty:
                 search_term = st.session_state['filter_term'].lower()
-                df = df[
-                    df['username'].str.lower().str.contains(search_term, na=False) |
-                    df['name'].str.lower().str.contains(search_term, na=False) |
-                    df['email'].str.lower().str.contains(search_term, na=False)
-                ]
+                # Check if 'username', 'name', and 'email' columns exist before filtering
+                if 'username' in df.columns and 'name' in df.columns and 'email' in df.columns:
+                    df = df[
+                        df['username'].str.lower().str.contains(search_term, na=False) |
+                        df['name'].str.lower().str.contains(search_term, na=False) |
+                        df['email'].str.lower().str.contains(search_term, na=False)
+                    ]
+                elif 'username' in df.columns:
+                    df = df[df['username'].str.lower().str.contains(search_term, na=False)]
+                elif 'name' in df.columns:
+                    df = df[df['name'].str.lower().str.contains(search_term, na=False)]
+                elif 'email' in df.columns:
+                    df = df[df['email'].str.lower().str.contains(search_term, na=False)]
             
             # Apply status filter
-            if st.session_state['status_filter'] != 'All':
+            if not df.empty and st.session_state['status_filter'] != 'All' and 'is_active' in df.columns:
                 is_active = st.session_state['status_filter'] == 'Active'
                 df = df[df['is_active'] == is_active]
             
             # Process fields for display
             if not df.empty:
                 # Process fields
-                df['intro'] = df.apply(
-                    lambda row: row.get('attributes', {}).get('intro', '') 
-                    if isinstance(row.get('attributes'), dict) else '', 
-                    axis=1
-                )
-                df['last_login'] = df.apply(
-                    lambda row: format_date(row.get('last_login')) if row.get('last_login') else '',
-                    axis=1
-                )
-                df['is_active'] = df['is_active'].apply(lambda x: '✅ Active' if x else '❌ Inactive')
-                df['invited_by'] = df.apply(
-                    lambda row: row.get('attributes', {}).get('invited_by', '') 
-                    if isinstance(row.get('attributes'), dict) else '', 
-                    axis=1
-                )
+                if 'attributes' in df.columns:
+                    df['intro'] = df.apply(
+                        lambda row: row.get('attributes', {}).get('intro', '') 
+                        if isinstance(row.get('attributes'), dict) else '', 
+                        axis=1
+                    )
+                    df['invited_by'] = df.apply(
+                        lambda row: row.get('attributes', {}).get('invited_by', '') 
+                        if isinstance(row.get('attributes'), dict) else '', 
+                        axis=1
+                    )
+                else:
+                    # Add empty columns if attributes don't exist
+                    df['intro'] = ''
+                    df['invited_by'] = ''
+                
+                if 'last_login' in df.columns:
+                    df['last_login'] = df.apply(
+                        lambda row: format_date(row.get('last_login')) if row.get('last_login') else '',
+                        axis=1
+                    )
+                else:
+                    df['last_login'] = ''
+                    
+                if 'is_active' in df.columns:
+                    df['is_active'] = df['is_active'].apply(lambda x: '✅ Active' if x else '❌ Inactive')
+                else:
+                    df['is_active'] = 'Unknown'
                 
                 # Get note counts for users
                 # Create a note_count column
@@ -2021,14 +2041,20 @@ async def display_user_list(auth_api_url=None, headers=None):
                             db_user = db.query(User).filter(User.username == username).first()
                             if db_user:
                                 # Get the note count
-                                note_count = db.query(User).filter(User.id == db_user.id).first().notes
-                                df.at[idx, 'note_count'] = len(note_count) if note_count else 0
+                                notes = db.query(User).filter(User.id == db_user.id).first().notes
+                                df.at[idx, 'note_count'] = len(notes) if notes else 0
                 finally:
                     # Make sure to close the db session
                     db.close()
                 
                 # Create selection columns with unique IDs for each row
-                if 'pk' in df.columns:
+                if not df.empty and 'pk' in df.columns:
+                    # Ensure all required columns exist
+                    required_columns = ['username', 'name', 'email', 'is_active', 'last_login', 'note_count']
+                    for col in required_columns:
+                        if col not in df.columns:
+                            df[col] = ''  # Add empty column if missing
+                    
                     # Display the table with selection columns
                     cols_to_display = ['username', 'name', 'email', 'is_active', 'last_login', 'note_count']
                     st.write(f"Found {len(df)} users matching your filters")
@@ -2059,37 +2085,41 @@ async def display_user_list(auth_api_url=None, headers=None):
                         height=400
                     )
                     
-                    # Add a multi-select to choose users
-                    st.write("Select users from the list:")
-                    selected_usernames = st.multiselect(
-                        "Select Users",
-                        options=df['username'].tolist(),
-                        default=[],
-                        key="selected_usernames"
-                    )
-                    
-                    # Get selected rows based on username
-                    if selected_usernames:
-                        # Get the selected user IDs
-                        selected_user_ids = df[df['username'].isin(selected_usernames)]['pk'].tolist()
+                    # Add a multi-select to choose users if we have usernames
+                    if 'username' in df.columns and len(df['username']) > 0:
+                        st.write("Select users from the list:")
+                        selected_usernames = st.multiselect(
+                            "Select Users",
+                            options=df['username'].tolist(),
+                            default=[],
+                            key="selected_usernames"
+                        )
                         
-                        # Display selection info
-                        st.success(f"Selected {len(selected_user_ids)} users")
-                        
-                        # Store selected users
-                        st.session_state['selected_user_ids'] = selected_user_ids
-                        st.session_state['selected_users'] = [
-                            df[df['pk'] == user_id].to_dict('records')[0] 
-                            for user_id in selected_user_ids
-                        ]
-                        
-                        # Continue button
-                        if st.button("Continue to Actions", key="continue_button"):
-                            st.session_state['selection_state'] = 'selected'
-                            st.rerun()
+                        # Get selected rows based on username
+                        if selected_usernames:
+                            # Get the selected user IDs
+                            selected_user_ids = df[df['username'].isin(selected_usernames)]['pk'].tolist()
+                            
+                            # Display selection info
+                            st.success(f"Selected {len(selected_user_ids)} users")
+                            
+                            # Store selected users
+                            st.session_state['selected_user_ids'] = selected_user_ids
+                            st.session_state['selected_users'] = [
+                                df[df['pk'] == user_id].to_dict('records')[0] 
+                                for user_id in selected_user_ids
+                            ]
+                            
+                            # Continue button
+                            if st.button("Continue to Actions", key="continue_button"):
+                                st.session_state['selection_state'] = 'selected'
+                                st.rerun()
+                        else:
+                            st.info("Please select at least one user to continue.")
                     else:
-                        st.info("Please select at least one user to continue.")
-                        
+                        st.warning("No usernames available to select from.")
+                else:
+                    st.warning("No users with valid IDs found. Cannot display user data.")
             else:
                 st.warning("No users match the filter criteria.")
                 
@@ -2400,12 +2430,12 @@ async def display_user_list(auth_api_url=None, headers=None):
                                     st.warning("Note content cannot be empty")
                     finally:
                         db.close()  # Ensure the database connection is closed
-            
-            # Back button - make sure it's at the CORRECT INDENTATION LEVEL
-            if st.button("Back to User Selection"):
-                st.session_state['selection_state'] = 'viewing'
-                st.session_state['selected_user_ids'] = []
-                st.rerun()
+        
+        # Back button moved one indentation level to the left, outside the action_tabs logic
+        if st.button("Back to User Selection"):
+            st.session_state['selection_state'] = 'viewing'
+            st.session_state['selected_user_ids'] = []
+            st.rerun()
     
     except Exception as e:
         logging.error(f"Error displaying user list: {e}")

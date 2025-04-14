@@ -221,11 +221,11 @@ def clear_parse_data():
     # Set flags to indicate form should be cleared on next rerun
     st.session_state['should_clear_form'] = True
     
-    # Reset group selection to default (MAIN_GROUP_ID)
-    from app.utils.config import Config
-    main_group_id = Config.MAIN_GROUP_ID
-    st.session_state['selected_groups'] = [main_group_id] if main_group_id else []
-    st.session_state['group_selection'] = [main_group_id] if main_group_id else []
+    # Remove the lines that modify group_selection
+    # from app.utils.config import Config
+    # main_group_id = Config.MAIN_GROUP_ID
+    # st.session_state['selected_groups'] = [main_group_id] if main_group_id else []
+    # st.session_state['group_selection'] = [main_group_id] if main_group_id else []
     
     # Also clear the parse input field
     if 'parse_data_input_outside' in st.session_state:
@@ -241,21 +241,22 @@ async def render_create_user_form():
     <style>
     /* Form styling */
     .form-container {
-        background-color: #f8f9fa;
+        background-color: var(--card-bg);
         padding: 24px;
         border-radius: 10px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        box-shadow: var(--card-shadow);
         margin-bottom: 24px;
+        border: 1px solid var(--border-color);
     }
     
     /* Input field styling */
     .stTextInput>div>div>input, 
     .stTextArea>div>div>textarea {
         margin-bottom: 10px !important;
-        border-radius: 5px !important;
-        border: 1px solid #ced4da !important;
-        background-color: #ffffff !important;
-        color: #212529 !important;
+        border-radius: 8px !important;
+        border: 1px solid var(--border-color) !important;
+        background-color: var(--input-bg) !important;
+        color: var(--text-color) !important;
         padding: 12px !important;
         box-shadow: none !important;
         transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
@@ -264,7 +265,7 @@ async def render_create_user_form():
     /* Input field focus states */
     .stTextInput>div>div>input:focus,
     .stTextArea>div>div>textarea:focus {
-        border-color: #4CAF50 !important;
+        border-color: var(--primary-color) !important;
         box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.25) !important;
         outline: 0 !important;
     }
@@ -272,42 +273,42 @@ async def render_create_user_form():
     /* Label styling */
     .stTextInput label, .stTextArea label, .stSelectbox label {
         font-weight: 500 !important;
-        color: #212529 !important;
+        color: var(--text-color) !important;
         margin-bottom: 5px !important;
     }
     
     /* Button styling */
     .stButton button {
-        border-radius: 5px;
+        border-radius: 8px;
         padding: 10px 18px;
         font-weight: 500;
         transition: all 0.3s;
     }
     
     .create-btn button {
-        background-color: #4CAF50;
+        background-color: var(--secondary-color);
         color: white;
         border: none;
     }
     
     .create-btn button:hover {
-        background-color: #45a049;
+        background-color: var(--secondary-hover);
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
     
     .parse-btn button {
-        background-color: #007bff;
+        background-color: var(--primary-color);
         color: white;
         border: none;
     }
     
     .parse-btn button:hover {
-        background-color: #0069d9;
+        background-color: var(--primary-hover);
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
     
     .clear-btn button {
-        background-color: #6c757d;
+        background-color: var(--muted-color);
         color: white;
         border: none;
     }
@@ -318,7 +319,7 @@ async def render_create_user_form():
     }
     
     .check-btn button {
-        background-color: #17a2b8;
+        background-color: var(--info-color);
         color: white;
         border: none;
     }
@@ -331,38 +332,38 @@ async def render_create_user_form():
     /* Custom help text styling */
     .help-text {
         font-size: 0.8rem;
-        color: #6c757d;
+        color: var(--muted-color);
         margin-bottom: 5px;
     }
     
     /* Help icon styling */
     .stTextInput div svg, .stTextArea div svg, .stSelectbox div svg {
-        color: #6c757d !important;
+        color: var(--muted-color) !important;
     }
     
     /* Help text tooltips */
     .stTextInput div small, .stTextArea div small, .stSelectbox div small {
-        color: #6c757d !important;
+        color: var(--muted-color) !important;
     }
     
     /* Divider styling */
     .divider {
         margin: 24px 0;
-        border-top: 1px solid #dee2e6;
+        border-top: 1px solid var(--border-color);
     }
     
     /* Parse data section styling */
     .data-to-parse {
-        background-color: #f8f9fa;
+        background-color: var(--card-bg);
         padding: 15px;
-        border-radius: 5px;
-        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
         margin-bottom: 20px;
     }
     
     /* Section headers */
     .stSubheader {
-        color: #212529;
+        color: var(--text-color);
         margin-bottom: 20px;
         font-weight: 600;
     }
@@ -377,6 +378,39 @@ async def render_create_user_form():
         display: flex;
         justify-content: space-between;
         margin-top: 24px;
+    }
+    
+    /* Dark mode optimization */
+    @media (prefers-color-scheme: dark) {
+        .help-text {
+            color: var(--muted-color);
+        }
+        
+        .data-to-parse {
+            background-color: var(--card-bg);
+            border-color: var(--border-color);
+        }
+    }
+    
+    /* Mobile optimization */
+    @media (max-width: 768px) {
+        .form-container {
+            padding: 16px;
+        }
+        
+        .stTextInput>div>div>input, 
+        .stTextArea>div>div>textarea {
+            padding: 12px !important;
+        }
+        
+        .stButton button {
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        
+        .divider {
+            margin: 16px 0;
+        }
     }
     </style>
     """, unsafe_allow_html=True)

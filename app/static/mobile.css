@@ -27,20 +27,23 @@
     
     /* Improve button touch targets */
     .stButton > button {
-        min-height: 44px !important; /* Minimum touch target size */
+        min-height: 48px !important; /* Increased minimum touch target size */
         width: 100% !important;
-        margin-bottom: 10px !important;
-        padding: 12px 15px !important;
+        margin-bottom: 12px !important;
+        padding: 12px 16px !important;
+        font-size: 16px !important;
+        border-radius: 8px !important;
     }
     
     /* Make login buttons more touch-friendly */
     .login-button {
         display: block !important;
         width: 100% !important;
-        padding: 12px 15px !important;
+        padding: 14px 16px !important;
         text-align: center !important;
         font-size: 16px !important;
-        min-height: 44px !important;
+        min-height: 48px !important;
+        border-radius: 8px !important;
     }
     
     /* Adjust form elements for touch */
@@ -49,40 +52,64 @@
     .stNumberInput>div>div>input,
     .stSelectbox>div>div>div>div>div,
     .stMultiselect>div>div>div>div>div {
-        min-height: 44px !important;
-        padding: 12px 10px !important;
+        min-height: 48px !important;
+        padding: 14px 12px !important;
         font-size: 16px !important; /* Prevent auto-zoom on iOS */
+        border-radius: 8px !important;
+    }
+    
+    /* Adjust textarea size on mobile */
+    .stTextArea>div>div>textarea {
+        min-height: 100px !important;
     }
     
     /* Adjust spacing for mobile */
     .stForm > div:first-child {
-        padding: 15px !important;
+        padding: 16px !important;
+        border-radius: 8px !important;
     }
     
     .card, .user-info {
-        padding: 15px !important;
-        margin-bottom: 15px !important;
+        padding: 16px !important;
+        margin-bottom: 16px !important;
+        border-radius: 8px !important;
     }
     
     /* Improve tab touch targets */
+    .stTabs [data-baseweb="tab-list"] {
+        display: flex !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        white-space: nowrap !important;
+        padding: 8px 4px !important;
+    }
+    
     .stTabs [data-baseweb="tab"] {
-        padding: 12px 15px !important;
-        min-height: 44px !important;
+        padding: 12px 16px !important;
+        min-height: 48px !important;
+        font-size: 14px !important;
+        flex: 0 0 auto !important;
     }
     
     /* Adjust expander for mobile */
     .streamlit-expanderHeader {
-        padding: 12px 15px !important;
-        min-height: 44px !important;
+        padding: 14px 16px !important;
+        min-height: 48px !important;
+        font-size: 15px !important;
+    }
+    
+    .streamlit-expanderContent {
+        padding: 16px !important;
     }
     
     /* Adjust radio and checkbox for touch */
     .stRadio > div > div > label,
     .stCheckbox > div > div > label {
-        min-height: 44px !important;
-        padding: 12px 10px !important;
+        min-height: 48px !important;
+        padding: 12px 16px !important;
         display: flex !important;
         align-items: center !important;
+        font-size: 15px !important;
     }
     
     /* Adjust table for mobile */
@@ -91,14 +118,15 @@
         display: block !important;
         overflow-x: auto !important;
         white-space: nowrap !important;
+        border-radius: 8px !important;
     }
     
     .stTable th, .dataframe th,
     .stTable td, .dataframe td {
-        padding: 8px 10px !important;
+        padding: 10px 12px !important;
     }
     
-    /* Adjust sidebar width */
+    /* Adjust sidebar for mobile */
     .css-1d391kg, .css-12oz5g7 {
         width: 100% !important;
         max-width: 100% !important;
@@ -112,28 +140,76 @@
     .row-widget.stHorizontal > div {
         flex: 1 1 100% !important;
         min-width: 100% !important;
+        margin-bottom: 12px !important;
     }
     
     /* Fix for multi-column layouts */
     [data-testid="column"] {
         width: 100% !important;
         flex: 1 1 100% !important;
-        margin-bottom: 10px !important;
+        margin-bottom: 12px !important;
+    }
+    
+    /* Make sure columns stack nicely on mobile */
+    .st-emotion-cache-1r6slb0 {
+        max-width: 100% !important;
+        flex: 1 1 100% !important;
     }
     
     /* Adjust alert messages */
     .stAlert > div {
-        padding: 12px !important;
+        padding: 12px 16px !important;
+        border-radius: 8px !important;
+        font-size: 14px !important;
     }
     
     /* Fix for selectbox on mobile */
     .stSelectbox > div > div > div {
-        min-height: 44px !important;
+        min-height: 48px !important;
     }
     
     /* Fix for multiselect on mobile */
     .stMultiselect > div > div > div {
-        min-height: 44px !important;
+        min-height: 48px !important;
+    }
+    
+    /* Theme toggle positioning for mobile */
+    .theme-toggle-container {
+        top: 14px !important;
+        right: 14px !important;
+    }
+    
+    /* Better spacing in forms */
+    .stForm > div > div > div {
+        margin-bottom: 16px !important;
+    }
+    
+    /* Fix for data editor on mobile */
+    [data-testid="stDataFrame"] {
+        overflow-x: auto !important;
+        width: 100% !important;
+    }
+    
+    /* Improved scrolling on mobile */
+    .main .block-container {
+        padding-left: 16px !important;
+        padding-right: 16px !important;
+        max-width: 100% !important;
+    }
+    
+    /* Better scrollbars on mobile */
+    ::-webkit-scrollbar {
+        width: 6px !important;
+        height: 6px !important;
+    }
+    
+    ::-webkit-scrollbar-track {
+        background: transparent !important;
+    }
+    
+    ::-webkit-scrollbar-thumb {
+        background: var(--primary-color) !important;
+        border-radius: 10px !important;
     }
 }
 
@@ -154,17 +230,88 @@
     
     /* Reduce padding to maximize space */
     .card, .user-info, .stForm > div:first-child {
-        padding: 12px !important;
+        padding: 14px !important;
     }
     
     /* Stack all columns */
     [data-testid="column"] {
         width: 100% !important;
-        margin-bottom: 8px !important;
+        margin-bottom: 10px !important;
     }
     
     /* Adjust container padding */
     .container {
-        padding: 0 8px !important;
+        padding: 0 12px !important;
+    }
+    
+    /* Reduce button padding on very small screens */
+    .stButton > button {
+        padding: 12px 14px !important;
+    }
+    
+    /* More compact form padding */
+    .stForm > div > div > div {
+        margin-bottom: 12px !important;
+    }
+    
+    /* Smaller text for limited space */
+    p, li, .stAlert > div {
+        font-size: 13px !important;
+    }
+    
+    /* More compact tab display */
+    .stTabs [data-baseweb="tab"] {
+        padding: 10px 12px !important;
+        font-size: 13px !important;
+    }
+    
+    /* Adjust main container padding */
+    .main .block-container {
+        padding: 1.5rem 12px !important;
+    }
+    
+    /* Theme toggle smaller on very small screens */
+    .theme-toggle {
+        width: 50px !important;
+        height: 26px !important;
+    }
+    
+    .theme-toggle-container {
+        top: 10px !important;
+        right: 10px !important;
+    }
+    
+    .theme-slider:before {
+        height: 18px !important;
+        width: 18px !important;
+    }
+    
+    .theme-toggle input:checked + .theme-slider:before {
+        transform: translateX(24px) !important;
+    }
+}
+
+/* iOS Safari specific fixes */
+@supports (-webkit-touch-callout: none) {
+    /* Fix for notches and safe areas */
+    .main .block-container {
+        padding-left: max(16px, env(safe-area-inset-left)) !important;
+        padding-right: max(16px, env(safe-area-inset-right)) !important;
+        padding-bottom: max(16px, env(safe-area-inset-bottom)) !important;
+    }
+    
+    /* Fix for bottom nav to respect safe area */
+    .bottom-nav {
+        padding-bottom: max(10px, env(safe-area-inset-bottom)) !important;
+    }
+    
+    /* Prevent auto zooming on input fields */
+    input[type="text"],
+    input[type="number"],
+    input[type="email"],
+    input[type="password"],
+    select,
+    textarea {
+        font-size: 16px !important;
     }
 }

@@ -1,37 +1,34 @@
 #!/usr/bin/env python3
 import os
+import sys
 import logging
-from logging.handlers import RotatingFileHandler
+import streamlit as st
+from dotenv import load_dotenv
+
+# Try to load environment variables
+load_dotenv()
 
 def setup_logging():
-    """Set up logging configuration."""
-    log_dir = os.path.join(os.getcwd(), 'logs')
-    os.makedirs(log_dir, exist_ok=True)
-    
-    log_file = os.path.join(log_dir, 'app.log')
-    
-    # Configure root logger
+    """Configure logging for the application."""
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+        ]
     )
+
+def add_responsive_meta_tags():
+    """Add responsive meta tags for better mobile display."""
+    import streamlit as st
     
-    # Add file handler to root logger
-    file_handler = RotatingFileHandler(
-        log_file, maxBytes=10*1024*1024, backupCount=5
-    )
-    file_handler.setFormatter(logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    ))
-    logging.getLogger().addHandler(file_handler)
-    
-    # Set log levels for some verbose libraries
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
-    logging.getLogger('streamlit').setLevel(logging.WARNING)
-    logging.getLogger('matplotlib').setLevel(logging.WARNING)
-    
-    logging.info("Logging configured")
+    st.markdown("""
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="format-detection" content="telephone=no">
+    <link rel="manifest" href="data:application/json;base64,ewogICJuYW1lIjogIkNvbW11bml0eSBEYXNoYm9hcmQiLAogICJzaG9ydF9uYW1lIjogIkRhc2hib2FyZCIsCiAgImljb25zIjogWwogICAgewogICAgICAic3JjIjogIi9mYXZpY29uLmljbyIsCiAgICAgICJzaXplcyI6ICIxNngxNiIsCiAgICAgICJ0eXBlIjogImltYWdlL3gtaWNvbiIKICAgIH0KICBdLAogICJzdGFydF91cmwiOiAiLyIsCiAgImRpc3BsYXkiOiAic3RhbmRhbG9uZSIsCiAgImJhY2tncm91bmRfY29sb3IiOiAiI2ZmZmZmZiIsCiAgInRoZW1lX2NvbG9yIjogIiM0Mjg1RjQiCn0K">
+    """, unsafe_allow_html=True)
 
 def load_custom_css():
     """Load custom CSS styles."""
@@ -71,49 +68,6 @@ def load_custom_css():
     else:
         logging.warning(f"Styles CSS file not found at {styles_path}")
 
-def add_theme_detection_script():
-    """Add JavaScript to detect user's preferred color scheme."""
-    import streamlit as st
-    
-    # JavaScript to detect dark mode preference and add a class to the body
-    st.markdown("""
-    <script>
-    // Check if the user prefers dark mode
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-        // Add a class to the body for dark mode
-        document.body.classList.add('dark-mode');
-        // Store the preference
-        localStorage.setItem('color-theme', 'dark');
-    } else {
-        // Add a class to the body for light mode
-        document.body.classList.add('light-mode');
-        // Store the preference
-        localStorage.setItem('color-theme', 'light');
-    }
-    
-    // Listen for changes in the color scheme preference
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', event => {
-        if (event.matches) {
-            document.body.classList.remove('light-mode');
-            document.body.classList.add('dark-mode');
-            localStorage.setItem('color-theme', 'dark');
-        } else {
-            document.body.classList.remove('dark-mode');
-            document.body.classList.add('light-mode');
-            localStorage.setItem('color-theme', 'light');
-        }
-    });
-    </script>
-    """, unsafe_allow_html=True)
-
-def add_responsive_meta_tags():
-    """Add responsive design meta tags."""
-    import streamlit as st
-    
-    # Add viewport meta tag for better mobile experience
-    st.markdown("""
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     # Configure logging before the app starts
@@ -130,6 +84,7 @@ if __name__ == "__main__":
     try:
         import streamlit as st
         from app.main import main
+        from app.ui.components import theme_toggle, mobile_meta_tags, bottom_nav
         
         # Configure streamlit with theme support
         st.set_page_config(
@@ -145,16 +100,20 @@ if __name__ == "__main__":
         )
         
         # Add responsive meta tags
-        add_responsive_meta_tags()
-        
-        # Add theme detection script
-        add_theme_detection_script()
+        mobile_meta_tags()
         
         # Load custom CSS
         load_custom_css()
         
+        # Add theme toggle
+        theme_toggle()
+        
         # Run the application
         main()
+        
+        # Add mobile bottom navigation
+        bottom_nav()
+        
     except Exception as e:
         logging.error(f"Error starting application: {e}", exc_info=True)
         raise

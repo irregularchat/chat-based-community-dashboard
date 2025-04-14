@@ -676,3 +676,135 @@ def test_email_connection():
     except Exception as e:
         logging.error(f"SMTP connection test failed: {e}")
         return False
+
+def send_invite_email(to, subject, full_name, invite_link):
+    """
+    Send an invitation email to a user.
+    
+    Args:
+        to (str): Email address to send to
+        subject (str): Email subject
+        full_name (str): Invitee's full name
+        invite_link (str): The invitation link
+        
+    Returns:
+        bool: True if email was sent successfully, False otherwise
+    """
+    try:
+        logging.info(f"Preparing invitation email for {full_name} ({to})")
+        logging.info(f"Email configuration active: {Config.SMTP_ACTIVE}")
+        
+        if not Config.SMTP_ACTIVE:
+            logging.warning("SMTP is not active. Enable it in settings to send emails.")
+            return False
+            
+        if not all([Config.SMTP_SERVER, Config.SMTP_PORT, Config.SMTP_USERNAME, Config.SMTP_PASSWORD, Config.SMTP_FROM_EMAIL]):
+            logging.error("Missing SMTP configuration. Check all SMTP settings are provided.")
+            logging.error(f"SMTP_SERVER: {'Set' if Config.SMTP_SERVER else 'Missing'}")
+            logging.error(f"SMTP_PORT: {'Set' if Config.SMTP_PORT else 'Missing'}")
+            logging.error(f"SMTP_USERNAME: {'Set' if Config.SMTP_USERNAME else 'Missing'}")
+            logging.error(f"SMTP_PASSWORD: {'Set' if Config.SMTP_PASSWORD else 'Missing (or empty)'}")
+            logging.error(f"SMTP_FROM_EMAIL: {'Set' if Config.SMTP_FROM_EMAIL else 'Missing'}")
+            return False
+        
+        # Create HTML content for the email
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    line-height: 1.6;
+                    color: #333;
+                    margin: 0;
+                    padding: 0;
+                }}
+                .email-container {{
+                    max-width: 600px;
+                    margin: auto;
+                    padding: 20px;
+                    border: 1px solid #ddd;
+                    border-radius: 8px;
+                    background-color: #f9f9f9;
+                }}
+                h1 {{
+                    color: #2a6496;
+                    border-bottom: 2px solid #eee;
+                    padding-bottom: 10px;
+                }}
+                .invite-section {{
+                    background-color: #f5f5f5;
+                    padding: 15px;
+                    border-radius: 5px;
+                    margin: 20px 0;
+                    border-left: 4px solid #2a6496;
+                }}
+                .button {{
+                    display: inline-block;
+                    padding: 10px 20px;
+                    background-color: #2a6496;
+                    color: white;
+                    text-decoration: none;
+                    border-radius: 5px;
+                    margin-top: 20px;
+                }}
+                .footer {{
+                    margin-top: 30px;
+                    padding-top: 15px;
+                    border-top: 1px solid #eee;
+                    font-size: 0.9em;
+                    color: #777;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="email-container">
+                <h1>You've Been Invited to IrregularChat!</h1>
+                
+                <p>Hello {full_name},</p>
+                
+                <p>You've been invited to join the IrregularChat community. We're excited to welcome you!</p>
+                
+                <div class="invite-section">
+                    <p><strong>Your personal invitation link:</strong></p>
+                    <p><a href="{invite_link}">{invite_link}</a></p>
+                    <p><em>This link will expire after a limited time, so please use it soon.</em></p>
+                </div>
+                
+                <h3>What is IrregularChat?</h3>
+                <p>IrregularChat is a community where members connect, share ideas, and collaborate. After joining, you'll have access to our forum, wiki, messaging platforms, and other services.</p>
+                
+                <h3>Getting Started:</h3>
+                <ol>
+                    <li>Click the invitation link above</li>
+                    <li>Create your account with a secure password</li>
+                    <li>Complete your profile</li>
+                    <li>Explore our community resources</li>
+                </ol>
+                
+                <a href="{invite_link}" class="button">Accept Invitation</a>
+                
+                <div class="footer">
+                    <p>If you have any questions, please contact the person who invited you.</p>
+                    <p>If you received this invitation by mistake, you can safely ignore it.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Send the email and get the result
+        logging.info(f"Attempting to send invitation email to {to}")
+        result = send_email(to, subject, html_content)
+        
+        if result:
+            logging.info(f"Successfully sent invitation email to {to}")
+            return True
+        else:
+            logging.error(f"Failed to send invitation email to {to}")
+            return False
+    except Exception as e:
+        logging.error(f"Error preparing or sending invitation email: {e}")
+        logging.error(f"Error details: {traceback.format_exc()}")
+        return False

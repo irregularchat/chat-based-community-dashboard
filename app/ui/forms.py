@@ -8,6 +8,7 @@ import logging
 import requests
 import traceback
 import pandas as pd
+import numpy as np
 from datetime import datetime, timedelta
 from pytz import timezone
 from typing import Dict, List, Any, Optional, Tuple, Union
@@ -32,7 +33,8 @@ from app.auth.api import (
     force_password_reset,
     reset_user_password,
     create_discourse_post,
-    create_user
+    create_user,
+    generate_recovery_link
 )
 from app.auth.utils import generate_username_with_random_word
 from app.db.operations import (
@@ -45,6 +47,7 @@ from app.db.operations import (
 )
 from app.messages import create_invite_message, create_user_message
 from app.utils.messages import WELCOME_MESSAGE
+from app.utils.helpers import send_invite_email
 
 def reset_create_user_form_fields():
     """Helper function to reset all fields related to create user."""
@@ -1840,16 +1843,21 @@ async def render_invite_form():
                             
                             # Send email with invite link
                             try:
-                                from app.messages import create_invite_message
-                                create_invite_message(
+                                email_sent = send_invite_email(
                                     to=invite_email,
                                     subject="You've been invited to join our platform",
                                     full_name=invite_name,
                                     invite_link=invite_link
                                 )
-                                st.success(f"Invitation created and email sent to {invite_email}")
+                                if email_sent:
+                                    st.success(f"Invitation created and email sent to {invite_email}")
+                                else:
+                                    st.warning(f"Invite created, but failed to send email. Check SMTP settings.")
+                                    # Display the invite link in case email sending failed
+                                    st.code(invite_link, language=None)
                             except Exception as e:
                                 logging.error(f"Error sending invitation email: {e}")
+                                logging.error(traceback.format_exc())
                                 st.warning(f"Invite created, but failed to send email: {str(e)}")
                                 
                                 # Display the invite link in case email sending failed

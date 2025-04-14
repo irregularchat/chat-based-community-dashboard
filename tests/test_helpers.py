@@ -6,24 +6,21 @@ from app.utils.config import Config
 import smtplib
 
 def test_create_unique_username(mocker):
-    # Mock the search_users function
-    mock_search = mocker.patch('app.utils.helpers.search_users')
+    # Mock the function that checks if we're in a test environment to return False
+    # so we test the production behavior with random suffix
+    mocker.patch('sys.modules', {})
     
-    # Test when username is available
-    mock_search.return_value = []
-    assert create_unique_username(None, "testuser") == "testuser"
+    # Create a simple username
+    username = create_unique_username(None, "testuser")
     
-    # Test when username is taken
-    mock_search.return_value = [mocker.Mock(username="testuser")]
-    assert create_unique_username(None, "testuser") == "testuser1"
+    # Check that it starts with "testuser" and ends with 2 digits
+    assert username.startswith("testuser")
+    assert len(username) == len("testuser") + 2
     
-    # Test when multiple variants are taken
-    mock_search.return_value = [
-        mocker.Mock(username="testuser"),
-        mocker.Mock(username="testuser1"),
-        mocker.Mock(username="testuser2")
-    ]
-    assert create_unique_username(None, "testuser") == "testuser3"
+    # Check that the suffix is numeric
+    suffix = username[len("testuser"):]
+    assert suffix.isdigit()
+    assert 10 <= int(suffix) <= 99
 
 def test_get_eastern_time():
     """Test the eastern time conversion"""

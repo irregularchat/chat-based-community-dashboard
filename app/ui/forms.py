@@ -2401,7 +2401,7 @@ async def display_user_list(auth_api_url=None, headers=None):
                     finally:
                         db.close()  # Ensure the database connection is closed
             
-            # Back button
+            # Back button - make sure it's at the CORRECT INDENTATION LEVEL
             if st.button("Back to User Selection"):
                 st.session_state['selection_state'] = 'viewing'
                 st.session_state['selected_user_ids'] = []

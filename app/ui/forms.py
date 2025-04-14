@@ -10,12 +10,11 @@ import traceback
 import asyncio
 import streamlit as st
 from streamlit.components.v1 import html
-from app.utils.database import get_db
-from app.models.user import User
-from app.utils.matrix_actions import get_entrance_room_users_sync
-from app.utils.recommendation import get_room_recommendations_sync
+from app.db.session import get_db
+from app.db.models import User
+from app.utils.recommendation import get_entrance_room_users_sync
 from app.utils.matrix_actions import invite_to_matrix_room
-from app.utils.database import get_groups_from_db  # Add this import
+from app.db.session import get_groups_from_db
 from app.utils.config import Config
 from app.auth.admin import (
     check_admin_permission,
@@ -1114,11 +1113,22 @@ async def render_create_user_form():
                                         
                                         # Create a synchronous wrapper for gpt_recommend_rooms
                                         def get_room_recommendations_sync(user_id, interests):
+                                            """Synchronous wrapper for getting room recommendations"""
                                             try:
-                                                from app.utils.recommendation import gpt_recommend_rooms
+                                                # Create a new event loop
+                                                loop = asyncio.new_event_loop()
+                                                asyncio.set_event_loop(loop)
                                                 
-                                                # Use the utility function to run the async function
-                                                return run_async_safely(gpt_recommend_rooms, user_id, interests)
+                                                # Apply nest_asyncio to allow nested event loops
+                                                import nest_asyncio
+                                                nest_asyncio.apply(loop)
+                                                
+                                                try:
+                                                    from app.utils.recommendation import get_room_recommendations
+                                                    future = asyncio.ensure_future(get_room_recommendations(user_id, interests), loop=loop)
+                                                    return loop.run_until_complete(future)
+                                                finally:
+                                                    loop.close()
                                             except Exception as e:
                                                 logging.error(f"Error getting room recommendations: {str(e)}")
                                                 logging.error(traceback.format_exc())

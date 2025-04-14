@@ -169,5 +169,20 @@ def create_invite_message(label, invite_url, expires_datetime):
         st.session_state['message'] = invite_message
         st.session_state['user_list'] = None
         st.success("Invite created successfully!")
+        
+        # Add buttons to control next actions - outside of any form
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Clear Message", key="clear_invite_message_btn"):
+                # Clear message from session state
+                if 'message' in st.session_state:
+                    del st.session_state['message']
+                st.rerun()
+        with col2:
+            if st.button("Create Another Invite", key="create_another_invite"):
+                # Clear form fields and message
+                if 'message' in st.session_state:
+                    del st.session_state['message']
+                st.rerun()
     else:
         st.error("Failed to generate invite message - no invite URL provided.")

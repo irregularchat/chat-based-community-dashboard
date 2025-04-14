@@ -1564,12 +1564,13 @@ async def render_invite_form():
     st.markdown("""
     <style>
     /* Form styling */
-    .stForm > div:first-child {
-        background-color: #f8f9fa;
+    .form-container {
+        background-color: var(--card-bg);
         padding: 24px;
         border-radius: 10px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        box-shadow: var(--card-shadow);
         margin-bottom: 24px;
+        border: 1px solid var(--border-color);
     }
     
     /* Input field styling */
@@ -1577,10 +1578,10 @@ async def render_invite_form():
     .stTextArea>div>div>textarea,
     .stNumberInput>div>div>input {
         margin-bottom: 10px !important;
-        border-radius: 5px !important;
-        border: 1px solid #ced4da !important;
-        background-color: #ffffff !important;
-        color: #212529 !important;
+        border-radius: 8px !important;
+        border: 1px solid var(--border-color) !important;
+        background-color: var(--input-bg) !important;
+        color: var(--text-color) !important;
         padding: 12px !important;
         box-shadow: none !important;
         transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
@@ -1590,7 +1591,7 @@ async def render_invite_form():
     .stTextInput>div>div>input:focus,
     .stTextArea>div>div>textarea:focus,
     .stNumberInput>div>div>input:focus {
-        border-color: #4CAF50 !important;
+        border-color: var(--primary-color) !important;
         box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.25) !important;
         outline: 0 !important;
     }
@@ -1601,55 +1602,123 @@ async def render_invite_form():
     .stNumberInput label,
     .stMultiselect label {
         font-weight: 500 !important;
-        color: #212529 !important;
+        color: var(--text-color) !important;
         margin-bottom: 5px !important;
     }
     
-    /* Form submit button styling */
+    /* Button styling */
     .stButton button {
-        border-radius: 5px;
+        border-radius: 8px;
         padding: 10px 18px;
         font-weight: 500;
         transition: all 0.3s;
     }
     
-    /* Primary button styling */
-    .stButton button[kind="primary"] {
-        background-color: #4CAF50;
+    .create-btn button {
+        background-color: var(--secondary-color);
         color: white;
         border: none;
     }
     
-    .stButton button[kind="primary"]:hover {
-        background-color: #45a049;
+    .create-btn button:hover {
+        background-color: var(--secondary-hover);
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
     
-    /* Secondary button styling */
-    .stButton button[kind="secondary"] {
-        background-color: #6c757d;
+    .clear-btn button {
+        background-color: var(--muted-color);
         color: white;
         border: none;
     }
     
-    .stButton button[kind="secondary"]:hover {
+    .clear-btn button:hover {
         background-color: #5a6268;
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
     
     /* MultiSelect styling */
     .stMultiselect > div > div {
-        background-color: #ffffff !important;
-        border: 1px solid #ced4da !important;
-        border-radius: 5px !important;
+        background-color: var(--input-bg) !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 8px !important;
     }
     
     /* Code block styling */
     .stCodeBlock {
-        background-color: #f1f3f5 !important;
-        border: 1px solid #dee2e6 !important;
-        border-radius: 5px !important;
+        background-color: var(--card-bg) !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 8px !important;
         padding: 12px !important;
+    }
+    
+    /* Form styling */
+    .stForm > div:first-child {
+        background-color: var(--card-bg);
+        padding: 24px;
+        border-radius: 10px;
+        box-shadow: var(--card-shadow);
+        margin-bottom: 24px;
+        border: 1px solid var(--border-color);
+    }
+    
+    /* Tab styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2px;
+        background-color: var(--card-bg);
+        border-radius: 8px;
+        padding: 5px;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        height: auto;
+        padding: 10px 16px;
+        color: var(--text-color);
+        border-radius: 6px;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background-color: var(--primary-color) !important;
+        color: white !important;
+    }
+    
+    /* Tab content container */
+    .stTabs [data-baseweb="tab-panel"] {
+        padding: 20px 0;
+    }
+    
+    /* Dark mode optimization */
+    @media (prefers-color-scheme: dark) {
+        .stCodeBlock {
+            background-color: var(--card-bg) !important;
+            border-color: var(--border-color) !important;
+        }
+    }
+    
+    /* Mobile optimization */
+    @media (max-width: 768px) {
+        .form-container {
+            padding: 16px;
+        }
+        
+        .stTextInput>div>div>input, 
+        .stTextArea>div>div>textarea,
+        .stNumberInput>div>div>input {
+            padding: 12px !important;
+        }
+        
+        .stButton button {
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        
+        .stForm > div:first-child {
+            padding: 16px !important;
+        }
+        
+        .stTabs [data-baseweb="tab"] {
+            padding: 12px 14px !important;
+            font-size: 14px !important;
+        }
     }
     </style>
     """, unsafe_allow_html=True)
@@ -1704,9 +1773,13 @@ async def render_invite_form():
             
             col1, col2 = st.columns(2)
             with col1:
+                st.markdown("<div class='create-btn'>", unsafe_allow_html=True)
                 submit_button = st.form_submit_button("Create Invite")
+                st.markdown("</div>", unsafe_allow_html=True)
             with col2:
+                st.markdown("<div class='clear-btn'>", unsafe_allow_html=True)
                 clear_button = st.form_submit_button("Clear Form")
+                st.markdown("</div>", unsafe_allow_html=True)
                 
             if submit_button:
                 # Use the input value directly, not from session state
@@ -1804,9 +1877,13 @@ async def render_invite_form():
             
             col1, col2 = st.columns(2)
             with col1:
+                st.markdown("<div class='create-btn'>", unsafe_allow_html=True)
                 send_submit_button = st.form_submit_button("Create & Send Invite")
+                st.markdown("</div>", unsafe_allow_html=True)
             with col2:
+                st.markdown("<div class='clear-btn'>", unsafe_allow_html=True)
                 send_clear_button = st.form_submit_button("Clear Form")
+                st.markdown("</div>", unsafe_allow_html=True)
                 
             if send_submit_button:
                 # Use direct input values, not from session state
@@ -1874,8 +1951,10 @@ async def render_invite_form():
     st.markdown("---")
     
     # Add a button to go back to the main form
+    st.markdown("<div class='clear-btn'>", unsafe_allow_html=True)
     if st.button("Back to Main Form"):
         st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
 
 async def display_user_list(auth_api_url=None, headers=None):
     """Display the list of users with enhanced filtering and UI."""

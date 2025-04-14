@@ -901,6 +901,34 @@ async def render_main_content():
         st.error(f"Error rendering content: {str(e)}")
         logging.error(f"Error in render_main_content: {str(e)}", exc_info=True)
 
+async def test_smtp_connection():
+    """Test SMTP connection and settings"""
+    try:
+        from app.utils.helpers import test_email_connection
+        # Test the email connection
+        result = test_email_connection()
+        if result:
+            st.success("SMTP connection test successful! Email sending should work.")
+        else:
+            st.error("SMTP connection test failed. Check your SMTP settings and logs.")
+            
+        # Display current SMTP settings
+        from app.utils.config import Config
+        st.subheader("Current SMTP Configuration")
+        st.json({
+            "SMTP_SERVER": Config.SMTP_SERVER,
+            "SMTP_PORT": Config.SMTP_PORT,
+            "SMTP_USERNAME": Config.SMTP_USERNAME,
+            "SMTP_FROM_EMAIL": Config.SMTP_FROM_EMAIL,
+            "SMTP_ACTIVE": Config.SMTP_ACTIVE,
+            "SMTP_BCC": Config.SMTP_BCC
+        })
+        
+        return True
+    except Exception as e:
+        st.error(f"Error testing SMTP connection: {str(e)}")
+        return False
+
 async def main():
     """Main application entry point"""
     try:
@@ -1021,34 +1049,6 @@ async def main():
 if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
-
-async def test_smtp_connection():
-    """Test SMTP connection and settings"""
-    try:
-        from app.utils.helpers import test_email_connection
-        # Test the email connection
-        result = test_email_connection()
-        if result:
-            st.success("SMTP connection test successful! Email sending should work.")
-        else:
-            st.error("SMTP connection test failed. Check your SMTP settings and logs.")
-            
-        # Display current SMTP settings
-        from app.utils.config import Config
-        st.subheader("Current SMTP Configuration")
-        st.json({
-            "SMTP_SERVER": Config.SMTP_SERVER,
-            "SMTP_PORT": Config.SMTP_PORT,
-            "SMTP_USERNAME": Config.SMTP_USERNAME,
-            "SMTP_FROM_EMAIL": Config.SMTP_FROM_EMAIL,
-            "SMTP_ACTIVE": Config.SMTP_ACTIVE,
-            "SMTP_BCC": Config.SMTP_BCC
-        })
-        
-        return True
-    except Exception as e:
-        st.error(f"Error testing SMTP connection: {str(e)}")
-        return False
 
 # auth/api.py: Handle all API interactions with Authentik and Shlink.
 # auth/encryption.py: Manage encryption and decryption functionalities.

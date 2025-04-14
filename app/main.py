@@ -933,7 +933,6 @@ async def main():
     """Main application entry point"""
     try:
         # Initialize the application
-        setup_page_config()
         initialize_session_state()
         
         # Check for auth_success query parameter (more reliable than session state persistence)

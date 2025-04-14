@@ -29,6 +29,7 @@ from app.utils.matrix_actions import (
 from app.db.session import get_db
 from app.db.operations import User, AdminEvent, MatrixRoomMember, get_matrix_room_members
 from app.utils.config import Config
+from app.utils.recommendation import get_entrance_room_users, invite_user_to_recommended_rooms
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -88,7 +89,7 @@ async def render_matrix_messaging_page():
     sorted_categories = sorted(all_categories)
     
     # Create tabs for different messaging options
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Direct Message", "Room Message", "Bulk Message", "Invite to Rooms", "Remove from Rooms"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Direct Message", "Room Message", "Bulk Message", "Invite to Rooms", "Remove from Rooms", "Entrance Room Users"])
     
     with tab1:
         st.header("Send Direct Message")
@@ -325,6 +326,203 @@ async def render_matrix_messaging_page():
                     st.error("Failed to remove user from any rooms")
             else:
                 st.warning("Please enter a user ID and select at least one room")
+    
+    with tab6:
+        st.header("Entrance Room Users")
+        st.subheader("Connect users from INDOC room with dashboard accounts")
+        
+        # Get entrance room ID
+        entrance_room_id = "!bPROVgpotAcdXGxXUN:irregularchat.com"  # IrregularChat Actions/INDOC
+        
+        # Button to refresh user list
+        if st.button("Refresh Entrance Room Users", key="refresh_entrance_users"):
+            st.session_state['entrance_users_refreshed'] = True
+        
+        # Get users from entrance room
+        with st.spinner("Loading entrance room users..."):
+            entrance_users = await get_entrance_room_users()
+            
+        # Display user count
+        st.info(f"Found {len(entrance_users)} non-admin users in the entrance room")
+        
+        # Create a dataframe to display users
+        if entrance_users:
+            import pandas as pd
+            
+            # Create dataframe with user information
+            users_data = []
+            for user in entrance_users:
+                user_id = user['user_id']
+                display_name = user['display_name']
+                username = user_id.split(":")[0].lstrip("@")
+                
+                users_data.append({
+                    "Username": username,
+                    "Display Name": display_name,
+                    "Matrix ID": user_id
+                })
+            
+            # Convert to dataframe
+            df = pd.DataFrame(users_data)
+            
+            # Display the dataframe
+            st.dataframe(df)
+            
+            # Step 1: Select Matrix user from INDOC
+            selected_matrix_user = st.selectbox(
+                "Select Matrix user from INDOC:",
+                options=[user['user_id'] for user in entrance_users],
+                format_func=lambda x: f"{x.split(':')[0].lstrip('@')} ({next((u['display_name'] for u in entrance_users if u['user_id'] == x), '')})"
+            )
+            
+            if selected_matrix_user:
+                matrix_username = selected_matrix_user.split(':')[0].lstrip('@')
+                matrix_display_name = next((u['display_name'] for u in entrance_users if u['user_id'] == selected_matrix_user), '')
+                
+                # Step 2: Get dashboard users to connect with
+                db = next(get_db())
+                dashboard_users = db.query(User).all()
+                
+                # Create a list of users for selection
+                dashboard_user_options = [(user.id, f"{user.first_name} {user.last_name} ({user.username})") for user in dashboard_users]
+                
+                # Select dashboard user to connect
+                selected_dashboard_user = st.selectbox(
+                    "Connect to dashboard user:",
+                    options=[user[0] for user in dashboard_user_options],
+                    format_func=lambda x: next((user[1] for user in dashboard_user_options if user[0] == x), ""),
+                    key="dashboard_user_select"
+                )
+                
+                if selected_dashboard_user:
+                    # Get selected user details
+                    selected_user = next((user for user in dashboard_users if user.id == selected_dashboard_user), None)
+                    if selected_user:
+                        # Show user details
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.subheader("Matrix User")
+                            st.write(f"**Username:** {matrix_username}")
+                            st.write(f"**Display Name:** {matrix_display_name}")
+                            st.write(f"**ID:** {selected_matrix_user}")
+                        
+                        with col2:
+                            st.subheader("Dashboard User")
+                            st.write(f"**Username:** {selected_user.username}")
+                            st.write(f"**Name:** {selected_user.first_name} {selected_user.last_name}")
+                            st.write(f"**Email:** {selected_user.email}")
+                            
+                            # Extract interests from user attributes
+                            interests = ""
+                            if hasattr(selected_user, 'attributes') and selected_user.attributes:
+                                attrs = selected_user.attributes
+                                if isinstance(attrs, dict):
+                                    if 'intro' in attrs:
+                                        intro = attrs['intro']
+                                        if isinstance(intro, dict) and 'interests' in intro:
+                                            interests = intro['interests']
+                                    elif 'interests' in attrs:
+                                        interests = attrs['interests']
+                            
+                            if interests:
+                                st.write(f"**Interests:** {interests}")
+                            else:
+                                # Input field for interests if not found
+                                interests = st.text_input(
+                                    "Enter user interests (comma separated):",
+                                    key="dashboard_user_interests",
+                                    help="Enter interests to match with room categories"
+                                )
+                        
+                        # Connect users and invite to rooms
+                        if st.button("Connect User and Invite to Recommended Rooms", key="connect_and_invite_button"):
+                            try:
+                                # Update user attributes to store connection
+                                if not hasattr(selected_user, 'attributes') or not selected_user.attributes:
+                                    selected_user.attributes = {}
+                                
+                                if isinstance(selected_user.attributes, dict):
+                                    selected_user.attributes["matrix_user_id"] = selected_matrix_user
+                                    db.commit()
+                                    st.success(f"Connected {selected_user.username} with Matrix user {matrix_username}")
+                                
+                                # Invite to recommended rooms if interests provided
+                                if interests:
+                                    with st.spinner("Finding and inviting to recommended rooms..."):
+                                        # Invite user to recommended rooms
+                                        room_results = await invite_user_to_recommended_rooms(selected_matrix_user, interests)
+                                        
+                                        # Create results table
+                                        results_data = []
+                                        for room_id, room_name, success in room_results:
+                                            results_data.append({
+                                                "Room Name": room_name,
+                                                "Room ID": room_id,
+                                                "Invitation Status": "✅ Successful" if success else "❌ Failed"
+                                            })
+                                        
+                                        # Display results
+                                        st.subheader("Invitation Results")
+                                        results_df = pd.DataFrame(results_data)
+                                        st.dataframe(results_df)
+                                        
+                                        # Success message
+                                        successful_invites = sum(1 for _, _, success in room_results if success)
+                                        st.success(f"Successfully invited user to {successful_invites} out of {len(room_results)} rooms")
+                                else:
+                                    st.warning("No interests provided. Could not recommend rooms.")
+                            except Exception as e:
+                                st.error(f"Error connecting users: {str(e)}")
+                                logger.error(f"Error connecting users: {str(e)}")
+            
+            # Alternative option for just inviting to rooms without connection
+            st.markdown("---")
+            st.subheader("Or just invite to recommended rooms")
+            
+            # User selection for recommendations without connecting
+            selected_user_for_invite = st.selectbox(
+                "Select a Matrix user to invite to rooms:",
+                options=[user['user_id'] for user in entrance_users],
+                format_func=lambda x: f"{x.split(':')[0].lstrip('@')} ({next((u['display_name'] for u in entrance_users if u['user_id'] == x), '')})",
+                key="invite_only_user"
+            )
+            
+            if selected_user_for_invite:
+                # Input for interests
+                invite_interests = st.text_input(
+                    "Enter user interests (comma separated):",
+                    key="entrance_user_interests",
+                    help="Enter interests to match with room categories"
+                )
+                
+                # Button to recommend and invite
+                if st.button("Recommend and Invite to Rooms", key="recommend_rooms_button"):
+                    if invite_interests:
+                        with st.spinner("Finding and inviting to recommended rooms..."):
+                            # Invite user to recommended rooms
+                            room_results = await invite_user_to_recommended_rooms(selected_user_for_invite, invite_interests)
+                            
+                            # Create results table
+                            results_data = []
+                            for room_id, room_name, success in room_results:
+                                results_data.append({
+                                    "Room Name": room_name,
+                                    "Room ID": room_id,
+                                    "Invitation Status": "✅ Successful" if success else "❌ Failed"
+                                })
+                            
+                            # Display results
+                            st.subheader("Invitation Results")
+                            results_df = pd.DataFrame(results_data)
+                            st.dataframe(results_df)
+                            
+                            # Success message
+                            successful_invites = sum(1 for _, _, success in room_results if success)
+                            st.success(f"Successfully invited user to {successful_invites} out of {len(room_results)} rooms")
+                    else:
+                        st.warning("Please enter user interests to match with rooms")
+        else:
+            st.warning("No non-admin users found in the entrance room")
 
 def filter_rooms_by_category(rooms, selected_categories):
     """

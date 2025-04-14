@@ -11,7 +11,9 @@ import nest_asyncio
 from typing import List, Dict, Optional, Union, Set, Any
 from urllib.parse import urlparse
 import json
-from nio import AsyncClient, AsyncClientConfig
+from nio import AsyncClient, AsyncClientConfig, RoomVisibility
+import traceback
+import uuid
 
 from app.utils.config import Config
 
@@ -176,7 +178,7 @@ class MatrixClient:
             
             # Create a direct message room
             response = await client.room_create(
-                visibility="private",
+                visibility=RoomVisibility.TRUSTED_PRIVATE_CHAT,
                 is_direct=True,
                 invite=[user_id],
                 preset="trusted_private_chat",
@@ -349,7 +351,7 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
             return None
 
         response = await client.room_create(
-            visibility="private",
+            visibility=RoomVisibility.TRUSTED_PRIVATE_CHAT,
             is_direct=True,
             invite=[user_id],
             preset="trusted_private_chat"
@@ -1218,82 +1220,185 @@ async def _send_direct_message_async(user_id: str, message: str) -> bool:
         return False
     
     try:
+        # Log the attempt
+        logger.info(f"Attempting to send direct message to user: {user_id}")
+        
+        # Check if this is a Signal bridge user
+        is_signal_user = 'signal_' in user_id
+        if is_signal_user:
+            logger.info(f"Detected Signal bridge user: {user_id}")
+        
         # Create Matrix client
         client = await get_matrix_client()
         if not client:
             logger.error("Failed to create Matrix client")
             return False
         
-        # Check if we already have a direct chat with this user
-        direct_room_id = None
-        rooms_response = await client.joined_rooms()
-        
-        # Get rooms list from response, handling different response formats
-        if hasattr(rooms_response, 'rooms'):
-            room_ids = rooms_response.rooms
-        elif hasattr(rooms_response, 'joined_rooms'):
-            room_ids = rooms_response.joined_rooms
-        elif isinstance(rooms_response, dict) and 'joined_rooms' in rooms_response:
-            room_ids = rooms_response['joined_rooms']
-        elif isinstance(rooms_response, dict) and 'rooms' in rooms_response:
-            room_ids = rooms_response['rooms']
-        else:
-            logger.warning(f"Unexpected response format from joined_rooms(): {rooms_response}")
-            room_ids = []
-        
-        for room_id in room_ids:
-            # Get room members
-            members = await get_room_members_async(client, room_id)
+        try:
+            # Check if we already have a direct chat with this user
+            direct_room_id = None
+            rooms_response = await client.joined_rooms()
             
-            # Check if this is a direct chat with the target user
-            if members and len(members) == 2:  # Just us and the target user
-                for member_id in members:
-                    if member_id == user_id:
-                        direct_room_id = room_id
-                        break
-                
-                if direct_room_id:
-                    break
-        
-        # If no direct chat exists, create one
-        if not direct_room_id:
-            logger.info(f"Creating new direct chat with {user_id}")
-            response = await client.room_create(
-                visibility="private",  # Use string instead of int
-                name=f"Direct chat with {user_id}",
-                is_direct=True,
-                invite=[user_id]
-            )
-            
-            if hasattr(response, 'room_id'):
-                direct_room_id = response.room_id
-                logger.info(f"Created direct chat room: {direct_room_id}")
+            # Get rooms list from response, handling different response formats
+            if hasattr(rooms_response, 'rooms'):
+                room_ids = rooms_response.rooms
+            elif hasattr(rooms_response, 'joined_rooms'):
+                room_ids = rooms_response.joined_rooms
+            elif isinstance(rooms_response, dict) and 'joined_rooms' in rooms_response:
+                room_ids = rooms_response['joined_rooms']
+            elif isinstance(rooms_response, dict) and 'rooms' in rooms_response:
+                room_ids = rooms_response['rooms']
             else:
-                logger.error(f"Failed to create direct chat room: {response}")
-                await client.close()
+                logger.warning(f"Unexpected response format from joined_rooms(): {rooms_response}")
+                room_ids = []
+            
+            logger.info(f"Found {len(room_ids)} joined rooms")
+            
+            # First pass - look for existing direct chats
+            for room_id in room_ids:
+                try:
+                    # Get room members
+                    members = await get_room_members_async(client, room_id)
+                    
+                    # Check if this is a direct chat with the target user
+                    if members and len(members) == 2:  # Just us and the target user
+                        for member_id in members:
+                            if member_id == user_id:
+                                direct_room_id = room_id
+                                logger.info(f"Found existing direct chat room: {room_id}")
+                                break
+                        
+                        if direct_room_id:
+                            break
+                except Exception as room_err:
+                    logger.warning(f"Error checking room {room_id}: {room_err}")
+                    continue
+            
+            # If no direct chat exists, create one
+            if not direct_room_id:
+                logger.info(f"Creating new direct chat with {user_id}")
+                try:
+                    # For Signal users, use a specific approach
+                    if is_signal_user:
+                        logger.info("Using special configuration for Signal bridge user")
+                        try:
+                            # For Signal bridge users, create a very simple direct message room
+                            # without any additional state or configurations
+                            response = await client.room_create(
+                                visibility=RoomVisibility.TRUSTED_PRIVATE_CHAT,
+                                is_direct=True,
+                                invite=[user_id],
+                                # Don't set a room name for Signal bridge users
+                                # Don't set initial_state for Signal bridge users
+                            )
+                            
+                            # If we succeed in creating the room, wait a moment for the bridge to process
+                            if hasattr(response, 'room_id'):
+                                logger.info(f"Created direct chat room for Signal user: {response.room_id}")
+                                direct_room_id = response.room_id
+                                
+                                # Small delay to let the bridge process the room creation
+                                import asyncio
+                                await asyncio.sleep(1)
+                            else:
+                                logger.error(f"Failed to create direct chat room for Signal user: {response}")
+                                return False
+                        except Exception as signal_err:
+                            logger.error(f"Special error creating room for Signal user: {signal_err}")
+                            logger.error(traceback.format_exc())
+                            
+                            # Fallback to regular room creation if special approach fails
+                            response = await client.room_create(
+                                visibility=RoomVisibility.TRUSTED_PRIVATE_CHAT,
+                                is_direct=True,
+                                invite=[user_id]
+                            )
+                            
+                            if hasattr(response, 'room_id'):
+                                direct_room_id = response.room_id
+                                logger.info(f"Created direct chat room using fallback method: {direct_room_id}")
+                            else:
+                                logger.error(f"Failed to create direct chat room using fallback method: {response}")
+                                return False
+                    else:
+                        # Standard room creation
+                        response = await client.room_create(
+                            visibility=RoomVisibility.TRUSTED_PRIVATE_CHAT,
+                            name=f"Direct chat with {user_id}",
+                            is_direct=True,
+                            invite=[user_id]
+                        )
+                    
+                    if hasattr(response, 'room_id'):
+                        direct_room_id = response.room_id
+                        logger.info(f"Created direct chat room: {direct_room_id}")
+                    else:
+                        logger.error(f"Failed to create direct chat room: {response}")
+                        return False
+                except Exception as create_err:
+                    logger.error(f"Error creating direct chat room: {create_err}")
+                    return False
+            
+            # Send the message
+            try:
+                logger.info(f"Sending message to room {direct_room_id}")
+                
+                # For Signal users, use plain text only without any formatting
+                if is_signal_user:
+                    logger.info("Using plain text format for Signal bridge user")
+                    
+                    try:
+                        # Try sending with a simpler format first
+                        response = await client.room_send(
+                            room_id=direct_room_id,
+                            message_type="m.room.message",
+                            content={
+                                "msgtype": "m.text",
+                                "body": message,
+                                "format": "org.matrix.custom.html",
+                                "formatted_body": message  # Plain text for Signal
+                            }
+                        )
+                    except Exception as signal_send_err:
+                        logger.warning(f"Failed with first Signal message format, trying alternate: {signal_send_err}")
+                        
+                        # Try a different approach without format specification
+                        response = await client.room_send(
+                            room_id=direct_room_id,
+                            message_type="m.room.message",
+                            content={
+                                "msgtype": "m.text",
+                                "body": message
+                            }
+                        )
+                else:
+                    # Standard message format for regular Matrix users
+                    response = await client.room_send(
+                        room_id=direct_room_id,
+                        message_type="m.room.message",
+                        content={
+                            "msgtype": "m.text",
+                            "body": message
+                        }
+                    )
+                
+                if hasattr(response, 'event_id'):
+                    logger.info(f"Message sent to {user_id} successfully with event_id {response.event_id}")
+                    return True
+                else:
+                    logger.error(f"Failed to send message: {response}")
+                    return False
+            except Exception as send_err:
+                logger.error(f"Error sending message: {send_err}")
                 return False
-        
-        # Send the message
-        response = await client.room_send(
-            room_id=direct_room_id,
-            message_type="m.room.message",
-            content={
-                "msgtype": "m.text",
-                "body": message
-            }
-        )
-        
-        # Close the client
-        await client.close()
-        
-        if hasattr(response, 'event_id'):
-            logger.info(f"Message sent to {user_id} successfully")
-            return True
-        else:
-            logger.error(f"Failed to send message: {response}")
-            return False
+                
+        finally:
+            # Close the client
+            await client.close()
+            
     except Exception as e:
         logger.error(f"Error sending direct message: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return False
 
 def send_direct_message(user_id: str, message: str) -> bool:
@@ -1468,3 +1573,137 @@ async def create_user(username, password, display_name=None, admin=False):
     except Exception as e:
         logging.error(f"Error creating Matrix user: {e}")
         return False
+
+async def send_signal_message_async(user_id: str, message: str) -> bool:
+    """
+    Special function to send a message to a Signal bridge user.
+    Uses the temp room approach for Signal bridge users.
+    
+    Args:
+        user_id: The Matrix ID of the Signal bridge user
+        message: The message content
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active. Cannot send Signal message.")
+        return False
+    
+    logger.info(f"Using temp room approach for Signal bridge user: {user_id}")
+    
+    try:
+        # Create Matrix client
+        client = await get_matrix_client()
+        if not client:
+            logger.error("Failed to create Matrix client")
+            return False
+        
+        try:
+            # Create a temporary room with a specific name
+            unique_id = str(uuid.uuid4())[:8]  # Generate a short unique ID
+            temp_room_name = f"Signal Message {unique_id}"
+            
+            logger.info(f"Creating temporary room '{temp_room_name}' for Signal message")
+            
+            try:
+                # Create the room first with a name
+                response = await client.room_create(
+                    visibility=RoomVisibility.TRUSTED_PRIVATE_CHAT,
+                    name=temp_room_name,
+                    topic="Temporary room for Signal message"
+                )
+                
+                if not hasattr(response, 'room_id'):
+                    logger.error(f"Failed to create temporary room: {response}")
+                    return False
+                
+                room_id = response.room_id
+                logger.info(f"Created temporary room: {room_id}")
+                
+                # Now invite the Signal user
+                logger.info(f"Inviting Signal user to room: {user_id}")
+                invite_response = await client.room_invite(room_id, user_id)
+                
+                if not isinstance(invite_response, RoomInviteResponse):
+                    logger.error(f"Failed to invite Signal user: {invite_response}")
+                    return False
+                
+                logger.info(f"Successfully invited Signal user to room")
+                
+                # Wait a moment for the bridge to process the invitation
+                await asyncio.sleep(2)
+                
+                # Send the message
+                logger.info(f"Sending message to Signal user via room {room_id}")
+                send_response = await client.room_send(
+                    room_id=room_id,
+                    message_type="m.room.message",
+                    content={
+                        "msgtype": "m.text",
+                        "body": message
+                    }
+                )
+                
+                if hasattr(send_response, 'event_id'):
+                    logger.info(f"Message sent to Signal user via temp room {room_id}")
+                    
+                    # Now mark the room as direct chat
+                    # This helps with Matrix client UI organization
+                    try:
+                        # Set the room as a direct chat
+                        await client.room_put_state(
+                            room_id=room_id,
+                            event_type="m.room.direct",
+                            content={user_id: [room_id]}
+                        )
+                        logger.info("Room marked as direct chat")
+                    except Exception as e:
+                        # Non-critical error, just log it
+                        logger.warning(f"Could not mark room as direct chat: {e}")
+                    
+                    return True
+                else:
+                    logger.error(f"Failed to send message: {send_response}")
+                    return False
+                
+            except Exception as e:
+                logger.error(f"Error in temp room workflow: {e}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                return False
+                
+        finally:
+            # Ensure client is closed
+            await client.close()
+            
+    except Exception as e:
+        logger.error(f"Error in send_signal_message_async: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return False
+
+def send_signal_message(user_id: str, message: str) -> bool:
+    """
+    Synchronous wrapper for sending a message to a Signal bridge user.
+    
+    Args:
+        user_id: The Matrix ID of the Signal bridge user
+        message: The message content
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Create a new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Send the message
+        result = loop.run_until_complete(send_signal_message_async(user_id, message))
+        return result
+    except Exception as e:
+        logger.error(f"Error sending Signal message: {e}")
+        return False
+    finally:
+        # Clean up
+        if not loop.is_closed():
+            loop.close()

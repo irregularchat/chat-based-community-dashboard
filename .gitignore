@@ -24,7 +24,7 @@ __pycache__/
 *.csv
 users.csv
 .cursorignore
-
+.venv/
 # postgres from /app/db/postgres
 pg_dump.sql
 app/db/postgres/
@@ -46,3 +46,6 @@ app/db/migrations/add_signal_identity.py
 app/db/init_db.py
 test_env/pyvenv.cfg
 test_env/etc/jupyter/nbconfig/notebook.d/pydeck.json
+.venv/bin/Activate.ps1
+.venv/bin/pip3
+.venv/*

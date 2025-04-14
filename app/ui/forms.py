@@ -198,6 +198,10 @@ def parse_and_rerun():
             if key.startswith('_parsed') or key.endswith('_input') or key.endswith('_input_outside') or key == 'parsing_successful':
                 logging.info(f"Session state key: {key}, value: {value}")
         
+        # Log a summary of what will be applied
+        parsed_fields = [key.replace('_parsed_', '') for key in st.session_state.keys() if key.startswith('_parsed_')]
+        logging.info(f"Fields to be updated after rerun: {', '.join(parsed_fields)}")
+        
         # Rerun so the fields can be updated with the parsed data
         logging.info("Rerunning with temporary parsed data in session state")
         st.rerun()
@@ -431,9 +435,45 @@ async def render_create_user_form():
             st.session_state['first_name_input'] = st.session_state['_parsed_first_name']
             st.session_state['first_name_input_outside'] = st.session_state['_parsed_first_name']
             
-        # Additional updates from parsed data
-        # Update other fields here...
+        if '_parsed_last_name' in st.session_state:
+            st.session_state['last_name_input'] = st.session_state['_parsed_last_name']
+            st.session_state['last_name_input_outside'] = st.session_state['_parsed_last_name']
+            
+        if '_parsed_email' in st.session_state:
+            st.session_state['email_input'] = st.session_state['_parsed_email']
+            st.session_state['email_input_outside'] = st.session_state['_parsed_email']
+            
+        if '_parsed_invited_by' in st.session_state:
+            st.session_state['invited_by_input'] = st.session_state['_parsed_invited_by']
+            st.session_state['invited_by_input_outside'] = st.session_state['_parsed_invited_by']
+            
+        if '_parsed_organization' in st.session_state:
+            st.session_state['organization_input'] = st.session_state['_parsed_organization']
+            st.session_state['organization_input_outside'] = st.session_state['_parsed_organization']
+            
+        if '_parsed_intro' in st.session_state:
+            st.session_state['intro_input'] = st.session_state['_parsed_intro']
+            st.session_state['intro_input_outside'] = st.session_state['_parsed_intro']
+            
+        if '_parsed_interests' in st.session_state:
+            st.session_state['interests_input'] = st.session_state['_parsed_interests']
+            st.session_state['interests_input_outside'] = st.session_state['_parsed_interests']
+            
+        if '_parsed_signal_username' in st.session_state:
+            st.session_state['signal_username_input'] = st.session_state['_parsed_signal_username']
+            st.session_state['signal_username_input_outside'] = st.session_state['_parsed_signal_username']
+            
+        if '_parsed_phone_number' in st.session_state:
+            st.session_state['phone_number_input'] = st.session_state['_parsed_phone_number']
+            st.session_state['phone_number_input_outside'] = st.session_state['_parsed_phone_number']
+            
+        if '_parsed_linkedin_username' in st.session_state:
+            st.session_state['linkedin_username_input'] = st.session_state['_parsed_linkedin_username']
+            st.session_state['linkedin_username_input_outside'] = st.session_state['_parsed_linkedin_username']
         
+        # After updating the fields, also update the username based on the new names
+        username_updated = update_username_from_inputs()
+            
         # Reset the parsing flag now that we've applied the parsed data
         st.session_state['parsing_successful'] = False
     
@@ -883,19 +923,19 @@ async def render_create_user_form():
     
     with col1:
         st.markdown("<div class='parse-btn'>", unsafe_allow_html=True)
-        if st.button("Parse Data"):
+        if st.button("Parse Data", key="parse_data_button"):
             parse_and_rerun()
         st.markdown("</div>", unsafe_allow_html=True)
         
     with col2:
         st.markdown("<div class='clear-btn'>", unsafe_allow_html=True)
-        if st.button("Clear Parse Data"):
+        if st.button("Clear Parse Data", key="clear_parse_data_button"):
             clear_parse_data()
         st.markdown("</div>", unsafe_allow_html=True)
     
     with col3:
         st.markdown("<div class='create-btn'>", unsafe_allow_html=True)
-        create_user_button = st.button("Create User")
+        create_user_button = st.button("Create User", key="create_user_button")
         st.markdown("</div>", unsafe_allow_html=True)
     
     # Handle Create User button logic

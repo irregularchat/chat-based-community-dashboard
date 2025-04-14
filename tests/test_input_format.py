@@ -101,3 +101,24 @@ def test_numbered_formats_with_special_chars():
         assert result["invited_by"] == "Jane Smith"
         assert result["intro"]["organization"] == "Acme Corporation"
         assert result["intro"]["interests"] == "Python, AI" 
+
+def test_ordinal_numbers_are_not_treated_as_list_markers():
+    """Test that ordinal numbers (1st, 2nd, 3rd, 4th, etc.) are correctly treated as content, not list markers"""
+    
+    input_text = """John Doe
+john.doe@example.com
+At Acme Corp, I was ranked 3rd in the sales team
+My 1st priority is learning Python
+During my 2nd year, I focused on AI"""
+    
+    result = simple_parse_input(input_text)
+    
+    # Assert that name was correctly parsed
+    assert result["first_name"] == "John"
+    assert result["last_name"] == "Doe"
+    assert result["email"] == "john.doe@example.com"
+    
+    # Ensure ordinal numbers are preserved in interests
+    assert "3rd in the sales team" in result["intro"]["interests"]
+    assert "1st priority" in result["intro"]["interests"]
+    assert "2nd year" in result["intro"]["interests"] 

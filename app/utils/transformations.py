@@ -51,51 +51,61 @@ def simple_parse_input(input_text):
     # 1. NAME, 2. ORGANIZATION, 3. INVITED BY, 4. EMAIL, 5. INTERESTS, 6. LINKEDIN
     lines = [line.strip() for line in input_text.split('\n') if line.strip()]
     if len(lines) >= 4:  # At least 4 lines to get the minimum required info
-        # Enhanced regex to match various number formats like: 1. 1: 1- 1) 1.. 1_ etc.
-        numbered_format = all(
-            re.match(r'^\d+[\.\:\-\)\(\]\[\}\{_\s]*\s*', line) for line in lines[:min(6, len(lines))]
+        # Check lines for ordinal numbers (1st, 2nd, 3rd, 4th, etc.) which shouldn't be treated as list markers
+        # This is a common pattern in descriptions rather than list indexes
+        has_ordinal_numbers = any(
+            re.match(r'^\d+(st|nd|rd|th)', line.strip()) for line in lines[:min(6, len(lines))]
         )
         
-        if numbered_format:
-            logging.info("Detected standard numbered format with 6 specific fields")
-            # Process each line by specific position, removing the number prefix
-            for i, line in enumerate(lines):
-                # Remove the number prefix with enhanced regex to handle more formats
-                content = re.sub(r'^\d+[\.\:\-\)\(\]\[\}\{_\s]*\s*', '', line).strip()
-                
-                if i == 0:  # Line 1: Name
-                    name_parts = content.split()
-                    if name_parts:
-                        parsed_data["first_name"] = name_parts[0]
-                        if len(name_parts) > 1:
-                            parsed_data["last_name"] = " ".join(name_parts[1:])
-                    logging.info(f"Parsed name: {parsed_data['first_name']} {parsed_data['last_name']}")
-                    
-                elif i == 1:  # Line 2: Organization
-                    parsed_data["intro"]["organization"] = content
-                    logging.info(f"Parsed organization: {content}")
-                    
-                elif i == 2:  # Line 3: Invited by
-                    parsed_data["invited_by"] = content
-                    logging.info(f"Parsed invited by: {content}")
-                    
-                elif i == 3:  # Line 4: Email
-                    # Clean and validate the email if possible
-                    email = content.strip()
-                    if '@' in email:
-                        parsed_data["email"] = email
-                    logging.info(f"Parsed email: {email}")
-                    
-                elif i == 4:  # Line 5: Interests
-                    parsed_data["intro"]["interests"] = content
-                    logging.info(f"Parsed interests: {content}")
-                    
-                elif i == 5:  # Line 6: LinkedIn Username
-                    parsed_data["linkedin_username"] = content
-                    logging.info(f"Parsed LinkedIn username: {content}")
+        if has_ordinal_numbers:
+            logging.info("Detected text with ordinal numbers (1st, 2nd, etc.) - not treating as numbered format")
+            # Skip the numbered format processing for text with ordinals
+        else:
+            # Enhanced regex to match various number formats like: 1. 1: 1- 1) 1.. 1_ etc.
+            numbered_format = all(
+                re.match(r'^\d+[\.\:\-\)\(\]\[\}\{_\s]*\s*', line) for line in lines[:min(6, len(lines))]
+            )
             
-            # Return early since we've processed the specific format
-            return parsed_data
+            if numbered_format:
+                logging.info("Detected standard numbered format with 6 specific fields")
+                # Process each line by specific position, removing the number prefix
+                for i, line in enumerate(lines):
+                    # Remove the number prefix with enhanced regex to handle more formats
+                    content = re.sub(r'^\d+[\.\:\-\)\(\]\[\}\{_\s]*\s*', '', line).strip()
+                    
+                    if i == 0:  # Line 1: Name
+                        name_parts = content.split()
+                        if name_parts:
+                            parsed_data["first_name"] = name_parts[0]
+                            if len(name_parts) > 1:
+                                parsed_data["last_name"] = " ".join(name_parts[1:])
+                        logging.info(f"Parsed name: {parsed_data['first_name']} {parsed_data['last_name']}")
+                        
+                    elif i == 1:  # Line 2: Organization
+                        parsed_data["intro"]["organization"] = content
+                        logging.info(f"Parsed organization: {content}")
+                        
+                    elif i == 2:  # Line 3: Invited by
+                        parsed_data["invited_by"] = content
+                        logging.info(f"Parsed invited by: {content}")
+                        
+                    elif i == 3:  # Line 4: Email
+                        # Clean and validate the email if possible
+                        email = content.strip()
+                        if '@' in email:
+                            parsed_data["email"] = email
+                        logging.info(f"Parsed email: {email}")
+                        
+                    elif i == 4:  # Line 5: Interests
+                        parsed_data["intro"]["interests"] = content
+                        logging.info(f"Parsed interests: {content}")
+                        
+                    elif i == 5:  # Line 6: LinkedIn Username
+                        parsed_data["linkedin_username"] = content
+                        logging.info(f"Parsed LinkedIn username: {content}")
+                
+                # Return early since we've processed the specific format
+                return parsed_data
     
     # If not the specific numbered format, proceed with the original parsing logic
     # Remove numbers and any following periods/characters from the input text
@@ -447,6 +457,17 @@ def determine_input_format(input_text):
     
     # Check for numbered list format - supports numbers, hashes, dashes, and bullets
     numbered_pattern = r'^(?:\d+[\.\-\)]|#|\-|\•|\*)\s+'
+    
+    # Check for ordinal numbers (1st, 2nd, 3rd, etc.) which shouldn't be treated as numbered list markers
+    has_ordinal_numbers = any(
+        re.match(r'^\d+(st|nd|rd|th)', line.strip()) for line in lines
+    )
+    
+    if has_ordinal_numbers:
+        logging.info("Detected text with ordinal numbers (1st, 2nd, etc.) - not treating as standard numbered format")
+        # If we have ordinal numbers, it's likely part of content description not a list format
+        # Let's not override it to chatgpt, but be less confident in it being numbered
+        return 'chatgpt', True
     
     # Count lines with numbering patterns to determine confidence
     numbered_lines = 0

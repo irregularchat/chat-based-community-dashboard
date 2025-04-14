@@ -51,16 +51,17 @@ def simple_parse_input(input_text):
     # 1. NAME, 2. ORGANIZATION, 3. INVITED BY, 4. EMAIL, 5. INTERESTS, 6. LINKEDIN
     lines = [line.strip() for line in input_text.split('\n') if line.strip()]
     if len(lines) >= 4:  # At least 4 lines to get the minimum required info
+        # Enhanced regex to match various number formats like: 1. 1: 1- 1) 1.. 1_ etc.
         numbered_format = all(
-            re.match(r'^\d+\.?\s+', line) for line in lines[:min(6, len(lines))]
+            re.match(r'^\d+[\.\:\-\)\(\]\[\}\{_\s]*\s*', line) for line in lines[:min(6, len(lines))]
         )
         
         if numbered_format:
             logging.info("Detected standard numbered format with 6 specific fields")
             # Process each line by specific position, removing the number prefix
             for i, line in enumerate(lines):
-                # Remove the number prefix (like "1. " or "1 " or "1) ")
-                content = re.sub(r'^\d+[\.\)\s]*\s*', '', line).strip()
+                # Remove the number prefix with enhanced regex to handle more formats
+                content = re.sub(r'^\d+[\.\:\-\)\(\]\[\}\{_\s]*\s*', '', line).strip()
                 
                 if i == 0:  # Line 1: Name
                     name_parts = content.split()
@@ -98,7 +99,8 @@ def simple_parse_input(input_text):
     
     # If not the specific numbered format, proceed with the original parsing logic
     # Remove numbers and any following periods/characters from the input text
-    cleaned_text = re.sub(r'^[\d\-#\.*\•\(\)]+\s*', '', input_text, flags=re.MULTILINE)
+    # Enhanced regex to handle more special characters consistently
+    cleaned_text = re.sub(r'^[\d\-#\.\:\*\•\(\)\[\]\{\}_]+\s*', '', input_text, flags=re.MULTILINE)
     
     # Split the input text by newlines and strip whitespace
     lines = [line.strip() for line in cleaned_text.split('\n') if line.strip()]

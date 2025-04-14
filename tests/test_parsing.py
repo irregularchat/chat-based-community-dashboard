@@ -104,6 +104,20 @@ Invited by: John Doe""",
                 "email": "jane.smith@yahoo.com",
                 "invited_by": "John Doe"
             }
+        },
+        {
+            "name": "Input with various numbered formats",
+            "input": """1: John Doe
+2.. ABC Organization
+3_ Invited by Jane Smith
+4: test@example.com
+5:: Python, AI, Testing""",
+            "expected": {
+                "first_name": "John",
+                "last_name": "Doe",
+                "email": "test@example.com",
+                "invited_by": "Invited by Jane Smith"
+            }
         }
     ]
     

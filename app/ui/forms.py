@@ -1,18 +1,13 @@
 # ui/forms.py
 import os
 import re
+import io
+import csv
 import json
-import time
-import asyncio
+import uuid
 import logging
-import requests
 import traceback
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-from pytz import timezone
-from typing import Dict, List, Any, Optional, Tuple, Union
-
+import asyncio
 import streamlit as st
 from streamlit.components.v1 import html
 from app.db.session import get_db
@@ -48,6 +43,51 @@ from app.db.operations import (
 from app.messages import create_invite_message, create_user_message
 from app.utils.messages import WELCOME_MESSAGE
 from app.utils.helpers import send_invite_email
+from app.utils.recommendation import invite_user_to_recommended_rooms_sync
+
+# Utility function for running async tasks safely in Streamlit
+def run_async_safely(async_func, *args, **kwargs):
+    """
+    Safely runs an async function in a Streamlit app.
+    Handles event loop conflicts using nest_asyncio.
+    
+    Args:
+        async_func: The async function to run
+        *args, **kwargs: Arguments to pass to the async function
+        
+    Returns:
+        The result of the async function
+    """
+    import nest_asyncio
+    
+    # Apply nest_asyncio to patch current event loop
+    nest_asyncio.apply()
+    
+    try:
+        # Get or create event loop
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # If there's no event loop, create a new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        # Handle the case when the loop is already running
+        if loop.is_running():
+            # Create a future in the existing loop
+            future = asyncio.ensure_future(async_func(*args, **kwargs), loop=loop)
+            # Wait for it to complete
+            while not future.done():
+                loop._run_once()
+            # Get the result
+            return future.result()
+        else:
+            # Standard approach if loop is not running
+            return loop.run_until_complete(async_func(*args, **kwargs))
+    except Exception as e:
+        logging.error(f"Error running async function {async_func.__name__}: {str(e)}")
+        logging.error(traceback.format_exc())
+        return None
 
 def reset_create_user_form_fields():
     """Helper function to reset all fields related to create user."""
@@ -421,6 +461,59 @@ async def render_create_user_form():
     }
     </style>
     """, unsafe_allow_html=True)
+
+    # Fetch INDOC room users in background if not already fetched
+    if 'fetch_indoc_users_started' not in st.session_state:
+        st.session_state['fetch_indoc_users_started'] = False
+
+    # Start background fetching of INDOC users
+    if not st.session_state.get('fetch_indoc_users_started', False):
+        try:
+            import threading
+            
+            def fetch_indoc_users_thread():
+                logging.info("Background INDOC user fetch thread started.")
+                try:
+                    # Import the needed function
+                    from app.utils.recommendation import get_entrance_room_users_sync
+                    import asyncio
+                    import nest_asyncio
+                    
+                    # Create a new event loop for this thread
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
+                    # Apply nest_asyncio to allow nested event loops (if needed)
+                    nest_asyncio.apply(loop)
+                    
+                    try:
+                        # Get the users using the thread's event loop
+                        fetched_users = get_entrance_room_users_sync()
+                        st.session_state['indoc_users'] = fetched_users
+                        st.session_state['fetch_indoc_users_complete'] = True
+                        logging.info(f"Background INDOC user fetch completed. Found {len(fetched_users) if fetched_users else 0} users.")
+                    finally:
+                        # Always close the loop properly when done
+                        loop.close()
+                        logging.info("Event loop closed properly in background thread.")
+                        
+                except Exception as e:
+                    logging.error(f"Error in background INDOC user fetch thread: {str(e)}")
+                    logging.error(traceback.format_exc())
+                    st.session_state['fetch_indoc_users_error'] = str(e)
+                finally:
+                    st.session_state['fetch_indoc_users_finished'] = True
+                    logging.info("Background INDOC user fetch thread finished.")
+            
+            # Mark as started and launch thread
+            st.session_state['fetch_indoc_users_started'] = True
+            st.session_state['fetch_indoc_users_finished'] = False
+            thread = threading.Thread(target=fetch_indoc_users_thread)
+            thread.start()
+            logging.info("Started background thread to fetch INDOC room users")
+        except Exception as e:
+            logging.error(f"Error starting background fetch of INDOC users: {str(e)}")
+            logging.error(traceback.format_exc())
 
     # Form clearing logic
     if st.session_state.get('should_clear_form', False):
@@ -899,6 +992,309 @@ async def render_create_user_form():
     st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
     st.subheader("Parse User Data")
     
+    # Add a section to connect with Matrix user from INDOC
+    st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
+    st.subheader("Connect with Matrix User")
+    
+    # Get INDOC room users for Matrix connection
+    try:
+        # Check if we have the background fetched users ready
+        if 'fetch_indoc_users_finished' in st.session_state and st.session_state['fetch_indoc_users_finished']:
+            # We have finished the background fetch, use the data
+            if 'indoc_users' in st.session_state and st.session_state['indoc_users']:
+                entrance_users = st.session_state['indoc_users']
+                
+                # Format Matrix users for selection
+                matrix_user_options = []
+                for user in entrance_users:
+                    user_id = user['user_id']
+                    display_name = user['display_name']
+                    is_admin = user.get('is_admin', False)
+                    
+                    # Add admin label if applicable
+                    display_text = f"{user_id.split(':')[0].lstrip('@')} ({display_name})"
+                    if is_admin:
+                        display_text += " [Admin]"
+                        
+                    matrix_user_options.append((user_id, display_text))
+                
+                # Select Matrix user to connect
+                matrix_user_id = st.selectbox(
+                    "Select Matrix User to Connect",
+                    options=[user[0] for user in matrix_user_options],
+                    format_func=lambda x: next((user[1] for user in matrix_user_options if user[0] == x), ""),
+                    key="matrix_user_select"
+                )
+                
+                # Store selection in session state
+                if matrix_user_id:
+                    st.session_state['matrix_user_id'] = matrix_user_id
+                    st.info(f"Selected Matrix user: {matrix_user_id}")
+                    
+                    # Add option to send direct message to the selected user
+                    with st.expander("Send Direct Message"):
+                        dm_message = st.text_area(
+                            "Message to send via Matrix bot",
+                            key="matrix_dm_message",
+                            placeholder="Enter your message here..."
+                        )
+                        
+                        if st.button("Send Direct Message", key="send_matrix_dm"):
+                            if dm_message:
+                                try:
+                                    # Import Matrix actions
+                                    from app.utils.matrix_actions import send_direct_message
+                                    
+                                    # Create a synchronous wrapper to send the direct message
+                                    def send_direct_message_sync(user_id, message):
+                                        try:
+                                            # Import necessary modules
+                                            import traceback
+                                            
+                                            # Check if this is a signal bridge user that might need special handling
+                                            is_signal_user = 'signal_' in user_id
+                                            if is_signal_user:
+                                                st.info(f"Sending message to Signal bridge user: {user_id}")
+                                                logging.info(f"Sending message to Signal bridge user: {user_id}")
+                                                
+                                                # Import the special Signal function
+                                                from app.utils.matrix_actions import send_signal_message
+                                                
+                                                # Use the special Signal function
+                                                result = send_signal_message(user_id, message)
+                                            else:
+                                                # For regular Matrix users, use the normal function
+                                                from app.utils.matrix_actions import _send_direct_message_async
+                                                result = run_async_safely(_send_direct_message_async, user_id, message)
+                                            
+                                            if result:
+                                                logging.info(f"Successfully sent message to {user_id}")
+                                                if is_signal_user:
+                                                    st.success(f"Message sent to Signal bridge user via Matrix. Note that the Signal user will receive the message in their Signal app, not in Matrix.")
+                                                else:
+                                                    st.success(f"Message sent to {user_id}")
+                                                return True
+                                            else:
+                                                logging.error(f"Failed to send message to {user_id}")
+                                                # If this is a signal user, add helpful message
+                                                if is_signal_user:
+                                                    st.error("Failed to send message to Signal bridge user. Signal bridge users require proper configuration in Matrix. Please check with your administrator.")
+                                                else:
+                                                    st.error(f"Failed to send message to {user_id}")
+                                                return False
+                                        except Exception as e:
+                                            logging.error(f"Error sending direct message: {str(e)}")
+                                            logging.error(traceback.format_exc())
+                                            return False
+                                    
+                                    # Send the message
+                                    success = send_direct_message_sync(matrix_user_id, dm_message)
+                                    
+                                    if success:
+                                        st.success(f"Message sent to {matrix_user_id}")
+                                    else:
+                                        st.error(f"Failed to send message to {matrix_user_id}")
+                                except Exception as e:
+                                    st.error(f"Error sending direct message: {str(e)}")
+                                    logging.error(f"Error sending direct message: {str(e)}")
+                                    logging.error(traceback.format_exc())
+                            else:
+                                st.warning("Please enter a message to send")
+                        
+                        # Add room recommendation section
+                        with st.expander("Room Recommendations"):
+                            # Input for user interests to match with rooms
+                            user_interests = st.text_input(
+                                "User Interests (comma separated):",
+                                key="matrix_user_interests",
+                                help="Enter user interests to match with room categories"
+                            )
+                            
+                            # Button to get room recommendations
+                            if st.button("Get Room Recommendations", key="get_room_recommendations"):
+                                if user_interests:
+                                    try:
+                                        # Import the room recommendation function
+                                        get_room_recommendations_sync = None
+                                        
+                                        # Create a synchronous wrapper for gpt_recommend_rooms
+                                        def get_room_recommendations_sync(user_id, interests):
+                                            try:
+                                                from app.utils.recommendation import gpt_recommend_rooms
+                                                
+                                                # Use the utility function to run the async function
+                                                return run_async_safely(gpt_recommend_rooms, user_id, interests)
+                                            except Exception as e:
+                                                logging.error(f"Error getting room recommendations: {str(e)}")
+                                                logging.error(traceback.format_exc())
+                                                return []
+                                        
+                                        # Get room recommendations
+                                        with st.spinner("Finding recommended rooms..."):
+                                            recommended_rooms = get_room_recommendations_sync(matrix_user_id, user_interests)
+                                            
+                                            # Store recommendations in session state
+                                            st.session_state['recommended_rooms'] = recommended_rooms
+                                            
+                                            # Display recommended rooms
+                                            if recommended_rooms:
+                                                st.success(f"Found {len(recommended_rooms)} recommended rooms")
+                                                
+                                                # Initialize selected rooms list in session state if not already present
+                                                if 'selected_rooms' not in st.session_state:
+                                                    st.session_state['selected_rooms'] = []
+                                                
+                                                # Select all checkbox
+                                                select_all = st.checkbox("Select All Rooms", key="select_all_rooms")
+                                                
+                                                # Create a container for room checkboxes
+                                                room_container = st.container()
+                                                
+                                                # Display rooms with checkboxes
+                                                with room_container:
+                                                    # Create a multiselect instead of individual checkboxes
+                                                    # This works better with Streamlit's state management
+                                                    room_options = [(f"{room_id}||{room_name}", f"{room_name} ({room_id})") for room_id, room_name in recommended_rooms]
+                                                    
+                                                    # Prepare default selection based on select_all
+                                                    default_selection = [option[0] for option in room_options] if select_all else []
+                                                    
+                                                    # Create the multiselect
+                                                    selected_options = st.multiselect(
+                                                        "Select rooms to invite to:",
+                                                        options=[option[0] for option in room_options],
+                                                        default=default_selection,
+                                                        format_func=lambda x: next((option[1] for option in room_options if option[0] == x), x),
+                                                        key="room_multiselect"
+                                                    )
+                                                    
+                                                    # Update selected_rooms in session state
+                                                    st.session_state['selected_rooms'] = []
+                                                    for option in selected_options:
+                                                        room_id, room_name = option.split("||", 1)
+                                                        st.session_state['selected_rooms'].append((room_id, room_name))
+                                                
+                                                # Button to invite to selected rooms
+                                                if st.button("Invite to Selected Rooms", key="invite_to_rooms"):
+                                                    if st.session_state.get('selected_rooms'):
+                                                        # Create invite function
+                                                        def invite_to_rooms_sync(user_id, rooms):
+                                                            from app.utils.matrix_actions import invite_to_matrix_room
+                                                            
+                                                            results = []
+                                                            
+                                                            try:
+                                                                # Invite to each room
+                                                                for room_id, room_name in rooms:
+                                                                    success = run_async_safely(invite_to_matrix_room, room_id, user_id)
+                                                                    results.append((room_id, room_name, success))
+                                                                
+                                                                return results
+                                                            except Exception as e:
+                                                                logging.error(f"Error inviting to rooms: {str(e)}")
+                                                                logging.error(traceback.format_exc())
+                                                                return []
+                                                        
+                                                        # Show the rooms we're inviting to
+                                                        st.write("Inviting to the following rooms:")
+                                                        for room_id, room_name in st.session_state['selected_rooms']:
+                                                            st.write(f"• {room_name} ({room_id})")
+                                                        
+                                                        # Invite to selected rooms
+                                                        with st.spinner("Inviting user to selected rooms..."):
+                                                            invite_results = invite_to_rooms_sync(matrix_user_id, st.session_state['selected_rooms'])
+                                                            
+                                                            # Display results
+                                                            if invite_results:
+                                                                import pandas as pd
+                                                                
+                                                                # Create results table
+                                                                results_data = []
+                                                                for room_id, room_name, success in invite_results:
+                                                                    results_data.append({
+                                                                        "Room Name": room_name,
+                                                                        "Room ID": room_id,
+                                                                        "Status": "✅ Success" if success else "❌ Failed"
+                                                                    })
+                                                                
+                                                                # Display as dataframe
+                                                                results_df = pd.DataFrame(results_data)
+                                                                st.dataframe(results_df)
+                                                                
+                                                                # Summary
+                                                                success_count = sum(1 for _, _, success in invite_results if success)
+                                                                st.success(f"Successfully invited to {success_count} out of {len(invite_results)} rooms")
+                                                    else:
+                                                        st.warning("Please select at least one room")
+                                            else:
+                                                st.warning("No recommended rooms found for these interests")
+                                    # Correctly indented except block (matches try)
+                                    except Exception as e:
+                                        st.error(f"Error getting room recommendations: {str(e)}")
+                                        logging.error(f"Error getting room recommendations: {str(e)}")
+                                        logging.error(traceback.format_exc())
+                                # Correctly indented else block (matches 'if user_interests:')
+                                else:
+                                    st.warning("Please enter interests to find matching rooms")
+            else:
+                # Fetching is done but no users were found
+                st.warning("No users found in the INDOC room. The room may be empty or there might be an issue with Matrix connectivity.")
+                
+                # Add button to retry
+                if st.button("Retry Fetching INDOC Users", key="retry_indoc_fetch"):
+                    # Reset flags to retry the fetch
+                    st.session_state['fetch_indoc_users_started'] = False
+                    st.session_state['fetch_indoc_users_finished'] = False
+                    if 'fetch_indoc_users_error' in st.session_state:
+                        del st.session_state['fetch_indoc_users_error']
+                    if 'indoc_users' in st.session_state:
+                        del st.session_state['indoc_users']
+                    st.rerun()
+                
+                # If there was an error, show it
+                if 'fetch_indoc_users_error' in st.session_state:
+                    st.error(f"Error fetching INDOC users: {st.session_state['fetch_indoc_users_error']}")
+        
+        elif 'fetch_indoc_users_started' in st.session_state and st.session_state['fetch_indoc_users_started']:
+            # Fetch is in progress, show spinner
+            with st.spinner("Fetching Matrix users from INDOC room..."):
+                st.info("Loading Matrix users from the INDOC room. This might take a moment depending on the room size and network connection.")
+                # We don't need to do anything here, just wait for the background thread to finish
+                # Add a check for errors that might have occurred during the fetch
+                if 'fetch_indoc_users_error' in st.session_state:
+                    st.error(f"An error occurred during background fetch: {st.session_state['fetch_indoc_users_error']}")
+                    # Optionally add a retry button here as well
+                    if st.button("Retry Background Fetch", key="retry_background_fetch"):
+                        st.session_state['fetch_indoc_users_started'] = False
+                        st.session_state['fetch_indoc_users_finished'] = False
+                        if 'fetch_indoc_users_error' in st.session_state:
+                            del st.session_state['fetch_indoc_users_error']
+                        if 'indoc_users' in st.session_state:
+                            del st.session_state['indoc_users']
+                        st.rerun()
+        
+        else:
+            # Not started and not finished - initial state or potential error
+            st.info("Preparing to fetch Matrix user data...")
+            
+            # Add button to manually trigger fetch
+            if st.button("Force Fetch INDOC Users", key="force_indoc_fetch"):
+                # Reset flags to retry the fetch
+                st.session_state['fetch_indoc_users_started'] = False
+                st.session_state['fetch_indoc_users_finished'] = False
+                if 'fetch_indoc_users_error' in st.session_state:
+                    del st.session_state['fetch_indoc_users_error']
+                if 'indoc_users' in st.session_state:
+                    del st.session_state['indoc_users']
+                st.rerun()
+    except Exception as e:
+        logging.error(f"Error fetching INDOC users: {str(e)}")
+        st.warning("Could not fetch Matrix users. The recommendation module might not be available.")
+    
+    # Parse data textarea with fix for widget key conflict
+    st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
+    st.subheader("Parse Text Data")
+    
     # Parse data textarea with fix for widget key conflict
     if 'parse_data_input_outside' in st.session_state:
         parse_data = st.text_area(
@@ -1021,12 +1417,192 @@ async def render_create_user_form():
                         if final_username != username:
                             logging.info(f"Username was modified for uniqueness: {username} -> {final_username}")
                         
+                        # Store Matrix connection if provided
+                        if st.session_state.get('matrix_user_id'):
+                            try:
+                                # Update user attributes to store the Matrix user ID connection
+                                matrix_user_id = st.session_state['matrix_user_id']
+                                db = next(get_db())
+                                user = db.query(User).filter(User.username == final_username).first()
+                                
+                                if user:
+                                    if not user.attributes:
+                                        user.attributes = {}
+                                    
+                                    if isinstance(user.attributes, dict):
+                                        user.attributes["matrix_user_id"] = matrix_user_id
+                                        db.commit()
+                                        logging.info(f"Connected {final_username} with Matrix user {matrix_user_id}")
+                                        
+                                        # Process interests for room recommendations
+                                        try:
+                                            from app.utils.recommendation import invite_user_to_recommended_rooms_sync
+                                            
+                                            # Get interests from the form
+                                            user_interests = interests if interests else ""
+                                            if not user_interests and organization:
+                                                user_interests = organization
+                                            
+                                            # Invite to recommended rooms based on interests
+                                            if user_interests:
+                                                logging.info(f"Inviting Matrix user {matrix_user_id} to rooms based on interests: {user_interests}")
+                                                with st.spinner(f"Inviting user to recommended rooms based on interests..."):
+                                                    # Get recommendations first to show what rooms would be recommended
+                                                    # Import the recommendation function
+                                                    from app.utils.recommendation import get_room_recommendations_sync
+                                                    
+                                                    # Show what rooms are being considered
+                                                    recommended_rooms = get_room_recommendations_sync(matrix_user_id, user_interests)
+                                                    if recommended_rooms:
+                                                        logging.info(f"Found {len(recommended_rooms)} recommended rooms based on interests: {user_interests}")
+                                                        for room_id, room_name in recommended_rooms:
+                                                            logging.info(f"Recommending room: {room_name} ({room_id})")
+                                                        
+                                                        # Proceed with invitations
+                                                        room_results = invite_user_to_recommended_rooms_sync(matrix_user_id, user_interests)
+                                                        successful_invites = sum(1 for _, _, success in room_results if success)
+                                                        if successful_invites > 0:
+                                                            st.success(f"Successfully invited user to {successful_invites} recommended rooms based on their interests")
+                                                            # Show which rooms the user was invited to
+                                                            for room_id, room_name, success in room_results:
+                                                                if success:
+                                                                    st.info(f"Invited to: {room_name}")
+                                                        else:
+                                                            st.warning("Could not invite user to any recommended rooms. Please check the Matrix server connection.")
+                                                        logging.info(f"Invited {matrix_user_id} to {successful_invites} rooms based on interests")
+                                                    else:
+                                                        st.warning(f"No rooms found matching interests: {user_interests}")
+                                                        logging.warning(f"No rooms found matching interests: {user_interests}")
+                                            else:
+                                                logging.info("No interests specified for room recommendations.")
+                                        except Exception as e:
+                                            logging.error(f"Error inviting Matrix user to rooms based on interests: {str(e)}")
+                                            logging.error(traceback.format_exc())
+                                            st.error(f"Error inviting to recommended rooms: {str(e)}")
+                            except Exception as e:
+                                logging.error(f"Error connecting with Matrix user: {str(e)}")
+                                logging.error(traceback.format_exc())
+                        
                         create_user_message(
                             new_username=final_username,
                             temp_password=result.get('temp_password', 'unknown'),
                             discourse_post_url=discourse_post_url,
                             password_reset_successful=result.get('password_reset', False)
                         )
+                        
+                        # Add a section to manually connect with Matrix if not already done
+                        if not st.session_state.get('matrix_user_id'):
+                            st.markdown("---")
+                            st.subheader("Connect with Matrix User")
+                            st.info(f"User {final_username} has been created! You can now connect them with a Matrix user.")
+                            
+                            # Button to fetch INDOC users
+                            if st.button("Connect with Matrix User", key="connect_matrix_after_create"):
+                                try:
+                                    from app.utils.recommendation import get_entrance_room_users_sync
+                                    
+                                    with st.spinner("Fetching Matrix users from INDOC room..."):
+                                        # Create a new event loop for this operation
+                                        import asyncio
+                                        import nest_asyncio
+                                        
+                                        # Create a new event loop
+                                        loop = asyncio.new_event_loop()
+                                        asyncio.set_event_loop(loop)
+                                        
+                                        # Apply nest_asyncio to allow nested event loops
+                                        nest_asyncio.apply(loop)
+                                        
+                                        try:
+                                            indoc_users = get_entrance_room_users_sync()
+                                            
+                                            if indoc_users:
+                                                # Format Matrix users for selection
+                                                matrix_user_options = []
+                                                for user in indoc_users:
+                                                    user_id = user['user_id']
+                                                    display_name = user['display_name']
+                                                    is_admin = user.get('is_admin', False)
+                                                    
+                                                    # Add admin label if applicable
+                                                    display_text = f"{user_id.split(':')[0].lstrip('@')} ({display_name})"
+                                                    if is_admin:
+                                                        display_text += " [Admin]"
+                                                        
+                                                    matrix_user_options.append((user_id, display_text))
+                                                
+                                                # Show the user selection dropdown
+                                                if matrix_user_options:
+                                                    selected_user_id = st.selectbox(
+                                                        "Select Matrix User to Connect",
+                                                        options=[user[0] for user in matrix_user_options],
+                                                        format_func=lambda x: next((user[1] for user in matrix_user_options if user[0] == x), ""),
+                                                        key="manual_matrix_user_select"
+                                                    )
+                                                    
+                                                    if selected_user_id:
+                                                        if st.button("Connect and Recommend Rooms", key="connect_and_recommend"):
+                                                            # Update user attributes to store the Matrix user ID connection
+                                                            db = next(get_db())
+                                                            user = db.query(User).filter(User.username == final_username).first()
+                                                            
+                                                            if user:
+                                                                if not user.attributes:
+                                                                    user.attributes = {}
+                                                                
+                                                                if isinstance(user.attributes, dict):
+                                                                    user.attributes["matrix_user_id"] = selected_user_id
+                                                                    db.commit()
+                                                                    st.success(f"Connected {final_username} with Matrix user {selected_user_id}")
+                                                                    
+                                                                    # Recommend rooms based on interests
+                                                                    user_interests = interests if interests else ""
+                                                                    if user_interests:
+                                                                        from app.utils.recommendation import get_room_recommendations_sync
+                                                                        
+                                                                        with st.spinner("Finding room recommendations..."):
+                                                                            recommended_rooms = get_room_recommendations_sync(selected_user_id, user_interests)
+                                                                            
+                                                                            if recommended_rooms:
+                                                                                st.success(f"Found {len(recommended_rooms)} recommended rooms")
+                                                                                
+                                                                                # Display rooms with checkboxes for selection
+                                                                                room_selections = {}
+                                                                                for room_id, room_name in recommended_rooms:
+                                                                                    room_selections[room_id] = st.checkbox(f"{room_name} ({room_id})", value=True, key=f"room_{room_id}")
+                                                                                
+                                                                                # Button to invite to selected rooms
+                                                                                if st.button("Invite to Selected Rooms", key="invite_to_selected"):
+                                                                                    from app.utils.matrix_actions import invite_to_matrix_room
+                                                                                    
+                                                                                    selected_rooms = [(room_id, room_name) for room_id, room_name in recommended_rooms if room_selections.get(room_id, False)]
+                                                                                    
+                                                                                    if selected_rooms:
+                                                                                        with st.spinner("Inviting to rooms..."):
+                                                                                            success_count = 0
+                                                                                            for room_id, room_name in selected_rooms:
+                                                                                                if run_async_safely(invite_to_matrix_room, room_id, selected_user_id):
+                                                                                                    success_count += 1
+                                                                                                    st.info(f"✅ Invited to {room_name}")
+                                                                                                else:
+                                                                                                    st.warning(f"❌ Failed to invite to {room_name}")
+                                                                                            
+                                                                                            st.success(f"Successfully invited to {success_count} out of {len(selected_rooms)} rooms")
+                                                                                    else:
+                                                                                        st.warning("No rooms selected")
+                                                                            else:
+                                                                                st.warning(f"No rooms found matching interests: {user_interests}")
+                                                            else:
+                                                                st.error(f"User {final_username} not found in database")
+                                            else:
+                                                st.warning("No users found in the INDOC room")
+                                        finally:
+                                            # Always close the loop
+                                            loop.close()
+                                except Exception as e:
+                                    st.error(f"Error fetching Matrix users: {str(e)}")
+                                    logging.error(f"Error in manual Matrix connection: {str(e)}")
+                                    logging.error(traceback.format_exc())
                         
                         # Store success flag but DON'T rerun immediately
                         st.session_state['user_created_successfully'] = True

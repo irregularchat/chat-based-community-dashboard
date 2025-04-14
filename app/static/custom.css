@@ -20,8 +20,29 @@
 }
 
 /* Dark theme colors */
+.dark-theme {
+    --background-color: #121212;
+    --text-color: #e0e0e0;
+    --primary-color: #5c9aff;
+    --primary-hover: #7eadff;
+    --secondary-color: #6abf69;
+    --secondary-hover: #8cd68a;
+    --border-color: #495057;
+    --card-bg: #1e1e1e;
+    --card-shadow: 0 2px 10px rgba(0,0,0,0.3);
+    --success-color: #4caf50;
+    --error-color: #f44336;
+    --warning-color: #ffeb3b;
+    --info-color: #29b6f6;
+    --muted-color: #adb5bd;
+    --input-bg: #2d2d2d;
+    --sidebar-bg: #1a1a1a;
+    --sidebar-hover: #333333;
+}
+
+/* Also keep the media query for system preferences, but with lower priority */
 @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not(.light-theme):not(.dark-theme) {
         --background-color: #121212;
         --text-color: #e0e0e0;
         --primary-color: #5c9aff;
@@ -40,6 +61,83 @@
         --sidebar-bg: #1a1a1a;
         --sidebar-hover: #333333;
     }
+}
+
+/* Theme toggle switch */
+.theme-toggle-container {
+    position: fixed;
+    top: 10px;
+    right: 20px;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+}
+
+.theme-toggle {
+    position: relative;
+    width: 60px;
+    height: 30px;
+    margin: 0;
+    cursor: pointer;
+}
+
+.theme-toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.theme-slider {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--card-bg);
+    border: 1px solid var(--border-color);
+    transition: .4s;
+    border-radius: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px;
+}
+
+.theme-slider:before {
+    position: absolute;
+    content: "";
+    height: 22px;
+    width: 22px;
+    left: 4px;
+    bottom: 3px;
+    background-color: var(--primary-color);
+    transition: .4s;
+    border-radius: 50%;
+    z-index: 2;
+}
+
+.theme-toggle input:checked + .theme-slider:before {
+    transform: translateX(30px);
+    background-color: #ffd700; /* Gold for sun */
+}
+
+.theme-toggle input:focus + .theme-slider {
+    box-shadow: 0 0 1px var(--primary-color);
+}
+
+/* Icons */
+.sun-icon, .moon-icon {
+    color: var(--text-color);
+    font-size: 14px;
+    z-index: 1;
+}
+
+.sun-icon {
+    margin-right: 5px;
+}
+
+.moon-icon {
+    margin-left: 5px;
 }
 
 /* Base styles for the app */

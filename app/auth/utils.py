@@ -40,7 +40,7 @@ def generate_username_with_random_word(first_name):
         first_name (str): The first name to use in the username
         
     Returns:
-        str: A username in the format first-randomword
+        str: A username in the format first-randomwordDD where DD is a random 2-digit number
     """
     # Clean up the first name
     if not first_name:
@@ -60,8 +60,11 @@ def generate_username_with_random_word(first_name):
     # Generate a random word using xkcdpass
     random_word = xp.generate_xkcdpassword(wordlist, numwords=1, delimiter="")
     
-    # Combine first name and random word
-    username = f"{first_name}-{random_word}"
+    # Generate a random 2-digit number (10-99)
+    random_suffix = random.randint(10, 99)
+    
+    # Combine first name, random word, and random suffix
+    username = f"{first_name}-{random_word}{random_suffix}"
     
     return username
 

@@ -54,8 +54,6 @@ def initialize_session_state():
         st.session_state['is_authenticated'] = False
     if 'is_admin' not in st.session_state:
         st.session_state['is_admin'] = False
-    if 'current_page' not in st.session_state:
-        st.session_state['current_page'] = 'Create User'
 
 def setup_page_config():
     """Set up the Streamlit page configuration"""
@@ -70,9 +68,6 @@ async def render_sidebar():
     """Render the sidebar navigation"""
     # Use synchronous Streamlit components
     st.sidebar.title("Navigation")
-    
-    # Get the current page from session state or default to appropriate page
-    current_page = st.session_state.get('current_page', 'Create User')
     
     # Define pages based on authentication status and admin rights
     is_authenticated = st.session_state.get('is_authenticated', False)
@@ -114,10 +109,8 @@ async def render_sidebar():
         # Neither Settings nor Prompts Manager are available to non-authenticated users
         page_options = ["Create User"]
     
-    # If current_page is not in available options, reset to the first available option
-    if current_page not in page_options and page_options:
-        current_page = page_options[0]
-        st.session_state['current_page'] = current_page
+    # Default page is the first one in the available pages
+    default_page = page_options[0] if page_options else "Create User"
     
     # Check for sidebar_selection query parameter
     selected_index = 0  # Default index
@@ -129,17 +122,11 @@ async def render_sidebar():
             # Make sure the index is valid
             if 0 <= selection_index < len(page_options):
                 selected_index = selection_index
-                # Set the current page in session state based on the index
-                current_page = page_options[selected_index]
-                
                 # Clear the sidebar_selection parameter to prevent redirect loops
                 st.query_params.clear()
         except (ValueError, TypeError):
             # Handle invalid index values
             pass
-    else:
-        # Use the current page's index if it's in page_options
-        selected_index = page_options.index(current_page) if current_page in page_options else 0
     
     # Create the page selection dropdown
     if page_options:
@@ -152,7 +139,6 @@ async def render_sidebar():
     else:
         # Fallback for empty page_options (shouldn't happen)
         selected_page = "Create User"
-        st.session_state['current_page'] = selected_page
     
     # Show login/logout in sidebar
     st.sidebar.markdown("---")
@@ -263,22 +249,13 @@ async def render_main_content():
         # Continue rendering the normal dashboard after short delay
         time.sleep(0.5)
         
-        # Clear the auth params but preserve current page
-        current_page = st.session_state.get('current_page', 'Create User')
+        # Clear the auth params
+        clean_params = {k: v for k, v in query_params.items() 
+                       if k not in ['auth_success', 'username', 'auth_method', 'admin']}
+        st.query_params.update(clean_params)
         
-        # Instead of directly modifying st.session_state['current_page'], use query params for redirection
-        if is_admin:
-            # Set redirect query param instead of modifying session state directly
-            st.query_params.clear()
-            st.query_params['redirect'] = 'admin_dashboard'
-        else:
-            # Just clear query params and preserve current page
-            st.query_params.clear()
+        # After login processing, continue with rendering the main content
         
-        st.rerun()
-        
-        return
-    
     # Check for special routes next
     if st.query_params.get('page') == 'test_login':
         # Import and render the test login page
@@ -838,13 +815,13 @@ async def render_main_content():
         
         return
     
-    # Get the current page from session state
-    page = st.session_state.get('current_page', 'Create User')
+    # Get the current page directly from the widget
+    current_page = st.session_state.get('current_page', 'Create User')
     is_admin = st.session_state.get('is_admin', False)
     is_authenticated = st.session_state.get('is_authenticated', False)
     
     # Handle unauthenticated users
-    if page in ["Prompts Manager", "Settings"] and not is_authenticated:
+    if current_page in ["Prompts Manager", "Settings"] and not is_authenticated:
         # Require authentication for sensitive pages
         from app.ui.common import display_login_button
         st.markdown("## Authentication Required")
@@ -853,7 +830,7 @@ async def render_main_content():
         return
     
     # Global authentication check for most pages (except Create User)
-    if not is_authenticated and page != "Create User":
+    if not is_authenticated and current_page != "Create User":
         # Show login page instead of the requested page
         from app.ui.common import display_login_button
         st.markdown("## Welcome to the Community Dashboard")
@@ -868,7 +845,7 @@ async def render_main_content():
     
     try:
         # Import UI components only when needed to avoid circular imports
-        if page == "Create User":
+        if current_page == "Create User":
             # Protect with admin check
             if st.session_state.get('is_admin', False):
                 await render_create_user_form()
@@ -876,19 +853,19 @@ async def render_main_content():
                 st.error("You need administrator privileges to access this page.")
                 st.info("Please contact an administrator if you need to create a user account.")
         
-        elif page == "Create Invite":
+        elif current_page == "Create Invite":
             await render_invite_form()
             
-        elif page == "List & Manage Users":
+        elif current_page == "List & Manage Users":
             await display_user_list()
             
-        elif page == "Matrix Messages and Rooms":
+        elif current_page == "Matrix Messages and Rooms":
             await render_matrix_messaging_page()
             
-        elif page == "Signal Association":
+        elif current_page == "Signal Association":
             render_signal_association()
             
-        elif page == "Settings":
+        elif current_page == "Settings":
             # Protect with admin check
             if is_admin:
                 from app.pages.settings import render_settings_page
@@ -896,7 +873,7 @@ async def render_main_content():
             else:
                 st.error("You need administrator privileges to access this page.")
                 
-        elif page == "Prompts Manager":
+        elif current_page == "Prompts Manager":
             # Additional authentication check to ensure no unauthenticated access
             if is_authenticated:
                 from app.pages.prompts_manager import render_prompts_manager
@@ -907,14 +884,14 @@ async def render_main_content():
                 st.markdown("You must login to access the Prompts Manager.")
                 display_login_button(location="main")
             
-        elif page == "Admin Dashboard":
+        elif current_page == "Admin Dashboard":
             # Protect with admin check
             if st.session_state.get('is_admin', False):
                 render_admin_dashboard()
             else:
                 st.error("You need administrator privileges to access this page.")
 
-        elif page == "Test SMTP":
+        elif current_page == "Test SMTP":
             # Protect with admin check
             if st.session_state.get('is_admin', False):
                 await test_smtp_connection()

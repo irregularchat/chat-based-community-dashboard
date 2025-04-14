@@ -161,10 +161,15 @@ def parse_and_rerun():
                 st.session_state["_parsed_interests"] = interests
                 logging.info(f"Set _parsed_interests to: '{interests}'")
             
-            # Also keep the combined intro for backward compatibility
-            combined_intro = f"{org}\n\nInterests: {interests}" if interests else org
-            st.session_state["_parsed_intro"] = combined_intro
-            logging.info(f"Set _parsed_intro to organization: '{org}' and interests: '{interests}'")
+            # Set the intro field to only contain actual introduction text if any
+            intro_text = intro_data.get("text", "")
+            if intro_text:
+                st.session_state["_parsed_intro"] = intro_text
+                logging.info(f"Set _parsed_intro to: '{intro_text}'")
+        elif "intro" in parsed and isinstance(parsed["intro"], str):
+            # If intro is just a string, use it directly
+            st.session_state["_parsed_intro"] = parsed["intro"]
+            logging.info(f"Set _parsed_intro to string value: '{parsed['intro']}'")
         
         # Handle additional fields if present in parsed data
         if "signal_username" in parsed:
@@ -701,6 +706,7 @@ async def render_create_user_form():
                 organization = st.text_input(
                     "Organization",
                     key="organization_input_outside",
+                    on_change=on_organization_change,
                     help="User's organization or company (optional)",
                     placeholder="Company or organization name"
                 )
@@ -709,6 +715,7 @@ async def render_create_user_form():
                     "Organization",
                     value=st.session_state.get('organization_input', ""),
                     key="organization_input_outside",
+                    on_change=on_organization_change,
                     help="User's organization or company (optional)",
                     placeholder="Company or organization name"
                 )
@@ -719,6 +726,7 @@ async def render_create_user_form():
                 interests = st.text_input(
                     "Interests",
                     key="interests_input_outside",
+                    on_change=on_interests_change,
                     help="User's interests or areas of expertise (optional)",
                     placeholder="AI, Security, Development, etc."
                 )
@@ -727,6 +735,7 @@ async def render_create_user_form():
                     "Interests",
                     value=st.session_state.get('interests_input', ""),
                     key="interests_input_outside",
+                    on_change=on_interests_change,
                     help="User's interests or areas of expertise (optional)",
                     placeholder="AI, Security, Development, etc."
                 )
@@ -831,8 +840,8 @@ async def render_create_user_form():
                 intro_text = st.text_area(
                     "User Introduction",
                     key="intro_text_input_outside",
-                    placeholder="A few sentences about the new user",
-                    help="Brief introduction for the new user",
+                    placeholder="A few sentences about the new user (Organization and Interests are handled separately)",
+                    help="Brief introduction for the new user. Organization and Interests information will be added automatically from their respective fields.",
                     height=100
                 )
             else:
@@ -840,10 +849,26 @@ async def render_create_user_form():
                     "User Introduction",
                     value=st.session_state.get('intro_text_input', ""),
                     key="intro_text_input_outside",
-                    placeholder="A few sentences about the new user",
-                    help="Brief introduction for the new user",
+                    placeholder="A few sentences about the new user (Organization and Interests are handled separately)",
+                    help="Brief introduction for the new user. Organization and Interests information will be added automatically from their respective fields.",
                     height=100
                 )
+            
+            # Add explanatory text
+            st.markdown("""
+            <div style="font-size:0.8rem; color:#6c757d;">
+            Organization and Interests entered above will be automatically included in the user's profile and introduction post.
+            No need to repeat them here.
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Add Discourse checkbox
+            create_discourse_post = st.checkbox(
+                "Create Discourse introduction post",
+                value=True,
+                key="create_discourse_post",
+                help="Create an introduction post on the Discourse forum for this user"
+            )
         
         # Data parsing section
         st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
@@ -951,7 +976,9 @@ async def render_create_user_form():
                             last_name=last_name,
                             attributes=user_data.get("attributes", {}),
                             groups=selected_groups,
-                            desired_username=username
+                            desired_username=username,
+                            reset_password=True,
+                            should_create_discourse_post=st.session_state.get('create_discourse_post', True)
                         )
                         
                         # Handle the result
@@ -2402,3 +2429,17 @@ def handle_form_submission(action: str, username: str, **kwargs) -> bool:
     except Exception as e:
         logging.error(f"Error handling form submission: {e}")
         return False
+
+def on_organization_change():
+    """Handle changes to the organization field to avoid auto-filling introduction"""
+    if 'organization_input_outside' in st.session_state:
+        # Update the internal value
+        st.session_state['organization_input'] = st.session_state['organization_input_outside']
+        logging.info(f"Organization changed to: {st.session_state['organization_input_outside']}")
+        
+def on_interests_change():
+    """Handle changes to the interests field to avoid auto-filling introduction"""
+    if 'interests_input_outside' in st.session_state:
+        # Update the internal value
+        st.session_state['interests_input'] = st.session_state['interests_input_outside']
+        logging.info(f"Interests changed to: {st.session_state['interests_input_outside']}")

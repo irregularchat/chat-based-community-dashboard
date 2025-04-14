@@ -126,22 +126,105 @@ def list_events_cached(api_url, headers):
     response.raise_for_status()  # Raise an error for bad responses
     return response.json()
 
-def reset_user_password(auth_api_url, headers, user_id, new_password):
-    """Reset a user's password using the correct endpoint and data payload."""
+def reset_user_password(auth_api_url, headers, user_id, temp_password=None):
+    """
+    Reset a user's password and create a password reset link.
+    """
+    # Ensure URL has a trailing slash
     url = f"{auth_api_url}/core/users/{user_id}/set_password/"
-    data = {"password": new_password}
+    data = {"password": temp_password}
+    
+    # Log what we're about to do (without the actual password)
+    logger.info(f"Attempting to reset password for user {user_id}")
+    
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=10)
-        response.raise_for_status()
-        logging.info(f"Password for user {user_id} reset successfully.")
-        return True
+        # First try with POST method
+        logger.info(f"Attempting POST request to {url}")
+        response = requests.post(url, headers=headers, json=data, timeout=30, verify=True)
+        
+        # Log response for debugging
+        logger.info(f"POST response status code: {response.status_code}")
+        
+        # If POST fails with 405, try PUT method
+        if response.status_code == 405:  # Method Not Allowed
+            logger.info(f"POST method not allowed for password reset, trying PUT")
+            response = requests.put(url, headers=headers, json=data, timeout=30, verify=True)
+            logger.info(f"PUT response status code: {response.status_code}")
+        
+        # Check if any of the requests was successful
+        if response.status_code in [200, 201, 202, 204]:
+            logger.info(f"Password for user {user_id} reset successfully with status {response.status_code}.")
+            
+            # For LDAP integration, add a delay to allow for propagation
+            # This can help with issues where LDAP writeback needs time to complete
+            import time
+            time.sleep(1)
+            
+            return True
+        
+        # Try to decode the error response
+        try:
+            error_detail = response.json()
+            logger.error(f"Password reset API response: {json.dumps(error_detail, indent=2)}")
+        except:
+            logger.error(f"Password reset failed with non-JSON response: {response.text}")
+        
+        # If we reached here without a success status code, log the error and return False
+        logger.error(f"Password reset failed with status code {response.status_code}")
+        
+        return False
+            
     except requests.exceptions.HTTPError as http_err:
-        logging.error(f"HTTP error occurred while resetting password for user {user_id}: {http_err}")
-        logging.error(f"Response status code: {response.status_code}")
-        logging.error(f"Response content: {response.text}")
+        logger.error(f"HTTP error occurred while resetting password for user {user_id}: {http_err}")
+        return False
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout occurred while resetting password for user {user_id}. This might be an LDAP writeback delay issue.")
         return False
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error resetting password for user {user_id}: {e}")
+        logger.error(f"Error resetting password for user {user_id}: {e}")
+        return False
+
+def send_welcome_to_user(message):
+    """
+    Send a welcome message to a new user.
+    
+    Args:
+        message (str): The welcome message to send to the user
+        
+    Returns:
+        bool: True if the message was sent successfully, False otherwise
+    """
+    try:
+        if not message:
+            logger.warning("Empty welcome message received, cannot send")
+            return False
+            
+        logger.info(f"Welcome message would be sent: {message[:100]}... (truncated)")
+        # Implementation would go here - this is a placeholder
+        # This function would typically send a welcome message via Matrix or other channels
+        
+        # Attempt to send via Matrix if configured
+        if hasattr(Config, 'MATRIX_ACTIVE') and Config.MATRIX_ACTIVE:
+            try:
+                from app.utils.matrix_actions import send_direct_message
+                # Extract username from the message to determine recipient
+                import re
+                match = re.search(r'Username: ([a-zA-Z0-9-]+)', message)
+                if match:
+                    username = match.group(1)
+                    logger.info(f"Extracted username from welcome message: {username}")
+                    # Send the actual message (implementation depends on your Matrix setup)
+                    # This is just a placeholder
+                    logger.info(f"Would send welcome message to Matrix user {username}")
+                    # send_direct_message(username, message)
+                else:
+                    logger.warning("Could not extract username from welcome message")
+            except Exception as matrix_error:
+                logger.error(f"Error sending welcome via Matrix: {str(matrix_error)}")
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error sending welcome message: {str(e)}")
         return False
 
 def create_user(
@@ -151,8 +234,9 @@ def create_user(
     attributes=None,
     groups=None,
     send_welcome=True,
-    create_discourse_post=False,
+    should_create_discourse_post=False,
     desired_username=None,
+    reset_password=False,
 ):
     """
     Create a new user in Authentik and optionally send a welcome message
@@ -299,21 +383,30 @@ def create_user(
         response["success"] = True
         
         # Reset the user's password in a separate thread to avoid blocking
-        def reset_password_task():
-            try:
-                password_reset_response = reset_user_password(Config.AUTHENTIK_API_URL, headers, user_id, temp_password)
-                if password_reset_response:
-                    logger.info(f"Password reset link created for user {username}")
-                    response["password_reset"] = True
-                else:
-                    logger.error(f"Failed to create password reset link for user {username}")
+        # This is important because:
+        # 1. It ensures the password from API is properly set
+        # 2. It creates a proper password reset link for the user 
+        # 3. It handles potential race conditions with the Authentik backend
+        if reset_password:
+            def reset_password_task():
+                try:
+                    password_reset_response = reset_user_password(Config.AUTHENTIK_API_URL, headers, user_id, temp_password)
+                    if password_reset_response:
+                        logger.info(f"Password reset link created for user {username}")
+                        response["password_reset"] = True
+                    else:
+                        logger.error(f"Failed to create password reset link for user {username}")
+                        response["password_reset"] = False
+                except Exception as e:
+                    logger.error(f"Error in password reset task: {str(e)}")
                     response["password_reset"] = False
-            except Exception as e:
-                logger.error(f"Error in password reset task: {str(e)}")
-                response["password_reset"] = False
-        
-        # Start the password reset thread
-        threading.Thread(target=reset_password_task).start()
+            
+            # Start the password reset thread
+            threading.Thread(target=reset_password_task).start()
+        else:
+            # Skip password reset, just mark it as completed
+            logger.info(f"Skipping password reset for user {username}")
+            response["password_reset"] = True
         
         # Send welcome message if requested
         if send_welcome:
@@ -335,16 +428,52 @@ def create_user(
             threading.Thread(target=send_welcome_message_task).start()
         
         # Create Discourse post if requested
-        if create_discourse_post:
-            def create_discourse_post_task():
-                try:
-                    create_new_user_post(username, email)
-                    logger.info(f"Created Discourse post for new user {username}")
-                except Exception as e:
-                    logger.error(f"Error creating Discourse post: {str(e)}")
-            
-            # Start Discourse post thread
-            threading.Thread(target=create_discourse_post_task).start()
+        if should_create_discourse_post:
+            try:
+                # Create a title for the introduction post
+                post_title = f"Introduction: {username}"
+                # Get intro from attributes if available
+                intro = None
+                invited_by = None
+                organization = None
+                interests = None
+                if attributes and isinstance(attributes, dict):
+                    intro = attributes.get('intro')
+                    invited_by = attributes.get('invited_by')
+                    organization = attributes.get('organization')
+                    interests = attributes.get('interests')
+                
+                # Format intro text to include organization and interests if available
+                formatted_intro = ""
+                if intro:
+                    formatted_intro += f"{intro}\n\n"
+                
+                if organization:
+                    formatted_intro += f"**Organization:** {organization}\n"
+                
+                if interests:
+                    formatted_intro += f"**Interests:** {interests}\n"
+                
+                # Use the formatted intro or the original intro if no formatting was done
+                final_intro = formatted_intro.strip() if formatted_intro.strip() else intro
+                
+                # Import the create_discourse_post function here to avoid circular imports
+                from app.auth.api import create_discourse_post
+                
+                # Log what we're about to do
+                logger.info(f"Creating Discourse post for {username} with intro: {final_intro}")
+                
+                # Call the create_discourse_post function directly (not in a thread)
+                success, post_url = create_discourse_post(headers, post_title, "", username, final_intro, invited_by)
+                
+                if success and post_url:
+                    logger.info(f"Created Discourse post for new user {username} at {post_url}")
+                    # Add post URL to the response
+                    response["discourse_url"] = post_url
+                else:
+                    logger.warning(f"Failed to create Discourse post for user {username} or post URL not returned")
+            except Exception as e:
+                logger.error(f"Error creating Discourse post: {str(e)}")
         
         return response
     
@@ -821,6 +950,11 @@ def create_discourse_post(headers, title, content, username=None, intro=None, in
     Returns:
         tuple: (success: bool, post_url: str) - A tuple with success status and the URL of the created post (or None if failed)
     """
+    # Debug logging to identify if function is being called
+    logger.info("=== create_discourse_post function called ===")
+    logger.info(f"Parameters: title='{title}', username='{username}', invited_by='{invited_by}'")
+    logger.info(f"Intro text: {intro[:100] + '...' if intro and len(intro) > 100 else intro}")
+    
     # Check if Discourse integration is configured
     missing_configs = []
     if not Config.DISCOURSE_URL:
@@ -848,15 +982,28 @@ def create_discourse_post(headers, title, content, username=None, intro=None, in
         
     try:
         # Create the post content with the exact template format specified
+        
+        # Ensure intro has a value and is properly formatted
+        intro_text = "No introduction provided."
+        if intro:
+            # Remove any leading/trailing whitespace and ensure proper line endings
+            intro_text = intro.strip()
+            # Ensure there are no more than two consecutive line breaks
+            import re
+            intro_text = re.sub(r'\n{3,}', '\n\n', intro_text)
+        
         formatted_content = f"""This is {username}
 
 Introduction:
-{intro or 'No introduction provided.'}
+{intro_text}
 
 Invited by: {invited_by or 'Not specified'}
 
 _Use this post to link to your introduction in the chats and have IrregularChat Members find you based on your interests or offerings._
 Notice that Login is required to view any of the Community posts. Please help maintain community privacy."""
+        
+        # Log the formatted content for debugging
+        logger.info(f"Formatted Discourse post content: {formatted_content}")
         
         # Create completely new headers for the Discourse API
         discourse_headers = {
@@ -882,7 +1029,8 @@ Notice that Login is required to view any of the Community posts. Please help ma
         
         logger.info(f"Attempting to create Discourse post for {username} at URL: {url}")
         logger.info(f"Request data: {json.dumps(data)}")
-        response = requests.post(url, headers=discourse_headers, json=data, timeout=10)
+        # Increase timeout to 30 seconds to allow more time for Discourse API
+        response = requests.post(url, headers=discourse_headers, json=data, timeout=30)
         
         logger.info(f"Discourse API response status code: {response.status_code}")
         

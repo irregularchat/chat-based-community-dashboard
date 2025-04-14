@@ -171,9 +171,6 @@ def test_reset_user_password_failure():
             "detail": "Invalid user ID"
         }
         
-        # The function may still return True due to the error handling
-        # Setup to catch the logging instead
-        
         # Call function
         api_url = "https://api.example.com"
         headers = {"Authorization": "Bearer token"}
@@ -182,11 +179,51 @@ def test_reset_user_password_failure():
         
         result = reset_user_password(api_url, headers, user_id, new_password)
         
+        # Verify result
+        assert result is False
+        
         # Verify API was called with correct parameters
         mock_post.assert_called_once()
         args, kwargs = mock_post.call_args
         assert f"{api_url}/core/users/{user_id}/set_password/" in args[0]
         assert kwargs['json']['password'] == new_password
+
+def test_reset_user_password_method_not_allowed():
+    """Test resetting a user's password when POST is not allowed but PUT works"""
+    with patch('app.auth.api.requests.post') as mock_post, \
+         patch('app.auth.api.requests.put') as mock_put, \
+         patch('app.auth.api.logger') as mock_logger:
+        # Setup mocks for 405 on POST but success on PUT
+        mock_post.return_value.status_code = 405  # Method Not Allowed
+        mock_put.return_value.status_code = 200
+        mock_put.return_value.json.return_value = {
+            "success": True
+        }
+        
+        # Call function
+        api_url = "https://api.example.com"
+        headers = {"Authorization": "Bearer token"}
+        user_id = "123"
+        new_password = "newpassword123"
+        
+        result = reset_user_password(api_url, headers, user_id, new_password)
+        
+        # Verify result
+        assert result is True
+        
+        # Verify both methods were called with correct parameters
+        mock_post.assert_called_once()
+        post_args, post_kwargs = mock_post.call_args
+        assert f"{api_url}/core/users/{user_id}/set_password/" in post_args[0]
+        assert post_kwargs['json']['password'] == new_password
+        
+        mock_put.assert_called_once()
+        put_args, put_kwargs = mock_put.call_args
+        assert f"{api_url}/core/users/{user_id}/set_password/" in put_args[0]
+        assert put_kwargs['json']['password'] == new_password
+        
+        # Verify log message about trying PUT method
+        mock_logger.info.assert_any_call("POST method not allowed for password reset, trying PUT")
 
 def test_generate_secure_passphrase():
     """Test generating a secure passphrase"""
@@ -257,30 +294,62 @@ def test_create_user_with_discourse_post():
     """Test the create_user function's handling of Discourse post creation"""
     with patch('app.auth.api.requests.post') as mock_post, \
          patch('app.auth.api.reset_user_password', return_value=True) as mock_reset, \
-         patch('app.auth.api.create_discourse_post') as mock_discourse, \
-         patch('app.auth.api.session.get') as mock_get, \
-         patch('app.auth.api.threading.Thread') as mock_thread:
+         patch('app.auth.api.send_welcome_to_user') as mock_welcome, \
+         patch('app.auth.api.create_discourse_post', return_value=(True, "https://forum.example.com/t/123")) as mock_discourse:
 
         # Mock user creation response
         mock_post.return_value.json.return_value = {"pk": "123", "username": "testuser"}
         mock_post.return_value.status_code = 201
-
-        # Call create_user with create_discourse_post=True
+        
+        # Call create_user with should_create_discourse_post=True
         result = create_user(
             email="test@example.com",
             first_name="Test",
             last_name="User",
             desired_username="testuser",
-            attributes={"intro": "This is my introduction"},
-            create_discourse_post=True
+            should_create_discourse_post=True
         )
 
-        # Verify the result
+        # Verify the result has all expected fields
         assert result["success"] is True
         assert result["user_id"] == "123"
+        assert result["username"] == "testuser"
         
-        # Check that a Thread was started for the Discourse post creation
-        mock_thread.assert_called()
+        # Verify that the discourse post URL is included in the result
+        assert "discourse_url" in result
+        assert result["discourse_url"] == "https://forum.example.com/t/123"
         
-        # Since the discourse post is created in a thread, we just check that the result has the expected fields
-        assert result["username"] == "testuser" 
+        # Verify that the create_discourse_post function was called
+        mock_discourse.assert_called_once()
+
+def test_discourse_url_included_in_response():
+    """Test that the discourse_url is properly included in the user creation response."""
+    with patch('app.auth.api.requests.post') as mock_post, \
+         patch('app.auth.api.reset_user_password', return_value=True) as mock_reset, \
+         patch('app.auth.api.send_welcome_to_user') as mock_welcome, \
+         patch('app.auth.api.create_discourse_post', return_value=(True, "https://forum.example.com/t/123")) as mock_discourse:
+
+        # Mock user creation response
+        mock_post.return_value.json.return_value = {"pk": "123", "username": "testuser"}
+        mock_post.return_value.status_code = 201
+        
+        # Call create_user with should_create_discourse_post=True
+        result = create_user(
+            email="test@example.com",
+            first_name="Test",
+            last_name="User",
+            desired_username="testuser",
+            should_create_discourse_post=True
+        )
+
+        # Verify the result has all expected fields
+        assert result["success"] is True
+        assert result["user_id"] == "123"
+        assert result["username"] == "testuser"
+        
+        # Verify that the discourse post URL is included in the result
+        assert "discourse_url" in result
+        assert result["discourse_url"] == "https://forum.example.com/t/123"
+        
+        # Verify that the create_discourse_post function was called
+        mock_discourse.assert_called_once() 

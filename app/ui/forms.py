@@ -60,8 +60,6 @@ def reset_create_user_form_fields():
         "data_to_parse_input",
         "intro_input",
         "is_admin_checkbox",
-        "selected_groups",
-        "group_selection",
         "username_was_auto_generated",
         # New fields
         "organization_input",
@@ -73,7 +71,8 @@ def reset_create_user_form_fields():
         "phone_number_input",
         "phone_number_input_outside",
         "linkedin_username_input",
-        "linkedin_username_input_outside"
+        "linkedin_username_input_outside",
+        "parse_data_input_outside"
     ]
     
     # Set a flag in session state to indicate we should clear fields
@@ -86,10 +85,13 @@ def reset_create_user_form_fields():
     # Clear the values
     for key in keys_to_reset:
         if key in st.session_state:
-            if key in ["selected_groups", "group_selection"]:
-                st.session_state[key] = []
-            else:
-                st.session_state[key] = ""
+            st.session_state[key] = ""
+    
+    # Handle group selection separately - reset to default MAIN_GROUP_ID
+    from app.utils.config import Config
+    main_group_id = Config.MAIN_GROUP_ID
+    st.session_state['selected_groups'] = [main_group_id] if main_group_id else []
+    st.session_state['group_selection'] = [main_group_id] if main_group_id else []
 
 def parse_and_rerun():
     """Callback to parse data and rerun the script so widgets see updated session state."""
@@ -218,6 +220,16 @@ def clear_parse_data():
     
     # Set flags to indicate form should be cleared on next rerun
     st.session_state['should_clear_form'] = True
+    
+    # Reset group selection to default (MAIN_GROUP_ID)
+    from app.utils.config import Config
+    main_group_id = Config.MAIN_GROUP_ID
+    st.session_state['selected_groups'] = [main_group_id] if main_group_id else []
+    st.session_state['group_selection'] = [main_group_id] if main_group_id else []
+    
+    # Also clear the parse input field
+    if 'parse_data_input_outside' in st.session_state:
+        st.session_state['parse_data_input_outside'] = ""
     
     # Rerun to apply changes
     st.rerun()

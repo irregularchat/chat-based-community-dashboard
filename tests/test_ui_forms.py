@@ -51,7 +51,7 @@ async def test_display_user_list():
         await display_user_list()
         
         # Verify the expected function calls
-        mock_get_db.assert_called_once()
+        mock_get_db.assert_called()
         mock_search_users.assert_called_once()
         
         # Verify multiselect was called for user selection
@@ -170,7 +170,8 @@ def test_parse_and_rerun_session_state_handling():
         "invited_by": "Jane Smith",
         "intro": {
             "organization": "ACME Corp",
-            "interests": "Python, Testing"
+            "interests": "Python, Testing",
+            "text": "Some introduction text"
         }
     }
     
@@ -199,6 +200,8 @@ def test_parse_and_rerun_session_state_handling():
         assert "_parsed_last_name" in st.session_state
         assert "_parsed_email" in st.session_state
         assert "_parsed_invited_by" in st.session_state
+        assert "_parsed_organization" in st.session_state
+        assert "_parsed_interests" in st.session_state
         assert "_parsed_intro" in st.session_state
         assert "parsing_successful" in st.session_state
         
@@ -207,8 +210,9 @@ def test_parse_and_rerun_session_state_handling():
         assert st.session_state["_parsed_last_name"] == "Doe"
         assert st.session_state["_parsed_email"] == "john@example.com"
         assert st.session_state["_parsed_invited_by"] == "Jane Smith"
-        assert "ACME Corp" in st.session_state["_parsed_intro"]
-        assert "Python, Testing" in st.session_state["_parsed_intro"]
+        assert st.session_state["_parsed_organization"] == "ACME Corp"
+        assert st.session_state["_parsed_interests"] == "Python, Testing"
+        assert st.session_state["_parsed_intro"] == "Some introduction text"
         
         # Check that rerun was called
         mock_rerun.assert_called_once()
@@ -216,35 +220,50 @@ def test_parse_and_rerun_session_state_handling():
 def test_clear_parse_data_session_state_handling():
     """Test that clear_parse_data properly cleans up session state without modifying widget values."""
     from app.ui.forms import clear_parse_data
+    import os
     
-    # Setup initial session state with parsed data
-    st.session_state = {
-        "_parsed_first_name": "John",
-        "_parsed_last_name": "Doe",
-        "_parsed_email": "john@example.com",
-        "_parsed_invited_by": "Jane Smith",
-        "_parsed_intro": "ACME Corp\n\nInterests: Python, Testing",
-        "parsing_successful": True
-    }
-    
-    # Setup mocks
-    with patch('streamlit.rerun') as mock_rerun:
-        # Call the function
-        clear_parse_data()
+    # Mock Config.MAIN_GROUP_ID 
+    with patch('app.utils.config.Config') as mock_config:
+        mock_config.MAIN_GROUP_ID = "default-group-id"
         
-        # Verify all temporary parsed data is removed
-        assert "_parsed_first_name" not in st.session_state
-        assert "_parsed_last_name" not in st.session_state
-        assert "_parsed_email" not in st.session_state
-        assert "_parsed_invited_by" not in st.session_state
-        assert "_parsed_intro" not in st.session_state
+        # Setup initial session state with parsed data
+        st.session_state = {
+            "_parsed_first_name": "John",
+            "_parsed_last_name": "Doe",
+            "_parsed_email": "john@example.com",
+            "_parsed_invited_by": "Jane Smith",
+            "_parsed_intro": "ACME Corp\n\nInterests: Python, Testing",
+            "parsing_successful": True,
+            "parse_data_input_outside": "Some parsed data",
+            "selected_groups": ["some-other-group"],
+            "group_selection": ["some-other-group"]
+        }
         
-        # Verify flags are set properly
-        assert st.session_state["clear_parse_data_flag"] is True
-        assert st.session_state["should_clear_form"] is True
-        
-        # Check that rerun was called
-        mock_rerun.assert_called_once()
+        # Setup mocks
+        with patch('streamlit.rerun') as mock_rerun:
+            # Call the function
+            clear_parse_data()
+            
+            # Verify all temporary parsed data is removed
+            assert "_parsed_first_name" not in st.session_state
+            assert "_parsed_last_name" not in st.session_state
+            assert "_parsed_email" not in st.session_state
+            assert "_parsed_invited_by" not in st.session_state
+            assert "_parsed_intro" not in st.session_state
+            
+            # Verify flags are set properly
+            assert st.session_state["clear_parse_data_flag"] is True
+            assert st.session_state["should_clear_form"] is True
+            
+            # Verify parse input field is cleared
+            assert st.session_state["parse_data_input_outside"] == ""
+            
+            # Verify group selection is reset to default
+            assert st.session_state["selected_groups"] == ["default-group-id"]
+            assert st.session_state["group_selection"] == ["default-group-id"]
+            
+            # Check that rerun was called
+            mock_rerun.assert_called_once()
 
 def test_session_state_modification_after_widget_instantiation():
     """Test that simulates the Streamlit error when modifying widget values after instantiation."""

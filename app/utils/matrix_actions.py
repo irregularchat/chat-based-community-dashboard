@@ -17,6 +17,9 @@ import uuid
 
 from app.utils.config import Config
 
+# Set up logging
+logger = logging.getLogger(__name__)
+
 # Import get_db conditionally to avoid import errors
 try:
     from app.db.session import get_db
@@ -25,10 +28,6 @@ except ImportError:
     # Create a dummy function to avoid errors
     def get_db():
         yield None
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Check if Matrix integration is active
 MATRIX_ACTIVE = Config.MATRIX_ACTIVE

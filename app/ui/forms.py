@@ -10,8 +10,12 @@ import traceback
 import asyncio
 import streamlit as st
 from streamlit.components.v1 import html
-from app.db.session import get_db
-from app.db.models import User
+from app.utils.database import get_db
+from app.models.user import User
+from app.utils.matrix_actions import get_entrance_room_users_sync
+from app.utils.recommendation import get_room_recommendations_sync
+from app.utils.matrix_actions import invite_to_matrix_room
+from app.utils.database import get_groups_from_db  # Add this import
 from app.utils.config import Config
 from app.auth.admin import (
     check_admin_permission,
@@ -251,35 +255,20 @@ def parse_and_rerun():
         st.error(f"An error occurred while parsing: {str(e)}")
 
 def clear_parse_data():
-    """Callback to clear the parsed data and rerun the script."""
-    # Set a flag to indicate that data should be cleared
-    st.session_state["clear_parse_data_flag"] = True
-    
-    # Clear all temporary parsed data fields
-    for key in [
-        '_parsed_first_name', '_parsed_last_name', '_parsed_email',
-        '_parsed_invited_by', '_parsed_intro', '_parsed_organization',
-        '_parsed_interests', '_parsed_signal_username', '_parsed_phone_number',
-        '_parsed_linkedin_username'
-    ]:
-        if key in st.session_state:
-            del st.session_state[key]
-    
-    # Set flags to indicate form should be cleared on next rerun
-    st.session_state['should_clear_form'] = True
-    
-    # Remove the lines that modify group_selection
-    # from app.utils.config import Config
-    # main_group_id = Config.MAIN_GROUP_ID
-    # st.session_state['selected_groups'] = [main_group_id] if main_group_id else []
-    # st.session_state['group_selection'] = [main_group_id] if main_group_id else []
-    
-    # Also clear the parse input field
+    """Clear parse data from session state and reset form fields."""
+    # Clear parse data from session state
+    if 'parse_data' in st.session_state:
+        del st.session_state.parse_data
+    if 'parse_data_input' in st.session_state:
+        del st.session_state.parse_data_input
     if 'parse_data_input_outside' in st.session_state:
-        st.session_state['parse_data_input_outside'] = ""
+        del st.session_state.parse_data_input_outside
     
-    # Rerun to apply changes
-    st.rerun()
+    # Reset form fields
+    reset_create_user_form_fields()
+    
+    # Force a rerun to update the UI
+    st.experimental_rerun()
 
 async def render_create_user_form():
     """Render the user creation form with improved layout and group selection."""
@@ -951,31 +940,37 @@ async def render_create_user_form():
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.subheader("Group Assignment")
+        st.subheader("Group Selection")
+        st.info("Select the groups this user should be a member of.")
         
-        # Helper function to format group display names
-        def format_group(group_id):
+        # Get available groups
+        groups = get_groups_from_db()
+        if groups:
+            # Format groups for selection
+            group_options = []
             for group in groups:
-                if group.get('pk') == group_id:
-                    return group.get('name', group_id)
-            return group_id
+                group_id = group['id']
+                group_name = group['name']
+                group_options.append((group_id, group_name))
             
-        # Initialize selected_groups if not in session state
-        if 'selected_groups' not in st.session_state:
-            # Pre-select main group if it exists
-            from app.utils.config import Config
-            main_group_id = Config.MAIN_GROUP_ID
-            st.session_state['selected_groups'] = [main_group_id] if main_group_id else []
+            # Initialize group selection in session state if not present
+            if 'group_selection' not in st.session_state:
+                st.session_state.group_selection = []
             
-        # Group selection with multiselect
-        st.multiselect(
-            "Assign to Groups",
-            options=[g.get('pk') for g in groups],
-            default=st.session_state['selected_groups'],
-            format_func=format_group,
-            key="group_selection",
-            help="Select groups to assign user to"
-        )
+            # Show group selection checkboxes
+            selected_groups = []
+            for group_id, group_name in group_options:
+                if st.checkbox(
+                    group_name,
+                    value=group_id in st.session_state.group_selection,
+                    key=f"group_{group_id}"
+                ):
+                    selected_groups.append(group_id)
+            
+            # Update session state with selected groups
+            st.session_state.group_selection = selected_groups
+        else:
+            st.warning("No groups found in the database")
     
     with col2:
         # Add Discourse checkbox

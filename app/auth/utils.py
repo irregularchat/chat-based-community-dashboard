@@ -86,29 +86,29 @@ def force_password_reset(username):
         user_id = users[0]['pk']
 
         # Now, force the password reset using the correct method
-        # The 405 error indicates Method Not Allowed, so we need to check the API documentation
-        # for the correct method (GET, PUT, or PATCH instead of POST)
-        reset_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/force_password_reset/"
+        # Ensure the URL has a trailing slash
+        reset_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/set_password/"
         logger.info(f"Sending password reset request for user {username} (ID: {user_id})")
         
-        # Try GET method first
-        response = requests.get(reset_api_url, headers=headers, timeout=10)
-        
-        # If GET fails, try PUT
-        if response.status_code == 405:  # Method Not Allowed
-            logger.info(f"GET method not allowed for password reset, trying PUT")
-            response = requests.put(reset_api_url, headers=headers, json={}, timeout=10)
-            
-        # If PUT fails, try PATCH
-        if response.status_code == 405:  # Method Not Allowed
-            logger.info(f"PUT method not allowed for password reset, trying PATCH")
-            response = requests.patch(reset_api_url, headers=headers, json={}, timeout=10)
+        # Try POST method with empty data to force the system to generate a password
+        data = {"password": generate_secure_passphrase()}
+        response = requests.post(reset_api_url, headers=headers, json=data, timeout=10)
         
         # Check if the response has content before trying to parse JSON
         if response.status_code in [200, 201, 202, 204]:  # Success codes
             logger.info(f"Password reset successful for user {username} (ID: {user_id}) with status code {response.status_code}")
             return True
             
+        # If POST fails with 405, try PUT
+        if response.status_code == 405:  # Method Not Allowed
+            logger.info(f"POST method not allowed for password reset, trying PUT")
+            response = requests.put(reset_api_url, headers=headers, json=data, timeout=10)
+            
+            if response.status_code in [200, 201, 202, 204]:  # Success codes
+                logger.info(f"Password reset successful using PUT for user {username}")
+                return True
+        
+        # Log the error details
         if response.content:  # Only try to parse JSON if there's content
             try:
                 response_data = response.json()

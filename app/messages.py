@@ -8,7 +8,11 @@ import logging
 from app.utils.config import Config  # Fixed import path
 
 def create_user_message(new_username, temp_password, discourse_post_url=None, password_reset_successful=True):
-    """Generate and display the welcome message after user creation with temp password."""
+    """Generate and display the welcome message after user creation with temp password.
+    
+    Returns:
+        str: The welcome message as a string
+    """
     
     # new_username is the final username that may have been incremented for uniqueness
     # This is passed from the create_user function and already has any numeric suffixes
@@ -92,6 +96,9 @@ def create_user_message(new_username, temp_password, discourse_post_url=None, pa
                 del st.session_state['message']
             st.session_state['should_clear_form'] = True
             st.rerun()
+            
+    # Return the welcome message so it can be used by other functions
+    return welcome_message
 
 
 def create_recovery_message(username_input, new_password):

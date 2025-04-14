@@ -164,153 +164,42 @@ def reset_user_password(auth_api_url, headers, user_id, new_password):
 async def create_user(username, full_name, email, invited_by=None, intro=None):
     """Create a new user in Authentik."""
     try:
-        # Generate a temporary password using a secure passphrase
-        temp_password = generate_secure_passphrase()
-        discourse_post_url = None  # Initialize post URL variable
-
-        # Parse full_name to get first_name for username generation
+        # Parse full_name to get first_name and last_name
         name_parts = full_name.split(maxsplit=1)
         first_name = name_parts[0] if name_parts else ""
-
-        # Check for existing usernames and modify if necessary
-        original_username = username
-        headers = {
-            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-            'Content-Type': 'application/json'
-        }
+        last_name = name_parts[1] if len(name_parts) > 1 else ""
         
-        try:
-            # Check for existing username
-            user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
-            response = session.get(user_search_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            users = response.json().get('results', [])
+        # Import the non-async create_user function
+        from app.auth.api import create_user as create_user_sync
+        
+        # Prepare attributes
+        attributes = {}
+        if invited_by:
+            attributes['invited_by'] = invited_by
+        if intro:
+            attributes['intro'] = intro
             
-            # If username already exists, generate a new one with first name and random word
-            if any(user['username'] == username for user in users):
-                username = generate_username_with_random_word(first_name)
-                logging.info(f"Username already exists, generated new username: {username}")
-                
-                # Check if the new username also exists
-                user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
-                response = session.get(user_search_url, headers=headers, timeout=10)
-                response.raise_for_status()
-                users = response.json().get('results', [])
-                
-                # If the new username also exists, add a random suffix
-                if any(user['username'] == username for user in users):
-                    import random
-                    random_suffix = random.randint(100, 999)
-                    username = f"{username}-{random_suffix}"
-                    logging.info(f"Generated username with random suffix: {username}")
+        # Call the non-async create_user function
+        result = create_user_sync(
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            attributes=attributes,
+            desired_username=username,
+            reset_password=True  # Enable the password reset process
+        )
+        
+        if result["success"]:
+            # Return in the format expected by callers
+            return True, result["username"], result["temp_password"], result.get("discourse_url")
+        else:
+            # Handle error case
+            error_message = result.get("error", "Unknown error")
+            return False, username, error_message, None
             
-            # Log if username was modified
-            if username != original_username:
-                logging.info(f"Username modified for uniqueness: {original_username} -> {username}")
-
-            user_data = {
-                "username": username,
-                "name": full_name,
-                "is_active": True,
-                "email": email,
-                "groups": [Config.MAIN_GROUP_ID],
-                "attributes": {}
-            }
-
-            # Add 'invited_by' and 'intro' to attributes if provided
-            if invited_by:
-                user_data['attributes']['invited_by'] = invited_by
-            if intro:
-                user_data['attributes']['intro'] = intro
-
-            # Create user in Authentik
-            user_api_url = f"{Config.AUTHENTIK_API_URL}/core/users/"
-            response = requests.post(user_api_url, headers=headers, json=user_data, timeout=10)
-            
-            # Check for username uniqueness error
-            if response.status_code == 400 and "username" in response.text and "unique" in response.text:
-                logging.error(f"Username uniqueness error: {response.text}")
-                return False, username, f"Username '{username}' is not unique. Please try a different username.", None
-            
-            response.raise_for_status()
-            user = response.json()
-
-            if not isinstance(user, dict):
-                logging.error("Unexpected response format: user is not a dictionary.")
-                return False, username, 'default_pass_issue', None
-
-            logging.info(f"User created: {user.get('username')}")
-
-            # Reset the user's password
-            reset_result = reset_user_password(Config.AUTHENTIK_API_URL, headers, user['pk'], temp_password)
-            if not reset_result:
-                logging.error(f"Failed to reset password for user {user.get('username')}")
-                return False, username, 'default_pass_issue', None
-
-            # Send webhook notification if webhook integration is active
-            if Config.WEBHOOK_ACTIVE:
-                try:
-                    await webhook_notification("user_created", username, full_name, email, intro, invited_by, temp_password)
-                    logging.info(f"Webhook notification sent for user {username}")
-                except Exception as e:
-                    logging.error(f"Failed to send webhook notification: {e}")
-                    # Continue even if webhook fails
-
-            # Sync the new user with local database
-            with SessionLocal() as db:
-                try:
-                    # Fetch all users to ensure complete sync
-                    all_users_request = requests.get(
-                        f"{Config.AUTHENTIK_API_URL}/core/users/",
-                        headers=headers,
-                        timeout=10
-                    )
-                    all_users_request.raise_for_status()
-                    all_users = all_users_request.json().get('results', [])
-
-                    # Sync users with local database
-                    sync_user_data(db, all_users)
-
-                    # Add creation event to admin events
-                    admin_event = AdminEvent(
-                        timestamp=datetime.now(),
-                        event_type='user_created',
-                        username=username,
-                        details=f'User created and synced to local database'
-                    )
-                    db.add(admin_event)
-                    db.commit()
-
-                    logging.info(f"Successfully created and synced user {username}")
-                except Exception as e:
-                    logging.error(f"Error syncing after user creation: {e}")
-                    # Continue even if sync fails
-
-            return True, username, temp_password, discourse_post_url
-
-        except requests.exceptions.HTTPError as http_err:
-            logging.error(f"HTTP error occurred while creating user: {http_err}")
-            logging.error(f"Response: {response.text}")  # Log the response text for more context
-            
-            # Check for username uniqueness error
-            if response.status_code == 400 and "username" in response.text and "unique" in response.text:
-                return False, username, f"Username '{username}' is not unique. Please try a different username.", None
-            
-            return False, username, 'default_pass_issue', None
-        except Exception as e:
-            logging.error(f"Error creating user: {e}")
-            return False, username, 'default_pass_issue', None
-
-    except requests.exceptions.HTTPError as http_err:
-        logging.error(f"HTTP error occurred: {http_err}")
-        try:
-            logging.error(f"Response: {response.text}")
-        except Exception:
-            pass
-        return False, username, 'default_pass_issue', None
     except Exception as e:
         logging.error(f"Error creating user: {e}")
-        return False, username, 'default_pass_issue', None
+        return False, username, str(e), None
 
 
 # List Users Function is needed and works better than the new methos session.get(f"{auth_api_url}/users/", headers=headers, timeout=10)

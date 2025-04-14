@@ -577,7 +577,7 @@ def list_users_cached(auth_api_url, headers):
         return []
 
 
-def create_invite(headers, label, expires=None):
+def create_invite(headers=None, label=None, expires=None, email=None, name=None, expiry=None, created_by=None, groups=None):
     """
     Create an invitation for a user.
 
@@ -585,10 +585,26 @@ def create_invite(headers, label, expires=None):
         headers (dict): The request headers for Authentik API.
         label (str): The label to identify the invitation.
         expires (str, optional): The expiration time for the invite.
+        email (str, optional): Email address of the invitee.
+        name (str, optional): Name of the invitee, will be used as label if provided.
+        expiry (str, optional): Alternative format for expiration time.
+        created_by (str, optional): Username of the person creating the invitation.
+        groups (list, optional): List of group IDs to pre-assign the user to.
 
     Returns:
-        dict: Dictionary containing 'link', 'expiry', 'success' and error message if applicable.
+        dict: Dictionary containing 'invite_link', 'expiry', 'success' and error message if applicable.
     """
+    # Get headers if not provided
+    if headers is None:
+        headers = {
+            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+            'Content-Type': 'application/json'
+        }
+    
+    # Handle different parameter options for name/label
+    if name and not label:
+        label = name
+    
     logger.info(f"Creating invite with label: {label}")
     eastern = timezone('US/Eastern')
     if not label:
@@ -608,14 +624,36 @@ def create_invite(headers, label, expires=None):
         logger.info(f"Label modified for validity: {label} -> {fixed_label}")
         label = fixed_label
 
+    # Handle different parameter options for expiration
+    if expiry and not expires:
+        expires = expiry
+        
     if expires is None:
         expires = (datetime.now(eastern) + timedelta(hours=2)).isoformat()
         logger.info(f"No expiry provided, using default: {expires}")
 
+    # Prepare fixed data for invitation
+    fixed_data = {}
+    
+    # Add email to fixed data if provided
+    if email:
+        fixed_data['email'] = email
+        logger.info(f"Adding email to invitation: {email}")
+        
+    # Add groups to fixed data if provided
+    if groups and isinstance(groups, list) and len(groups) > 0:
+        fixed_data['groups'] = groups
+        logger.info(f"Adding groups to invitation: {groups}")
+        
+    # Add created_by information if provided    
+    if created_by:
+        fixed_data['created_by'] = created_by
+        logger.info(f"Adding created_by to invitation: {created_by}")
+
     data = {
         "name": label,
         "expires": expires,
-        "fixed_data": {},
+        "fixed_data": fixed_data,
         "single_use": True,
         "flow": Config.INVITE_FLOW_ID  # Use the invite flow ID for invitations
     }
@@ -645,7 +683,7 @@ def create_invite(headers, label, expires=None):
         # Return as dictionary with success flag
         return {
             'success': True,
-            'link': invite_link,
+            'invite_link': invite_link,
             'expiry': expires
         }
 

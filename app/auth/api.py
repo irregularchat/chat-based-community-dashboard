@@ -491,14 +491,21 @@ def create_user(
         return response
 
 
-# List Users Function is needed and works better than the new methos session.get(f"{auth_api_url}/users/", headers=headers, timeout=10)
- # auth/api.py
-
-def list_users(auth_api_url, headers, search_term=None):
-    """List users, optionally filtering by a search term, handling pagination to fetch all users."""
+def list_users(auth_api_url, headers, search_term=None, status=None):
     try:
-        # First get all users since the API search might not catch attribute contents
-        params = {'page_size': 500}  # Reduced page size for better reliability
+        params = {
+            'page_size': 500,  # Reduced page size for better reliability
+            'ordering': 'username'  # Default ordering by username
+        }
+        
+        # Add search term if provided
+        if search_term:
+            params['search'] = search_term
+        
+        # Add status filter if provided
+        if status:
+            params['is_active'] = status == 'active'
+
         users = []
         url = f"{auth_api_url}/core/users/"
         page_count = 0

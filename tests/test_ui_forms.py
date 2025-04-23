@@ -44,8 +44,9 @@ async def test_display_user_list():
         # Set up mock returns for Streamlit components
         mock_text_input.return_value = ''
         mock_selectbox.return_value = 'All'
-        mock_multiselect.return_value = ['user1', 'user2']
-        mock_button.return_value = True
+        mock_data_editor.return_value = pd.DataFrame()
+        mock_multiselect.return_value = []
+        mock_button.return_value = False
         
         # Call the function under test
         await display_user_list()

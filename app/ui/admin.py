@@ -207,6 +207,8 @@ def render_user_management():
             'Email': user.get('email'),
             'Status': '✅ Active' if user.get('is_active', False) else '❌ Inactive',
             'Last Login': last_login,
+            'LinkedIn': user.get('attributes', {}).get('linkedin_username', ''),
+            'Phone Number': user.get('attributes', {}).get('phone_number', ''),
             'Notes': notes_indicator
         })
     
@@ -218,7 +220,9 @@ def render_user_management():
         'Name': 'Name',
         'Email': 'Email',
         'Last Login': 'Last Login',
-        'Status': 'Status'
+        'Status': 'Status',
+        'LinkedIn': 'LinkedIn',
+        'Phone Number': 'Phone Number'
     }
     
     sort_column = sort_column_map.get(sort_by, 'Username')
@@ -268,6 +272,14 @@ def render_user_management():
                         "Last Login",
                         width="medium",
                     ),
+                    "LinkedIn": st.column_config.TextColumn(
+                        "LinkedIn",
+                        width="medium",
+                    ),
+                    "Phone Number": st.column_config.TextColumn(
+                        "Phone Number",
+                        width="medium",
+                    ),
                     "Notes": st.column_config.TextColumn(
                         "Notes",
                         width="small",
@@ -277,8 +289,7 @@ def render_user_management():
                 hide_index=True,
                 key="user_table",
                 use_container_width=True,
-                disabled=["ID", "Username", "Name", "Email", "Status", "Last Login", "Notes"],
-                selection="multiple",
+                disabled=["ID", "Username", "Name", "Email", "Status", "Last Login", "LinkedIn", "Phone Number", "Notes"],
                 height=400
             )
             
@@ -942,7 +953,7 @@ def render_group_management():
                 st.write(f"Showing {len(df)} groups")
                 
                 # Use data editor for better interaction
-                selection = st.data_editor(
+                edited_df = st.data_editor(
                     df,
                     column_config={
                         "ID": st.column_config.TextColumn(
@@ -967,12 +978,11 @@ def render_group_management():
                     key="group_table",
                     use_container_width=True,
                     disabled=["ID", "Name", "Description", "Member Count"],
-                    selection="single",
                     height=400
                 )
                 
                 # Get selected row
-                selected_rows = selection.get("selected_rows", [])
+                selected_rows = edited_df.get("selected_rows", [])
                 
                 if selected_rows:
                     group = selected_rows[0]

@@ -18,7 +18,10 @@ class User(Base):
     last_login = Column(DateTime)
     attributes = Column(JSON)
     authentik_id = Column(String)  # Link with Authentik user ID
-    signal_identity = Column(String)  # Store Signal name or phone number
+    signal_identity = Column(String)
+    linkedin_username = Column(String, nullable=True)
+    phone_number = Column(String, nullable=True)
+      # Store Signal name or phone number
     
     # Relationship to UserNote model
     notes = relationship("UserNote", back_populates="user", cascade="all, delete-orphan")
@@ -45,6 +48,8 @@ class User(Base):
             'attributes': self.attributes,
             'authentik_id': self.authentik_id,
             'signal_identity': self.signal_identity,
+            'linkedin_username': self.linkedin_username,
+            'phone_number': self.phone_number,
             'note_count': len(self.notes) if hasattr(self, 'notes') else 0,
         }
 

@@ -1,7 +1,7 @@
 requests
 python-dotenv
 nltk
-streamlit>=1.22.0
+streamlit>=1.31.0
 pandas
 streamlit-copy-to-clipboard
 cryptography

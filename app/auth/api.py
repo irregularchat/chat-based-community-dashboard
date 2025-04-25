@@ -1213,7 +1213,7 @@ async def process_auth_webhook(webhook_data: dict) -> dict:
             
         # Update user data in local database
         with SessionLocal() as db:
-            success = await update_user_data(username, user_data, db)
+            success = await update_user_data(username, user_data)
             if success:
                 return {
                     "success": True,
@@ -1350,23 +1350,25 @@ async def send_reset_code(email: str, code: str) -> bool:
         logger.error(f"Error sending reset code: {e}")
         return False
 
-async def update_user_data(username: str, data: dict, db: Session) -> bool:
-    """Update user data in local database."""
+async def update_user_data(auth_api_url: str, headers: dict, data: dict):  
+    url = f"{auth_api_url}/core/users/{user_id}/"
+    
+    logger.info(f"Attempting to update user {user_id}")
     try:
-        user = db.query(User).filter(User.username == username).first()
-        if not user:
+        response = session.patch(url, headers=headers, json=data, timeout=10)
+        
+        if response.status_code in [200, 201, 202, 204]:
+            logger.info(f"User {user_id} updated successfully.")
+            return True
+        else:
+            logger.error(f"Failed to update user {user_id}. Status code: {response.status_code}")
             return False
-            
-        # Update user fields
-        for key, value in data.items():
-            if hasattr(user, key):
-                setattr(user, key, value)
-                
-        db.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Error updating user data: {e}")
-        db.rollback()
+    except requests.exceptions.HTTPError as http_err:
+        logger.error(f"HTTP error updating user: {http_err}")
+        logger.error(f"Response content: {http_err.response.text if http_err.response else 'No response content'}")
+        return False
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error updating user: {e}")
         return False
 
 def generate_verification_code(length: int = 6) -> str:

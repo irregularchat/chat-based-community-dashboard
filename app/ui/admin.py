@@ -11,7 +11,7 @@ from app.auth.admin import (
     grant_admin_privileges,
     revoke_admin_privileges
 )
-from app.auth.api import list_users, update_user_status, update_user_email
+from app.auth.api import list_users, update_user_status, update_user_email, update_user_data
 from app.utils.config import Config
 from app.db.database import SessionLocal
 from app.db.operations import (
@@ -28,6 +28,7 @@ from app.utils.helpers import send_email
 import pandas as pd
 from datetime import datetime
 import time
+from app.db.models import User  # Import User model
 
 def render_admin_dashboard():
     """
@@ -191,7 +192,7 @@ def render_user_management():
         note_count = 0
         with SessionLocal() as db:
             try:
-                db_user = db.query(db.model.User).filter_by(username=user.get('username')).first()
+                db_user = db.query(User).filter_by(username=user.get('username')).first()
                 if db_user:
                     note_count = len(db_user.notes) if hasattr(db_user, 'notes') else 0
             except Exception as e:
@@ -240,9 +241,6 @@ def render_user_management():
     # Tab 1: User List
     with user_tabs[0]:
         if not df.empty:
-            # Display users in a table with selection
-            st.subheader("Select Users to Manage")
-            
             # Use Streamlit's data editor for better interaction
             selection = st.data_editor(
                 df,
@@ -289,40 +287,89 @@ def render_user_management():
                 hide_index=True,
                 key="user_table",
                 use_container_width=True,
-                disabled=["ID", "Username", "Name", "Email", "Status", "Last Login", "LinkedIn", "Phone Number", "Notes"],
+                disabled=["ID", "Username", "Name", "Email", "Status", "Last Login", "Notes"],
                 height=400
             )
+            
+            # Check if data editor has been edited
+            if "original_df" not in st.session_state:
+                st.session_state.original_df = df.copy()
+            
+            # Compare original and edited dataframes to detect changes
+            edited_df = selection
+            changes_detected = False
+            changed_rows = []
+            
+            if not edited_df.equals(st.session_state.original_df):
+                changes_detected = True
+                # Find which rows changed
+                for idx, row in edited_df.iterrows():
+                    if idx < len(st.session_state.original_df):
+                        orig_row = st.session_state.original_df.iloc[idx]
+                        if not row.equals(orig_row):
+                            changed_rows.append({
+                                'id': row['ID'],
+                                'username': row['Username'],
+                                'changes': {
+                                    'linkedin_username': row['LinkedIn'],
+                                    'phone_number': row['Phone Number']
+                                }
+                            })
+            
+            # Show save button if changes detected
+            if changes_detected:
+                st.warning(f"Unsaved changes detected for {len(changed_rows)} user(s). Click 'Save to Authentik' to update.")
+                if st.button("Save to Authentik", key="save_data_editor_changes"):
+                    success_count = 0
+                    for change in changed_rows:
+                        try:
+                            # Get user details to update attributes
+                            from app.auth.admin import get_user_details
+                            user_details = get_user_details(change['id'])
+                            if user_details is None:
+                                st.error(f"Failed to fetch details for user {change['username']}.")
+                                continue
+                                
+                            # Update attributes
+                            attributes = user_details.get('attributes', {})
+                            attributes['linkedin_username'] = change['changes']['linkedin_username']
+                            attributes['phone_number'] = change['changes']['phone_number']
+                            
+                            # Use a synchronous approach instead of creating a new event loop
+                            import requests
+                            url = f"{Config.AUTHENTIK_API_URL}/core/users/{change['id']}/"
+                            response = requests.patch(url, headers=headers, json={'attributes': attributes})
+                            if response.status_code in [200, 201, 202, 204]:
+                                success_count += 1
+                            else:
+                                st.error(f"Failed to update {change['username']} via API. Status code: {response.status_code}")
+                        except Exception as e:
+                            st.error(f"Failed to update {change['username']}: {e}")
+                    
+                    if success_count > 0:
+                        st.success(f"Successfully updated {success_count} of {len(changed_rows)} users.")
+                        # Update the original dataframe to match the current state
+                        st.session_state.original_df = edited_df.copy()
+                        time.sleep(1)
+                        st.rerun()
             
             # Get selected rows
             selected_rows = selection.get("selected_rows", [])
             
             if selected_rows:
                 st.success(f"Selected {len(selected_rows)} users")
-                
-                # Store selected users in session state for other tabs
                 st.session_state['selected_users'] = selected_rows
-                
-                # Quick actions for selected users
                 st.subheader("Quick Actions")
-                
-                # Create columns for action buttons
                 col1, col2, col3 = st.columns(3)
-                
                 with col1:
                     if st.button("View Details", key="view_details_btn"):
-                        # Switch to User Details tab
                         user_tabs[2].active = True
-                
                 with col2:
                     if st.button("Manage Groups", key="manage_groups_btn"):
-                        # Switch to Bulk Operations tab
                         user_tabs[1].active = True
-                
                 with col3:
-                    # Toggle active status
                     all_active = all(row.get('Status', '').startswith('✅') for row in selected_rows)
                     status_action = "Deactivate" if all_active else "Activate"
-                    
                     if st.button(f"{status_action} Selected", key="toggle_status_btn"):
                         success_count = 0
                         for row in selected_rows:
@@ -331,8 +378,9 @@ def render_user_management():
                                 Config.AUTHENTIK_API_URL,
                                 headers,
                                 user_id,
-                                not all_active  # Activate if not all active, otherwise deactivate
+                                not all_active
                             )
+                            
                             if result:
                                 success_count += 1
                         
@@ -340,10 +388,44 @@ def render_user_management():
                             st.success(f"Successfully {status_action.lower()}d {success_count} users")
                         else:
                             st.warning(f"Partially successful: {status_action.lower()}d {success_count} out of {len(selected_rows)} users")
-                        
-                        # Refresh the page to show updated status
                         time.sleep(1)
                         st.rerun()
+                # --- User Info Edit Form ---
+                if len(selected_rows) == 1:
+                    user = selected_rows[0]
+                    st.markdown("---")
+                    st.subheader(f"Edit User Info: {user.get('Username', 'Unknown')}")
+                    new_linkedin = st.text_input(
+                        "LinkedIn Username",
+                        value=user.get('LinkedIn', ''),
+                        key=f"edit_linkedin_{user.get('ID')}"
+                    )
+                    new_phone = st.text_input(
+                        "Phone Number",
+                        value=user.get('Phone Number', ''),
+                        key=f"edit_phone_{user.get('ID')}"
+                    )
+                    if st.button("Save Changes", key=f"save_user_info_{user.get('ID')}"):
+                        # Fetch latest user details to get attributes
+                        from app.auth.admin import get_user_details
+                        user_details = get_user_details(user.get('ID'))
+                        if user_details is None:
+                            st.error("Failed to fetch user details. Cannot update info.")
+                        else:
+                            attributes = user_details.get('attributes', {})
+                            attributes['linkedin_username'] = new_linkedin
+                            attributes['phone_number'] = new_phone
+                            url = f"{Config.AUTHENTIK_API_URL}/core/users/{user.get('ID')}/"
+                            data = {'attributes': attributes}
+                            import requests
+                            try:
+                                response = requests.patch(url, headers=headers, json=data)
+                                response.raise_for_status()
+                                st.success("User information updated successfully.")
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to update user info: {e}")
             else:
                 st.info("Select one or more users to perform actions")
         else:
@@ -622,7 +704,7 @@ def render_user_management():
                 # Check if user is an admin
                 with SessionLocal() as db:
                     try:
-                        db_user = db.query(db.model.User).filter_by(username=user.get('Username')).first()
+                        db_user = db.query(User).filter_by(username=user.get('Username')).first()
                         is_admin = db_user.is_admin if db_user else False
                     except Exception as e:
                         logging.error(f"Error checking admin status: {e}")
@@ -665,7 +747,7 @@ def render_user_management():
                 # Get the user ID from the database
                 with SessionLocal() as db:
                     try:
-                        db_user = db.query(db.model.User).filter_by(username=user.get('Username')).first()
+                        db_user = db.query(User).filter_by(username=user.get('Username')).first()
                         if db_user:
                             user_id = db_user.id
                             

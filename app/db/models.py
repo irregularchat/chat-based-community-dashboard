@@ -19,7 +19,7 @@ class User(Base):
     attributes = Column(JSON)
     authentik_id = Column(String)  # Link with Authentik user ID
     signal_identity = Column(String)  # Store Signal name or phone number
-    matrix_username = Column(String)  # Store Matrix username from INDOC room
+    matrix_username = Column(String, nullable=True)  # Store Matrix username from INDOC room
     
     # Relationship to UserNote model
     notes = relationship("UserNote", back_populates="user", cascade="all, delete-orphan")
@@ -166,7 +166,7 @@ class Group(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True)
     description = Column(Text, nullable=True)
-    authentik_group_id = Column(String)  # Link with Authentik group ID
+    authentik_group_id = Column(String, nullable=True)  # Link with Authentik group ID
     
     # Relationship to User model
     users = relationship("User", secondary="user_groups", back_populates="groups")

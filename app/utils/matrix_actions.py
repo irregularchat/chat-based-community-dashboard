@@ -14,8 +14,13 @@ import json
 from nio import AsyncClient, AsyncClientConfig, RoomVisibility
 import traceback
 import uuid
+import threading
 
+# Import Config first
 from app.utils.config import Config
+
+# Apply nest_asyncio to allow nested event loops
+nest_asyncio.apply()
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -98,26 +103,105 @@ class MatrixClient:
             AsyncClient: The Matrix client
         """
         if self.client is None:
-            # Create a new client
-            self.client = AsyncClient(
-                homeserver=self.homeserver,
-                device_id=f"Dashboard_Bot_{os.getpid()}"
-            )
-            
-            # Set the access token and user_id
-            self.client.access_token = self.access_token
-            self.client.user_id = self.user_id
-            
-            # We don't need to set logged_in flag manually as it's a property
-            # that's determined by whether access_token is set
+            try:
+                # Create a new client
+                self.client = AsyncClient(
+                    homeserver=self.homeserver,
+                    device_id=f"Dashboard_Bot_{os.getpid()}"
+                )
+                
+                # Set the access token and user_id
+                self.client.access_token = self.access_token
+                self.client.user_id = self.user_id
+                
+                # Verify the client is properly initialized
+                if not self.client.access_token or not self.client.user_id:
+                    raise ValueError("Failed to initialize Matrix client: missing access token or user_id")
+                    
+            except Exception as e:
+                logger.error(f"Error creating Matrix client: {str(e)}")
+                logger.error(traceback.format_exc())
+                raise
             
         return self.client
     
     async def close(self):
         """Close the Matrix client connection."""
         if self.client:
-            await self.client.close()
-            self.client = None
+            try:
+                await self.client.close()
+            except Exception as e:
+                logger.error(f"Error closing Matrix client: {str(e)}")
+            finally:
+                self.client = None
+    
+    def run_async(self, coro):
+        """Run an async coroutine in a new event loop."""
+        try:
+            # Create a new event loop for this operation
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                # Run the coroutine
+                result = loop.run_until_complete(coro)
+                return result
+            finally:
+                # Clean up the loop
+                if not loop.is_closed():
+                    loop.close()
+        except Exception as e:
+            logger.error(f"Error running async operation: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
+
+    def get_matrix_users(self) -> List[Dict[str, str]]:
+        """
+        Get a list of Matrix users that the bot can interact with.
+        
+        Returns:
+            List[Dict[str, str]]: A list of dictionaries containing user information
+        """
+        if not MATRIX_ACTIVE:
+            logger.warning("Matrix integration is not active. Cannot get Matrix users.")
+            return []
+            
+        try:
+            # Get the default room ID
+            room_id = MATRIX_DEFAULT_ROOM_ID
+            if not room_id:
+                logger.warning("No default room ID configured. Cannot get Matrix users.")
+                return []
+                
+            # Get the client
+            client = self.run_async(self._get_client())
+            
+            # Get room members
+            response = self.run_async(client.joined_members(room_id))
+            if not response or not hasattr(response, 'members'):
+                logger.warning(f"Failed to get members for room {room_id}")
+                return []
+                
+            # Filter out the bot itself and format the response
+            users = []
+            for user_id, member_info in response.members.items():
+                if user_id != self.user_id:  # Skip the bot itself using instance user_id
+                    users.append({
+                        'user_id': user_id,
+                        'display_name': member_info.display_name or user_id.split(':')[0][1:],  # Remove @ symbol
+                        'avatar_url': member_info.avatar_url if hasattr(member_info, 'avatar_url') else None
+                    })
+                    
+            return users
+            
+        except Exception as e:
+            logger.error(f"Error getting Matrix users: {str(e)}")
+            logger.error(traceback.format_exc())
+            return []
+        finally:
+            # Ensure client is closed
+            if hasattr(self, 'client') and self.client:
+                self.run_async(self.close())
     
     async def send_message(self, room_id: str, message: str) -> bool:
         """

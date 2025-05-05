@@ -492,6 +492,18 @@ def create_user(
 
 
 def list_users(auth_api_url, headers, search_term=None, status=None):
+    """
+    Get users from Authentik API with fallback to local database if API fails.
+    
+    Args:
+        auth_api_url (str): Authentik API URL
+        headers (dict): Headers with authentication token
+        search_term (str, optional): Search term to filter users
+        status (str, optional): Filter by user status ('active' or 'inactive')
+        
+    Returns:
+        list: List of user dictionaries
+    """
     try:
         params = {
             'page_size': 500,  # Reduced page size for better reliability
@@ -529,7 +541,13 @@ def list_users(auth_api_url, headers, search_term=None, status=None):
                         time.sleep(2)  # Wait before retrying
                     else:
                         logger.error(f"Failed to fetch page {page_count} after {max_retries} attempts: {e}")
-                        raise  # Re-raise the exception after all retries failed
+                        if page_count == 1:  # Only fallback if we fail on the first page
+                            logger.warning("Falling back to local database for user data")
+                            return _get_users_from_local_db(search_term, status)
+                        else:
+                            # We've already fetched some pages, so return what we have
+                            logger.warning(f"Returning {len(users)} users fetched before failure")
+                            return users
             
             results = data.get('results', [])
             total_fetched += len(results)
@@ -570,8 +588,79 @@ def list_users(auth_api_url, headers, search_term=None, status=None):
         return users
     except requests.exceptions.RequestException as e:
         logger.error(f"Error listing users: {e}")
-        return []
-       
+        logger.warning("Falling back to local database for user data")
+        return _get_users_from_local_db(search_term, status)
+
+def _get_users_from_local_db(search_term=None, status=None):
+    """
+    Internal function to get users from local database.
+    Used as a fallback when Authentik API is unavailable.
+    
+    Args:
+        search_term (str, optional): Search term to filter users
+        status (str, optional): Filter by user status ('active' or 'inactive')
+        
+    Returns:
+        list: List of user dictionaries formatted like Authentik API response
+    """
+    try:
+        # Import here to avoid circular imports
+        from app.db.database import get_db
+        from app.db.models import User
+        
+        logger.info("Fetching users from local database")
+        
+        with next(get_db()) as db:
+            # Build query based on filters
+            query = db.query(User)
+            
+            # Apply search filter if provided
+            if search_term:
+                search_pattern = f"%{search_term}%"
+                query = query.filter(
+                    or_(
+                        User.username.ilike(search_pattern),
+                        User.name.ilike(search_pattern),
+                        User.email.ilike(search_pattern)
+                    )
+                )
+            
+            # Apply status filter if provided
+            if status:
+                is_active = status == 'active'
+                query = query.filter(User.is_active == is_active)
+            
+            # Execute query
+            local_users = query.all()
+            logger.info(f"Found {len(local_users)} users in local database")
+            
+            # Format users to match Authentik API response format
+            formatted_users = []
+            for user in local_users:
+                formatted_user = {
+                    'pk': user.authentik_id or user.id,  # Use authentik_id if available, otherwise use local id
+                    'username': user.username,
+                    'name': user.name,
+                    'email': user.email,
+                    'is_active': user.is_active,
+                    'last_login': user.last_login,
+                    'attributes': user.attributes or {},
+                }
+                
+                # Add LinkedIn username if available
+                if hasattr(user, 'linkedin_username') and user.linkedin_username:
+                    if 'attributes' not in formatted_user:
+                        formatted_user['attributes'] = {}
+                    formatted_user['attributes']['linkedin_username'] = user.linkedin_username
+                
+                formatted_users.append(formatted_user)
+            
+            logger.info(f"Returning {len(formatted_users)} formatted users from local database")
+            return formatted_users
+    except Exception as e:
+        logger.error(f"Error fetching users from local database: {e}")
+        return []  # Return empty list as last resort
+
 def list_users_cached(auth_api_url, headers):
     """List users with caching to reduce API calls."""
     try:
@@ -1363,6 +1452,7 @@ async def update_user_data(auth_api_url: str, headers: dict, data: dict):
         else:
             logger.error(f"Failed to update user {user_id}. Status code: {response.status_code}")
             return False
+            
     except requests.exceptions.HTTPError as http_err:
         logger.error(f"HTTP error updating user: {http_err}")
         logger.error(f"Response content: {http_err.response.text if http_err.response else 'No response content'}")

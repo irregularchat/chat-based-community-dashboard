@@ -14,70 +14,51 @@ PORT="${PORT:-8503}"
 export IN_DOCKER=true
 export PYTHONUNBUFFERED=1
 
-# Extract database connection information using improved regex patterns
-if grep -q "DATABASE_URL" /app/.env; then
-    DB_URL=$(grep "DATABASE_URL" /app/.env | cut -d= -f2- | tr -d ' ')
-    echo "Found DATABASE_URL: ${DB_URL//:*@/:***@}"
-    
-    # Extract hostname using better regex pattern
-    if [[ $DB_URL =~ @([^:/]+)[:/] ]]; then
-        DB_HOST="${BASH_REMATCH[1]}"
-        echo "Extracted host from URL: $DB_HOST"
-    else
-        # Default to 'db' if parsing fails
-        DB_HOST="db"
-        echo "Could not parse host from DATABASE_URL, using default: $DB_HOST"
-    fi
-    
-    # Extract port from URL
-    if [[ $DB_URL =~ :([0-9]+)/ ]]; then
-        POSTGRES_PORT="${BASH_REMATCH[1]}"
-        echo "Extracted port from URL: $POSTGRES_PORT"
-    else
-        # Default port if not found
-        POSTGRES_PORT="5432"
-        echo "Could not parse port from DATABASE_URL, using default: $POSTGRES_PORT"
-    fi
-    
-    # Extract database name from URL
-    if [[ $DB_URL =~ /([^/]+)$ ]]; then
-        POSTGRES_DB="${BASH_REMATCH[1]}"
-        echo "Extracted database from URL: $POSTGRES_DB"
-    else
-        # Default database if not found
-        POSTGRES_DB=$(grep "POSTGRES_DB" /app/.env | cut -d= -f2- | tr -d ' ' || echo "dashboarddb")
-        echo "Could not parse database from DATABASE_URL, using env: $POSTGRES_DB"
-    fi
-    
-    # Extract username from URL
-    if [[ $DB_URL =~ ://([^:]+): ]]; then
-        POSTGRES_USER="${BASH_REMATCH[1]}"
-        echo "Extracted username from URL: $POSTGRES_USER"
-    else
-        # Default username if not found
-        POSTGRES_USER=$(grep "POSTGRES_USER" /app/.env | cut -d= -f2- | tr -d ' ' || echo "dashboarduser")
-        echo "Could not parse username from DATABASE_URL, using env: $POSTGRES_USER"
-    fi
-    
-    # Extract password (masked for security)
-    if [[ $DB_URL =~ ://[^:]+:([^@]+)@ ]]; then
-        POSTGRES_PASSWORD="${BASH_REMATCH[1]}"
-        echo "Extracted password from URL: ********"
-    else
-        # Default password if not found
-        POSTGRES_PASSWORD=$(grep "POSTGRES_PASSWORD" /app/.env | cut -d= -f2- | tr -d ' ' || echo "password_for_db")
-        echo "Could not parse password from DATABASE_URL, using env variable"
-    fi
-else
-    # No DATABASE_URL found, use environment variables
-    echo "DATABASE_URL not found in .env, using individual environment variables"
-    
-    # Default to 'db' if DATABASE_URL is not in .env
+# Check for required environment variables
+echo "Validating database environment variables..."
+MISSING_VARS=0
+
+# Check DB_HOST
+if [ -z "$DB_HOST" ]; then
+    echo "⚠️ WARNING: DB_HOST environment variable is not set"
+    echo "Using default value 'db' for DB_HOST"
     DB_HOST="db"
-    POSTGRES_DB=$(grep "POSTGRES_DB" /app/.env | cut -d= -f2- | tr -d ' ' || echo "dashboarddb")
-    POSTGRES_USER=$(grep "POSTGRES_USER" /app/.env | cut -d= -f2- | tr -d ' ' || echo "dashboarduser")
-    POSTGRES_PASSWORD=$(grep "POSTGRES_PASSWORD" /app/.env | cut -d= -f2- | tr -d ' ' || echo "password_for_db")
-    POSTGRES_PORT=$(grep "POSTGRES_PORT" /app/.env | cut -d= -f2- | tr -d ' ' || echo "5432")
+    MISSING_VARS=$((MISSING_VARS+1))
+fi
+
+# Check POSTGRES_DB
+if [ -z "$POSTGRES_DB" ]; then
+    echo "⚠️ WARNING: POSTGRES_DB environment variable is not set"
+    echo "Please set POSTGRES_DB in your environment or .env file"
+    MISSING_VARS=$((MISSING_VARS+1))
+fi
+
+# Check POSTGRES_USER
+if [ -z "$POSTGRES_USER" ]; then
+    echo "⚠️ WARNING: POSTGRES_USER environment variable is not set"
+    echo "Please set POSTGRES_USER in your environment or .env file"
+    MISSING_VARS=$((MISSING_VARS+1))
+fi
+
+# Check POSTGRES_PASSWORD
+if [ -z "$POSTGRES_PASSWORD" ]; then
+    echo "⚠️ WARNING: POSTGRES_PASSWORD environment variable is not set"
+    echo "Please set POSTGRES_PASSWORD in your environment or .env file"
+    MISSING_VARS=$((MISSING_VARS+1))
+fi
+
+# Check POSTGRES_PORT
+if [ -z "$POSTGRES_PORT" ]; then
+    echo "⚠️ WARNING: POSTGRES_PORT environment variable is not set"
+    echo "Using default value '5432' for POSTGRES_PORT"
+    POSTGRES_PORT="5432"
+fi
+
+# Exit if critical variables are missing
+if [ $MISSING_VARS -gt 0 ]; then
+    echo "⚠️ $MISSING_VARS required environment variables are missing or empty"
+    echo "The application may not function correctly without these variables"
+    echo "Please check your docker-compose.yml and .env files"
 fi
 
 # Export variables for the application to use
@@ -133,23 +114,6 @@ else
     fi
 fi
 
-# Adjust the OIDC_REDIRECT_URI in .env if needed
-if grep -q "OIDC_REDIRECT_URI" /app/.env; then
-    # Get the current value
-    CURRENT_URI=$(grep "OIDC_REDIRECT_URI" /app/.env | cut -d= -f2- | tr -d ' ')
-    echo "Current OIDC_REDIRECT_URI: $CURRENT_URI"
-    
-    # Check if it's a localhost URI (for development)
-    if [[ "$CURRENT_URI" == *"localhost"* ]]; then
-        # Create the new URI with the correct format
-        NEW_URI="http://localhost:${PORT}/auth/callback"
-        
-        echo "Updating OIDC_REDIRECT_URI to: $NEW_URI"
-        # Update the URI in the .env file
-        sed -i "s|OIDC_REDIRECT_URI.*|OIDC_REDIRECT_URI = ${NEW_URI}|g" /app/.env
-    fi
-fi
-
 # Print environment variables (without sensitive values)
 echo "Checking environment variables..."
 grep -v '^#' /app/.env | grep '=' | cut -d= -f1 | while read -r var; do
@@ -158,14 +122,18 @@ grep -v '^#' /app/.env | grep '=' | cut -d= -f1 | while read -r var; do
     fi
 done
 
-# Override DATABASE_URL in .env if it exists
+# Set the DATABASE_URL in the environment
+export DATABASE_URL="postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$DB_HOST:$POSTGRES_PORT/$POSTGRES_DB"
+
+# Update DATABASE_URL in .env file if it exists
 if grep -q "DATABASE_URL" /app/.env; then
     echo "Ensuring DATABASE_URL in .env points to the correct database"
-    sed -i "s|DATABASE_URL.*|DATABASE_URL = postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$DB_HOST:$POSTGRES_PORT/$POSTGRES_DB|g" /app/.env
+    # Create a temporary file with the correct DATABASE_URL (masked for security in logs)
+    echo "DATABASE_URL=postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$DB_HOST:$POSTGRES_PORT/$POSTGRES_DB" > /tmp/db_url
+    sed -i "s|DATABASE_URL=.*|$(cat /tmp/db_url)|g" /app/.env
+    # Securely remove the temporary file
+    rm -f /tmp/db_url
     echo "Updated DATABASE_URL in .env file"
-else
-    echo "Adding DATABASE_URL to .env file"
-    echo "DATABASE_URL = postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$DB_HOST:$POSTGRES_PORT/$POSTGRES_DB" >> /app/.env
 fi
 
 # Print final connection information
@@ -178,4 +146,4 @@ echo "URL format: postgresql://<user>:<password>@$DB_HOST:$POSTGRES_PORT/$POSTGR
 
 # Start the Streamlit app
 echo "Starting Streamlit app on port $PORT"
-exec streamlit run app/main.py --server.port=$PORT --server.address=0.0.0.0 
+exec streamlit run app/main.py --server.port=$PORT --server.address=0.0.0.0

@@ -1067,11 +1067,11 @@ def on_first_name_change():
         logging.info(f"First name changed to: {st.session_state['first_name_input_outside']}")
         # Now update username - will only update the internal value
         username_updated = update_username_from_inputs()
-        if username_updated:
-            # Set flag to indicate username needs update on next rerun
-            st.session_state['username_needs_update'] = True
-            # We need to rerun to show the updated username immediately
-            st.rerun()
+            
+        # Set flag to indicate username needs update on next rerun
+        st.session_state['username_needs_update'] = True
+        # We need to rerun to show the updated username immediately
+        st.rerun()
         
 def on_last_name_change():
     """Update username when last name changes"""
@@ -1323,7 +1323,7 @@ def handle_action(action, selected_users, action_params=None, headers=None):
                     continue
                     
                 result = update_user_invited_by(
-                    Config.AUTHENTIK_API_URL,
+                    Config.AUTHENTIK_API_TOKEN,
                     headers,
                     user_id,
                     invited_by
@@ -1436,29 +1436,82 @@ def verify_safety_number_change(username, input_code):
     else:
         st.error("Verification failed. Please check the code and try again.")
 
-def get_users_from_db():
-    """Get all users from the database."""
+def get_users_from_db(search_term=None, status=None):
+    """Get users from both Authentik and local database, ensuring they are synced.
+    
+    Args:
+        search_term (str, optional): Search term to filter users by name, username, or email
+        status (str, optional): Filter by user status ('active' or 'inactive')
+    """
     try:
         with next(get_db()) as db:
-            users = search_users(db, "")  # Empty search term returns all users
-            if users:
-                formatted_users = []
-                for user in users:
-                    user_id = getattr(user, 'id', None) or getattr(user, 'user_id', None)
-                    formatted_user = {
-                        'pk': user_id,
-                        'username': getattr(user, 'username', ''),
-                        'name': getattr(user, 'name', ''),
-                        'email': getattr(user, 'email', ''),
-                        'is_active': getattr(user, 'is_active', True),
-                        'last_login': getattr(user, 'last_login', None),
-                        'attributes': getattr(user, 'attributes', {})
-                    }
-                    formatted_users.append(formatted_user)
-                return formatted_users
-            return []
+            # First, get filtered users from Authentik
+            headers = {
+                'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                'Content-Type': 'application/json'
+            }
+            logging.info("Fetching filtered users from Authentik API")
+            authentik_users = list_users(
+                Config.AUTHENTIK_API_URL, 
+                headers,
+                search_term=search_term,
+                status=status
+            )
+            logging.info(f"Found {len(authentik_users)} filtered users in Authentik")
+            
+            # Get local users for comparison
+            local_users = search_users(db, search_term)
+            local_user_ids = {user.authentik_id for user in local_users if user.authentik_id}
+            logging.info(f"Found {len(local_users)} local users")
+            
+            # Find users that need to be synced
+            users_to_sync = [
+                user for user in authentik_users 
+                if str(user.get('pk')) not in local_user_ids
+            ]
+            logging.info(f"Found {len(users_to_sync)} users to sync")
+            
+            # Sync missing users to local DB
+            if users_to_sync:
+                logging.info("Starting user sync process")
+                for user_data in users_to_sync:
+                    user = User(
+                        username=user_data.get('username', ''),
+                        name=user_data.get('name', ''),
+                        email=user_data.get('email', ''),
+                        is_active=user_data.get('is_active', True),
+                        last_login=user_data.get('last_login'),
+                        attributes=user_data.get('attributes', {}),
+                        authentik_id=str(user_data.get('pk')),
+                        linkedin_username=user_data.get('attributes', {}).get('linkedin_username')
+                    )
+                    db.add(user)
+                    logging.info(f"Added user: {user.username}")
+                db.commit()
+                logging.info("User sync completed")
+                
+                # Refresh local users after sync
+                local_users = search_users(db, "")
+            
+            # Format all users for display
+            formatted_users = []
+            for user in local_users:
+                user_id = getattr(user, 'id', None) or getattr(user, 'user_id', None)
+                formatted_user = {
+                    'pk': user_id,
+                    'username': getattr(user, 'username', ''),
+                    'name': getattr(user, 'name', ''),
+                    'email': getattr(user, 'email', ''),
+                    'is_active': getattr(user, 'is_active', True),
+                    'last_login': getattr(user, 'last_login', None),
+                    'attributes': getattr(user, 'attributes', {}),
+                    'linkedin_username': getattr(user, 'linkedin_username', None),
+                }
+                formatted_users.append(formatted_user)
+            logging.info(f"Returning {len(formatted_users)} formatted users")
+            return formatted_users
     except Exception as e:
-        logging.error(f"Error fetching users from database: {e}")
+        logging.error(f"Error fetching users: {e}")
         return []
 
 def format_date(date_str):
@@ -1544,8 +1597,8 @@ def update_username_from_inputs():
             response = requests.get(user_search_url, headers=headers, timeout=10)
             
             if response.status_code == 200:
-                users = response.json().get('results', [])
-                if any(user['username'] == base_username for user in users):
+                users = response.json()
+                if users.get('count', 0) > 0 or len(users.get('results', [])) > 0:
                     sso_exists = True
                     logging.info(f"Username {base_username} already exists in SSO")
             else:
@@ -2008,7 +2061,7 @@ async def display_user_list(auth_api_url=None, headers=None):
     
     # Initialize session state
     if 'user_list' not in st.session_state:
-        st.session_state['user_list'] = get_users_from_db()
+        st.session_state['user_list'] = list_users(auth_api_url, headers);
     if 'selection_state' not in st.session_state:
         st.session_state['selection_state'] = 'viewing'  # States: viewing, selected
     if 'selected_user_ids' not in st.session_state:
@@ -2032,7 +2085,13 @@ async def display_user_list(auth_api_url=None, headers=None):
         
         # Reset state after action
         if success:
-            st.session_state['user_list'] = get_users_from_db()
+            # After action, get filtered users based on current filters
+            search_term = st.session_state['filter_term']
+            status = st.session_state['status_filter'] if st.session_state['status_filter'] != 'All' else None
+            st.session_state['user_list'] = get_users_from_db(
+                search_term=search_term,
+                status=status
+            )
             st.session_state['selected_user_ids'] = []
             st.session_state['selection_state'] = 'viewing'
             
@@ -2051,8 +2110,7 @@ async def display_user_list(auth_api_url=None, headers=None):
                 key="filter_input"
             )
             st.session_state['filter_term'] = filter_term
-        
-        with filter_col2:
+            
             # Filter by status
             status_options = ['All', 'Active', 'Inactive']
             status_filter = st.selectbox(
@@ -2063,6 +2121,25 @@ async def display_user_list(auth_api_url=None, headers=None):
             )
             st.session_state['status_filter'] = status_filter
         
+        # Get users from Authentik with spinner to indicate loading
+        with st.spinner("Loading users..."):
+            users = list_users(auth_api_url, headers, filter_term)
+            
+            if not users:
+                st.info("No users found matching your criteria.")
+                return
+                
+            # Apply additional filters client-side
+            filtered_users = users
+            
+            # Filter by status
+            if status_filter != 'All':
+                is_active = status_filter == 'Active'
+                filtered_users = [u for u in filtered_users if u.get('is_active', False) == is_active]
+                
+            # Update the user list with filtered results
+            st.session_state['user_list'] = filtered_users
+        
         # Simple UI with two states: selecting users and performing actions
         if st.session_state['selection_state'] == 'viewing':
             # STEP 1: SELECT USERS
@@ -2070,28 +2147,7 @@ async def display_user_list(auth_api_url=None, headers=None):
             
             # Convert user list to DataFrame
             df = pd.DataFrame(st.session_state['user_list'])
-            
-            # Apply filters
-            if st.session_state['filter_term'] and not df.empty:
-                search_term = st.session_state['filter_term'].lower()
-                # Check if 'username', 'name', and 'email' columns exist before filtering
-                if 'username' in df.columns and 'name' in df.columns and 'email' in df.columns:
-                    df = df[
-                        df['username'].str.lower().str.contains(search_term, na=False) |
-                        df['name'].str.lower().str.contains(search_term, na=False) |
-                        df['email'].str.lower().str.contains(search_term, na=False)
-                    ]
-                elif 'username' in df.columns:
-                    df = df[df['username'].str.lower().str.contains(search_term, na=False)]
-                elif 'name' in df.columns:
-                    df = df[df['name'].str.lower().str.contains(search_term, na=False)]
-                elif 'email' in df.columns:
-                    df = df[df['email'].str.lower().str.contains(search_term, na=False)]
-            
-            # Apply status filter
-            if not df.empty and st.session_state['status_filter'] != 'All' and 'is_active' in df.columns:
-                is_active = st.session_state['status_filter'] == 'Active'
-                df = df[df['is_active'] == is_active]
+            # No need for local filtering since it's already done at the API level
             
             # Process fields for display
             if not df.empty:
@@ -2107,10 +2163,16 @@ async def display_user_list(auth_api_url=None, headers=None):
                         if isinstance(row.get('attributes'), dict) else '', 
                         axis=1
                     )
+                    df['linkedin_username'] = df.apply(
+                        lambda row: row.get('attributes', {}).get('linkedin_username', '') 
+                        if isinstance(row.get('attributes'), dict) else '', 
+                        axis=1
+                    )
                 else:
                     # Add empty columns if attributes don't exist
                     df['intro'] = ''
                     df['invited_by'] = ''
+                    df['linkedin_username'] = ''
                 
                 if 'last_login' in df.columns:
                     df['last_login'] = df.apply(
@@ -2179,9 +2241,7 @@ async def display_user_list(auth_api_url=None, headers=None):
                                 help="Number of moderator notes for this user",
                                 format="%d"
                             )
-                        },
-                        disabled=cols_to_display,
-                        height=400
+                        }
                     )
                     
                     # Add a multi-select to choose users if we have usernames
@@ -2540,8 +2600,8 @@ async def display_user_list(auth_api_url=None, headers=None):
         logging.error(f"Error displaying user list: {e}")
         logging.error(traceback.format_exc())
         st.error(f"An error occurred: {str(e)}")
-
 # Add new functions for user management
+
 def update_user_status(api_url: str, headers: dict, user_id: str, is_active: bool) -> bool:
     """Update user's active status in Authentik."""
     try:

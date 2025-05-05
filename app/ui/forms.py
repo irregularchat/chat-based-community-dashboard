@@ -958,37 +958,14 @@ async def render_create_user_form():
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.subheader("Group Selection")
-        st.info("Select the groups this user should be a member of.")
-        
-        # Get available groups
-        groups = get_groups_from_db()
-        if groups:
-            # Format groups for selection
-            group_options = []
-            for group in groups:
-                group_id = group['id']
-                group_name = group['name']
-                group_options.append((group_id, group_name))
-            
-            # Initialize group selection in session state if not present
-            if 'group_selection' not in st.session_state:
-                st.session_state.group_selection = []
-            
-            # Show group selection checkboxes
-            selected_groups = []
-            for group_id, group_name in group_options:
-                if st.checkbox(
-                    group_name,
-                    value=group_id in st.session_state.group_selection,
-                    key=f"group_{group_id}"
-                ):
-                    selected_groups.append(group_id)
-            
-            # Update session state with selected groups
-            st.session_state.group_selection = selected_groups
+        st.subheader("Group Assignment")
+        main_group_id = Config.MAIN_GROUP_ID
+        if main_group_id:
+            st.session_state['selected_groups'] = [main_group_id]
+            st.session_state['group_selection'] = [main_group_id]
+            st.info(f"User will be automatically added to the default group")
         else:
-            st.warning("No groups found in the database")
+            st.warning("No default group configured in MAIN_GROUP_ID")
     
     with col2:
         # Add Discourse checkbox

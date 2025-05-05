@@ -54,6 +54,10 @@ def initialize_session_state():
         st.session_state['is_authenticated'] = False
     if 'is_admin' not in st.session_state:
         st.session_state['is_admin'] = False
+    if 'matrix_users' not in st.session_state:
+        st.session_state['matrix_users'] = []
+    if 'matrix_user_selected' not in st.session_state:
+        st.session_state['matrix_user_selected'] = None
 
 def setup_page_config():
     """Set up the Streamlit page configuration"""

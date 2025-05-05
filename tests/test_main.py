@@ -5,6 +5,7 @@ import app.main
 from datetime import datetime, timedelta
 from app.db.operations import AdminEvent
 from app.utils.config import Config
+from typing import List
 
 @pytest.fixture
 def mock_streamlit():
@@ -52,6 +53,7 @@ def mock_config():
         'FAVICON_URL': "test_favicon.ico",
         'AUTHENTIK_API_URL': "http://test-api",
         'AUTHENTIK_API_TOKEN': "test-token",
+        'MAIN_GROUP_ID': "test-group-id",
         'MATRIX_ACTIVE': False,
         'MATRIX_HOMESERVER_URL': "https://matrix.test",
         'MATRIX_USER_ID': "@bot:matrix.test",
@@ -63,13 +65,47 @@ def mock_config():
         'DISCOURSE_CATEGORY_ID': None,
         'DISCOURSE_INTRO_TAG': None,
         'DISCOURSE_ACTIVE': False,
-        'DATABASE_URL': "sqlite:///test.db"
+        'DATABASE_URL': "sqlite:///test.db",
+        'DEFAULT_ADMIN_USERNAME': "admin",
+        'DEFAULT_ADMIN_PASSWORD': "password"
     }
     
     class MockConfig:
         @classmethod
         def validate_oidc_config(cls):
             return True
+            
+        @classmethod
+        def get_matrix_rooms(cls):
+            return []
+            
+        @classmethod
+        def get_matrix_rooms_by_category(cls, category):
+            return []
+            
+        @classmethod
+        def get_matrix_room_categories(cls):
+            return []
+            
+        @classmethod
+        def get_all_matrix_rooms(cls):
+            return []
+            
+        @classmethod
+        def is_admin(cls, username: str) -> bool:
+            return username == "admin"
+            
+        @classmethod
+        def get_required_vars(cls) -> List[str]:
+            return []
+            
+        @classmethod
+        def validate(cls):
+            return True
+            
+        @classmethod
+        def to_dict(cls):
+            return config_values
     
     # Add config values as class attributes
     for key, value in config_values.items():
@@ -78,7 +114,10 @@ def mock_config():
     with patch('app.utils.config.Config', MockConfig), \
          patch('app.ui.forms.Config', MockConfig), \
          patch('app.ui.home.Config', MockConfig), \
-         patch('app.main.Config', MockConfig):
+         patch('app.main.Config', MockConfig), \
+         patch('app.auth.local_auth.Config', MockConfig), \
+         patch('app.auth.token_handler.Config', MockConfig), \
+         patch('app.force_sync.Config', MockConfig):
         yield MockConfig
 
 @pytest.fixture

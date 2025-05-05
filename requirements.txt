@@ -20,3 +20,4 @@ matrix-nio
 nest-asyncio
 streamlit-extras
 streamlit-option-menu
+pytest-asyncio

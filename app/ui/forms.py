@@ -981,12 +981,28 @@ async def render_create_user_form():
     with col2:
         # Add Discourse checkbox
         st.write("")  # Add some space
-        st.write("")  # Add more space
         create_discourse_post = st.checkbox(
             "Create Discourse introduction post",
             value=True,
             key="create_discourse_post",
             help="Create an introduction post on the Discourse forum for this user"
+        )
+        
+        # Add Matrix integration options
+        st.write("")  # Add some space
+        send_matrix_welcome = st.checkbox(
+            "Send welcome message to Matrix user",
+            value=True,
+            key="send_matrix_welcome",
+            help="Send the welcome message directly to the connected Matrix user"
+        )
+        
+        st.write("")  # Add some space
+        add_to_recommended_rooms = st.checkbox(
+            "Add to recommended Matrix rooms",
+            value=True,
+            key="add_to_recommended_rooms",
+            help="Automatically add the user to recommended rooms based on their interests"
         )
     
     # Data parsing section
@@ -1043,26 +1059,28 @@ async def render_create_user_form():
             # Store the Matrix username in the database
             try:
                 # Import get_db at the function level to avoid scope issues
-from app.db.session import get_db
-                db = next(get_db())
-                user = db.query(User).filter(User.email == email).first()
-                if user:
-                    user.matrix_username = display_name
-                    # Update Authentik profile with Matrix username
-                    user.attributes = user.attributes or {}
-                    user.attributes['matrix_username'] = display_name
-                    db.commit()
-                    st.success(f"Matrix username {display_name} linked to account")
+                from app.db.session import get_db
+                # Ensure email is defined and valid before querying
+                email = st.session_state.get('email_input_outside', '')
+                if email:
+                    db = next(get_db())
+                    user = db.query(User).filter(User.email == email).first()
+                    if user:
+                        user.matrix_username = display_name
+                        # Update Authentik profile with Matrix username
+                        user.attributes = user.attributes or {}
+                        user.attributes['matrix_username'] = display_name
+                        db.commit()
+                        st.success(f"Matrix username {display_name} linked to account")
             except Exception as e:
                 st.error(f"Error storing Matrix username: {str(e)}")
-    
     # Room recommendations based on interests
     if st.session_state.matrix_user_selected and interests:
         st.subheader("Recommended Rooms")
         
         # Get room recommendations
-                if "recommended_rooms" not in st.session_state:
-                    st.session_state.recommended_rooms = []
+        if "recommended_rooms" not in st.session_state:
+            st.session_state.recommended_rooms = []
         if not st.session_state.recommended_rooms:
             with st.spinner("Getting room recommendations based on interests..."):
                 try:
@@ -1074,6 +1092,8 @@ from app.db.session import get_db
                     
                     def get_recommendations_with_timeout():
                         try:
+                            # Ensure the recommendation function is properly imported
+                            from app.utils.recommendation import get_room_recommendations_sync
                             # Get room recommendations
                             rooms = get_room_recommendations_sync(
                                 st.session_state.matrix_user_selected,
@@ -1097,11 +1117,8 @@ from app.db.session import get_db
                             st.session_state.recommended_rooms = result
                         else:
                             st.error(f"Error getting room recommendations: {result}")
-                    st.session_state.recommended_rooms = []
                     else:
                         st.warning("Timed out while getting room recommendations. Please try again.")
-                    st.session_state.recommended_rooms = []
-                        
                 except Exception as e:
                     st.error(f"Error getting room recommendations: {str(e)}")
                     logging.error(f"Error getting room recommendations: {str(e)}")

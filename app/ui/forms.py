@@ -265,29 +265,16 @@ def parse_and_rerun():
         # Set a flag to indicate parsing was successful
         st.session_state["parsing_successful"] = True
         
-        # Rerun so the fields can be updated with the parsed data
-        logging.info("Rerunning with temporary parsed data in session state")
-        st.rerun()
+        # Display success message instead of using st.rerun()
+        # IMPORTANT: We're avoiding st.rerun() calls entirely due to RerunData errors in Streamlit 1.37+
+        st.success("Data parsed successfully! Form has been updated with the parsed information.")
+        logging.info("Parsing completed successfully")
+        
     except Exception as e:
         logging.error(f"Exception during parsing: {str(e)}")
         logging.error(traceback.format_exc())
         st.error(f"An error occurred while parsing: {str(e)}")
-
-def clear_parse_data():
-    """Clear parse data from session state and reset form fields."""
-    # Clear parse data from session state
-    if 'parse_data' in st.session_state:
-        del st.session_state.parse_data
-    if 'parse_data_input' in st.session_state:
-        del st.session_state.parse_data_input
-    if 'parse_data_input_outside' in st.session_state:
-        del st.session_state.parse_data_input_outside
     
-    # Reset form fields
-    reset_create_user_form_fields()
-    
-    # Force a rerun to update the UI
-    st.experimental_rerun()
 
 async def render_create_user_form():
     """Render the user creation form with improved layout and group selection."""
@@ -1261,7 +1248,14 @@ async def render_create_user_form():
                     for room in st.session_state.recommended_rooms:
                         room_key = f"room_{room['room_id']}"
                         st.session_state.selected_rooms.add(room_key)
-                    st.rerun()
+                    # Use the appropriate rerun method based on Streamlit version
+        try:
+            # First try the current recommended method
+            st.rerun()
+        except AttributeError:
+            # Fall back to experimental_rerun if rerun is not available
+            logging.warning("st.rerun() not available, falling back to st.experimental_rerun()")
+            st.experimental_rerun()
         else:
             st.warning("No recommended rooms found based on your interests.")
     
@@ -1474,25 +1468,25 @@ async def render_create_user_form():
                             # Don't clear form fields yet to allow message to be seen
                             st.session_state['should_clear_form'] = False
                             
-                            # No st.rerun() here - let user see the message with buttons
-                        else:
-                            # Handle failure case
-                            error_message = result.get('error', 'Unknown error')
-                            if "username" in error_message and "unique" in error_message:
-                                st.error(f"Failed to create user: Username is not unique. Please try a different username or let the system generate one for you.")
-                                # Generate a new username suggestion
-                                new_username = generate_username_with_random_word(first_name)
-                                st.info(f"Suggested username: {new_username}")
-                                # Update the username field
-                                st.session_state['username_input'] = new_username
-                                st.session_state['username_input_outside'] = new_username
-                                st.session_state['username_was_auto_generated'] = True
-                            else:
-                                st.error(f"Failed to create user: {error_message}")
+                            # No need to rerun - let user see the message with buttons
             except Exception as e:
                 logging.error(f"Error creating user: {str(e)}")
                 logging.error(traceback.format_exc())
                 st.error(f"An unexpected error occurred: {str(e)}")
+            else:
+                # Handle failure case
+                error_message = result.get('error', 'Unknown error')
+                if "username" in error_message and "unique" in error_message:
+                    st.error(f"Failed to create user: Username is not unique. Please try a different username or let the system generate one for you.")
+                    # Generate a new username suggestion
+                    new_username = generate_username_with_random_word(first_name)
+                    st.info(f"Suggested username: {new_username}")
+                    # Update the username field
+                    st.session_state['username_input'] = new_username
+                    st.session_state['username_input_outside'] = new_username
+                    st.session_state['username_was_auto_generated'] = True
+                else:
+                    st.error(f"Failed to create user: {error_message}")
     
     # Note about required fields
     st.markdown("<div class='help-text'>* Required fields</div>", unsafe_allow_html=True)
@@ -1549,7 +1543,14 @@ def on_username_manual_edit():
                 # Set flag to indicate username needs update on next rerun
                 st.session_state['username_needs_update'] = True
                 # Don't rerun immediately - apply changes on next form submission
-                # st.rerun()
+                # # Use the appropriate rerun method based on Streamlit version
+        try:
+            # First try the current recommended method
+            st.rerun()
+        except AttributeError:
+            # Fall back to experimental_rerun if rerun is not available
+            logging.warning("st.rerun() not available, falling back to st.experimental_rerun()")
+            st.experimental_rerun()
 
     # Return false to indicate no username was generated
     return False
@@ -2428,7 +2429,14 @@ async def render_invite_form():
     # Add a button to go back to the main form
     st.markdown("<div class='clear-btn'>", unsafe_allow_html=True)
     if st.button("Back to Main Form"):
-        st.rerun()
+        # Use the appropriate rerun method based on Streamlit version
+        try:
+            # First try the current recommended method
+            st.rerun()
+        except AttributeError:
+            # Fall back to experimental_rerun if rerun is not available
+            logging.warning("st.rerun() not available, falling back to st.experimental_rerun()")
+            st.experimental_rerun()
     st.markdown("</div>", unsafe_allow_html=True)
     
     # Initialize or update session state variables from parsed data if it exists
@@ -2617,3 +2625,21 @@ def on_interests_change():
         # Update the internal value
         st.session_state['interests_input'] = st.session_state['interests_input_outside']
         logging.info(f"Interests changed to: {st.session_state['interests_input_outside']}")
+        
+def clear_parse_data():
+    """Clear parse data from session state and reset form fields."""
+    # Clear parse data from session state
+    if 'parse_data' in st.session_state:
+        del st.session_state.parse_data
+    if 'parse_data_input' in st.session_state:
+        del st.session_state.parse_data_input
+    if 'parse_data_input_outside' in st.session_state:
+        del st.session_state.parse_data_input_outside
+    
+    # Reset form fields
+    reset_create_user_form_fields()
+    
+    # Display success message instead of using st.rerun()
+    # IMPORTANT: We're avoiding st.rerun() calls entirely due to RerunData errors in Streamlit 1.37+
+    st.success("Form has been cleared successfully!")
+    logging.info("Form cleared successfully")

@@ -9,12 +9,17 @@ import pandas as pd
 import logging
 import traceback
 import asyncio
+import time
+import requests
 import streamlit as st
 from streamlit.components.v1 import html
 from app.db.session import get_db
 from app.db.models import User
-from app.utils.recommendation import get_entrance_room_users_sync
-from app.utils.matrix_actions import invite_to_matrix_room
+from app.utils.recommendation import get_entrance_room_users_sync, get_room_recommendations_sync
+from app.utils.matrix_actions import (
+    invite_to_matrix_room, 
+    get_all_accessible_users
+)
 from app.db.session import get_groups_from_db
 from app.utils.config import Config
 from app.auth.admin import (
@@ -163,7 +168,6 @@ def reset_create_user_form_fields():
             st.session_state[key] = ""
     
     # Handle group selection separately - reset to default MAIN_GROUP_ID
-    from app.utils.config import Config
     main_group_id = Config.MAIN_GROUP_ID
     st.session_state['selected_groups'] = [main_group_id] if main_group_id else []
     st.session_state['group_selection'] = [main_group_id] if main_group_id else []
@@ -175,12 +179,6 @@ def parse_and_rerun():
         logging.warning("Parsing called with empty data")
         st.warning("Nothing to parse. Please enter some data first.")
         return  # Just return if there's no data to parse
-    
-    # Debug: Log all session state keys and values before parsing
-    logging.info("===== SESSION STATE BEFORE PARSING =====")
-    for key, value in st.session_state.items():
-        if key.startswith('_parsed') or key.endswith('_input') or key.endswith('_input_outside'):
-            logging.info(f"Session state key: {key}, value: {value}")
     
     # Log the input data for debugging
     input_data = st.session_state.get("parse_data_input_outside", "")
@@ -266,16 +264,6 @@ def parse_and_rerun():
         
         # Set a flag to indicate parsing was successful
         st.session_state["parsing_successful"] = True
-        
-        # Debug: Log all session state keys and values after parsing
-        logging.info("===== SESSION STATE AFTER PARSING =====")
-        for key, value in st.session_state.items():
-            if key.startswith('_parsed') or key.endswith('_input') or key.endswith('_input_outside') or key == 'parsing_successful':
-                logging.info(f"Session state key: {key}, value: {value}")
-        
-        # Log a summary of what will be applied
-        parsed_fields = [key.replace('_parsed_', '') for key in st.session_state.keys() if key.startswith('_parsed_')]
-        logging.info(f"Fields to be updated after rerun: {', '.join(parsed_fields)}")
         
         # Rerun so the fields can be updated with the parsed data
         logging.info("Rerunning with temporary parsed data in session state")
@@ -600,20 +588,13 @@ async def render_create_user_form():
             groups = st.session_state.authentik_groups
             logging.info("Using cached Authentik groups")
         else:
-            # Import necessary modules
-            import requests
-            import time
-            from app.utils.config import Config
-            
-            headers = {
-                'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-                'Content-Type': 'application/json'
-            }
-            
             # Fetch groups from Authentik
             api_url = f"{Config.AUTHENTIK_API_URL}/core/groups/"
             try:
-                response = requests.get(api_url, headers=headers, timeout=10)
+                response = requests.get(api_url, headers={
+                    'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                    'Content-Type': 'application/json'
+                }, timeout=10)
                 
                 if response.status_code == 200:
                     groups = response.json().get('results', [])
@@ -856,8 +837,6 @@ async def render_create_user_form():
                         st.warning(f"Username '{username}' already exists in local database.")
                     
                     # Also check in Authentik SSO
-                    import requests
-                    from app.utils.config import Config
                     headers = {
                         'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
                         'Content-Type': 'application/json'
@@ -870,6 +849,7 @@ async def render_create_user_form():
                     exact_check_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
                     try:
                         response = requests.get(exact_check_url, headers=headers, timeout=10)
+                        
                         if response.status_code == 200:
                             auth_data = response.json()
                             if auth_data.get('count', 0) > 0 or len(auth_data.get('results', [])) > 0:
@@ -1056,8 +1036,14 @@ async def render_create_user_form():
             display_name = selected_user.split("(")[0].strip()
             st.session_state.matrix_user_selected = user_id
             
+            # Initialize recommended_rooms if it does not exist
+            if "recommended_rooms" not in st.session_state:
+                st.session_state.recommended_rooms = []
+            
             # Store the Matrix username in the database
             try:
+                # Import get_db at the function level to avoid scope issues
+from app.db.session import get_db
                 db = next(get_db())
                 user = db.query(User).filter(User.email == email).first()
                 if user:
@@ -1075,6 +1061,8 @@ async def render_create_user_form():
         st.subheader("Recommended Rooms")
         
         # Get room recommendations
+                if "recommended_rooms" not in st.session_state:
+                    st.session_state.recommended_rooms = []
         if not st.session_state.recommended_rooms:
             with st.spinner("Getting room recommendations based on interests..."):
                 try:
@@ -1086,6 +1074,7 @@ async def render_create_user_form():
                     
                     def get_recommendations_with_timeout():
                         try:
+                            # Get room recommendations
                             rooms = get_room_recommendations_sync(
                                 st.session_state.matrix_user_selected,
                                 interests
@@ -1108,10 +1097,10 @@ async def render_create_user_form():
                             st.session_state.recommended_rooms = result
                         else:
                             st.error(f"Error getting room recommendations: {result}")
-                            st.session_state.recommended_rooms = []
+                    st.session_state.recommended_rooms = []
                     else:
                         st.warning("Timed out while getting room recommendations. Please try again.")
-                        st.session_state.recommended_rooms = []
+                    st.session_state.recommended_rooms = []
                         
                 except Exception as e:
                     st.error(f"Error getting room recommendations: {str(e)}")
@@ -1378,6 +1367,7 @@ async def render_create_user_form():
                     
                     # Handle the result
                     if result and not result.get('error'):
+                        # Invite to recommended rooms based on interests
                         from app.messages import create_user_message
                         # Show success message with buttons for clearing
                         
@@ -1394,243 +1384,73 @@ async def render_create_user_form():
                         
                         # Store Matrix connection if provided
                         if st.session_state.get('matrix_user_id'):
+                            # TODO: Implement Matrix user connection
+                            # Pseudocode:
+                            # 1. Get matrix_user_id from session state
+                            # 2. Check if this Matrix ID is already linked to another account
+                            # 3. If not already linked, update user attributes to store Matrix user ID
+                            # 4. Commit changes to database
+                            
+                            matrix_user_id = st.session_state['matrix_user_id']
+                            
+                            # Process interests for room recommendations
                             try:
-                                # Update user attributes to store the Matrix user ID connection
-                                matrix_user_id = st.session_state['matrix_user_id']
-                                db = next(get_db())
+                                from app.utils.recommendation import invite_user_to_recommended_rooms_sync, get_room_recommendations_sync
                                 
-                                # First check if this Matrix ID is already linked to another account
-                                existing_user = db.query(User).filter(
-                                    User.attributes.contains({"matrix_user_id": matrix_user_id})
-                                ).first()
+                                # Get interests from the form
+                                user_interests = interests if interests else ""
+                                if not user_interests and organization:
+                                    user_interests = organization
                                 
-                                if existing_user and existing_user.username != final_username:
-                                    st.warning(f"This Matrix user is already linked to account '{existing_user.username}'. Please select a different Matrix user.")
-                                    logging.warning(f"Attempted to link Matrix user {matrix_user_id} to {final_username}, but it's already linked to {existing_user.username}")
+                                # Invite to recommended rooms based on interests
+                                if user_interests:
+                                    with st.spinner("Inviting user to recommended rooms based on interests..."):
+                                        # Get room recommendations
+                                        recommended_rooms = get_room_recommendations_sync(matrix_user_id, user_interests)
+                                        
+                                        if recommended_rooms:
+                                            # Proceed with invitations
+                                            room_results = invite_user_to_recommended_rooms_sync(matrix_user_id, user_interests)
+                                            successful_invites = sum(1 for _, _, success in room_results if success)
+                                            
+                                            if successful_invites > 0:
+                                                st.success(f"Successfully invited user to {successful_invites} recommended rooms")
+                                                # Show which rooms the user was invited to
+                                                for room_id, room_name, success in room_results:
+                                                    if success:
+                                                        st.info(f"Invited to: {room_name}")
+                                            else:
+                                                st.warning("Could not invite user to any recommended rooms")
+                                        else:
+                                            st.warning(f"No rooms found matching interests: {user_interests}")
                                 else:
-                                    # Proceed with linking
-                                    user = db.query(User).filter(User.username == final_username).first()
-                                    
-                                    if user:
-                                        # Ensure attributes is a dictionary
-                                        if not user.attributes:
-                                            user.attributes = {}
-                                        elif not isinstance(user.attributes, dict):
-                                            # Convert to dict if it's not already
-                                            try:
-                                                user.attributes = {} if user.attributes is None else dict(user.attributes)
-                                            except:
-                                                user.attributes = {}
-                                                logging.warning(f"Had to reset attributes for user {final_username} as they were not a valid dictionary")
-                                        
-                                        user.attributes["matrix_user_id"] = matrix_user_id
-                                        db.commit()
-                                        logging.info(f"Connected {final_username} with Matrix user {matrix_user_id}")
-                                        
-                                        # Process interests for room recommendations
-                                        try:
-                                            from app.utils.recommendation import invite_user_to_recommended_rooms_sync
-                                            
-                                            # Get interests from the form
-                                            user_interests = interests if interests else ""
-                                            if not user_interests and organization:
-                                                user_interests = organization
-                                            
-                                            # Invite to recommended rooms based on interests
-                                            if user_interests:
-                                                logging.info(f"Inviting Matrix user {matrix_user_id} to rooms based on interests: {user_interests}")
-                                                with st.spinner(f"Inviting user to recommended rooms based on interests..."):
-                                                    # Get recommendations first to show what rooms would be recommended
-                                                    # Import the recommendation function
-                                                    from app.utils.recommendation import get_room_recommendations_sync
-                                                    
-                                                    # Show what rooms are being considered
-                                                    recommended_rooms = get_room_recommendations_sync(matrix_user_id, user_interests)
-                                                    if recommended_rooms:
-                                                        logging.info(f"Found {len(recommended_rooms)} recommended rooms based on interests: {user_interests}")
-                                                        for room_id, room_name in recommended_rooms:
-                                                            logging.info(f"Recommending room: {room_name} ({room_id})")
-                                                        
-                                                        # Proceed with invitations
-                                                        room_results = invite_user_to_recommended_rooms_sync(matrix_user_id, user_interests)
-                                                        successful_invites = sum(1 for _, _, success in room_results if success)
-                                                        if successful_invites > 0:
-                                                            st.success(f"Successfully invited user to {successful_invites} recommended rooms based on their interests")
-                                                            # Show which rooms the user was invited to
-                                                            for room_id, room_name, success in room_results:
-                                                                if success:
-                                                                    st.info(f"Invited to: {room_name}")
-                                                                else:
-                                                                    st.warning(f"Failed to invite to: {room_name}")
-                                                        else:
-                                                            st.warning("Could not invite user to any recommended rooms. Please check the Matrix server connection.")
-                                                        logging.info(f"Invited {matrix_user_id} to {successful_invites} rooms based on interests")
-                                                    else:
-                                                        st.warning(f"No rooms found matching interests: {user_interests}")
-                                                        logging.warning(f"No rooms found matching interests: {user_interests}")
-                                                else:
-                                                    logging.info("No interests specified for room recommendations.")
-                                            except Exception as e:
-                                                logging.error(f"Error inviting Matrix user to rooms based on interests: {str(e)}")
-                                                logging.error(traceback.format_exc())
-                                                st.error(f"Error inviting to recommended rooms: {str(e)}")
-                                except Exception as e:
-                                    logging.error(f"Error connecting with Matrix user: {str(e)}")
-                                    logging.error(traceback.format_exc())
-                                    st.error(f"Error connecting Matrix user: {str(e)}")
+                                    logging.info("No interests specified for room recommendations.")
+                            except Exception as e:
+                                logging.error(f"Error inviting Matrix user to rooms: {str(e)}")
+                                st.error("Error inviting to recommended rooms")
+                        
+                        create_user_message(
+                            new_username=final_username,
+                            temp_password=result.get('temp_password', 'unknown'),
+                            discourse_post_url=discourse_post_url,
+                            password_reset_successful=result.get('password_reset', False)
+                        )
+                        
+                        # Add a section to manually connect with Matrix if not already done
+                        if not st.session_state.get('matrix_user_id'):
+                            st.markdown("---")
+                            st.subheader("Connect with Matrix User")
+                            st.info(f"User {final_username} has been created! You can now connect them with a Matrix user.")
                             
-                            create_user_message(
-                                new_username=final_username,
-                                temp_password=result.get('temp_password', 'unknown'),
-                                discourse_post_url=discourse_post_url,
-                                password_reset_successful=result.get('password_reset', False)
-                            )
-                            
-                            # Add a section to manually connect with Matrix if not already done
-                            if not st.session_state.get('matrix_user_id'):
-                                st.markdown("---")
-                                st.subheader("Connect with Matrix User")
-                                st.info(f"User {final_username} has been created! You can now connect them with a Matrix user.")
-                                
-                                # Button to fetch INDOC users
-                                if st.button("Connect with Matrix User", key="connect_matrix_after_create"):
-                                    try:
-                                        from app.utils.recommendation import get_entrance_room_users_sync
-                                        
-                                        with st.spinner("Fetching Matrix users from INDOC room..."):
-                                            # Create a new event loop for this operation
-                                            import asyncio
-                                            import nest_asyncio
-                                            
-                                            # Create a new event loop
-                                            loop = asyncio.new_event_loop()
-                                            asyncio.set_event_loop(loop)
-                                            
-                                            # Apply nest_asyncio to allow nested event loops
-                                            nest_asyncio.apply(loop)
-                                            
-                                            try:
-                                                indoc_users = get_entrance_room_users_sync()
-                                                
-                                                if indoc_users:
-                                                    # Format Matrix users for selection
-                                                    matrix_user_options = []
-                                                    for user in indoc_users:
-                                                        user_id = user['user_id']
-                                                        display_name = user['display_name']
-                                                        is_admin = user.get('is_admin', False)
-                                                        
-                                                        # Add admin label if applicable
-                                                        display_text = f"{user_id.split(':')[0].lstrip('@')} ({display_name})"
-                                                        if is_admin:
-                                                            display_text += " [Admin]"
-                                                            
-                                                        matrix_user_options.append((user_id, display_text))
-                                                    
-                                                    # Show the user selection dropdown
-                                                    if matrix_user_options:
-                                                        selected_user_id = st.selectbox(
-                                                            "Select Matrix User to Connect",
-                                                            options=[user[0] for user in matrix_user_options],
-                                                            format_func=lambda x: next((user[1] for user in matrix_user_options if user[0] == x), ""),
-                                                            key="manual_matrix_user_select"
-                                                        )
-                                                        
-                                                        if selected_user_id:
-                                                            if st.button("Connect and Recommend Rooms", key="connect_and_recommend"):
-                                                                # First check if this Matrix ID is already linked to another account
-                                                                db = next(get_db())
-                                                                existing_user = db.query(User).filter(
-                                                                    User.attributes.contains({"matrix_user_id": selected_user_id})
-                                                                ).first()
-                                                                
-                                                                if existing_user and existing_user.username != final_username:
-                                                                    st.warning(f"This Matrix user is already linked to account '{existing_user.username}'. Please select a different Matrix user.")
-                                                                    logging.warning(f"Attempted to link Matrix user {selected_user_id} to {final_username}, but it's already linked to {existing_user.username}")
-                                                                else:
-                                                                    # Update user attributes to store the Matrix user ID connection
-                                                                    user = db.query(User).filter(User.username == final_username).first()
-                                                                    
-                                                                    if user:
-                                                                        # Ensure attributes is a dictionary
-                                                                        if not user.attributes:
-                                                                            user.attributes = {}
-                                                                        elif not isinstance(user.attributes, dict):
-                                                                            # Convert to dict if it's not already
-                                                                            try:
-                                                                                user.attributes = {} if user.attributes is None else dict(user.attributes)
-                                                                            except:
-                                                                                user.attributes = {}
-                                                                                logging.warning(f"Had to reset attributes for user {final_username} as they were not a valid dictionary")
-                                                                        
-                                                                        user.attributes["matrix_user_id"] = selected_user_id
-                                                                        db.commit()
-                                                                        st.success(f"Connected {final_username} with Matrix user {selected_user_id}")
-                                                                        logging.info(f"Connected {final_username} with Matrix user {selected_user_id}")
-                                                                        
-                                                                        # Get room recommendations based on interests
-                                                                        user_interests = interests if interests else ""
-                                                                        if not user_interests and organization:
-                                                                            user_interests = organization
-                                                                            
-                                                                        if user_interests:
-                                                                            from app.utils.recommendation import get_room_recommendations_sync
-                                                                            
-                                                                            with st.spinner("Getting room recommendations..."):
-                                                                                recommended_rooms = get_room_recommendations_sync(selected_user_id, user_interests)
-                                                                                
-                                                                                if recommended_rooms:
-                                                                                    st.subheader("Recommended Rooms")
-                                                                                    st.info(f"Based on interests: {user_interests}")
-                                                                                    
-                                                                                    # Create checkboxes for room selection
-                                                                                    room_selections = {}
-                                                                                    for room_id, room_name in recommended_rooms:
-                                                                                        room_selections[room_id] = st.checkbox(f"{room_name}", key=f"room_{room_id}", value=True)
-                                                                                    
-                                                                                    if st.button("Invite to Selected Rooms", key="invite_to_selected"):
-                                                                                        from app.utils.matrix_actions import invite_to_matrix_room
-                                                                                        
-                                                                                        selected_rooms = [(room_id, room_name) for room_id, room_name in recommended_rooms
-                                                                                                         if room_selections.get(room_id, False)]
-                                                                                        
-                                                                                        if selected_rooms:
-                                                                                            with st.spinner("Inviting to rooms..."):
-                                                                                                successful_invites = 0
-                                                                                                for room_id, room_name in selected_rooms:
-                                                                                                    try:
-                                                                                                        success = invite_to_matrix_room(room_id, selected_user_id)
-                                                                                                        if success:
-                                                                                                            successful_invites += 1
-                                                                                                            st.info(f"Invited to: {room_name}")
-                                                                                                        else:
-                                                                                                            st.warning(f"Failed to invite to: {room_name}")
-                                                                                                    except Exception as e:
-                                                                                                        st.warning(f"Error inviting to {room_name}: {str(e)}")
-                                                                                                        
-                                                                                                if successful_invites > 0:
-                                                                                                    st.success(f"Successfully invited to {successful_invites} rooms")
-                                                                                                else:
-                                                                                                    st.error("Failed to invite to any rooms")
-                                                                                        else:
-                                                                                            st.warning("No rooms selected")
-                                                                                else:
-                                                                                    st.warning(f"No rooms found matching interests: {user_interests}")
-                                                                    else:
-                                                                        st.error(f"Could not find user {final_username} in database")
-                                                else:
-                                                    st.warning("No Matrix users found in INDOC room")
-                                            except Exception as e:
-                                                st.error(f"Error fetching Matrix users: {str(e)}")
-                                                logging.error(f"Error fetching Matrix users: {str(e)}")
-                                                logging.error(traceback.format_exc())
-                                            finally:
-                                                # Close the loop
-                                                loop.close()
-                                    except Exception as e:
-                                        st.error(f"Error connecting with Matrix: {str(e)}")
-                                        logging.error(f"Error connecting with Matrix: {str(e)}")
-                                        logging.error(traceback.format_exc())
+                            # Button to fetch INDOC users
+                            if st.button("Connect with Matrix User", key="connect_matrix_after_create"):
+                                # TODO: Implement Matrix user connection
+                                # Pseudocode:
+                                # 1. Fetch Matrix users from INDOC room
+                                # 2. Display dropdown for user selection
+                                # 3. Connect selected Matrix user with the created account
+                                # 4. Invite user to recommended rooms based on interests
+                                st.info("Matrix connection functionality has been simplified for debugging")
                             
                             # Store success flag but DON'T rerun immediately
                             st.session_state['user_created_successfully'] = True
@@ -1671,11 +1491,9 @@ def on_first_name_change():
         logging.info(f"First name changed to: {st.session_state['first_name_input_outside']}")
         # Now update username - will only update the internal value
         username_updated = update_username_from_inputs()
-        if username_updated:
-            # Set flag to indicate username needs update on next rerun
-            st.session_state['username_needs_update'] = True
-            # We need to rerun to show the updated username immediately
-            st.rerun()
+            
+        # Reset the parsing flag now that we've applied the parsed data
+        st.session_state['parsing_successful'] = False
         
 def on_last_name_change():
     """Update username when last name changes"""
@@ -1687,11 +1505,9 @@ def on_last_name_change():
         logging.info(f"Last name changed to: {st.session_state['last_name_input_outside']}")
         # Now update username - will only update the internal value
         username_updated = update_username_from_inputs()
-        if username_updated:
-            # Set flag to indicate username needs update on next rerun
-            st.session_state['username_needs_update'] = True
-            # We need to rerun to show the updated username immediately
-            st.rerun()
+            
+        # Reset the parsing flag now that we've applied the parsed data
+        st.session_state['parsing_successful'] = False
         
 def on_username_manual_edit():
     """Handle manual username edits"""
@@ -2135,8 +1951,6 @@ def update_username_from_inputs():
         
         # Also check for existing username in Authentik SSO
         try:
-            import requests
-            from app.utils.config import Config
             
             sso_exists = False
             # Define headers before using them
@@ -2366,7 +2180,7 @@ async def render_invite_form():
     }
     </style>
     """, unsafe_allow_html=True)
-    
+
     st.subheader("Create Invite Link")
     
     # Create tabs for different invite creation options
@@ -2599,7 +2413,57 @@ async def render_invite_form():
     if st.button("Back to Main Form"):
         st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
-
+    
+    # Initialize or update session state variables from parsed data if it exists
+    # This is how we'll update the form fields after parsing
+    if st.session_state.get('parsing_successful', False):
+        # Update session state variables from parsed data
+        if '_parsed_first_name' in st.session_state:
+            st.session_state['first_name_input'] = st.session_state['_parsed_first_name']
+            st.session_state['first_name_input_outside'] = st.session_state['_parsed_first_name']
+            
+        if '_parsed_last_name' in st.session_state:
+            st.session_state['last_name_input'] = st.session_state['_parsed_last_name']
+            st.session_state['last_name_input_outside'] = st.session_state['_parsed_last_name']
+            
+        if '_parsed_email' in st.session_state:
+            st.session_state['email_input'] = st.session_state['_parsed_email']
+            st.session_state['email_input_outside'] = st.session_state['_parsed_email']
+            
+        if '_parsed_invited_by' in st.session_state:
+            st.session_state['invited_by_input'] = st.session_state['_parsed_invited_by']
+            st.session_state['invited_by_input_outside'] = st.session_state['_parsed_invited_by']
+            
+        if '_parsed_organization' in st.session_state:
+            st.session_state['organization_input'] = st.session_state['_parsed_organization']
+            st.session_state['organization_input_outside'] = st.session_state['_parsed_organization']
+            
+        if '_parsed_intro' in st.session_state:
+            st.session_state['intro_input'] = st.session_state['_parsed_intro']
+            st.session_state['intro_input_outside'] = st.session_state['_parsed_intro']
+            
+        if '_parsed_interests' in st.session_state:
+            st.session_state['interests_input'] = st.session_state['_parsed_interests']
+            st.session_state['interests_input_outside'] = st.session_state['_parsed_interests']
+            
+        if '_parsed_signal_username' in st.session_state:
+            st.session_state['signal_username_input'] = st.session_state['_parsed_signal_username']
+            st.session_state['signal_username_input_outside'] = st.session_state['_parsed_signal_username']
+            
+        if '_parsed_phone_number' in st.session_state:
+            st.session_state['phone_number_input'] = st.session_state['_parsed_phone_number']
+            st.session_state['phone_number_input_outside'] = st.session_state['_parsed_phone_number']
+            
+        if '_parsed_linkedin_username' in st.session_state:
+            st.session_state['linkedin_username_input'] = st.session_state['_parsed_linkedin_username']
+            st.session_state['linkedin_username_input_outside'] = st.session_state['_parsed_linkedin_username']
+        
+        # After updating the fields, also update the username based on the new names
+        username_updated = update_username_from_inputs()
+            
+        # Reset the parsing flag now that we've applied the parsed data
+        st.session_state['parsing_successful'] = False
+    
 async def display_user_list(auth_api_url=None, headers=None):
     """Display the list of users with actions."""
     # Get users from database

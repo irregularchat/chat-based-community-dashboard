@@ -1,33 +1,83 @@
-# app/messages.py
-import streamlit as st
-from app.auth import generate_secure_passphrase, force_password_reset, shorten_url
-from app.auth.api import create_invite  # Keep this import for now
-from pytz import timezone
-from datetime import datetime
-import logging
-from app.utils.config import Config  # Fixed import path
+"""
+Messages module for IrregularChat community dashboard.
 
-def create_user_message(new_username, temp_password, discourse_post_url=None, password_reset_successful=True):
-    """Generate and display the welcome message after user creation with temp password.
+This module provides functions for generating welcome messages and invite messages for users.
+"""
+import logging
+from datetime import datetime
+import traceback
+
+import streamlit as st
+from pytz import timezone
+
+from app.auth import generate_secure_passphrase
+from app.auth.api import generate_recovery_link
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
+def create_invite_message(invite_link, expires_at):
+    """
+    Create an invite message with a link and expiration time.
+    
+    Args:
+        invite_link: URL for the invite
+        expires_at: Timestamp when the invite expires
+        
+    Returns:
+        str: Formatted invite message
+    """
+    # Get timezone and format expiration time
+    try:
+        eastern = timezone('US/Eastern')
+        expires_dt = datetime.fromtimestamp(expires_at).astimezone(eastern)
+        expires_formatted = expires_dt.strftime('%A, %B %d at %I:%M %p %Z')
+        logger.info("Formatted expiration time: %s", expires_formatted)
+    except (ValueError, TypeError) as e:
+        logger.error("Error formatting expiration time: %s", str(e))
+        expires_formatted = "Unknown"
+
+    # Create the invite message
+    message = f"""
+    🌟 Welcome to IrregularChat! 🌟
+
+    You're invited to join our community. Please use the link below to create your account:
+
+    {invite_link}
+
+    This invite expires on {expires_formatted}.
+
+    Looking forward to seeing you in the community!
+    """
+    return message
+
+def create_user_message(new_username, temp_password=None, discourse_post_url=None):
+    """
+    Create a welcome message for a new user with login credentials and optional Discourse post URL.
+    
+    Args:
+        new_username: The username of the new user
+        temp_password: Temporary password for the user, None if password reset is needed
+        discourse_post_url: URL to the user's Discourse introduction post
     
     Returns:
-        str: The welcome message as a string
+        str: Welcome message
     """
-    
     # new_username is the final username that may have been incremented for uniqueness
     # This is passed from the create_user function and already has any numeric suffixes
-    logging.info(f"Generating welcome message for user: {new_username}")
+    logger.info("Generating welcome message for user: %s", new_username)
     
     # Special case for failed password reset
-    if not password_reset_successful or temp_password == "PASSWORD_NEEDS_RESET":
+    if not temp_password:
         welcome_message = f"""
         🌟 User Created But Password Reset Failed 🌟
         
+        Your account has been created. Please set your password using the steps below:
+        
         Username: {new_username}
         
-        ⚠️ Important: The system was unable to set a password automatically.
+        To set your password:
         
-        Please follow these steps:
         1️⃣ Go to https://sso.irregularchat.com/if/flow/password-reset/
         2️⃣ Enter the username: {new_username}
         3️⃣ Click "Reset Password" and follow the instructions
@@ -39,19 +89,18 @@ def create_user_message(new_username, temp_password, discourse_post_url=None, pa
         st.session_state['message'] = welcome_message
         st.session_state['user_list'] = None  # Clear user list if there was any
         st.warning("User created but password reset failed. Manual reset required.")
-        
     else:
         # Normal case with successful password reset
         welcome_message = f"""
         🌟 Your First Step Into the IrregularChat! 🌟
-        You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans.
+        You've just joined a community focused on breaking down silos, fostering innovation, 
+        and supporting service members and veterans.
         ---
         Use This Username and Temporary Password ⬇️
         Username: {new_username}
         Temporary Password: {temp_password}
         Exactly as shown above 👆🏼
 
-        
         1️⃣ Step 1:
         - Use the username and temporary password to log in to https://sso.irregularchat.com
         
@@ -59,57 +108,114 @@ def create_user_message(new_username, temp_password, discourse_post_url=None, pa
         - Update your email, important to be able to recover your account and verify your identity
         - Save your Login Username and New Password to a Password Manager
         - Visit the welcome page while logged in https://forum.irregularchat.com/t/84
-        - Change your password directly here: https://url.irregular.chat/change-password 
         """
-        
-        # Add Discourse post URL if available
-        if discourse_post_url:
-            logging.info(f"Including discourse post URL in welcome message: {discourse_post_url}")
-            welcome_message += f"""
+
+        # Welcome message only sent when admin explicitly configures it
+        if st.session_state.get('send_welcome', False):
+            try:
+                if discourse_post_url:
+                    welcome_message += f"""
         3️⃣ Step 3:
-        - Check out your introduction post: {discourse_post_url}
-        - Feel free to update it with more information about yourself!
-            """
-        else:
-            logging.info("No discourse post URL available for welcome message")
+        - We posted an intro about you, but you can complete or customize it:
+        {discourse_post_url}
+        """
+            except (KeyError, AttributeError) as e:
+                logger.error("Error adding discourse post URL to welcome message: %s", str(e))
+                logger.error(traceback.format_exc())
+        
+            # Import matrix actions only if needed
+            try:
+                if st.session_state.get('selected_matrix_user') and discourse_post_url:
+                    import threading
+                    
+                    def send_matrix_message_thread():
+                        try:
+                            from app.utils.recommendation import send_welcome_and_invite_to_rooms_sync
+                            from app.utils.matrix_actions import send_matrix_message
+                            
+                            def send_single_message(content):
+                                try:
+                                    send_matrix_message(
+                                        "You're invited to IrregularChat!",
+                                        content,
+                                        st.session_state['selected_matrix_user']
+                                    )
+                                except (ConnectionError, TimeoutError, ValueError) as e:
+                                    logger.error(
+                                        "Error sending Matrix message to %s: %s",
+                                        st.session_state['selected_matrix_user'],
+                                        str(e)
+                                    )
+                            
+                            # Send first message with credentials
+                            first_message = f"""Hey there! Your account on Irregular Chat has been created.
+
+                            Username: {new_username}
+                            Temporary password: {temp_password}
+
+                            Head over to https://sso.irregularchat.com to log in and update your password.
+                            """
+                            send_single_message(first_message)
+                            
+                            # Send second message with discourse link and groups info
+                            if discourse_post_url:
+                                second_message = f"""I also created an introduction post for you at {discourse_post_url}.
+                                Feel free to edit it to better introduce yourself to our community!
+                                
+                                You'll be invited to join our Matrix rooms soon! 
+                                I'm looking forward to chatting with you there.
+                                """
+                                send_single_message(second_message)
+                                
+                                # Send invites to matrix rooms based on user's interests
+                                send_welcome_and_invite_to_rooms_sync(
+                                    st.session_state['selected_matrix_user'],
+                                    new_username
+                                )
+                                
+                                logger.info(
+                                    "Matrix invites sent to %s for user %s",
+                                    st.session_state['selected_matrix_user'],
+                                    new_username
+                                )
+                    
+                    # Start thread for matrix messages
+                    thread = threading.Thread(target=send_matrix_message_thread)
+                    thread.daemon = True
+                    thread.start()
+                else:
+                    logger.info("No Matrix user selected or discourse post URL available for welcome message")
+            except (ImportError, RuntimeError) as e:
+                logger.error("Error importing or running Matrix messaging: %s", str(e))
         
         welcome_message += """
         Please take a moment to learn about the community before you jump in.
+        
+        If you have any questions or need assistance, feel free to reach out to the community admins.
+        
+        Welcome aboard!
         """
         
-        st.code(welcome_message)
-        st.session_state['message'] = welcome_message
-        st.session_state['user_list'] = None  # Clear user list if there was any
-        st.success("User created successfully!")
-    
-    # Add buttons to control next actions - outside of any form
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Clear Message", key="clear_message_btn"):
-            # Clear message from session state
-            if 'message' in st.session_state:
-                del st.session_state['message']
-            st.rerun()
-    with col2:
-        if st.button("Create Another User", key="create_another"):
-            # Clear form fields and message
-            if 'message' in st.session_state:
-                del st.session_state['message']
-            st.session_state['should_clear_form'] = True
-            st.rerun()
-            
-    # Return the welcome message so it can be used by other functions
-    return welcome_message
-
+        return welcome_message
 
 def create_recovery_message(username_input, new_password):
-    """Generate and display the recovery message after generating a recovery link."""
+    """
+    Generate and display the recovery message after generating a recovery link.
+    
+    Args:
+        username_input: Username for recovery
+        new_password: New password for the user
+    
+    Returns:
+        None
+    """
     recovery_message = f"""
     Account recovery Details
     **Username**: {username_input}
     **New Password**: {new_password}
 
-    Use the credentials above to recover your account. Make sure you update your email address after recovering your account so you can recover your account in the future.
+    Use the credentials above to recover your account. Make sure you update your email address 
+    after recovering your account so you can recover your account in the future.
     
     If you have any issues, please reach out to the admin team.
     Once Logged in, see all the chats and services: https://forum.irregularchat.com/t/84
@@ -120,7 +226,15 @@ def create_recovery_message(username_input, new_password):
     st.success("Recovery link generated successfully!")
 
 def multi_recovery_message(user_list):
-    """Generate and display recovery messages after resetting passwords for multiple users."""
+    """
+    Generate and display recovery messages after resetting passwords for multiple users.
+    
+    Args:
+        user_list: List of users with their details
+    
+    Returns:
+        None
+    """
     for user in user_list:
         username_input = user['username']
         new_password = generate_secure_passphrase()  # Assuming this function generates a secure password
@@ -130,7 +244,8 @@ def multi_recovery_message(user_list):
         **Username**: {username_input}
         **New Password**: {new_password}
 
-        Use the credentials above to recover your account. Make sure you update your email address after recovering your account so you can recover your account in the future.
+        Use the credentials above to recover your account. Make sure you update your email address 
+        after recovering your account so you can recover your account in the future.
         
         If you have any issues, please reach out to the admin team.
         Once Logged in, see all the chats and services: https://forum.irregularchat.com/t/84
@@ -142,48 +257,55 @@ def multi_recovery_message(user_list):
 
     st.session_state['user_list'] = None  # Clear user list if there was any
 
-def create_invite_message(label, invite_url, expires_datetime):
-    """Generate and display the invite message."""
-    if invite_url:
-        eastern = timezone('US/Eastern')
-        
-        # Ensure both datetimes are timezone-aware in Eastern time
-        if expires_datetime.tzinfo is None:
-            expires_datetime = eastern.localize(expires_datetime)
-        now = datetime.now(eastern)
-        
-        time_remaining = expires_datetime - now
-        hours, remainder = divmod(int(time_remaining.total_seconds()), 3600)
-        minutes, _ = divmod(remainder, 60)
+def create_user_summary(username, display_name, organization, email, interests_input, send_welcome=False):
+    """
+    Create a summary of the user creation details.
+    
+    Args:
+        username: Username
+        display_name: Display name
+        organization: Organization
+        email: Email address
+        interests_input: User interests
+        send_welcome: Whether to send welcome email
+    
+    Returns:
+        str: User creation summary
+    """
+    return f"""
+    📋 User Creation Summary:
+    
+    👤 Username: {username}
+    📛 Name: {display_name}
+    🏢 Organization: {organization}
+    📧 Email: {email}
+    🔍 Interests: {interests_input}
+    📨 Send Welcome: {'Yes' if send_welcome else 'No'}
+    """
 
-        invite_message = f"""
-        💣 This Invite Will Self Destruct! ⏳
-        This is how you get an IrregularChat Login and how you can see all the chats and services:
+def handle_passwordless_recovery(username_input):
+    """
+    Handle passwordless recovery for a user.
+    
+    Args:
+        username_input: Username for recovery
+    """
+    st.warning("🔄 Generating recovery link...")
+    
+    # Generate a reset link
+    reset_link = generate_recovery_link(username_input)
+    
+    if reset_link:
+        recovery_message = f"""
+        🔑 Recovery Link for {username_input}:
         
-        IrregularChat Temp Invite ⏭️ : {invite_url}
-        ⏲️ Invite Expires: {hours} hours and {minutes} minutes from now
+        {reset_link}
         
-        🌟 After you login you'll see options for the wiki, the forum, matrix "element messenger", and other self-hosted services. 
-        Login to the wiki with that Irregular Chat Login and visit https://forum.irregularchat.com/t/84/
+        The link will expire after use or after 1 hour.
         """
-        st.code(invite_message)
-        st.session_state['message'] = invite_message
-        st.session_state['user_list'] = None
-        st.success("Invite created successfully!")
         
-        # Add buttons to control next actions - outside of any form
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Clear Message", key="clear_invite_message_btn"):
-                # Clear message from session state
-                if 'message' in st.session_state:
-                    del st.session_state['message']
-                st.rerun()
-        with col2:
-            if st.button("Create Another Invite", key="create_another_invite"):
-                # Clear form fields and message
-                if 'message' in st.session_state:
-                    del st.session_state['message']
-                st.rerun()
-    else:
-        st.error("Failed to generate invite message - no invite URL provided.")
+        st.code(recovery_message)
+        st.session_state['message'] = recovery_message
+        st.success(f"Recovery link generated successfully for {username_input}!")
+
+    st.session_state['user_list'] = None  # Clear user list if there was any

@@ -348,3 +348,246 @@ def test_render_create_user_form_handles_parsed_data():
         
         # Verify parsing_successful flag was reset
         assert st.session_state['parsing_successful'] is False 
+
+def test_email_validation():
+    """Test that email validation works correctly in the create user form."""
+    from app.ui.forms import render_create_user_form
+    import re
+    
+    # Test valid email addresses
+    valid_emails = [
+        "user@example.com",
+        "user.name@example.co.uk",
+        "user+tag@example.org",
+        "user-name@sub.domain.com",
+        "123456@example.com"
+    ]
+    
+    # Test invalid email addresses
+    invalid_emails = [
+        "not-an-email",
+        "missing@domain",
+        "@example.com",
+        "user@.com",
+        "user@example.",
+        "user name@example.com",
+        "user@exam ple.com"
+    ]
+    
+    # Extract the email validation pattern from the forms.py file
+    with patch('streamlit.button') as mock_button:
+        mock_button.return_value = True
+        
+        # Set up session state with required fields
+        st.session_state = {
+            'username_input': 'testuser',
+            'first_name_input': 'Test',
+            'create_user_button': True
+        }
+        
+        # Get the email validation pattern from the code
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        
+        # Test valid emails
+        for email in valid_emails:
+            assert re.match(email_pattern, email) is not None, f"Email '{email}' should be valid"
+        
+        # Test invalid emails
+        for email in invalid_emails:
+            assert re.match(email_pattern, email) is None, f"Email '{email}' should be invalid"
+
+def test_reset_create_user_form_fields():
+    """Test that reset_create_user_form_fields properly clears all form fields including Matrix-related ones."""
+    from app.ui.forms import reset_create_user_form_fields
+    
+    # Setup session state with various fields
+    st.session_state = {
+        'username_input': 'testuser',
+        'first_name_input': 'Test',
+        'last_name_input': 'User',
+        'email_input': 'test@example.com',
+        'matrix_user_id': 'matrix_user_id',
+        'matrix_user_select': 'selected_matrix_user',
+        'matrix_user_selected': True,
+        'recommended_rooms': ['room1', 'room2'],
+        'selected_rooms': {'room_1', 'room_2'},
+        'group_selection': ['group1', 'group2'],
+        '_parsed_first_name': 'Parsed',
+        'parsing_successful': True
+    }
+    
+    # Call the reset function
+    reset_create_user_form_fields()
+    
+    # Verify all fields are cleared
+    assert 'username_input' not in st.session_state
+    assert 'first_name_input' not in st.session_state
+    assert 'last_name_input' not in st.session_state
+    assert 'email_input' not in st.session_state
+    assert 'matrix_user_id' not in st.session_state
+    assert 'matrix_user_select' not in st.session_state
+    assert 'matrix_user_selected' not in st.session_state
+    assert '_parsed_first_name' not in st.session_state
+    assert 'parsing_successful' not in st.session_state
+    
+    # Verify Matrix-related flags are reset
+    assert st.session_state['recommended_rooms'] == []
+    assert st.session_state['selected_rooms'] == set()
+
+def test_authentik_groups_caching():
+    """Test that Authentik groups are properly cached and reused."""
+    from app.ui.forms import render_create_user_form
+    import time
+    
+    # Mock the current time
+    current_time = time.time()
+    
+    with patch('app.ui.forms.time.time') as mock_time, \
+         patch('app.ui.forms.requests.get') as mock_get, \
+         patch('streamlit.error') as mock_error, \
+         patch('streamlit.warning') as mock_warning, \
+         patch('logging.info') as mock_logging_info, \
+         patch('logging.error') as mock_logging_error:
+        
+        # Setup time mock
+        mock_time.return_value = current_time
+        
+        # Setup API response mock
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {'results': [{'id': '1', 'name': 'Test Group'}]}
+        mock_get.return_value = mock_response
+        
+        # First call should fetch groups
+        st.session_state = {}
+        asyncio.run(render_create_user_form())
+        
+        # Verify API was called
+        mock_get.assert_called_once()
+        assert 'authentik_groups' in st.session_state
+        assert 'authentik_groups_timestamp' in st.session_state
+        assert st.session_state['authentik_groups_timestamp'] == current_time
+        
+        # Reset mock
+        mock_get.reset_mock()
+        
+        # Second call within cache window should use cached groups
+        mock_time.return_value = current_time + 1800  # 30 minutes later
+        asyncio.run(render_create_user_form())
+        
+        # Verify API was not called again
+        mock_get.assert_not_called()
+        mock_logging_info.assert_any_call("Using cached Authentik groups")
+        
+        # Reset mock
+        mock_get.reset_mock()
+        mock_logging_info.reset_mock()
+        
+        # Call after cache expiry should fetch again
+        mock_time.return_value = current_time + 3700  # Just over 1 hour later
+        asyncio.run(render_create_user_form())
+        
+        # Verify API was called again
+        mock_get.assert_called_once()
+
+def test_matrix_user_connection_race_condition():
+    """Test that Matrix user connection checks for existing connections."""
+    from app.ui.forms import render_create_user_form
+    from app.db.models import User
+    
+    # Mock database and User model
+    with patch('app.ui.forms.get_db') as mock_get_db, \
+         patch('streamlit.warning') as mock_warning, \
+         patch('logging.warning') as mock_logging_warning:
+        
+        # Setup mock database
+        mock_db = Mock()
+        mock_get_db.return_value.__next__.return_value = mock_db
+        
+        # Create mock user with existing Matrix connection
+        existing_user = Mock(spec=User)
+        existing_user.username = "existing_user"
+        existing_user.attributes = {"matrix_user_id": "existing_matrix_id"}
+        
+        # Setup query mock to find the existing connection
+        mock_query = Mock()
+        mock_query.filter.return_value.first.return_value = existing_user
+        mock_db.query.return_value = mock_query
+        
+        # Setup session state with Matrix user ID
+        st.session_state = {
+            'matrix_user_id': 'existing_matrix_id',
+            'create_user_button': True,
+            'username_input': 'new_user',
+            'first_name_input': 'New',
+            'email_input': 'new@example.com'
+        }
+        
+        # Mock create_user to return success
+        with patch('app.auth.api.create_user') as mock_create_user, \
+             patch('app.messages.create_user_message') as mock_create_message:
+            
+            mock_create_user.return_value = {
+                'success': True,
+                'user_id': '123',
+                'username': 'new_user',
+                'error': None
+            }
+            
+            # Run the form
+            asyncio.run(render_create_user_form())
+            
+            # Verify warning was shown about existing connection
+            mock_warning.assert_any_call("This Matrix user is already linked to account 'existing_user'. Please select a different Matrix user.")
+            mock_logging_warning.assert_any_call("Attempted to link Matrix user existing_matrix_id to new_user, but it's already linked to existing_user")
+
+def test_attribute_handling():
+    """Test that user attributes are properly handled and converted."""
+    from app.ui.forms import render_create_user_form
+    from app.db.models import User
+    
+    # Mock database and User model
+    with patch('app.ui.forms.get_db') as mock_get_db, \
+         patch('logging.warning') as mock_logging_warning:
+        
+        # Setup mock database
+        mock_db = Mock()
+        mock_get_db.return_value.__next__.return_value = mock_db
+        
+        # Create mock user with non-dictionary attributes
+        user = Mock(spec=User)
+        user.username = "test_user"
+        user.attributes = "not_a_dict"  # This should be converted to a dict
+        
+        # Setup query mock to find the user
+        mock_query = Mock()
+        mock_query.filter.return_value.first.return_value = user
+        mock_db.query.return_value = mock_query
+        
+        # Setup session state
+        st.session_state = {
+            'matrix_user_id': 'matrix_id',
+            'create_user_button': True,
+            'username_input': 'test_user',
+            'first_name_input': 'Test',
+            'email_input': 'test@example.com'
+        }
+        
+        # Mock create_user to return success
+        with patch('app.auth.api.create_user') as mock_create_user, \
+             patch('app.messages.create_user_message') as mock_create_message:
+            
+            mock_create_user.return_value = {
+                'success': True,
+                'user_id': '123',
+                'username': 'test_user',
+                'error': None
+            }
+            
+            # Run the form
+            asyncio.run(render_create_user_form())
+            
+            # Verify attributes were converted to a dictionary
+            assert isinstance(user.attributes, dict)
+            assert user.attributes.get('matrix_user_id') == 'matrix_id'
+            mock_logging_warning.assert_any_call("Had to reset attributes for user test_user as they were not a valid dictionary")

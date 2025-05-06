@@ -539,6 +539,12 @@ def parse_input(input_text):
         # Log the input we're trying to parse
         logging.info(f"Parsing input: {input_text[:100]}..." if len(input_text) > 100 else f"Parsing input: {input_text}")
         
+        # Clean semicolons that might be causing issues
+        # Replace standalone semicolons at the end of lines with nothing
+        input_text = re.sub(r';\s*$', '', input_text, flags=re.MULTILINE)
+        # Replace semicolons between fields with newlines to improve parsing
+        input_text = re.sub(r';\s*(?=[A-Za-z]+\s*:)', '\n', input_text)
+        
         # Determine input format
         format_type, is_confident = determine_input_format(input_text)
         logging.info(f"Determined format: {format_type}, confidence: {is_confident}")

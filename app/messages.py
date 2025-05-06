@@ -59,6 +59,7 @@ def create_user_message(new_username, temp_password, discourse_post_url=None, pa
         - Update your email, important to be able to recover your account and verify your identity
         - Save your Login Username and New Password to a Password Manager
         - Visit the welcome page while logged in https://forum.irregularchat.com/t/84
+        - Change your password directly here: https://url.irregular.chat/change-password 
         """
         
         # Add Discourse post URL if available

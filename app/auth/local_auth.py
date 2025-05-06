@@ -1,9 +1,16 @@
-import streamlit as st
+"""
+Local authentication module for admin users.
+
+This module provides functionality for local admin authentication,
+including credential validation and session state management.
+"""
 import logging
-import hashlib
-from datetime import datetime
-from app.utils.config import Config
 import time
+from datetime import datetime
+
+import streamlit as st
+
+from app.utils.config import Config
 
 
 def validate_local_admin(username, password):
@@ -19,18 +26,18 @@ def validate_local_admin(username, password):
     """
     if not username or not password:
         return False
-        
+    
     # Check if username matches the configured admin username
     if username != Config.DEFAULT_ADMIN_USERNAME:
-        logging.warning(f"Invalid local admin login attempt with username: {username}")
-        return False
-        
-    # Check if password matches the configured admin password
-    if password != Config.DEFAULT_ADMIN_PASSWORD:
-        logging.warning(f"Invalid local admin login attempt for username: {username}")
+        logging.warning("Invalid local admin login attempt with username: %s", username)
         return False
     
-    logging.info(f"Local admin login successful for username: {username}")
+    # Check if password matches the configured admin password
+    if password != Config.DEFAULT_ADMIN_PASSWORD:
+        logging.warning("Invalid local admin login attempt for username: %s", username)
+        return False
+    
+    logging.info("Local admin login successful for username: %s", username)
     return True
 
 
@@ -69,7 +76,7 @@ def handle_local_login(username, password):
         st.session_state['username'] = username
         
         # Log successful login with persistence
-        logging.info(f"Local admin login successful with persistence flags set")
+        logging.info("Local admin login successful with persistence flags set")
         
         return True
     
@@ -93,7 +100,7 @@ def display_local_login_form():
         password = st.text_input("Password", type="password", placeholder="Enter admin password")
         
         # Make the login button more prominent
-        col1, col2 = st.columns([3, 1])
+        col1, _ = st.columns([3, 1])
         with col1:
             submit_button = st.form_submit_button("Login", use_container_width=True)
         
@@ -104,9 +111,13 @@ def display_local_login_form():
                 # Delay slightly to ensure session state is saved
                 time.sleep(0.5)
                 
-                # Redirect to special login success page with auth params 
-                # This creates a much more reliable way to maintain session state
-                st.markdown(f'<meta http-equiv="refresh" content="1;URL=\'/?auth_success=true&auth_method=local&username={username}&admin=true\'">', unsafe_allow_html=True)
+                # Instead of using meta refresh which causes RerunException,
+                # use Streamlit's built-in mechanisms for page navigation
+                # Store authentication data in session state and use st.experimental_rerun()
+                st.session_state['auth_success'] = True
+                st.session_state['auth_method'] = 'local'
+                st.session_state['username'] = username
+                st.session_state['admin'] = True
                 
                 # Return True to signal successful login to parent components
                 return True
@@ -125,5 +136,5 @@ def is_local_admin():
     """
     if not st.session_state.get('is_authenticated', False):
         return False
-        
+    
     return st.session_state.get('auth_method') == 'local'

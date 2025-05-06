@@ -391,3 +391,103 @@ def get_room_recommendations_sync(user_id: str, interests: str) -> List[Dict[str
         return []
     finally:
         loop.close() 
+
+# Add a function to send welcome message to a Matrix user and invite them to recommended rooms
+async def send_welcome_and_invite_to_rooms(matrix_user_id: str, interests: str, welcome_message: str) -> Dict[str, Any]:
+    """
+    Send a welcome message to a Matrix user and invite them to recommended rooms.
+    
+    Args:
+        matrix_user_id: Matrix user ID
+        interests: User interests as a string
+        welcome_message: Welcome message to send to the user
+        
+    Returns:
+        Dict[str, Any]: Results including message status and room invitations
+    """
+    result = {
+        "message_sent": False,
+        "rooms_invited": [],
+        "errors": []
+    }
+    
+    try:
+        # Import here to avoid circular imports
+        from app.utils.matrix_actions import send_matrix_message
+        
+        # Step 1: Send welcome message
+        try:
+            # Create a direct chat and send welcome message
+            success = await send_matrix_message(matrix_user_id, welcome_message)
+            result["message_sent"] = success
+            if not success:
+                result["errors"].append("Failed to send welcome message")
+        except Exception as e:
+            logger.error(f"Error sending welcome message to Matrix user: {e}")
+            result["errors"].append(f"Error sending welcome message: {str(e)}")
+            
+        # Step 2: Get room recommendations based on interests
+        try:
+            recommended_rooms = await match_interests_with_rooms(interests)
+            
+            # Step 3: Invite user to recommended rooms
+            for room in recommended_rooms:
+                room_id = room.get("room_id")
+                if not room_id:
+                    continue
+                    
+                room_name = room.get("name", "Unknown room")
+                try:
+                    from app.utils.matrix_actions import invite_to_matrix_room
+                    success = await invite_to_matrix_room(room_id, matrix_user_id)
+                    result["rooms_invited"].append({
+                        "room_id": room_id,
+                        "room_name": room_name,
+                        "success": success
+                    })
+                except Exception as room_error:
+                    logger.error(f"Error inviting to room {room_name}: {room_error}")
+                    result["errors"].append(f"Error inviting to {room_name}: {str(room_error)}")
+                    
+        except Exception as e:
+            logger.error(f"Error getting room recommendations: {e}")
+            result["errors"].append(f"Error getting room recommendations: {str(e)}")
+            
+        return result
+    except Exception as e:
+        logger.error(f"Error in send_welcome_and_invite_to_rooms: {e}")
+        logger.error(traceback.format_exc())
+        result["errors"].append(f"Unexpected error: {str(e)}")
+        return result
+
+# Synchronous wrapper for the welcome message and room invitation function
+def send_welcome_and_invite_to_rooms_sync(matrix_user_id: str, interests: str, welcome_message: str) -> Dict[str, Any]:
+    """
+    Synchronous wrapper for sending welcome message and inviting to rooms.
+    
+    Args:
+        matrix_user_id: Matrix user ID
+        interests: User interests as a string
+        welcome_message: Welcome message to send to the user
+        
+    Returns:
+        Dict[str, Any]: Results including message status and room invitations
+    """
+    try:
+        import nest_asyncio
+        nest_asyncio.apply()
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(send_welcome_and_invite_to_rooms(matrix_user_id, interests, welcome_message))
+    except Exception as e:
+        logger.error(f"Error in send_welcome_and_invite_to_rooms_sync: {e}")
+        logger.error(traceback.format_exc())
+        return {
+            "message_sent": False,
+            "rooms_invited": [],
+            "errors": [f"Sync wrapper error: {str(e)}"]
+        }
+    finally:
+        if 'loop' in locals() and not loop.is_closed():
+            loop.close()

@@ -178,6 +178,8 @@ def create_user_message(new_username, temp_password=None, discourse_post_url=Non
                                     st.session_state['selected_matrix_user'],
                                     new_username
                                 )
+                        except (ImportError, RuntimeError) as e:
+                            logger.error("Error importing or running Matrix messaging: %s", str(e))
                     
                     # Start thread for matrix messages
                     thread = threading.Thread(target=send_matrix_message_thread)

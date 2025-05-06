@@ -39,7 +39,8 @@ def display_useful_links():
                 logout_url = get_logout_url()
                 st.markdown(f'<meta http-equiv="refresh" content="0;URL=\'{logout_url}\'">', unsafe_allow_html=True)
             
-            st.rerun()
+            # Use meta refresh instead of st.rerun()
+            st.markdown('<meta http-equiv="refresh" content="0">', unsafe_allow_html=True)
     else:
         # Create columns for SSO and local login buttons with better styling
         col1, col2 = st.sidebar.columns(2)
@@ -60,22 +61,21 @@ def display_useful_links():
             # Use a different key to avoid the state modification error
             if st.button("Local Admin", key="local_admin_login_btn"):
                 st.session_state['show_local_login'] = True
-                st.rerun()
+                # Use meta refresh instead of st.rerun()
+                st.markdown('<meta http-equiv="refresh" content="0">', unsafe_allow_html=True)
     
     # Show local login form if requested with better styling
     if st.session_state.get('show_local_login', False) and not is_authenticated():
         with st.sidebar.expander("Local Admin Login", expanded=True):
-            # Initialize cancel_clicked state before we create the button
-            if 'cancel_clicked' not in st.session_state:
-                st.session_state['cancel_clicked'] = False
-                
+            st.write("Use local admin credentials from .env file:")
             # Display the login form - no need to call st.rerun() anymore as the function handles redirect
             display_local_login_form()
             
             # Use a different key for the cancel button to avoid state conflict
             if st.button("Cancel", key="cancel_local_login_btn", use_container_width=True):
                 st.session_state['show_local_login'] = False
-                st.rerun()
+                # Use meta refresh instead of st.rerun()
+                st.markdown('<meta http-equiv="refresh" content="0">', unsafe_allow_html=True)
     
     # Styled useful links section
     st.sidebar.markdown("""
@@ -126,7 +126,7 @@ def display_login_button(location="sidebar"):
             if st.button("Local Admin", key="show_local_login_btn", 
                         help="Login with local administrator credentials"):
                 st.session_state['show_local_login'] = True
-                st.rerun()
+                st.markdown('<meta http-equiv="refresh" content="0">', unsafe_allow_html=True)
         
         # Display local login form if requested
         if st.session_state.get('show_local_login', False):
@@ -138,7 +138,7 @@ def display_login_button(location="sidebar"):
                 # Use a different key for the cancel button
                 if st.button("Cancel", key="cancel_login_form_btn"):
                     st.session_state['show_local_login'] = False
-                    st.rerun()
+                    st.markdown('<meta http-equiv="refresh" content="0">', unsafe_allow_html=True)
 
         # Alternative login options in an expander
         with st.sidebar.expander("Having issues? Try alternative login methods"):

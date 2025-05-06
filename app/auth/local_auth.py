@@ -101,28 +101,17 @@ def display_local_login_form():
             if handle_local_login(username, password):
                 st.success("Login successful!")
                 
-                # Set a session state flag to indicate successful login
-                st.session_state['login_successful'] = True
+                # Delay slightly to ensure session state is saved
+                time.sleep(0.5)
+                
+                # Redirect to special login success page with auth params 
+                # This creates a much more reliable way to maintain session state
+                st.markdown(f'<meta http-equiv="refresh" content="1;URL=\'/?auth_success=true&auth_method=local&username={username}&admin=true\'">', unsafe_allow_html=True)
                 
                 # Return True to signal successful login to parent components
                 return True
             else:
                 st.error("Invalid username or password")
-    
-    # Check if we need to redirect after successful login
-    if st.session_state.get('login_successful', False):
-        # Clear the flag to prevent infinite redirects
-        st.session_state.pop('login_successful', None)
-        
-        # Use JavaScript for redirection instead of meta refresh
-        st.markdown(
-            f"""
-            <script>
-                window.location.href = '/?auth_success=true&auth_method=local&username={st.session_state.get("username", "admin")}&admin=true';
-            </script>
-            """, 
-            unsafe_allow_html=True
-        )
     
     return False
 

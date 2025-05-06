@@ -461,6 +461,10 @@ async def render_create_user_form():
     if 'fetch_indoc_users_started' not in st.session_state:
         st.session_state['fetch_indoc_users_started'] = False
 
+    # Initialize matrix_user_selected to prevent AttributeError
+    if 'matrix_user_selected' not in st.session_state:
+        st.session_state['matrix_user_selected'] = None
+
     # Start background fetching of INDOC users
     if not st.session_state.get('fetch_indoc_users_started', False):
         try:
@@ -1045,8 +1049,10 @@ async def render_create_user_form():
             
             # Store the Matrix username in the database
             try:
-                # Import get_db at the function level to avoid scope issues
+                # Import models and database connection at the function level to avoid scope issues
                 from app.db.session import get_db
+                from app.db.models import User  # Ensure User model is imported here
+                
                 # Ensure email is defined and valid before querying
                 email = st.session_state.get('email_input_outside', '')
                 if email:
@@ -1061,8 +1067,9 @@ async def render_create_user_form():
                         st.success(f"Matrix username {display_name} linked to account")
             except Exception as e:
                 st.error(f"Error storing Matrix username: {str(e)}")
-    # Room recommendations based on interests
-    if st.session_state.matrix_user_selected and interests:
+                
+    # Room recommendations based on interests - check that matrix_user_selected exists and is not None
+    if st.session_state.get('matrix_user_selected') and interests:
         st.subheader("Recommended Rooms")
         
         # Get room recommendations

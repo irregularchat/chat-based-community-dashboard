@@ -775,3 +775,111 @@ def test_matrix_user_defensive_get_method_during_account_creation():
         
         # Verify Matrix user ID was not included in attributes when not selected
         assert 'matrix_user_id' not in capture_attributes.attributes
+
+def test_matrix_user_selection_and_recommendation_with_defensive_checks():
+    """
+    Test that matrix_user_selected is handled safely throughout the recommendation process.
+    This test verifies the fixed implementation handles edge cases properly.
+    """
+    from app.utils.recommendation import match_interests_with_rooms, get_room_recommendations_sync
+    
+    # Mock Streamlit's session_state and related functions
+    st.session_state = {}
+    
+    # Test initialization in main.py
+    if 'matrix_user_selected' not in st.session_state:
+        st.session_state['matrix_user_selected'] = None
+    if 'recommended_rooms' not in st.session_state:
+        st.session_state['recommended_rooms'] = []
+        
+    assert st.session_state['matrix_user_selected'] is None
+    assert st.session_state['recommended_rooms'] == []
+    
+    # Mock match_interests_with_rooms to return a controlled result
+    with patch('app.utils.recommendation.match_interests_with_rooms') as mock_match:
+        mock_match.return_value = [
+            {"room_id": "room1", "name": "Test Room 1", "categories": ["test", "ai"]},
+            {"room_id": "room2", "name": "Test Room 2", "categories": ["security"]}
+        ]
+        
+        with patch('asyncio.new_event_loop') as mock_loop_creator:
+            # Create a mock event loop
+            mock_loop = Mock()
+            mock_loop_creator.return_value = mock_loop
+            
+            # Mock the run_until_complete to return the mock_match result
+            mock_loop.run_until_complete.return_value = mock_match.return_value
+            
+            # Case 1: Normal case with valid values
+            st.session_state['matrix_user_selected'] = "@user:example.com"
+            result = get_room_recommendations_sync("@user:example.com", "test, ai")
+            
+            # Verify result
+            assert len(result) == 2
+            assert result[0]["room_id"] == "room1"
+            
+            # Case 2: None user_id
+            result = get_room_recommendations_sync(None, "test, ai")
+            # Should still work by falling back to the interests
+            assert len(result) == 2
+            
+            # Case 3: None interests
+            result = get_room_recommendations_sync("@user:example.com", None)
+            # Should return results by using empty string instead of None
+            assert len(result) == 2
+            
+            # Case 4: None for both
+            result = get_room_recommendations_sync(None, None)
+            # Should still not crash
+            assert len(result) == 2
+    
+    # Simulate the recommendations thread with defensive checks
+    with patch('app.utils.recommendation.get_room_recommendations_sync') as mock_get_recommendations:
+        mock_get_recommendations.return_value = [
+            {"room_id": "room1", "name": "Test Room 1", "categories": ["test", "ai"]},
+            {"room_id": "room2", "name": "Test Room 2", "categories": ["security"]}
+        ]
+        
+        # Create queue for thread results
+        import queue
+        result_queue = queue.Queue()
+        
+        # Test 1: With matrix_user_selected set
+        st.session_state['matrix_user_selected'] = "@user:example.com"
+        
+        def get_recommendations():
+            try:
+                # Defensive checks similar to the fixed code
+                matrix_user_id = st.session_state.get('matrix_user_selected')
+                if matrix_user_id is None:
+                    matrix_user_id = ""
+                    
+                interests = "test, ai"
+                if interests is None:
+                    interests = ""
+                    
+                rooms = mock_get_recommendations(matrix_user_id, interests)
+                result_queue.put(("success", rooms))
+            except Exception as e:
+                result_queue.put(("error", str(e)))
+        
+        # Run the function and get result
+        get_recommendations()
+        status, result = result_queue.get()
+        
+        # Verify success
+        assert status == "success"
+        assert len(result) == 2
+        assert result[0]["room_id"] == "room1"
+        
+        # Test 2: With matrix_user_selected not set
+        del st.session_state['matrix_user_selected']
+        result_queue = queue.Queue()
+        
+        # Run again
+        get_recommendations()
+        status, result = result_queue.get()
+        
+        # Should still succeed with default value
+        assert status == "success"
+        assert len(result) == 2

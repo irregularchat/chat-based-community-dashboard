@@ -576,10 +576,9 @@ def test_matrix_room_invitation_with_defensive_checks():
     
     # Set up mock for invite_to_matrix_room function directly at module level
     with patch('app.ui.forms.invite_to_matrix_room') as mock_invite_to_room:
-        # Set up a future result for the async mock
-        mock_future = asyncio.Future()
-        mock_future.set_result(True)
-        mock_invite_to_room.return_value = mock_future
+        # Make the mock return a simple True value (not a Future)
+        # This is simpler and works because we're using AsyncMock which handles awaiting
+        mock_invite_to_room.return_value = True
         
         # Create a simplified version of the invite function similar to what's in forms.py
         async def perform_invite_async(room_id="test-room"):
@@ -595,24 +594,88 @@ def test_matrix_room_invitation_with_defensive_checks():
             except Exception as e:
                 return False
                 
-        # Synchronous wrapper to run the async function
-        def perform_invite(room_id="test-room"):
-            return asyncio.run(perform_invite_async(room_id))
-        
         # Test case 1: matrix_user_selected not in session_state
         assert 'matrix_user_selected' not in st.session_state
-        result = perform_invite()
+        result = asyncio.run(perform_invite_async())
         assert result is False
         mock_invite_to_room.assert_not_called()
         
         # Test case 2: matrix_user_selected is None
         st.session_state['matrix_user_selected'] = None
-        result = perform_invite()
+        result = asyncio.run(perform_invite_async())
         assert result is False
         mock_invite_to_room.assert_not_called()
         
         # Test case 3: matrix_user_selected has a valid value
         st.session_state['matrix_user_selected'] = "@user:example.com"
-        result = perform_invite("room123")
+        result = asyncio.run(perform_invite_async("room123"))
         assert result is True
         mock_invite_to_room.assert_called_once_with("room123", "@user:example.com")
+
+def test_matrix_user_selection_dropdown_initialization():
+    """Test that the Matrix user selection dropdown properly initializes session state."""
+    # Mock Streamlit's session_state and components
+    st.session_state = {}
+    
+    with patch('streamlit.selectbox') as mock_selectbox, \
+         patch('streamlit.warning') as mock_warning, \
+         patch('streamlit.spinner') as mock_spinner, \
+         patch('app.utils.matrix_actions.get_all_accessible_users') as mock_get_users:
+        
+        # Setup mock users
+        mock_users = [
+            {'user_id': '@user1:example.com', 'display_name': 'User One'},
+            {'user_id': '@user2:example.com', 'display_name': 'User Two'}
+        ]
+        
+        # Set up the session state with matrix_users
+        st.session_state['matrix_users'] = mock_users
+        
+        # Create a selectbox that uses similar logic to the actual implementation
+        def render_matrix_user_dropdown():
+            # Initialize matrix_user_selected if it doesn't exist
+            if 'matrix_user_selected' not in st.session_state:
+                st.session_state['matrix_user_selected'] = None
+                
+            # Create options for select box
+            user_options = [f"{user['display_name']} ({user['user_id']})" for user in st.session_state['matrix_users']]
+            
+            # Set up the selectbox with proper key
+            selected_option = mock_selectbox.return_value = user_options[0] if user_options else None
+            
+            # Process selection
+            if selected_option:
+                # Extract user_id from selected_option
+                import re
+                match = re.search(r'\((.*?)\)$', selected_option)
+                if match:
+                    matrix_user_id = match.group(1)
+                    # Set the session state
+                    st.session_state['matrix_user_selected'] = matrix_user_id
+                    return matrix_user_id
+            return None
+        
+        # Test the function
+        result = render_matrix_user_dropdown()
+        
+        # Verify session state was initialized
+        assert 'matrix_user_selected' in st.session_state
+        
+        # After selection, the session state should be updated
+        assert st.session_state['matrix_user_selected'] == '@user1:example.com'
+        
+        # Verify the selectbox was called
+        mock_selectbox.assert_called_once()
+        
+        # Test with empty matrix_users list
+        st.session_state['matrix_users'] = []
+        st.session_state['matrix_user_selected'] = None
+        
+        # Mock selectbox to return None
+        mock_selectbox.return_value = None
+        
+        # Render again
+        result = render_matrix_user_dropdown()
+        
+        # Verify session state stays None when no selection
+        assert st.session_state['matrix_user_selected'] is None

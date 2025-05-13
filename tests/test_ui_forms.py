@@ -692,3 +692,86 @@ def test_matrix_user_selection_dropdown_initialization():
         # Verify session state stays None when no selection
         assert st.session_state['matrix_user_selected'] is None
         mock_selectbox.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_matrix_user_integration_during_account_creation():
+    """Test the integration of Matrix user selection during account creation."""
+    # Mock Streamlit's session_state and components
+    st.session_state = {
+        'username_input': 'testuser',
+        'first_name_input': 'Test',
+        'last_name_input': 'User',
+        'email_input': 'test@example.com',
+        'create_user_button': True,
+        'create_discourse_post': True,
+        'add_to_recommended_rooms': True,
+        'send_matrix_welcome': True,
+    }
+    
+    # Set up mock Matrix users and user selection
+    matrix_users = [
+        {'user_id': '@user1:example.com', 'display_name': 'User One'},
+        {'user_id': '@user2:example.com', 'display_name': 'User Two'}
+    ]
+    st.session_state['matrix_users'] = matrix_users
+    st.session_state['matrix_user_selected'] = '@user1:example.com'
+    st.session_state['matrix_user_id'] = '@user1:example.com'
+    
+    # Set up mock rooms
+    mock_rooms = [
+        {'room_id': 'room1', 'name': 'AI:Discussion', 'topic': 'AI topics'},
+        {'room_id': 'room2', 'name': 'Security:Chat', 'topic': 'Security discussions'}
+    ]
+    st.session_state['recommended_rooms'] = mock_rooms
+    st.session_state['selected_rooms'] = {'room_room1', 'room_room2'}
+    
+    # Set up mocks for all required functions
+    with patch('app.auth.api.create_user') as mock_create_user, \
+         patch('app.messages.create_user_message') as mock_create_message, \
+         patch('streamlit.spinner') as mock_spinner, \
+         patch('streamlit.success') as mock_success, \
+         patch('streamlit.info') as mock_info, \
+         patch('streamlit.error') as mock_error, \
+         patch('logging.info') as mock_logging_info, \
+         patch('app.ui.forms.invite_to_matrix_room') as mock_invite_to_room, \
+         patch('app.ui.forms.get_db') as mock_get_db:
+        
+        # Set up return values
+        mock_create_user.return_value = {
+            'success': True,
+            'username': 'testuser',
+            'user_id': '123',
+            'discourse_url': 'https://forum.example.com/t/123',
+            'error': None
+        }
+        mock_create_message.return_value = "Welcome message"
+        
+        # Make invite_to_room return True to simulate successful invites
+        mock_invite_to_room.return_value = True
+        
+        # Mock spinner context manager
+        mock_spinner_context = MagicMock()
+        mock_spinner.return_value.__enter__.return_value = mock_spinner_context
+        
+        # Mock DB connection for storing Matrix connection
+        mock_db = MagicMock()
+        mock_get_db.return_value.__next__.return_value = mock_db
+        
+        # Run the user creation function from forms.py
+        from app.ui.forms import render_create_user_form
+        await render_create_user_form()
+        
+        # Verify user creation was called with correct parameters
+        mock_create_user.assert_called_once()
+        
+        # Verify Matrix user ID was stored in attributes
+        assert mock_create_user.call_args.kwargs['attributes'].get('matrix_user_id') == '@user1:example.com'
+        
+        # Verify Matrix rooms were used
+        assert mock_invite_to_room.call_count >= 1
+        
+        # Verify success message was shown
+        mock_success.assert_called()
+        
+        # Verify logging of the Matrix connection
+        mock_logging_info.assert_any_call(mock.ANY)

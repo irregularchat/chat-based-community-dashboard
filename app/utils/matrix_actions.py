@@ -8,7 +8,7 @@ import os
 import logging
 import asyncio
 import nest_asyncio
-from typing import List, Dict, Optional, Union, Set, Any
+from typing import List, Dict, Optional, Union, Set, Any, Tuple
 from urllib.parse import urlparse
 import json
 from nio import AsyncClient, AsyncClientConfig, RoomVisibility
@@ -465,43 +465,146 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
         if client:
             await client.close()
 
+def create_matrix_direct_chat_sync(user_id: str) -> Optional[str]:
+    """
+    Synchronous wrapper for create_matrix_direct_chat.
+    
+    Args:
+        user_id: The Matrix ID of the user to chat with
+        
+    Returns:
+        Optional[str]: The room ID of the created chat, or None if creation failed
+    """
+    import asyncio
+    import threading
+    import logging
+    
+    # Define a thread-local event loop storage
+    thread_local = threading.local()
+    
+    try:
+        # Get or create a new event loop for this thread
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            setattr(thread_local, 'loop', loop)
+        
+        # Apply nest_asyncio to allow nested event loops
+        import nest_asyncio
+        nest_asyncio.apply()
+        
+        # Run the async function in the loop
+        return loop.run_until_complete(create_matrix_direct_chat(user_id))
+    except Exception as e:
+        logging.error(f"Error in create_matrix_direct_chat_sync: {str(e)}")
+        return None
+
 async def invite_to_matrix_room(room_id: str, user_id: str) -> bool:
     """
     Invite a user to a Matrix room.
     
     Args:
-        room_id (str): The ID of the room to invite the user to
-        user_id (str): The Matrix ID of the user to invite
+        room_id: The Matrix room ID
+        user_id: The Matrix user ID to invite
         
     Returns:
-        bool: True if successful, False otherwise
+        bool: Success status
     """
+    # Defensive checks for None values or empty strings
+    if not room_id:
+        logger.error("Cannot invite to room: room_id is None or empty")
+        return False
+        
+    if not user_id:
+        logger.error("Cannot invite user: user_id is None or empty")
+        return False
+    
     if not MATRIX_ACTIVE:
-        logger.warning("Matrix integration is not active. Cannot invite user.")
+        logger.warning("Matrix integration is not active. Skipping invite_to_matrix_room.")
         return False
     
     try:
+        # Get Matrix client
         client = await get_matrix_client()
         if not client:
-            logger.error("Failed to create Matrix client")
+            logger.error("Failed to get Matrix client")
             return False
-            
-        response = await client.room_invite(room_id, user_id)
         
-        # Check if response is RoomInviteResponse
-        if isinstance(response, RoomInviteResponse):
-            logger.info(f"Successfully invited {user_id} to room {room_id}")
+        try:
+            # Invite the user to the room
+            await client.room_invite(room_id, user_id)
+            logger.info(f"Invited {user_id} to room {room_id}")
             return True
-            
-        logger.error(f"Failed to invite {user_id} to room {room_id}: {response}")
-        return False
-            
+        except MatrixRequestError as e:
+            # Check if the error is because the user is already in the room
+            if e.code == 403 and "is already in the room" in str(e):
+                logger.info(f"User {user_id} is already in room {room_id}")
+                return True  # Consider this success
+            elif e.code == 403 and "not in room" in str(e):
+                # Bot is not in room, try to join first
+                logger.info(f"Bot is not in room {room_id}, trying to join first")
+                try:
+                    await client.join_room(room_id)
+                    # Try invite again
+                    await client.room_invite(room_id, user_id)
+                    logger.info(f"Successfully joined room and invited {user_id} to {room_id}")
+                    return True
+                except Exception as join_error:
+                    logger.error(f"Failed to join room {room_id}: {join_error}")
+                    return False
+            else:
+                logger.error(f"Error inviting {user_id} to room {room_id}: {e}")
+                return False
+        except Exception as e:
+            logger.error(f"Error inviting {user_id} to room {room_id}: {e}")
+            return False
+        finally:
+            # Close the client
+            await client.close()
     except Exception as e:
-        logger.error(f"Error inviting user to room: {e}")
+        logger.error(f"Error in invite_to_matrix_room: {e}")
+        return False
+
+# Add a synchronous wrapper for the invite function with safe parameter handling
+def invite_to_matrix_room_sync(room_id: str, user_id: str) -> bool:
+    """
+    Synchronous wrapper for inviting a user to a Matrix room with defensive parameter handling.
+    
+    Args:
+        room_id: The Matrix room ID
+        user_id: The Matrix user ID to invite
+        
+    Returns:
+        bool: Success status
+    """
+    # Defensive checks for None values or empty strings
+    if room_id is None or user_id is None:
+        logger.error(f"Cannot invite: room_id={room_id}, user_id={user_id}")
+        return False
+        
+    try:
+        # Set up event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        # Run the async function
+        result = loop.run_until_complete(invite_to_matrix_room(room_id, user_id))
+        return result
+    except Exception as e:
+        logger.error(f"Error in invite_to_matrix_room_sync: {e}")
         return False
     finally:
-        if client:
-            await client.close()
+        # Clean up the loop to prevent resource leaks
+        if 'loop' in locals() and not loop.is_closed():
+            loop.close()
 
 async def send_matrix_message_to_multiple_rooms(room_ids: List[str], message: str) -> Dict[str, bool]:
     """
@@ -1807,3 +1910,74 @@ def send_signal_message(user_id: str, message: str) -> bool:
         # Clean up
         if not loop.is_closed():
             loop.close()
+
+def invite_user_to_recommended_rooms_sync(user_id: str, room_ids: List[str]) -> Dict[str, Union[bool, List[str], List[Tuple[str, str]]]]:
+    """
+    Synchronous wrapper for inviting a user to recommended rooms.
+    
+    Args:
+        user_id: Matrix user ID
+        room_ids: List of room IDs to invite the user to
+        
+    Returns:
+        Dict with status and results
+    """
+    import asyncio
+    import threading
+    import logging
+    import traceback
+    import time
+    
+    # Define a thread-local event loop storage
+    thread_local = threading.local()
+    
+    try:
+        # Get current thread's event loop or create a new one
+        try:
+            # Try to get the current event loop
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # Create a new event loop if there isn't one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            setattr(thread_local, 'loop', loop)
+            
+        # Apply nest_asyncio to allow nested event loops 
+        import nest_asyncio
+        nest_asyncio.apply()
+            
+        # Run the async function in the event loop
+        results = []
+        failed_rooms = []
+        
+        for room_id in room_ids:
+            try:
+                # Use a short timeout per room to prevent hanging
+                result = loop.run_until_complete(asyncio.wait_for(invite_to_matrix_room(user_id, room_id), timeout=10.0))
+                if result:
+                    room_name = loop.run_until_complete(asyncio.wait_for(get_room_name(room_id), timeout=5.0))
+                    results.append((room_id, room_name or room_id))
+                else:
+                    failed_rooms.append(room_id)
+            except Exception as e:
+                logging.error(f"Error inviting to room {room_id}: {str(e)}")
+                logging.error(traceback.format_exc())
+                failed_rooms.append(room_id)
+                
+        return {
+            "success": len(results) > 0,
+            "invited_rooms": results,
+            "failed_rooms": failed_rooms
+        }
+    except Exception as e:
+        logging.error(f"Error in invite_user_to_recommended_rooms_sync: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {
+            "success": False,
+            "error": str(e),
+            "invited_rooms": [],
+            "failed_rooms": room_ids
+        }
+    finally:
+        # Don't close the loop as it might be shared
+        pass

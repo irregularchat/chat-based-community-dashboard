@@ -58,6 +58,14 @@ def initialize_session_state():
         st.session_state['matrix_users'] = []
     if 'matrix_user_selected' not in st.session_state:
         st.session_state['matrix_user_selected'] = None
+    if 'recommended_rooms' not in st.session_state:
+        st.session_state['recommended_rooms'] = []
+    if 'selected_rooms' not in st.session_state:
+        st.session_state['selected_rooms'] = set()
+    
+    # Log that session state has been initialized
+    logging.info("Session state variables initialized successfully")
+    logging.debug(f"Session state keys: {list(st.session_state.keys())}")
 
 def setup_page_config():
     """Set up the Streamlit page configuration"""
@@ -938,6 +946,23 @@ async def main():
     try:
         # Initialize the application
         initialize_session_state()
+        
+        # Verify critical session state variables are initialized
+        critical_state_vars = [
+            'matrix_user_selected', 
+            'recommended_rooms', 
+            'selected_rooms'
+        ]
+        
+        for var in critical_state_vars:
+            if var not in st.session_state:
+                logging.warning(f"Critical session state variable '{var}' not initialized. Fixing now.")
+                if var == 'matrix_user_selected':
+                    st.session_state[var] = None
+                elif var == 'recommended_rooms':
+                    st.session_state[var] = []
+                elif var == 'selected_rooms':
+                    st.session_state[var] = set()
         
         # Check for auth_success query parameter (more reliable than session state persistence)
         query_params = st.query_params

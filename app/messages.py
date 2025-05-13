@@ -86,6 +86,7 @@ def create_user_message(new_username, temp_password=None, discourse_post_url=Non
         For admin assistance, please contact the system administrator.
         """
         
+        # Display message to admin
         st.code(welcome_message)
         st.session_state['message'] = welcome_message
         st.session_state['user_list'] = None  # Clear user list if there was any
@@ -126,7 +127,7 @@ def create_user_message(new_username, temp_password=None, discourse_post_url=Non
         
             # Import matrix actions only if needed
             try:
-                if st.session_state.get('selected_matrix_user') and discourse_post_url:
+                if st.session_state.get('matrix_user_selected') and discourse_post_url:
                     import threading
                     
                     def send_matrix_message_thread():
@@ -139,12 +140,12 @@ def create_user_message(new_username, temp_password=None, discourse_post_url=Non
                                     send_matrix_message(
                                         "You're invited to IrregularChat!",
                                         content,
-                                        st.session_state['selected_matrix_user']
+                                        st.session_state.get('matrix_user_selected')
                                     )
                                 except (ConnectionError, TimeoutError, ValueError) as e:
                                     logger.error(
                                         "Error sending Matrix message to %s: %s",
-                                        st.session_state['selected_matrix_user'],
+                                        st.session_state.get('matrix_user_selected'),
                                         str(e)
                                     )
                             
@@ -170,13 +171,13 @@ def create_user_message(new_username, temp_password=None, discourse_post_url=Non
                                 
                                 # Send invites to matrix rooms based on user's interests
                                 send_welcome_and_invite_to_rooms_sync(
-                                    st.session_state['selected_matrix_user'],
+                                    st.session_state.get('matrix_user_selected'),
                                     new_username
                                 )
                                 
                                 logger.info(
                                     "Matrix invites sent to %s for user %s",
-                                    st.session_state['selected_matrix_user'],
+                                    st.session_state.get('matrix_user_selected'),
                                     new_username
                                 )
                         except (ImportError, RuntimeError) as e:
@@ -198,6 +199,64 @@ def create_user_message(new_username, temp_password=None, discourse_post_url=Non
         
         Welcome aboard!
         """
+        
+        # Always display the welcome message to the admin in the UI
+        st.code(welcome_message, language="")
+        
+        # Store the message in session state for later use
+        st.session_state['welcome_message'] = welcome_message
+        
+        # Add a button to copy the message to clipboard
+        if st.button("Copy Welcome Message to Clipboard"):
+            try:
+                import pyperclip
+                pyperclip.copy(welcome_message)
+                st.success("Welcome message copied to clipboard!")
+                # Don't rerun or clear the welcome message
+            except ImportError:
+                st.info("Please copy the message manually")
+                
+        # Add a button to directly send the welcome message to the Matrix user if one is selected
+        if st.session_state.get('matrix_user_selected') and st.session_state.get('matrix_user_display_name'):
+            matrix_user = st.session_state.get('matrix_user_display_name')
+            if st.button(f"Send Welcome Message to {matrix_user}"):
+                try:
+                    from app.utils.matrix_actions import send_matrix_message, send_direct_message
+                    
+                    # Log the attempt for debugging
+                    logger.info(f"Attempting to send welcome message to {matrix_user} ({st.session_state.get('matrix_user_selected')})")
+                    
+                    # Use send_direct_message instead which creates a room first if needed
+                    success = send_direct_message(
+                        st.session_state.get('matrix_user_selected'),  # This is the user_id
+                        welcome_message  # This is the message content
+                    )
+                    
+                    if success:
+                        st.success(f"Welcome message sent to {matrix_user}!")
+                    else:
+                        st.error(f"Failed to send welcome message to {matrix_user}")
+                        
+                        # Create a direct chat if needed
+                        try:
+                            from app.utils.matrix_actions import create_matrix_direct_chat_sync
+                            room_id = create_matrix_direct_chat_sync(st.session_state.get('matrix_user_selected'))
+                            if room_id:
+                                # Try sending again to the newly created room
+                                success = send_matrix_message(room_id, welcome_message)
+                                if success:
+                                    st.success(f"Created direct chat and sent welcome message to {matrix_user}!")
+                                else:
+                                    st.error(f"Created direct chat but failed to send message to {matrix_user}")
+                            else:
+                                st.error(f"Could not create direct chat with {matrix_user}")
+                        except Exception as direct_chat_error:
+                            logger.error(f"Error creating direct chat: {str(direct_chat_error)}")
+                            st.error(f"Error creating direct chat: {str(direct_chat_error)}")
+                except Exception as e:
+                    logger.error(f"Error sending Matrix welcome message: {str(e)}")
+                    logger.error(traceback.format_exc())
+                    st.error(f"Error sending welcome message: {str(e)}")
         
         return welcome_message
 
@@ -312,3 +371,72 @@ def handle_passwordless_recovery(username_input):
         st.success(f"Recovery link generated successfully for {username_input}!")
 
     st.session_state['user_list'] = None  # Clear user list if there was any
+
+def display_welcome_message_ui(welcome_message, forum_post_url=None):
+    """
+    Display a welcome message in the Streamlit UI with options for copying and sending.
+    
+    Args:
+        welcome_message: The welcome message to display
+        forum_post_url: URL to the user's forum post, if available
+    """
+    try:
+        # Always store the welcome message in session state first for persistence
+        st.session_state['current_welcome_message'] = welcome_message
+        
+        # Display the message in a code block with a border
+        st.markdown("### Welcome Message")
+        st.code(welcome_message, language="")
+        
+        # Store forum post URL if provided
+        if forum_post_url:
+            st.session_state['forum_post_url'] = forum_post_url
+            st.markdown(f"[View forum post]({forum_post_url})")
+        
+        # Add a button to copy the message to clipboard
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Copy Welcome Message to Clipboard", key="copy_welcome_btn"):
+                try:
+                    import pyperclip
+                    pyperclip.copy(welcome_message)
+                    st.success("Welcome message copied to clipboard!")
+                except ImportError:
+                    st.warning("Could not copy to clipboard. Please manually copy the message above.")
+        
+        # Add a button to directly send the welcome message to the Matrix user if one is selected
+        with col2:
+            if st.session_state.get('matrix_user_selected') and st.session_state.get('matrix_user_display_name'):
+                matrix_user = st.session_state.get('matrix_user_display_name')
+                if st.button(f"Send Welcome Message to {matrix_user}", key="send_welcome_btn"):
+                    try:
+                        from app.utils.matrix_actions import send_direct_message, create_matrix_direct_chat_sync
+                        
+                        # Log the attempt for debugging
+                        logging.info(f"Attempting to send welcome message to {matrix_user} ({st.session_state.get('matrix_user_selected')})")
+                        
+                        # First create a direct chat with the user
+                        room_id = create_matrix_direct_chat_sync(st.session_state.get('matrix_user_selected'))
+                        
+                        if room_id:
+                            # Send the message to the direct chat
+                            success = send_direct_message(
+                                st.session_state.get('matrix_user_selected'),
+                                welcome_message
+                            )
+                            
+                            if success:
+                                st.success(f"Welcome message sent to {matrix_user}!")
+                            else:
+                                st.error(f"Failed to send welcome message to {matrix_user}")
+                        else:
+                            st.error(f"Failed to create direct chat with {matrix_user}")
+                    except Exception as e:
+                        logging.error(f"Error sending welcome message: {str(e)}")
+                        logging.error(traceback.format_exc())
+                        st.error(f"Error sending welcome message: {str(e)}")
+    
+    except Exception as e:
+        logging.error(f"Error displaying welcome message UI: {str(e)}")
+        logging.error(traceback.format_exc())
+        st.error(f"Error displaying welcome message: {str(e)}")

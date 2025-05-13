@@ -9,7 +9,7 @@ import pandas as pd
 import logging
 import traceback
 import asyncio
-import time  # Ensure time is imported
+import time
 import requests
 import streamlit as st
 from streamlit.components.v1 import html
@@ -19,11 +19,7 @@ from app.utils.recommendation import get_entrance_room_users_sync, get_room_reco
 from app.utils.matrix_actions import (
     invite_to_matrix_room, 
     get_all_accessible_users,
-    invite_to_matrix_room_sync,
-    send_matrix_message,
-    create_matrix_direct_chat_sync,
-    invite_user_to_recommended_rooms_sync,
-    send_direct_message
+    invite_to_matrix_room_sync
 )
 from app.db.session import get_groups_from_db
 from app.utils.config import Config
@@ -54,7 +50,7 @@ from app.db.operations import (
     delete_user_note,
     get_note_by_id
 )
-from app.messages import create_invite_message, create_user_message, display_welcome_message_ui
+from app.messages import create_invite_message, create_user_message
 from app.utils.messages import WELCOME_MESSAGE
 from app.utils.helpers import send_invite_email
 from app.utils.recommendation import invite_user_to_recommended_rooms_sync
@@ -187,9 +183,6 @@ def parse_and_rerun():
     
     # Log the input data for debugging
     input_data = st.session_state.get("parse_data_input_outside", "")
-    # Save to the preserved data field to ensure it persists
-    st.session_state['preserved_parse_data'] = input_data
-    
     logging.info(f"Parsing data: {input_data[:100]}..." if len(input_data) > 100 else f"Parsing data: {input_data}")
     
     try:
@@ -284,232 +277,12 @@ def parse_and_rerun():
         st.error(f"An error occurred while parsing: {str(e)}")
     
 
-def update_username_from_inputs():
-    """
-    Generate a username based on first name and a random word.
-    Checks both local database and SSO service for existing usernames.
-    """
-    # Only auto-generate username if username is empty or matches previous auto-generation
-    # This prevents overwriting a manually entered username
-    if (not st.session_state.get('username_input') or 
-        st.session_state.get('username_was_auto_generated', False)):
-        
-        first_name = st.session_state.get('first_name_input', '').strip().lower()
-        
-        logging.info(f"Attempting username generation with first_name='{first_name}'")
-        
-        # Generate username with first name and random word
-        if first_name:
-            # Use the new function to generate a username with random word
-            from app.auth.utils import generate_username_with_random_word
-            base_username = generate_username_with_random_word(first_name)
-            logging.info(f"Generated base username with random word: {base_username}")
-        else:
-            # Just use a default if no first name
-            import random
-            random_suffix = random.randint(100, 999)
-            base_username = f"user-{random_suffix}"
-            logging.info(f"No first name provided, using default: {base_username}")
-        
-        # Check for existing username in local database
-        existing_usernames = []
-        try:
-            # Get a database session
-            from app.db.database import get_db
-            db = next(get_db())
-            try:
-                from app.db.models import User
-                # Use a SQL query that works with both SQLite and PostgreSQL
-                local_existing = db.query(User).filter(User.username == base_username).all()
-                if local_existing:
-                    existing_usernames = [user.username for user in local_existing]
-                    logging.info(f"Username {base_username} already exists in local DB")
-            except Exception as db_err:
-                logging.error(f"Database error checking existing usernames: {db_err}")
-                existing_usernames = []
-            finally:
-                db.close()
-        except Exception as e:
-            logging.error(f"Error with database connection: {e}")
-            existing_usernames = []
-        
-        # Also check for existing username in Authentik SSO
-        try:
-            from app.utils.config import Config
-            import requests
-            
-            sso_exists = False
-            # Define headers before using them
-            headers = {
-                'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-                'Content-Type': 'application/json'
-            }
-            user_search_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={base_username}"
-            response = requests.get(user_search_url, headers=headers, timeout=10)
-            
-            if response.status_code == 200:
-                users = response.json()
-                if users.get('count', 0) > 0 or len(users.get('results', [])) > 0:
-                    sso_exists = True
-                    logging.info(f"Username {base_username} already exists in SSO")
-            else:
-                logging.warning(f"Failed to check SSO for existing username: {response.status_code}")
-            
-            # If username exists in either system, generate a new one with a suffix
-            if base_username in existing_usernames or sso_exists:
-                # Generate a new username with a random suffix
-                import random
-                random_suffix = random.randint(100, 999)
-                final_username = f"{base_username}-{random_suffix}"
-                logging.info(f"Username already exists, using random suffix: {final_username}")
-            else:
-                final_username = base_username
-            
-            logging.info(f"Final generated username: {final_username}")
-            
-            # Update session state - update both username_input and username_input_outside
-            st.session_state['username_input'] = final_username
-            st.session_state['username_input_outside'] = final_username
-            st.session_state['username_was_auto_generated'] = True
-            
-            # Set flag to indicate username needs update on next rerun
-            st.session_state['username_needs_update'] = True
-            
-            # Return true to indicate username was generated
-            return True
-                
-        except Exception as e:
-            # If there's an error checking SSO, fall back to just local check
-            logging.error(f"Error checking SSO for existing username: {e}")
-            if base_username in existing_usernames:
-                # Generate a unique suffix
-                import random
-                random_suffix = random.randint(100, 999)
-                suggested_username = f"{base_username}-{random_suffix}"
-            else:
-                suggested_username = base_username
-                
-            # Update both internal value and widget value
-            st.session_state['username_input'] = suggested_username
-            st.session_state['username_input_outside'] = suggested_username
-            st.session_state['username_was_auto_generated'] = True
-            st.session_state['username_needs_update'] = True
-            logging.info(f"Generated username (fallback): {suggested_username}")
-            
-            # Return true to indicate username was generated
-            return True
-                
-    # Return false to indicate no username was generated
-    return False
-
-def on_first_name_change():
-    """Update username when first name changes"""
-    logging.info("on_first_name_change triggered")
-    # Get the current value from the widget
-    if 'first_name_input_outside' in st.session_state:
-        # Update the form field value
-        st.session_state['first_name_input'] = st.session_state['first_name_input_outside']
-        logging.info(f"First name changed to: {st.session_state['first_name_input_outside']}")
-        # Now update username - will only update the internal value
-        username_updated = update_username_from_inputs()
-            
-        # Reset the parsing flag now that we've applied the parsed data
-        st.session_state['parsing_successful'] = False
-
-def on_last_name_change():
-    """Update username when last name changes"""
-    logging.info("on_last_name_change triggered")
-    # Get the current value from the widget
-    if 'last_name_input_outside' in st.session_state:
-        # Update the form field value
-        st.session_state['last_name_input'] = st.session_state['last_name_input_outside']
-        logging.info(f"Last name changed to: {st.session_state['last_name_input_outside']}")
-        # Now update username - will only update the internal value
-        username_updated = update_username_from_inputs()
-            
-        # Reset the parsing flag now that we've applied the parsed data
-        st.session_state['parsing_successful'] = False
-        
-def on_username_manual_edit():
-    """Handle manual username edits"""
-    # Set flag to prevent auto-updates when user manually edits the username
-    st.session_state['username_was_auto_generated'] = False
-    
-    # Validate the username format
-    if 'username_input_outside' in st.session_state:
-        username = st.session_state['username_input_outside']
-        # Update the internal value
-        st.session_state['username_input'] = username
-        
-        if username:
-            # Remove any special characters except hyphens and alphanumeric
-            import re
-            cleaned_username = re.sub(r'[^a-z0-9-]', '', username.lower())
-            
-            # If the username changed after cleaning
-            if cleaned_username != username:
-                # Only update the internal value, not the widget value
-                st.session_state['username_input'] = cleaned_username
-                # Set flag to indicate username needs update on next rerun
-                st.session_state['username_needs_update'] = True
-                # Don't rerun immediately - apply changes on next form submission
-                try:
-                    # First try the current recommended method
-                    st.rerun()
-                except AttributeError:
-                    # Fall back to experimental_rerun if rerun is not available
-                    logging.warning("st.rerun() not available, falling back to st.experimental_rerun()")
-                    st.experimental_rerun()
-
-    # Return false to indicate no username was generated
-    return False
-
-def on_organization_change():
-    """Handle changes to the organization field to avoid auto-filling introduction"""
-    if 'organization_input_outside' in st.session_state:
-        # Update the internal value
-        st.session_state['organization_input'] = st.session_state['organization_input_outside']
-        logging.info(f"Organization changed to: {st.session_state['organization_input_outside']}")
-        
-def on_interests_change():
-    """Handle changes to the interests field to avoid auto-filling introduction"""
-    if 'interests_input_outside' in st.session_state:
-        # Update the internal value
-        st.session_state['interests_input'] = st.session_state['interests_input_outside']
-        logging.info(f"Interests changed to: {st.session_state['interests_input_outside']}")
-
-def clear_parse_data():
-    """Clear parse data from session state and reset form fields."""
-    # Clear parse data from session state
-    if 'parse_data' in st.session_state:
-        del st.session_state.parse_data
-    if 'parse_data_input' in st.session_state:
-        del st.session_state.parse_data_input
-    if 'parse_data_input_outside' in st.session_state:
-        del st.session_state.parse_data_input_outside
-    
-    # Reset form fields
-    reset_create_user_form_fields()
-    
-    # Display success message instead of using st.rerun()
-    # IMPORTANT: We're avoiding st.rerun() calls entirely due to RerunData errors in Streamlit 1.37+
-    st.success("Form has been cleared successfully!")
-    logging.info("Form cleared successfully")
-
 async def render_create_user_form():
     """Render the user creation form with improved layout and group selection."""
     
-    # Import time module explicitly within the function scope to ensure it's available
-    import time
-    
     # Initialize key session state variables to prevent AttributeError
     if 'matrix_user_selected' not in st.session_state:
-        # Restore from preserved data if available
-        if 'preserved_matrix_user' in st.session_state:
-            st.session_state.matrix_user_selected = st.session_state.preserved_matrix_user
-        else:
-            st.session_state.matrix_user_selected = None
-            
+        st.session_state.matrix_user_selected = None
     if 'recommended_rooms' not in st.session_state:
         st.session_state.recommended_rooms = []
 
@@ -1270,8 +1043,6 @@ async def render_create_user_form():
         # Ensure matrix_user_selected is initialized
         if 'matrix_user_selected' not in st.session_state:
             st.session_state.matrix_user_selected = None
-        if 'matrix_user_display_name' not in st.session_state:
-            st.session_state.matrix_user_display_name = None
 
         # Store previous selection to detect changes
         previous_selection = st.session_state.get('matrix_user_selected')
@@ -1291,8 +1062,6 @@ async def render_create_user_form():
             # Always explicitly set both keys for the session state 
             st.session_state['matrix_user_selected'] = user_id
             st.session_state.matrix_user_selected = user_id
-            st.session_state['matrix_user_display_name'] = display_name
-            st.session_state.matrix_user_display_name = display_name
             
             # If the selection changed, clear recommendations for a fresh start
             if previous_selection != user_id:
@@ -1323,28 +1092,6 @@ async def render_create_user_form():
             except Exception as e:
                 st.error(f"Error storing Matrix username: {str(e)}")
                 
-            # Add a button to get room recommendations
-            user_interests = st.session_state.get('interests_input', '')
-            get_recommendations = st.button("Get Room Recommendations", key="get_recommendations_button")
-            
-            if get_recommendations and user_interests:
-                with st.spinner("Getting room recommendations based on interests..."):
-                    try:
-                        from app.utils.recommendation import get_room_recommendations_sync
-                        logging.info(f"Getting manual room recommendations for interests: {user_interests}")
-                        
-                        # Use a longer timeout when explicitly requested
-                        recommended_rooms = get_room_recommendations_sync(user_id, user_interests)
-                        
-                        # Store the recommendations in session state
-                        st.session_state.recommended_rooms = recommended_rooms
-                        
-                        if not recommended_rooms:
-                            st.warning("No recommended rooms found based on interests. Please try again.")
-                    except Exception as e:
-                        st.error(f"Error getting room recommendations: {str(e)}")
-                        logging.error(f"Error in manual room recommendations: {str(e)}")
-    
     # Room recommendations based on interests - check that matrix_user_selected exists and is not None
     # Use a more robust check to handle different ways the key might be stored
     matrix_user = st.session_state.get('matrix_user_selected')
@@ -1590,15 +1337,13 @@ async def render_create_user_form():
                         room_key = f"room_{room['room_id']}"
                         st.session_state.selected_rooms.add(room_key)
                     # Use the appropriate rerun method based on Streamlit version
-                    try:
-                        # First try the current recommended method
-                        st.rerun()
-                    except AttributeError:
-                        # Fall back to experimental_rerun if rerun is not available
-                        logging.warning("st.rerun() not available, falling back to st.experimental_rerun()")
-                        st.experimental_rerun()
-        
-        # Display the "No recommended rooms" message only if there are no recommended rooms
+        try:
+            # First try the current recommended method
+            st.rerun()
+        except AttributeError:
+            # Fall back to experimental_rerun if rerun is not available
+            logging.warning("st.rerun() not available, falling back to st.experimental_rerun()")
+            st.experimental_rerun()
         else:
             st.warning("No recommended rooms found based on your interests.")
     
@@ -1606,34 +1351,24 @@ async def render_create_user_form():
     st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
     st.subheader("Parse Text Data")
     
-    # Store the parse data input value separately to ensure it persists through reruns
-    if 'preserved_parse_data' not in st.session_state:
-        st.session_state['preserved_parse_data'] = ""
-    
     # Parse data textarea with fix for widget key conflict
     if 'parse_data_input_outside' in st.session_state:
-        # Use the preserved value if it exists
         parse_data = st.text_area(
             "Enter data to parse",
             key="parse_data_input_outside",
-            value=st.session_state.get('preserved_parse_data', ""),
             help="Enter multiple lines of information to parse into user fields",
             placeholder="1. John Doe\n2. ACME Corporation\n3. Jane Smith\n4. john.doe@example.com\n5. AI, Python, Security\n6. johndoe",
             height=150
         )
-        # Update the preserved value whenever the field changes
-        st.session_state['preserved_parse_data'] = parse_data
     else:
         parse_data = st.text_area(
             "Enter data to parse",
-            value=st.session_state.get('preserved_parse_data', ""),
+            value=st.session_state.get('parse_data_input', ""),
             key="parse_data_input_outside",
             help="Enter multiple lines of information to parse into user fields",
             placeholder="1. John Doe\n2. ACME Corporation\n3. Jane Smith\n4. john.doe@example.com\n5. AI, Python, Security\n6. johndoe",
             height=150
         )
-        # Update the preserved value whenever the field changes
-        st.session_state['preserved_parse_data'] = parse_data
     
     # Bottom row with all buttons
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -1657,12 +1392,6 @@ async def render_create_user_form():
     
     # Handle Create User button logic
     if create_user_button:
-        # Save currently selected Matrix user info to ensure it persists
-        if 'matrix_user_selected' in st.session_state:
-            matrix_user_selected = st.session_state.matrix_user_selected
-            # Store it in a separate variable to ensure it's preserved
-            st.session_state['preserved_matrix_user'] = matrix_user_selected
-        
         # Validate email format
         import re  # Make sure re is imported within this scope
         email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
@@ -1721,7 +1450,8 @@ async def render_create_user_form():
                 
                 # Set a spinner while creating the user
                 with st.spinner("Creating user..."):
-                    # Use the create_user function that was already imported at the top level
+                    # Import the create_user function
+                    from app.auth.api import create_user
                     
                     # Create user synchronously - use parameters that match the API function
                     result = create_user(
@@ -1732,87 +1462,79 @@ async def render_create_user_form():
                         groups=selected_groups,
                         desired_username=username,
                         reset_password=True,
-                        should_create_discourse_post=True
+                        should_create_discourse_post=st.session_state.get('create_discourse_post', True)
                     )
                     
                     # Handle the result
                     if result and not result.get('error'):
-                        # Get the username from the result, which may have been incremented for uniqueness
-                        final_username = result.get('username', username)
-                        if final_username != username:
-                            logging.info(f"Username was modified for uniqueness: {username} -> {final_username}")
-                            st.info(f"Note: Username was adjusted to ensure uniqueness. The assigned username is: {final_username}")
-                        
-                        # Show success message
-                        st.success(f"User {final_username} has been created! You can now connect them with a Matrix user.")
+                        # Invite to recommended rooms based on interests
+                        from app.messages import create_user_message
+                        # Show success message with buttons for clearing
                         
                         # Log the return values for debugging
                         logging.info(f"User creation result: {result}")
                         discourse_post_url = result.get('discourse_url')
                         logging.info(f"Discourse URL in result: {discourse_post_url}")
                         
-                        # Create and display welcome message with improved persistence
-                        from app.messages import create_user_message, display_welcome_message_ui
+                        # Use the username from the result, which may have been incremented for uniqueness
+                        final_username = result.get('username', username)
+                        if final_username != username:
+                            logging.info(f"Username was modified for uniqueness: {username} -> {final_username}")
+                            st.info(f"Note: Username was adjusted to ensure uniqueness. The assigned username is: {final_username}")
                         
-                        # Generate welcome message
-                        welcome_message = create_user_message(
+                        # Store Matrix connection if provided
+                        if st.session_state.get('matrix_user_id'):
+                            # TODO: Implement Matrix user connection
+                            # Pseudocode:
+                            # 1. Get matrix_user_id from session state
+                            # 2. Check if this Matrix ID is already linked to another account
+                            # 3. If not already linked, update user attributes to store Matrix user ID
+                            # 4. Commit changes to database
+                            
+                            matrix_user_id = st.session_state['matrix_user_id']
+                            
+                            # Process interests for room recommendations
+                            try:
+                                from app.utils.recommendation import invite_user_to_recommended_rooms_sync, get_room_recommendations_sync
+                                
+                                # Get interests from the form
+                                user_interests = interests if interests else ""
+                                if not user_interests and organization:
+                                    user_interests = organization
+                                
+                                # Invite to recommended rooms based on interests
+                                if user_interests:
+                                    with st.spinner("Inviting user to recommended rooms based on interests..."):
+                                        # Get room recommendations
+                                        recommended_rooms = get_room_recommendations_sync(matrix_user_id, user_interests)
+                                        
+                                        if recommended_rooms:
+                                            # Proceed with invitations
+                                            room_results = invite_user_to_recommended_rooms_sync(matrix_user_id, user_interests)
+                                            successful_invites = sum(1 for _, _, success in room_results if success)
+                                            
+                                            if successful_invites > 0:
+                                                st.success(f"Successfully invited user to {successful_invites} recommended rooms")
+                                                # Show which rooms the user was invited to
+                                                for room_id, room_name, success in room_results:
+                                                    if success:
+                                                        st.info(f"Invited to: {room_name}")
+                                            else:
+                                                st.warning("Could not invite user to any recommended rooms")
+                                        else:
+                                            st.warning(f"No rooms found matching interests: {user_interests}")
+                                else:
+                                    logging.info("No interests specified for room recommendations.")
+                            except Exception as e:
+                                logging.error(f"Error inviting Matrix user to rooms: {str(e)}")
+                                st.error("Error inviting to recommended rooms")
+                        
+                        create_user_message(
                             new_username=final_username,
                             temp_password=result.get('temp_password', 'unknown'),
                             discourse_post_url=discourse_post_url,
                             password_reset_successful=result.get('password_reset', False)
                         )
-                        
-                        # Store the welcome message in session state for persistence
-                        st.session_state['welcome_message'] = welcome_message
-                        st.session_state['discourse_post_url'] = discourse_post_url
-                        
-                        # Display the welcome message using direct code block for maximum persistence
-                        st.markdown("### 📩 Welcome Message")
-                        st.code(welcome_message, language="")
-                        
-                        # Show forum post link if available
-                        if discourse_post_url:
-                            st.markdown(f"[View forum post]({discourse_post_url})")
-                            
-                        # Copy button
-                        if st.button("Copy Welcome Message to Clipboard", key="copy_welcome"):
-                            try:
-                                import pyperclip
-                                pyperclip.copy(welcome_message)
-                                st.success("Welcome message copied to clipboard!")
-                            except ImportError:
-                                st.warning("Could not copy to clipboard. Please manually copy the message above.")
-                        
-                        # Add a button to send welcome message if Matrix user is selected
-                        if st.session_state.get('matrix_user_selected'):
-                            matrix_user = st.session_state.get('matrix_user_display_name', 
-                                           st.session_state.get('matrix_user_selected'))
-                            if st.button(f"Send Message to {matrix_user}", key="send_direct"):
-                                try:
-                                    from app.utils.matrix_actions import send_direct_message
-                                    
-                                    # Log the attempt for debugging
-                                    logging.info(f"Attempting to send welcome message to {matrix_user}...")
-                                    
-                                    # Show progress indicator
-                                    with st.spinner(f"Sending message to {matrix_user}..."):
-                                        # Send the message directly
-                                        success = send_direct_message(
-                                            st.session_state.get('matrix_user_selected'),
-                                            welcome_message
-                                        )
-                                    
-                                    if success:
-                                        st.success(f"Welcome message sent to {matrix_user}!")
-                                    else:
-                                        st.error(f"Failed to send welcome message to {matrix_user}")
-                                except Exception as e:
-                                    logging.error(f"Error sending message: {str(e)}")
-                                    st.error(f"Error sending welcome message: {str(e)}")
-                                    
-                                # Re-display the welcome message to avoid UI disruption
-                                st.markdown("### 📩 Welcome Message (sent)")
-                                st.code(welcome_message, language="")
                         
                         # Add a section to manually connect with Matrix if not already done
                         if not st.session_state.get('matrix_user_id'):
@@ -1836,76 +1558,6 @@ async def render_create_user_form():
                             st.session_state['should_clear_form'] = False
                             
                             # No need to rerun - let user see the message with buttons
-                        
-                        # Store the form data in session state
-                        st.session_state['form_submitted'] = True
-                        st.session_state['created_username'] = final_username
-                        
-                        # Force input focus to matrix_user_dropdown if not already selected
-                        if not st.session_state.get('matrix_user_selected'):
-                            st.info("Please select a Matrix user to connect with this new account from the dropdown below.")
-                        
-                        # Invite to recommended rooms based on interests if a Matrix user is selected
-                        matrix_user_id = st.session_state.get('matrix_user_selected')
-                        if matrix_user_id and st.session_state.get('add_to_recommended_rooms', True):
-                            # Process interests for room recommendations
-                            try:
-                                from app.utils.recommendation import invite_user_to_recommended_rooms_sync, get_room_recommendations_sync
-                                
-                                # Get interests from the form
-                                user_interests = interests if interests else ""
-                                if not user_interests and organization:
-                                    user_interests = organization
-                                
-                                # Enhance the interests string to include keywords from intro text
-                                if intro_text:
-                                    user_interests = f"{user_interests}, {intro_text}" if user_interests else intro_text
-                                
-                                # Log interests for debugging
-                                logging.info(f"Getting room recommendations for interests: {user_interests}")
-                                
-                                # Invite to recommended rooms based on interests
-                                if user_interests:
-                                    with st.spinner("Inviting user to recommended rooms based on interests..."):
-                                        try:
-                                            # Get room recommendations with timeout handling
-                                            recommended_rooms = get_room_recommendations_sync(matrix_user_id, user_interests)
-                                            
-                                            if recommended_rooms:
-                                                # Use the new bulk invitation function
-                                                room_ids = [room.get('id') for room in recommended_rooms if room.get('id')]
-                                                if room_ids:
-                                                    # Invite user to all recommended rooms with a single function call
-                                                    invitation_results = invite_user_to_recommended_rooms_sync(matrix_user_id, room_ids)
-                                                    
-                                                    # Process results
-                                                    if invitation_results.get('success'):
-                                                        invited_rooms = invitation_results.get('invited_rooms', [])
-                                                        failed_rooms = invitation_results.get('failed_rooms', [])
-                                                        
-                                                        if invited_rooms:
-                                                            st.success(f"Added to {len(invited_rooms)} rooms based on interests!")
-                                                            for room_id, room_name in invited_rooms:
-                                                                st.info(f"✅ Added to {room_name}")
-                                                        
-                                                        if failed_rooms:
-                                                            st.warning(f"Failed to add to {len(failed_rooms)} rooms. You may need to try again later.")
-                                                    else:
-                                                        st.warning(f"Room invitations failed: {invitation_results.get('error', 'Unknown error')}")
-                                                else:
-                                                    st.info("No valid room IDs found in recommendations")
-                                                    
-                                            else:
-                                                st.info("No rooms were recommended based on the user's interests.")
-                                        except Exception as e:
-                                            # Log the error but continue with user creation process
-                                            logging.error(f"Error getting room recommendations: {str(e)}")
-                                            st.warning(f"Could not get room recommendations: {str(e)}")
-                                else:
-                                    logging.info("No interests specified for room recommendations.")
-                            except Exception as e:
-                                logging.error(f"Error inviting Matrix user to rooms: {str(e)}")
-                                st.error("Error inviting to recommended rooms")
             except Exception as e:
                 logging.error(f"Error creating user: {str(e)}")
                 logging.error(traceback.format_exc())
@@ -1913,7 +1565,7 @@ async def render_create_user_form():
             else:
                 # Handle failure case
                 error_message = result.get('error', 'Unknown error')
-                if error_message and "username" in error_message and "unique" in error_message:
+                if "username" in error_message and "unique" in error_message:
                     st.error(f"Failed to create user: Username is not unique. Please try a different username or let the system generate one for you.")
                     # Generate a new username suggestion
                     new_username = generate_username_with_random_word(first_name)
@@ -1922,19 +1574,6 @@ async def render_create_user_form():
                     st.session_state['username_input'] = new_username
                     st.session_state['username_input_outside'] = new_username
                     st.session_state['username_was_auto_generated'] = True
-                elif error_message == 'None' or error_message is None:
-                    # This is actually a success case that was misreported
-                    st.success(f"User {username} created successfully!")
-                    
-                    # Set up Matrix connection section
-                    st.markdown("---")
-                    st.subheader("Connect with Matrix User")
-                    st.info(f"You can now connect {username} with a Matrix user.")
-                    
-                    # Store success flag but DON'T rerun immediately
-                    st.session_state['user_created_successfully'] = True
-                    # Don't clear form fields yet to allow message to be seen
-                    st.session_state['should_clear_form'] = False
                 else:
                     st.error(f"Failed to create user: {error_message}")
     

@@ -51,7 +51,7 @@ def create_invite_message(invite_link, expires_at):
     """
     return message
 
-def create_user_message(new_username, temp_password=None, discourse_post_url=None):
+def create_user_message(new_username, temp_password=None, discourse_post_url=None, password_reset_successful=False):
     """
     Create a welcome message for a new user with login credentials and optional Discourse post URL.
     
@@ -59,6 +59,7 @@ def create_user_message(new_username, temp_password=None, discourse_post_url=Non
         new_username: The username of the new user
         temp_password: Temporary password for the user, None if password reset is needed
         discourse_post_url: URL to the user's Discourse introduction post
+        password_reset_successful: Whether the password reset was successful
     
     Returns:
         str: Welcome message

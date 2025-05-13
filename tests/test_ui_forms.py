@@ -640,8 +640,16 @@ def test_matrix_user_selection_dropdown_initialization():
             # Create options for select box
             user_options = [f"{user['display_name']} ({user['user_id']})" for user in st.session_state['matrix_users']]
             
-            # Set up the selectbox with proper key
-            selected_option = mock_selectbox.return_value = user_options[0] if user_options else None
+            # Return the first option as selected (mock behavior)
+            mock_selectbox.return_value = user_options[0] if user_options else None
+            
+            # Actually call the selectbox function
+            selected_option = mock_selectbox(
+                "Select Matrix User",
+                options=user_options,
+                key="matrix_user_select",
+                help="Select a Matrix user to link with this account"
+            )
             
             # Process selection
             if selected_option:
@@ -666,6 +674,10 @@ def test_matrix_user_selection_dropdown_initialization():
         
         # Verify the selectbox was called
         mock_selectbox.assert_called_once()
+        assert mock_selectbox.call_args[0][0] == "Select Matrix User"
+        
+        # Reset for second test
+        mock_selectbox.reset_mock()
         
         # Test with empty matrix_users list
         st.session_state['matrix_users'] = []
@@ -679,3 +691,4 @@ def test_matrix_user_selection_dropdown_initialization():
         
         # Verify session state stays None when no selection
         assert st.session_state['matrix_user_selected'] is None
+        mock_selectbox.assert_called_once()

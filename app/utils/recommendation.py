@@ -245,10 +245,10 @@ async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[D
         keyword_expansions = {
             "outdoor": ["nature", "hiking", "camping", "adventure", "outdoors", "trek", "wilderness", 
                        "outside", "backpacking", "mountain", "climbing", "trail", "hiking", "biking", 
-                       "fishing", "kayaking", "canoeing", "rafting", "skiing", "snowboarding"],
-            "computer": ["tech", "technology", "programming", "coding", "software", "development", "hardware"],
-            "hack": ["security", "cybersecurity", "penetration", "pentest", "exploit", "vulnerability"],
-            "network": ["networking", "infrastructure", "system", "admin", "administration"]
+                       "fishing", "kayaking", "canoeing", "rafting", "skiing", "snowboarding", "shooting", "guns", "firearms", "firearm", "firearm safety", "firearm training", "firearm safety training", "firearm training", "firearm safety training"],
+            "computer": ["tech", "technology", "programming", "coding", "software", "development", "hardware", "raspberry pi", "home server", "home lab", "home automation", "home assistant"],
+            "hack": ["security", "cybersecurity", "penetration", "pentest", "exploit", "vulnerability", "Brighton", "Cyber", "red team", "blue team", "purple team", "redteaming", "blue teaming", "purple teaming", "red teaming", "blue teaming", "purple teaming"],
+            "network": ["networking", "infrastructure", "system", "admin", "administration", "net+", "self-hosting", "self hosting", "self-host", "self-hosting", "self hosting", "self-host", "self-hosting", "Brighton"]
         }
         
         expanded_set = set(all_keywords)

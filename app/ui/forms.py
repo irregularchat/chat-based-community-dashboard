@@ -335,7 +335,7 @@ def update_username_from_inputs():
         
         # Also check for existing username in Authentik SSO
         try:
-            from app.utils.config import Config
+            # Config already imported at top level
             import requests
             
             sso_exists = False
@@ -1751,6 +1751,44 @@ async def render_create_user_form():
                         discourse_post_url = result.get('discourse_url')
                         logging.info(f"Discourse URL in result: {discourse_post_url}")
                         
+                        # Store discourse URL in session state for persistence across reruns
+                        st.session_state['discourse_post_url'] = discourse_post_url
+                        
+                        # Display forum post information prominently if available
+                        if discourse_post_url:
+                            st.success(f"✅ Forum post created successfully!")
+                            st.markdown(f"""
+                            ### 📝 Forum Post
+                            An introduction post has been created for this user on the forum:
+                            
+                            **[View forum post]({discourse_post_url})**
+                            
+                            The user will be prompted to complete their introduction when they log in.
+                            """)
+                        else:
+                            st.warning("⚠️ No forum post was created. This might be because Discourse integration is not fully configured.")
+                            # Log more details about the Discourse configuration
+                            logging.info("=== Checking Discourse Integration Configuration ===")
+                            # Config already imported at top level
+                            logging.info(f"DISCOURSE_URL is configured: {Config.DISCOURSE_URL}")
+                            logging.info(f"DISCOURSE_API_KEY is configured: {'yes' if Config.DISCOURSE_API_KEY else 'no'}")
+                            logging.info(f"DISCOURSE_API_USERNAME is configured: {Config.DISCOURSE_API_USERNAME}")
+                            logging.info(f"DISCOURSE_CATEGORY_ID is configured: {Config.DISCOURSE_CATEGORY_ID}")
+                            logging.info(f"DISCOURSE_INTRO_TAG is configured: {Config.DISCOURSE_INTRO_TAG}")
+                            logging.info(f"DISCOURSE_ACTIVE is set to: {Config.DISCOURSE_ACTIVE}")
+                            if all([Config.DISCOURSE_URL, Config.DISCOURSE_API_KEY, Config.DISCOURSE_API_USERNAME, Config.DISCOURSE_CATEGORY_ID]):
+                                logging.info("✅ Discourse integration is fully configured")
+                                st.error("All Discourse settings are configured but post creation failed. Check logs for more details.")
+                            else:
+                                missing = []
+                                if not Config.DISCOURSE_URL: missing.append("DISCOURSE_URL")
+                                if not Config.DISCOURSE_API_KEY: missing.append("DISCOURSE_API_KEY")
+                                if not Config.DISCOURSE_API_USERNAME: missing.append("DISCOURSE_API_USERNAME")
+                                if not Config.DISCOURSE_CATEGORY_ID: missing.append("DISCOURSE_CATEGORY_ID")
+                                if not Config.DISCOURSE_ACTIVE: missing.append("DISCOURSE_ACTIVE (set to False)")
+                                logging.warning(f"⚠️ Discourse integration is not fully configured. Missing: {', '.join(missing)}")
+                                st.warning(f"Discourse integration is not fully configured. Missing: {', '.join(missing)}")
+                        
                         # Create and display welcome message with improved persistence
                         from app.messages import create_user_message, display_welcome_message_ui
                         
@@ -1770,10 +1808,14 @@ async def render_create_user_form():
                         st.markdown("### 📩 Welcome Message")
                         st.code(welcome_message, language="")
                         
-                        # Show forum post link if available
-                        if discourse_post_url:
-                            st.markdown(f"[View forum post]({discourse_post_url})")
-                            
+                        # Show forum post link if available (again for after button presses)
+                        if st.session_state.get('discourse_post_url'):
+                            with st.expander("View Forum Post Link", expanded=True):
+                                st.markdown(f"""
+                                ### 📝 Forum Post
+                                **[View forum post]({st.session_state.get('discourse_post_url')})**
+                                """)
+                        
                         # Copy button
                         if st.button("Copy Welcome Message to Clipboard", key="copy_welcome"):
                             try:
@@ -1787,32 +1829,50 @@ async def render_create_user_form():
                         if st.session_state.get('matrix_user_selected'):
                             matrix_user = st.session_state.get('matrix_user_display_name', 
                                            st.session_state.get('matrix_user_selected'))
-                            if st.button(f"Send Message to {matrix_user}", key="send_direct"):
-                                try:
-                                    from app.utils.matrix_actions import send_direct_message
-                                    
-                                    # Log the attempt for debugging
-                                    logging.info(f"Attempting to send welcome message to {matrix_user}...")
-                                    
-                                    # Show progress indicator
-                                    with st.spinner(f"Sending message to {matrix_user}..."):
-                                        # Send the message directly
-                                        success = send_direct_message(
-                                            st.session_state.get('matrix_user_selected'),
-                                            welcome_message
-                                        )
-                                    
-                                    if success:
-                                        st.success(f"Welcome message sent to {matrix_user}!")
-                                    else:
-                                        st.error(f"Failed to send welcome message to {matrix_user}")
-                                except Exception as e:
-                                    logging.error(f"Error sending message: {str(e)}")
-                                    st.error(f"Error sending welcome message: {str(e)}")
-                                    
-                                # Re-display the welcome message to avoid UI disruption
+                            
+                            # Check if message was already sent in this session
+                            message_sent = st.session_state.get('welcome_message_sent', False)
+                            
+                            if message_sent:
+                                # Show the success message if the message was sent
+                                st.success(f"Welcome message sent to {matrix_user}!")
+                                # Re-display the welcome message that was sent
                                 st.markdown("### 📩 Welcome Message (sent)")
                                 st.code(welcome_message, language="")
+                            else:
+                                # Show the send button if message hasn't been sent yet
+                                if st.button(f"Send Message to {matrix_user}", key="send_direct"):
+                                    try:
+                                        from app.utils.matrix_actions import send_direct_message
+                                        
+                                        # Log the attempt for debugging
+                                        logging.info(f"Attempting to send welcome message to {matrix_user}...")
+                                        
+                                        # Show progress indicator
+                                        with st.spinner(f"Sending message to {matrix_user}..."):
+                                            # Send the message directly
+                                            success = send_direct_message(
+                                                st.session_state.get('matrix_user_selected'),
+                                                welcome_message
+                                            )
+                                        
+                                        # Mark the message as sent in session state to preserve state
+                                        st.session_state['welcome_message_sent'] = success
+                                        
+                                        if success:
+                                            st.success(f"Welcome message sent to {matrix_user}!")
+                                            # Re-display the welcome message after sending
+                                            st.markdown("### 📩 Welcome Message (sent)")
+                                            st.code(welcome_message, language="")
+                                        else:
+                                            st.error(f"Failed to send welcome message to {matrix_user}")
+                                            # Keep current state and don't mark as sent
+                                            st.session_state['welcome_message_sent'] = False
+                                    except Exception as e:
+                                        logging.error(f"Error sending message: {str(e)}")
+                                        st.error(f"Error sending welcome message: {str(e)}")
+                                        # Keep current state and don't mark as sent
+                                        st.session_state['welcome_message_sent'] = False
                         
                         # Add a section to manually connect with Matrix if not already done
                         if not st.session_state.get('matrix_user_id'):
@@ -1873,8 +1933,17 @@ async def render_create_user_form():
                                             
                                             if recommended_rooms:
                                                 # Use the new bulk invitation function
-                                                room_ids = [room.get('id') for room in recommended_rooms if room.get('id')]
+                                                room_ids = []
+                                                for room in recommended_rooms:
+                                                    # Try different possible keys for room ID
+                                                    room_id = room.get('room_id') or room.get('id')
+                                                    if room_id:
+                                                        room_ids.append(room_id)
+                                                
                                                 if room_ids:
+                                                    # Log the room IDs for debugging
+                                                    logging.info(f"Found {len(room_ids)} room IDs to invite user to: {room_ids}")
+                                                    
                                                     # Invite user to all recommended rooms with a single function call
                                                     invitation_results = invite_user_to_recommended_rooms_sync(matrix_user_id, room_ids)
                                                     

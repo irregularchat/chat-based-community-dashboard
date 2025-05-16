@@ -241,14 +241,14 @@ def add_user_to_group(user_id: str, group_id: str):
 
 def remove_user_from_group(user_id: str, group_id: str):
     """
-    Remove a user from a group in Authentik.
+    Remove a user from a specific group.
     
     Args:
         user_id (str): Authentik user ID
         group_id (str): Authentik group ID
         
     Returns:
-        bool: True if successful, False otherwise
+        Dict[str, Any]: Result of the operation
     """
     try:
         headers = {
@@ -257,14 +257,23 @@ def remove_user_from_group(user_id: str, group_id: str):
         }
         
         url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/groups/{group_id}/"
-        
         response = requests.delete(url, headers=headers)
-        response.raise_for_status()
         
-        return True
+        if response.status_code == 204:
+            return {
+                "success": True
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"Failed to remove user from group: {response.text}"
+            }
     except Exception as e:
-        logging.error(f"Error removing user {user_id} from group {group_id}: {e}")
-        return False
+        logging.error(f"Error removing user from group: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 @require_admin
 def create_group(admin_username: str, group_name: str, group_description: str = None):
@@ -556,6 +565,77 @@ def revoke_admin_privileges(admin_username: str, target_username: str):
                 }
     except Exception as e:
         logging.error(f"Error revoking admin privileges from {target_username}: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@require_admin
+def update_user_status(admin_username: str, username: str, is_active: bool):
+    """
+    Update a user's active status.
+    
+    Args:
+        admin_username (str): Username of the admin making the change
+        username (str): Username of the user to update
+        is_active (bool): Whether the user should be active or not
+        
+    Returns:
+        Dict[str, Any]: Result of the operation
+    """
+    try:
+        # Find the user in Authentik by username
+        headers = {
+            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+            'Content-Type': 'application/json'
+        }
+        
+        url = f"{Config.AUTHENTIK_API_URL}/core/users/"
+        response = requests.get(url, headers=headers, params={"username": username})
+        response.raise_for_status()
+        
+        users = response.json().get('results', [])
+        if not users:
+            return {
+                "success": False,
+                "error": f"User {username} not found"
+            }
+        
+        user = users[0]
+        user_id = user.get('pk')
+        
+        # Update user's active status
+        update_url = f"{Config.AUTHENTIK_API_URL}/core/users/{user_id}/"
+        update_data = {
+            "is_active": is_active
+        }
+        
+        update_response = requests.patch(update_url, headers=headers, json=update_data)
+        update_response.raise_for_status()
+        
+        # Also update in our local database
+        with SessionLocal() as db:
+            db_user = db.query(User).filter(User.username == username).first()
+            if db_user:
+                db_user.is_active = is_active
+                db.commit()
+                
+            # Log the admin action
+            action = "activated" if is_active else "deactivated"
+            create_admin_event(
+                db=db, 
+                admin_username=admin_username,
+                action=f"User status update: {action}",
+                details=f"Set user {username} status to {'active' if is_active else 'inactive'}"
+            )
+        
+        return {
+            "success": True,
+            "user_id": user_id,
+            "is_active": is_active
+        }
+    except Exception as e:
+        logging.error(f"Error updating user status: {e}")
         return {
             "success": False,
             "error": str(e)

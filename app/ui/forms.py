@@ -1602,6 +1602,128 @@ async def render_create_user_form():
         else:
             st.warning("No recommended rooms found based on your interests.")
     
+    # Add manual room search feature
+    st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
+    st.subheader("Search for Rooms")
+    
+    # Room search input and button
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        room_search_query = st.text_input(
+            "Search for rooms by keyword",
+            key="room_search_query",
+            help="Enter keywords to find specific rooms (e.g., 'tech', 'outdoor', 'ai', etc.)"
+        )
+    
+    with col2:
+        search_rooms_button = st.button("Search Rooms", key="search_rooms_button")
+    
+    # Handle room search
+    if search_rooms_button and room_search_query:
+        with st.spinner("Searching for rooms..."):
+            try:
+                from app.utils.recommendation import get_room_recommendations_sync
+                
+                # Use the search query as the interests parameter
+                search_results = get_room_recommendations_sync("", room_search_query)
+                
+                if search_results:
+                    st.success(f"Found {len(search_results)} rooms matching your search")
+                    
+                    # Show search results in a similar format to recommended rooms
+                    room_container = st.container()
+                    
+                    with room_container:
+                        # Group rooms by category if possible
+                        room_categories = {}
+                        
+                        for room in search_results:
+                            room_id = room['room_id']
+                            room_key = f"search_room_{room_id}"
+                            
+                            # Try to extract category from room name or topic
+                            category = "General"
+                            room_name = room['name']
+                            room_topic = room.get('topic', '')
+                            
+                            # Look for category indicators in name or topic
+                            if ":" in room_name:
+                                parts = room_name.split(":", 1)
+                                if len(parts[0].strip()) <= 20:  # Reasonable category length
+                                    category = parts[0].strip()
+                            
+                            # Add room to category
+                            if category not in room_categories:
+                                room_categories[category] = []
+                            
+                            room_categories[category].append({
+                                'id': room_id,
+                                'key': room_key,
+                                'name': room_name,
+                                'description': room.get('description', room.get('topic', '')),
+                                'selected': room_key in st.session_state.selected_rooms
+                            })
+                        
+                        # Display rooms by category
+                        for category, rooms in sorted(room_categories.items()):
+                            if category != "General":
+                                st.subheader(f"{category}")
+                            
+                            # Create columns for better layout
+                            cols = st.columns(2)
+                            col_idx = 0
+                            
+                            for room in sorted(rooms, key=lambda r: r['name']):
+                                with cols[col_idx]:
+                                    # Create checkbox with room name and description
+                                    description = room['description']
+                                    tooltip = description if len(description) > 50 else ""
+                                    display_desc = description[:50] + "..." if len(description) > 50 else description
+                                    
+                                    if st.checkbox(
+                                        f"{room['name']}",
+                                        key=room['key'],
+                                        value=room['selected'],
+                                        help=tooltip
+                                    ):
+                                        st.session_state.selected_rooms.add(room['key'])
+                                        st.caption(display_desc)
+                                    else:
+                                        st.session_state.selected_rooms.discard(room['key'])
+                                        st.caption(display_desc)
+                                
+                                # Alternate columns
+                                col_idx = (col_idx + 1) % 2
+                        
+                        # Add search results to selected rooms button
+                        search_col1, search_col2 = st.columns(2)
+                        
+                        with search_col1:
+                            if st.button("Add Search Results to Selected Rooms", key="add_search_rooms_button"):
+                                selected_room_ids = [
+                                    room['id'] for category_rooms in room_categories.values() 
+                                    for room in category_rooms if room['key'] in st.session_state.selected_rooms
+                                ]
+                                
+                                if selected_room_ids:
+                                    st.success(f"Added {len(selected_room_ids)} rooms to selection")
+                                else:
+                                    st.warning("Please select at least one room from the search results")
+                        
+                        with search_col2:
+                            if st.button("Select All Search Results", key="select_all_search_rooms"):
+                                # Add all search room keys to selected_rooms
+                                for category_rooms in room_categories.values():
+                                    for room in category_rooms:
+                                        st.session_state.selected_rooms.add(room['key'])
+                                st.rerun()
+                else:
+                    st.warning("No rooms found matching your search criteria. Try different keywords.")
+            except Exception as e:
+                st.error(f"Error searching for rooms: {str(e)}")
+                logging.error(f"Error in room search: {str(e)}")
+                logging.error(traceback.format_exc())
+    
     # Parse data textarea with fix for widget key conflict
     st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
     st.subheader("Parse Text Data")

@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import logging
 import uuid
 from typing import List, Optional
+import traceback
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -122,7 +123,6 @@ class Config:
     SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL")
     SMTP_BCC = os.getenv("SMTP_BCC")
     SMTP_ACTIVE = os.getenv("SMTP_ACTIVE", "False").lower() == "true"
-    recommendation_keyword_expansions = 
     
     # Discourse integration (optional)
     DISCOURSE_URL = os.getenv("DISCOURSE_URL")
@@ -244,7 +244,25 @@ class Config:
             return []
             
         rooms = cls.get_matrix_rooms()
-        categories = set(room.get("category", "") for room in rooms if "category" in room)
+        
+        # Extract categories including both single categories and lists
+        categories = set()
+        for room in rooms:
+            # Add the primary category string for backward compatibility
+            if "category" in room and room["category"]:
+                categories.add(room["category"].lower())
+            
+            # Add each individual category from the categories list
+            if "categories" in room and isinstance(room["categories"], list):
+                for category in room["categories"]:
+                    if category:
+                        categories.add(category.lower())
+        
+        # Ensure main categories always present
+        main_categories = ["tech", "information & research", "miscellaneous", "locations"]
+        for cat in main_categories:
+            categories.add(cat.lower())
+            
         return sorted(list(categories))
     
     @classmethod
@@ -284,8 +302,12 @@ class Config:
                 required_vars.append("MATRIX_HOMESERVER_URL")
             if not cls.MATRIX_USER_ID:
                 required_vars.append("MATRIX_USER_ID")
+            if not cls.MATRIX_ACCESS_TOKEN:
+                required_vars.append("MATRIX_ACCESS_TOKEN")
             if not cls.MATRIX_ROOM_ID:
                 required_vars.append("MATRIX_ROOM_ID")
+            if not cls.MATRIX_BOT_USERNAME:
+                required_vars.append("MATRIX_BOT_USERNAME")
         
         # Only check Discourse variables if Discourse integration is active
         if cls.DISCOURSE_ACTIVE:
@@ -295,6 +317,12 @@ class Config:
                 required_vars.append("DISCOURSE_API_KEY")
             if not cls.DISCOURSE_API_USERNAME:
                 required_vars.append("DISCOURSE_API_USERNAME")
+            if not cls.DISCOURSE_CATEGORY_ID:
+                required_vars.append("DISCOURSE_CATEGORY_ID")
+        
+        # Check database URL
+        if not cls.DATABASE_URL:
+            required_vars.append("DATABASE_URL")
         
         return required_vars
     
@@ -304,6 +332,62 @@ class Config:
         missing_vars = cls.get_required_vars()
         if missing_vars:
             raise EnvironmentError(f"Missing required environment variables: {', '.join(missing_vars)}")
+        
+        # Additional validations
+        if cls.MATRIX_ACTIVE:
+            cls.validate_matrix_config()
+        
+        if cls.DISCOURSE_ACTIVE:
+            cls.validate_discourse_config()
+    
+    @classmethod
+    def validate_matrix_config(cls):
+        """Validate the Matrix configuration."""
+        # Check Matrix user ID format
+        if cls.MATRIX_USER_ID and not cls.MATRIX_USER_ID.startswith('@'):
+            logging.warning(f"MATRIX_USER_ID should start with '@', got: {cls.MATRIX_USER_ID}")
+        
+        # Check Matrix room ID format
+        if cls.MATRIX_ROOM_ID and not cls.MATRIX_ROOM_ID.startswith('!'):
+            logging.warning(f"MATRIX_ROOM_ID should start with '!', got: {cls.MATRIX_ROOM_ID}")
+        
+        # Validate room configuration format
+        if cls.MATRIX_ROOM_IDS_NAME_CATEGORY:
+            try:
+                rooms = cls.get_matrix_rooms()
+                if not rooms:
+                    logging.warning("No Matrix rooms were parsed from configuration")
+                else:
+                    logging.info(f"Successfully parsed {len(rooms)} Matrix rooms")
+                    
+                    # Validate that all rooms have required fields
+                    for i, room in enumerate(rooms):
+                        if 'name' not in room or not room['name']:
+                            logging.warning(f"Room at index {i} is missing a name")
+                        if 'room_id' not in room or not room['room_id']:
+                            logging.warning(f"Room {room.get('name', f'at index {i}')} is missing a room_id")
+                        if ('category' not in room and 'categories' not in room) or (not room.get('category') and not room.get('categories')):
+                            logging.warning(f"Room {room.get('name', f'at index {i}')} is missing category information")
+                        
+                        # Check room ID format
+                        if 'room_id' in room and room['room_id'] and not room['room_id'].startswith('!'):
+                            logging.warning(f"Room {room.get('name', f'at index {i}')} has an invalid room_id format: {room['room_id']}")
+            except Exception as e:
+                logging.error(f"Error validating Matrix room configuration: {e}")
+                logging.error(traceback.format_exc())
+                raise ValueError(f"Invalid Matrix room configuration: {str(e)}")
+    
+    @classmethod
+    def validate_discourse_config(cls):
+        """Validate the Discourse configuration."""
+        if not cls.DISCOURSE_URL:
+            logging.warning("DISCOURSE_URL is missing")
+        if not cls.DISCOURSE_API_KEY:
+            logging.warning("DISCOURSE_API_KEY is missing")
+        if not cls.DISCOURSE_API_USERNAME:
+            logging.warning("DISCOURSE_API_USERNAME is missing")
+        if not cls.DISCOURSE_CATEGORY_ID:
+            logging.warning("DISCOURSE_CATEGORY_ID is missing")
     
     @classmethod
     def to_dict(cls):
@@ -396,6 +480,56 @@ class Config:
             
         logger.info(f"OIDC Configuration is {'valid' if valid else 'INVALID'}")
         return valid
+    
+    @classmethod
+    def validate_room_categories(cls):
+        """
+        Validate that rooms are organized into the expected categories.
+        
+        Returns:
+            bool: True if categories are valid, False otherwise
+        """
+        if not cls.MATRIX_ACTIVE:
+            return True
+            
+        rooms = cls.get_matrix_rooms()
+        categories = cls.get_matrix_room_categories()
+        
+        # Check that we have the main categories
+        required_categories = ["tech", "information & research", "miscellaneous", "locations"]
+        missing_categories = [cat for cat in required_categories 
+                            if not any(existing.lower() == cat.lower() for existing in categories)]
+        
+        if missing_categories:
+            logging.warning(f"Missing required room categories: {', '.join(missing_categories)}")
+            return False
+            
+        # Check that each room has a valid category
+        invalid_rooms = []
+        for room in rooms:
+            has_valid_category = False
+            
+            # Check primary category
+            if "category" in room and room["category"]:
+                room_category = room["category"].lower()
+                if any(cat.lower() == room_category for cat in categories):
+                    has_valid_category = True
+            
+            # Check categories list
+            if "categories" in room and isinstance(room["categories"], list):
+                for category in room["categories"]:
+                    if category and any(cat.lower() == category.lower() for cat in categories):
+                        has_valid_category = True
+                        break
+            
+            if not has_valid_category:
+                invalid_rooms.append(room.get("name", "Unnamed room"))
+        
+        if invalid_rooms:
+            logging.warning(f"Rooms with invalid categories: {', '.join(invalid_rooms)}")
+            return False
+            
+        return True
 
 # Initialize Fernet outside the Config class
 # Completely remove or comment out the following lines

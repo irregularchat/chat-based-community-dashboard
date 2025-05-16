@@ -32,7 +32,8 @@ from app.auth.admin import (
     get_authentik_groups,
     manage_user_groups,
     get_user_details,
-    search_users_by_criteria
+    search_users_by_criteria,
+    update_user_status
 )
 from app.utils.transformations import parse_input
 from app.auth.api import (
@@ -1607,7 +1608,7 @@ async def render_create_user_form():
     st.subheader("Search for Rooms")
     
     # Room search input and button
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([3, 2, 1])
     with col1:
         room_search_query = st.text_input(
             "Search for rooms by keyword",
@@ -1616,6 +1617,14 @@ async def render_create_user_form():
         )
     
     with col2:
+        # Add category filter dropdown
+        search_category = st.selectbox(
+            "Filter by category",
+            options=["All Categories", "Tech", "Information & Research", "Miscellaneous", "Locations"],
+            key="search_category"
+        )
+    
+    with col3:
         search_rooms_button = st.button("Search Rooms", key="search_rooms_button")
     
     # Handle room search
@@ -1624,8 +1633,13 @@ async def render_create_user_form():
             try:
                 from app.utils.recommendation import get_room_recommendations_sync
                 
+                # Combine search query with category if selected
+                search_terms = room_search_query
+                if search_category != "All Categories":
+                    search_terms = f"{search_terms}, {search_category}"
+                
                 # Use the search query as the interests parameter
-                search_results = get_room_recommendations_sync("", room_search_query)
+                search_results = get_room_recommendations_sync("", search_terms)
                 
                 if search_results:
                     st.success(f"Found {len(search_results)} rooms matching your search")
@@ -2686,3 +2700,179 @@ async def display_user_list(auth_api_url=None, headers=None):
                     st.success(f"Successfully deleted selected users")
                 else:
                     st.error("Failed to delete users")
+
+def format_date(date_obj):
+    """Format a date object for display."""
+    if date_obj is None or pd.isna(date_obj):
+        return ""
+    try:
+        return date_obj.strftime("%Y-%m-%d %H:%M")
+    except (AttributeError, TypeError, ValueError):
+        # If it's a string, try to parse it
+        if isinstance(date_obj, str):
+            try:
+                from datetime import datetime
+                return datetime.fromisoformat(date_obj.replace('Z', '+00:00')).strftime("%Y-%m-%d %H:%M")
+            except (ValueError, AttributeError):
+                return date_obj
+        return str(date_obj)
+
+def handle_action(action_type, selected_users, action_params=None):
+    """
+    Handle various user actions (update status, email, matrix username, delete).
+    
+    Args:
+        action_type (str): The type of action to perform
+        selected_users (list): List of usernames to perform action on
+        action_params (dict, optional): Additional parameters for specific actions
+    
+    Returns:
+        bool: True if action was successful, False otherwise
+    """
+    if not selected_users:
+        st.warning("No users selected")
+        return False
+        
+    try:
+        # Get a database session
+        db = next(get_db())
+        
+        try:
+            # Get users from database
+            from app.db.models import User
+            users = db.query(User).filter(User.username.in_(selected_users)).all()
+            
+            if not users:
+                st.warning(f"No users found with usernames: {', '.join(selected_users)}")
+                return False
+                
+            if action_type in ["Activate", "Deactivate"]:
+                # Update user status
+                is_active = action_type == "Activate"
+                from app.auth.admin import update_user_status
+                
+                success = True
+                for user in users:
+                    result = update_user_status(user.username, is_active)
+                    if not result.get('success', False):
+                        success = False
+                        st.error(f"Failed to update status for {user.username}: {result.get('error', 'Unknown error')}")
+                
+                if success:
+                    st.success(f"Successfully {action_type.lower()}d {len(users)} users")
+                return success
+                
+            elif action_type == "update_email":
+                # Update user email
+                if not action_params or 'email' not in action_params:
+                    st.warning("Email parameter is required")
+                    return False
+                    
+                new_email = action_params['email']
+                
+                success = True
+                for user in users:
+                    try:
+                        user.email = new_email
+                        db.commit()
+                    except Exception as e:
+                        success = False
+                        db.rollback()
+                        st.error(f"Failed to update email for {user.username}: {str(e)}")
+                
+                if success:
+                    st.success(f"Successfully updated email for {len(users)} users")
+                return success
+                
+            elif action_type == "update_matrix_username":
+                # Update Matrix username
+                if not action_params or 'matrix_username' not in action_params:
+                    st.warning("Matrix username parameter is required")
+                    return False
+                    
+                new_matrix_username = action_params['matrix_username']
+                
+                success = True
+                for user in users:
+                    try:
+                        user.matrix_username = new_matrix_username
+                        # Update Authentik profile with Matrix username
+                        user.attributes = user.attributes or {}
+                        user.attributes['matrix_username'] = new_matrix_username
+                        db.commit()
+                    except Exception as e:
+                        success = False
+                        db.rollback()
+                        st.error(f"Failed to update Matrix username for {user.username}: {str(e)}")
+                
+                if success:
+                    st.success(f"Successfully updated Matrix username for {len(users)} users")
+                return success
+                
+            elif action_type == "update_status":
+                # Update user status
+                if action_params is None or 'is_active' not in action_params:
+                    st.warning("is_active parameter is required")
+                    return False
+                    
+                is_active = action_params['is_active']
+                
+                success = True
+                for user in users:
+                    try:
+                        user.is_active = is_active
+                        db.commit()
+                    except Exception as e:
+                        success = False
+                        db.rollback()
+                        st.error(f"Failed to update status for {user.username}: {str(e)}")
+                
+                if success:
+                    status_text = "activated" if is_active else "deactivated"
+                    st.success(f"Successfully {status_text} {len(users)} users")
+                return success
+                
+            elif action_type == "delete":
+                # Delete users
+                success = True
+                for user in users:
+                    try:
+                        db.delete(user)
+                        db.commit()
+                    except Exception as e:
+                        success = False
+                        db.rollback()
+                        st.error(f"Failed to delete {user.username}: {str(e)}")
+                
+                if success:
+                    st.success(f"Successfully deleted {len(users)} users")
+                return success
+                
+            else:
+                st.warning(f"Unknown action type: {action_type}")
+                return False
+        finally:
+            db.close()
+    except Exception as e:
+        st.error(f"Error performing action: {str(e)}")
+        logging.error(f"Error in handle_action: {str(e)}")
+        logging.error(traceback.format_exc())
+        return False
+
+def get_users_from_db():
+    """Get all users from the database."""
+    try:
+        # Get a database session
+        db = next(get_db())
+        try:
+            # Get users from database
+            from app.db.models import User
+            users = db.query(User).all()
+            return users
+        finally:
+            db.close()
+    except Exception as e:
+        st.error(f"Error getting users from database: {str(e)}")
+        logging.error(f"Error in get_users_from_db: {str(e)}")
+        logging.error(traceback.format_exc())
+        return []

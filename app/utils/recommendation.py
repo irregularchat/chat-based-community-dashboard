@@ -243,28 +243,36 @@ async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[D
         
         # Add related keywords for common interests
         recommendation_keyword_expansions = {
+            # General interests
             "outdoor": ["nature", "hiking", "camping", "adventure", "outdoors", "trek", "wilderness", 
                        "outside", "backpacking", "mountain", "climbing", "trail", "hiking", "biking", 
-                       "fishing", "kayaking", "canoeing", "rafting", "skiing", "snowboarding", "shooting", "guns", "firearms", "firearm", "firearm safety", "firearm training", "firearm safety training", "firearm training", "firearm safety training"],
-            "computer": ["tech", "technology", "programming", "coding", "software", "development", "hardware", "raspberry pi", "home server", "home lab", "home automation", "home assistant"],
-            "hack": ["security", "cybersecurity", "penetration", "pentest", "exploit", "vulnerability", "Brighton", "Cyber", "red team", "blue team", "purple team", "redteaming", "blue teaming", "purple teaming", "red teaming", "blue teaming", "purple teaming"],
-            "network": ["networking", "infrastructure", "system", "admin", "administration", "net+", "self-hosting", "self hosting", "self-host", "self-hosting", "self hosting", "self-host", "self-hosting", "Brighton"],
-            "IWAR": ["Influence", "PSYOP", "PSY-B", "4th"],
-            # Added based on community's chat groups
-            "tech": ["general tech", "hardware", "ai", "ml", "artificial intelligence", "machine learning", "computer", "software", "development", "programming", "coding"],
-            "hardware": ["electronics", "raspberry pi", "arduino", "microcontroller", "circuit", "pcb", "computer hardware"],
+                       "fishing", "kayaking", "canoeing", "rafting", "skiing", "snowboarding", "shooting", "guns", "firearms", "firearm safety", "firearm training"],
+            
+            # Tech category
+            "tech": ["general tech", "hardware", "software", "development", "computer", "programming", "coding", "technology"],
+            "hardware": ["electronics", "raspberry pi", "arduino", "microcontroller", "circuit", "pcb", "computer hardware", "tech hardware"],
             "rf": ["signals", "ew", "electronic warfare", "radio", "sdr", "software defined radio", "dragonos", "ham", "amateur radio"],
-            "ai": ["artificial intelligence", "machine learning", "ml", "data science", "neural networks", "deep learning", "nlp", "gpt"],
-            "unmanned": ["drone", "robotics", "uav", "unmanned aerial vehicle", "counter drone", "counter uav", "c-uas", "cuas"],
-            "fabrication": ["3d printing", "cnc", "manufacturing", "maker", "diy", "printing", "additive manufacturing"],
-            "security": ["cybersecurity", "cyber", "infosec", "information security", "red team", "blue team", "purple team", "pentest", "penetration testing"],
-            "space": ["astronomy", "spacex", "nasa", "satellite", "mars", "moon", "rocket", "spacecraft"],
-            "influence": ["psyop", "psychological operations", "information operations", "information warfare", "psyops", "military information", "iwar"],
-            "research": ["academic", "science", "analysis", "intelligence analysis", "studies", "white paper"],
-            "business": ["entrepreneurship", "startup", "finance", "investing", "career", "professional"],
-            "debate": ["discussion", "philosophy", "politics", "rhetoric", "argument", "critical thinking"],
-            "language": ["spanish", "linguistics", "bilingual", "language learning"],
-            "location": ["fort liberty", "flnc", "national capital region", "ncr", "knoxville", "tampa", "texas", "central texas"]
+            "ai": ["artificial intelligence", "machine learning", "ml", "data science", "neural networks", "deep learning", "nlp", "gpt", "tech ai", "ai/ml", "ml/ai"],
+            "unmanned": ["drone", "robotics", "uav", "unmanned aerial vehicle", "counter drone", "counter uav", "c-uas", "cuas", "unmanned systems", "drones & robotics", "counter unmanned systems"],
+            "fabrication": ["3d printing", "cnc", "manufacturing", "maker", "diy", "printing", "additive manufacturing", "tech fabrication"],
+            "security": ["cybersecurity", "cyber", "infosec", "information security", "red team", "blue team", "purple team", "pentest", "penetration testing", "purple teaming"],
+            "certification": ["cert", "certs", "certifications", "tech certification", "exam", "training certification"],
+            "fullstack": ["web development", "web dev", "software development", "ctf", "capture the flag", "full stack development", "full-stack", "developer"],
+            "space": ["astronomy", "spacex", "nasa", "satellite", "mars", "moon", "rocket", "spacecraft", "space chat", "space exploration"],
+            
+            # Information & Research
+            "influence": ["psyop", "psychological operations", "information operations", "information warfare", "psyops", "military information", "iwar", "influence chat", "information warfare", "influence operations"],
+            "research": ["academic", "science", "analysis", "intelligence analysis", "studies", "white paper", "research chat", "information research"],
+            
+            # Miscellaneous
+            "business": ["entrepreneurship", "startup", "finance", "investing", "career", "professional", "business chat"],
+            "debate": ["discussion", "philosophy", "politics", "rhetoric", "argument", "critical thinking", "debate group", "debate chat"],
+            "spanish": ["español", "language", "linguistics", "bilingual", "language learning", "spanish chat"],
+            "offtopic": ["general", "random", "misc", "off-topic", "off topic", "casual", "general chat"],
+            "outdoor_misc": ["hiking", "camping", "climbing", "outdoor activities", "outdoor group", "outdoors"],
+            
+            # Locations
+            "location": ["fort liberty", "flnc", "national capital region", "ncr", "knoxville", "tampa", "texas", "central texas", "fort liberty group", "ncr group", "knoxville group", "tampa group", "central texas group"]
         }
         
         expanded_set = set(all_keywords)
@@ -346,6 +354,23 @@ async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[D
                 if any(keyword in room_text for keyword in all_keywords):
                     matched_rooms.append(room)
                     logger.info(f"Matched room: {room_name} based on expanded keywords")
+                    
+                    # Add a match score to help with sorting (higher is better)
+                    match_score = 0
+                    
+                    # Check for exact category matches - give these higher priority
+                    if any(category.lower() in all_keywords for category in room_categories):
+                        match_score += 10
+                        
+                    # Check for name matches - these are also important
+                    if any(keyword in room_name.lower() for keyword in all_keywords):
+                        match_score += 5
+                        
+                    # Add score based on number of matching keywords
+                    match_score += sum(1 for keyword in all_keywords if keyword in room_text)
+                    
+                    # Store match score with the room
+                    room['match_score'] = match_score
             except Exception as e:
                 logger.warning(f"Error matching interests for room {room.get('name', 'Unknown')}: {e}")
                 continue
@@ -360,6 +385,10 @@ async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[D
             except (ValueError, TypeError) as e:
                 logger.warning(f"Error sampling rooms: {e}. Returning all available rooms.")
                 return all_rooms
+        
+        # Sort matched rooms by match score
+        if matched_rooms:
+            matched_rooms.sort(key=lambda r: r.get('match_score', 0), reverse=True)
         
         # Check if we need to prioritize outdoor-related rooms based on interests
         has_outdoor_interest = False

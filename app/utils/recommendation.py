@@ -242,18 +242,34 @@ async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[D
         all_keywords = list(set(interest_keywords + expanded_keywords))
         
         # Add related keywords for common interests
-        keyword_expansions = {
+        recommendation_keyword_expansions = {
             "outdoor": ["nature", "hiking", "camping", "adventure", "outdoors", "trek", "wilderness", 
                        "outside", "backpacking", "mountain", "climbing", "trail", "hiking", "biking", 
                        "fishing", "kayaking", "canoeing", "rafting", "skiing", "snowboarding", "shooting", "guns", "firearms", "firearm", "firearm safety", "firearm training", "firearm safety training", "firearm training", "firearm safety training"],
             "computer": ["tech", "technology", "programming", "coding", "software", "development", "hardware", "raspberry pi", "home server", "home lab", "home automation", "home assistant"],
             "hack": ["security", "cybersecurity", "penetration", "pentest", "exploit", "vulnerability", "Brighton", "Cyber", "red team", "blue team", "purple team", "redteaming", "blue teaming", "purple teaming", "red teaming", "blue teaming", "purple teaming"],
-            "network": ["networking", "infrastructure", "system", "admin", "administration", "net+", "self-hosting", "self hosting", "self-host", "self-hosting", "self hosting", "self-host", "self-hosting", "Brighton"]
+            "network": ["networking", "infrastructure", "system", "admin", "administration", "net+", "self-hosting", "self hosting", "self-host", "self-hosting", "self hosting", "self-host", "self-hosting", "Brighton"],
+            "IWAR": ["Influence", "PSYOP", "PSY-B", "4th"],
+            # Added based on community's chat groups
+            "tech": ["general tech", "hardware", "ai", "ml", "artificial intelligence", "machine learning", "computer", "software", "development", "programming", "coding"],
+            "hardware": ["electronics", "raspberry pi", "arduino", "microcontroller", "circuit", "pcb", "computer hardware"],
+            "rf": ["signals", "ew", "electronic warfare", "radio", "sdr", "software defined radio", "dragonos", "ham", "amateur radio"],
+            "ai": ["artificial intelligence", "machine learning", "ml", "data science", "neural networks", "deep learning", "nlp", "gpt"],
+            "unmanned": ["drone", "robotics", "uav", "unmanned aerial vehicle", "counter drone", "counter uav", "c-uas", "cuas"],
+            "fabrication": ["3d printing", "cnc", "manufacturing", "maker", "diy", "printing", "additive manufacturing"],
+            "security": ["cybersecurity", "cyber", "infosec", "information security", "red team", "blue team", "purple team", "pentest", "penetration testing"],
+            "space": ["astronomy", "spacex", "nasa", "satellite", "mars", "moon", "rocket", "spacecraft"],
+            "influence": ["psyop", "psychological operations", "information operations", "information warfare", "psyops", "military information", "iwar"],
+            "research": ["academic", "science", "analysis", "intelligence analysis", "studies", "white paper"],
+            "business": ["entrepreneurship", "startup", "finance", "investing", "career", "professional"],
+            "debate": ["discussion", "philosophy", "politics", "rhetoric", "argument", "critical thinking"],
+            "language": ["spanish", "linguistics", "bilingual", "language learning"],
+            "location": ["fort liberty", "flnc", "national capital region", "ncr", "knoxville", "tampa", "texas", "central texas"]
         }
         
         expanded_set = set(all_keywords)
         for keyword in all_keywords.copy():
-            for base_word, expansions in keyword_expansions.items():
+            for base_word, expansions in recommendation_keyword_expansions.items():
                 if base_word in keyword:
                     expanded_set.update(expansions)
         

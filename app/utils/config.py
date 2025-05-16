@@ -122,6 +122,7 @@ class Config:
     SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL")
     SMTP_BCC = os.getenv("SMTP_BCC")
     SMTP_ACTIVE = os.getenv("SMTP_ACTIVE", "False").lower() == "true"
+    recommendation_keyword_expansions = 
     
     # Discourse integration (optional)
     DISCOURSE_URL = os.getenv("DISCOURSE_URL")

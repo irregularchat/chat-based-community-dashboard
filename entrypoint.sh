@@ -142,8 +142,7 @@ if grep -q "OIDC_REDIRECT_URI" /app/.env; then
     # Check if it's a localhost URI (for development)
     if [[ "$CURRENT_URI" == *"localhost"* ]]; then
         # Create the new URI with the correct format
-        NEW_URI="http://localhost:${PORT}/auth/callback"
-        
+        NEW_URI="http://localhost:${PORT}/callback"
         echo "Updating OIDC_REDIRECT_URI to: $NEW_URI"
         # Update the URI in the .env file
         sed -i "s|OIDC_REDIRECT_URI.*|OIDC_REDIRECT_URI = ${NEW_URI}|g" /app/.env
@@ -178,4 +177,4 @@ echo "URL format: postgresql://<user>:<password>@$DB_HOST:$POSTGRES_PORT/$POSTGR
 
 # Start the Streamlit app
 echo "Starting Streamlit app on port $PORT"
-exec streamlit run app/main.py --server.port=$PORT --server.address=0.0.0.0 
+exec streamlit run app/main.py --server.port=$PORT --server.address=0.0.0.0

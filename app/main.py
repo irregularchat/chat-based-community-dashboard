@@ -1076,7 +1076,13 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        import traceback
+        st.error(f"A fatal error occurred: {str(e)}")
+        st.code(traceback.format_exc())
+        st.markdown('<a href="/" style="color: #fff; background: #007bff; padding: 10px 20px; border-radius: 5px; text-decoration: none;">Return to Home</a>', unsafe_allow_html=True)
 
 # auth/api.py: Handle all API interactions with Authentik and Shlink.
 # auth/encryption.py: Manage encryption and decryption functionalities.

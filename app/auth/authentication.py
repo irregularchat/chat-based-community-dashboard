@@ -88,7 +88,7 @@ def handle_auth_callback(code, state):
         logging.error(f"Invalid state parameter in authentication callback")
         logging.error(f"Received: {state}")
         logging.error(f"Expected: {expected_state}")
-        
+        st.error(f"Invalid state parameter in authentication callback. Received: {state}, Expected: {expected_state}")
         # ALWAYS continue with auth attempt when using direct auth
         if expected_state is None:
             logging.warning("Auth state completely lost from session - continuing anyway")
@@ -186,20 +186,25 @@ def handle_auth_callback(code, state):
             # Check if this method worked
             if response and response.status_code == 200:
                 logging.info(f"Authentication method '{method}' succeeded!")
-                # Save the successful method for future use
                 st.session_state['successful_auth_method'] = method
                 success = True
                 break
             elif response:
-                logging.warning(f"Authentication method '{method}' failed with status {response.status_code}")
-                if hasattr(response, 'text'):
-                    logging.warning(f"Response: {response.text}")
+                # Log and show error details
+                try:
+                    error_json = response.json()
+                    error_msg = error_json.get('error_description') or error_json.get('error') or response.text
+                except Exception:
+                    error_msg = response.text
+                logging.error(f"OIDC token exchange failed with method '{method}': {error_msg}")
+                st.error(f"OIDC token exchange failed with method '{method}': {error_msg}")
         
         # If all methods failed
         if not success:
             logging.error("All authentication methods failed")
             if response and hasattr(response, 'text'):
                 logging.error(f"Last response: {response.text}")
+            st.error("Authentication failed. Please try again.")
             return False
             
         # Process token response
@@ -210,11 +215,13 @@ def handle_auth_callback(code, state):
             if 'error' in tokens:
                 logging.error(f"Error in token response: {tokens.get('error')}")
                 logging.error(f"Error description: {tokens.get('error_description', 'No description provided')}")
+                st.error(f"Error in token response: {tokens.get('error')}")
                 return False
                 
             if 'access_token' not in tokens:
                 logging.error("No access_token in token response")
                 logging.error(f"Response: {tokens}")
+                st.error("No access_token in token response")
                 return False
                 
             # Store tokens in session state
@@ -235,17 +242,23 @@ def handle_auth_callback(code, state):
             logging.info("Tokens stored in session state")
         except Exception as e:
             logging.error(f"Error processing token response: {str(e)}")
+            st.error(f"Failed to process token response: {str(e)}")
             return False
             
         # Get user info
         try:
             logging.info(f"Fetching user info from: {Config.OIDC_USERINFO_ENDPOINT}")
             headers = {'Authorization': f'Bearer {st.session_state["access_token"]}'}
-            
-            # Make user info request with error handling
             userinfo_response = requests.get(Config.OIDC_USERINFO_ENDPOINT, headers=headers, timeout=10)
-            userinfo_response.raise_for_status()
-            
+            if userinfo_response.status_code != 200:
+                try:
+                    error_json = userinfo_response.json()
+                    error_msg = error_json.get('error_description') or error_json.get('error') or userinfo_response.text
+                except Exception:
+                    error_msg = userinfo_response.text
+                logging.error(f"Failed to fetch user info: {error_msg}")
+                st.error(f"Failed to fetch user info: {error_msg}")
+                return False
             # Process user info response
             user_info = userinfo_response.json()
             logging.info("User info response received successfully")
@@ -278,11 +291,14 @@ def handle_auth_callback(code, state):
             return True
         except Exception as e:
             logging.error(f"Error fetching or processing user info: {str(e)}")
+            st.error(f"Failed to fetch user info: {str(e)}")
             return False
     except Exception as e:
         logging.error(f"Unexpected error during authentication: {str(e)}")
         import traceback
         logging.error(traceback.format_exc())
+        st.error(f"Unexpected error during authentication: {str(e)}")
+        st.code(traceback.format_exc())
         return False
 
 def is_authenticated():

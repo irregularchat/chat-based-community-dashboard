@@ -806,6 +806,55 @@ async def render_create_user_form():
             
         # Reset the parsing flag now that we've applied the parsed data
         st.session_state['parsing_successful'] = False
+
+    # Parse Text Data section moved to the top
+    st.subheader("Parse Text Data")
+    
+    # Store the parse data input value separately to ensure it persists through reruns
+    if 'preserved_parse_data' not in st.session_state:
+        st.session_state['preserved_parse_data'] = ""
+    
+    # Parse data textarea 
+    if 'parse_data_input_outside' in st.session_state:
+        # Use the preserved value if it exists
+        parse_data = st.text_area(
+            "Enter data to parse",
+            key="parse_data_input_outside",
+            value=st.session_state.get('preserved_parse_data', ""),
+            help="Enter multiple lines of information to parse into user fields",
+            placeholder="1. John Doe\n2. ACME Corporation\n3. Jane Smith\n4. john.doe@example.com\n5. AI, Python, Security\n6. johndoe",
+            height=150
+        )
+        # Update the preserved value whenever the field changes
+        st.session_state['preserved_parse_data'] = parse_data
+    else:
+        parse_data = st.text_area(
+            "Enter data to parse",
+            value=st.session_state.get('preserved_parse_data', ""),
+            key="parse_data_input_outside",
+            help="Enter multiple lines of information to parse into user fields",
+            placeholder="1. John Doe\n2. ACME Corporation\n3. Jane Smith\n4. john.doe@example.com\n5. AI, Python, Security\n6. johndoe",
+            height=150
+        )
+        # Update the preserved value whenever the field changes
+        st.session_state['preserved_parse_data'] = parse_data
+    
+    # Parse Data buttons row
+    parse_col1, parse_col2 = st.columns([1, 1])
+    
+    with parse_col1:
+        st.markdown("<div class='parse-btn'>", unsafe_allow_html=True)
+        if st.button("Parse Data", key="parse_data_button"):
+            parse_and_rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+        
+    with parse_col2:
+        st.markdown("<div class='clear-btn'>", unsafe_allow_html=True)
+        if st.button("Clear Parse Data", key="clear_parse_data_button"):
+            clear_parse_data()
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+    st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
     
     # Get a list of available groups from Authentik for group selection
     groups = []
@@ -1769,55 +1818,10 @@ async def render_create_user_form():
                 logging.error(f"Error in room search: {str(e)}")
                 logging.error(traceback.format_exc())
     
-    # Parse data textarea 
-    st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
-    st.subheader("Parse Text Data")
-    
-    # Store the parse data input value separately to ensure it persists through reruns
-    if 'preserved_parse_data' not in st.session_state:
-        st.session_state['preserved_parse_data'] = ""
-    
-    # Parse data textarea 
-    if 'parse_data_input_outside' in st.session_state:
-        # Use the preserved value if it exists
-        parse_data = st.text_area(
-            "Enter data to parse",
-            key="parse_data_input_outside",
-            value=st.session_state.get('preserved_parse_data', ""),
-            help="Enter multiple lines of information to parse into user fields",
-            placeholder="1. John Doe\n2. ACME Corporation\n3. Jane Smith\n4. john.doe@example.com\n5. AI, Python, Security\n6. johndoe",
-            height=150
-        )
-        # Update the preserved value whenever the field changes
-        st.session_state['preserved_parse_data'] = parse_data
-    else:
-        parse_data = st.text_area(
-            "Enter data to parse",
-            value=st.session_state.get('preserved_parse_data', ""),
-            key="parse_data_input_outside",
-            help="Enter multiple lines of information to parse into user fields",
-            placeholder="1. John Doe\n2. ACME Corporation\n3. Jane Smith\n4. john.doe@example.com\n5. AI, Python, Security\n6. johndoe",
-            height=150
-        )
-        # Update the preserved value whenever the field changes
-        st.session_state['preserved_parse_data'] = parse_data
-    
-    # Bottom row with all buttons
+    # Bottom row with Create User button
     col1, col2, col3 = st.columns([1, 1, 1])
     
-    with col1:
-        st.markdown("<div class='parse-btn'>", unsafe_allow_html=True)
-        if st.button("Parse Data", key="parse_data_button"):
-            parse_and_rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-        
     with col2:
-        st.markdown("<div class='clear-btn'>", unsafe_allow_html=True)
-        if st.button("Clear Parse Data", key="clear_parse_data_button"):
-            clear_parse_data()
-        st.markdown("</div>", unsafe_allow_html=True)
-    
-    with col3:
         st.markdown("<div class='create-btn'>", unsafe_allow_html=True)
         create_user_button = st.button("Create User", key="create_user_button")
         st.markdown("</div>", unsafe_allow_html=True)

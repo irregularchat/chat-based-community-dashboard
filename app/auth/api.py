@@ -1,30 +1,37 @@
-import requests
+#!/usr/bin/env python3
+"""API functions for authentication and user management"""
+import json
+import logging
+import os
 import random
+import re
+import string
+import traceback  # Add this import for traceback.format_exc()
+import uuid
+from datetime import datetime, timedelta
+from typing import Dict, List, Tuple, Optional, Any, Union
+
+import bcrypt
+import requests
+from fastapi import Depends, HTTPException, status
+from passlib.context import CryptContext
+from sqlalchemy.orm import Session
+from app.utils.config import Config
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from app.utils.config import Config # This will import the Config class from the config module
-from datetime import datetime, timedelta
 from pytz import timezone  
-import logging
+import time
+import hmac
+import hashlib
+import streamlit as st
+import threading
+from app.db.operations import AdminEvent, sync_user_data, User, VerificationCode
+from app.db.database import SessionLocal
+import traceback
+from app.auth.utils import generate_secure_passphrase, force_password_reset, shorten_url, generate_username_with_random_word
 
 # Initialize the logger
 logger = logging.getLogger(__name__)
-
-import os
-from sqlalchemy.orm import Session
-from app.db.operations import AdminEvent, sync_user_data, User, VerificationCode
-from app.db.database import SessionLocal
-import time
-import json
-import streamlit as st
-import hmac
-import hashlib
-from typing import Optional, List, Dict, Any
-import string
-import traceback
-from app.auth.utils import generate_secure_passphrase, force_password_reset, shorten_url, generate_username_with_random_word
-import threading
-from app.db.session import get_db
 
 # Define user path constant for Authentik
 USER_PATH = "users"
@@ -242,7 +249,7 @@ def create_user(
     Create a new user in Authentik and optionally send a welcome message
     """
     # Import inside function to avoid circular imports
-    from app.utils.helpers import create_unique_username
+    from app.utils.helpers import create_unique_username, community_intro_email
     from app.messages import create_user_message
     from app.auth.utils import generate_username_with_random_word
     import threading
@@ -418,6 +425,7 @@ def create_user(
         
         # Send welcome message if requested
         if send_welcome:
+            # Send Matrix message in a background thread
             def send_welcome_message_task():
                 try:
                     # Create welcome message using the unique username
@@ -434,6 +442,49 @@ def create_user(
             
             # Start welcome message thread
             threading.Thread(target=send_welcome_message_task).start()
+            
+            # Send welcome email if email is provided
+            if email:
+                def send_welcome_email_task():
+                    try:
+                        from app.utils.config import Config
+                        
+                        # Only attempt to send email if SMTP is active
+                        if Config.SMTP_ACTIVE:
+                            logger.info(f"Sending welcome email to {email} for user {username}")
+                            
+                            # Determine topic ID for the welcome page
+                            topic_id = "84"  # Default welcome topic ID
+                            
+                            # Prepare user's full name
+                            full_name = f"{first_name} {last_name}".strip()
+                            
+                            # Get the Discourse post URL if available
+                            discourse_post_url = response.get("discourse_url")
+                            
+                            # Send the welcome email
+                            email_result = community_intro_email(
+                                to=email,
+                                subject="Welcome to Our Community!",
+                                full_name=full_name,
+                                username=username,
+                                password=temp_password,
+                                topic_id=topic_id,
+                                discourse_post_url=discourse_post_url
+                            )
+                            
+                            if email_result:
+                                logger.info(f"Welcome email sent successfully to {email}")
+                            else:
+                                logger.warning(f"Failed to send welcome email to {email}")
+                        else:
+                            logger.warning("SMTP is not active. Welcome email not sent.")
+                    except Exception as e:
+                        logger.error(f"Error sending welcome email: {str(e)}")
+                        logger.error(traceback.format_exc())
+                
+                # Start email sending in a separate thread
+                threading.Thread(target=send_welcome_email_task).start()
         
         # Create Discourse post if requested
         if should_create_discourse_post:

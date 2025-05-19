@@ -21,3 +21,7 @@ nest-asyncio
 streamlit-extras
 streamlit-option-menu
 pytest-asyncio
+# Added for email functionality in user creation
+bcrypt
+fastapi
+passlib

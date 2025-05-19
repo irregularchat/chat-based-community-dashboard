@@ -1556,7 +1556,7 @@ async def render_create_user_form():
                                         
                                         try:
                                             # Invite to this specific room
-                                            from app.utils.matrix_actions import invite_to_matrix_room_sync
+                                            from app.utils.matrix_actions import invite_to_matrix_room_sync, invite_to_matrix_room
                                             
                                             matrix_user_id = st.session_state.get('matrix_user_selected')
                                             if not matrix_user_id:
@@ -1564,9 +1564,11 @@ async def render_create_user_form():
                                                     st.error("Invalid Matrix user ID. Please select a user first.")
                                                 failed += 1
                                                 continue
-                                                
-                                            success = invite_to_matrix_room_sync(
-                                                room_id, 
+                                            
+                                            # Use run_async_safely to handle event loop properly
+                                            success = run_async_safely(
+                                                invite_to_matrix_room,  # Use the async version directly
+                                                room_id,
                                                 matrix_user_id
                                             )
                                             
@@ -1767,7 +1769,7 @@ async def render_create_user_form():
                 logging.error(f"Error in room search: {str(e)}")
                 logging.error(traceback.format_exc())
     
-    # Parse data textarea with fix for widget key conflict
+    # Parse data textarea 
     st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
     st.subheader("Parse Text Data")
     
@@ -1775,7 +1777,7 @@ async def render_create_user_form():
     if 'preserved_parse_data' not in st.session_state:
         st.session_state['preserved_parse_data'] = ""
     
-    # Parse data textarea with fix for widget key conflict
+    # Parse data textarea 
     if 'parse_data_input_outside' in st.session_state:
         # Use the preserved value if it exists
         parse_data = st.text_area(
@@ -2109,11 +2111,42 @@ async def render_create_user_form():
                                                     # Log the room IDs for debugging
                                                     logging.info(f"Found {len(room_ids)} room IDs to invite user to: {room_ids}")
                                                     
-                                                    # Invite user to all recommended rooms with a single function call
-                                                    invitation_results = invite_user_to_recommended_rooms_sync(matrix_user_id, room_ids)
+                                                    # Create a custom async function for room invitations that we can run with run_async_safely
+                                                    async def invite_to_rooms_async(user_id, room_ids):
+                                                        results = []
+                                                        failed_rooms = []
+                                                        
+                                                        for room_id in room_ids:
+                                                            try:
+                                                                # Invite to this specific room with timeout
+                                                                from app.utils.matrix_actions import invite_to_matrix_room
+                                                                success = await invite_to_matrix_room(user_id, room_id)
+                                                                
+                                                                if success:
+                                                                    # Get room name if available
+                                                                    from app.utils.matrix_actions import get_room_name_by_id, get_matrix_client
+                                                                    client = await get_matrix_client()
+                                                                    room_name = await get_room_name_by_id(client, room_id) if client else room_id
+                                                                    if client:
+                                                                        await client.close()
+                                                                    results.append((room_id, room_name or room_id))
+                                                                else:
+                                                                    failed_rooms.append(room_id)
+                                                            except Exception as e:
+                                                                logging.error(f"Error inviting to room {room_id}: {str(e)}")
+                                                                failed_rooms.append(room_id)
+                                                        
+                                                        return {
+                                                            "success": len(results) > 0,
+                                                            "invited_rooms": results,
+                                                            "failed_rooms": failed_rooms
+                                                        }
+                                                    
+                                                    # Use run_async_safely to handle event loop properly
+                                                    invitation_results = run_async_safely(invite_to_rooms_async, matrix_user_id, room_ids)
                                                     
                                                     # Process results
-                                                    if invitation_results.get('success'):
+                                                    if invitation_results and invitation_results.get('success'):
                                                         invited_rooms = invitation_results.get('invited_rooms', [])
                                                         failed_rooms = invitation_results.get('failed_rooms', [])
                                                         

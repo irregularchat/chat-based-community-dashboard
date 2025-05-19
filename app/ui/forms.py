@@ -1447,157 +1447,175 @@ async def render_create_user_form():
         
         # Display recommended rooms with checkboxes
         if st.session_state.recommended_rooms:
-            # Create a container for the rooms with a max height
-            room_container = st.container()
-            
-            with room_container:
-                # Group rooms by category if possible
-                room_categories = {}
+            try:
+                # Create a container for the rooms with a max height
+                room_container = st.container()
                 
-                for room in st.session_state.recommended_rooms:
-                    room_id = room['room_id']
-                    room_key = f"room_{room_id}"
+                with room_container:
+                    # Group rooms by category if possible
+                    room_categories = {}
                     
-                    # Try to extract category from room name or topic
-                    category = "General"
-                    room_name = room['name']
-                    room_topic = room.get('topic', '')
-                    
-                    # Look for category indicators in name or topic
-                    if ":" in room_name:
-                        parts = room_name.split(":", 1)
-                        if len(parts[0].strip()) <= 20:  # Reasonable category length
-                            category = parts[0].strip()
-                    
-                    # Add room to category
-                    if category not in room_categories:
-                        room_categories[category] = []
-                    
-                    room_categories[category].append({
-                        'id': room_id,
-                        'key': room_key,
-                        'name': room_name,
-                        'description': room.get('description', room.get('topic', '')),
-                        'selected': room_key in st.session_state.selected_rooms
-                    })
-                
-                # Display rooms by category
-                for category, rooms in sorted(room_categories.items()):
-                    if category != "General":
-                        st.subheader(f"{category}")
-                    
-                    # Create columns for better layout
-                    cols = st.columns(2)
-                    col_idx = 0
-                    
-                    for room in sorted(rooms, key=lambda r: r['name']):
-                        with cols[col_idx]:
-                            # Create checkbox with room name and description
-                            description = room['description']
-                            tooltip = description if len(description) > 50 else ""
-                            display_desc = description[:50] + "..." if len(description) > 50 else description
+                    # Safely process rooms
+                    for room in st.session_state.recommended_rooms:
+                        try:
+                            room_id = room.get('room_id', '')
+                            if not room_id:
+                                continue  # Skip rooms without ID
+                                
+                            room_key = f"room_{room_id}"
                             
-                            if st.checkbox(
-                                f"{room['name']}",
-                                key=room['key'],
-                                value=room['selected'],
-                                help=tooltip
-                            ):
-                                st.session_state.selected_rooms.add(room['key'])
-                                st.caption(display_desc)
-                            else:
-                                st.session_state.selected_rooms.discard(room['key'])
-                                st.caption(display_desc)
-                        
-                        # Alternate columns
-                        col_idx = (col_idx + 1) % 2
-            
-            # Add to selected rooms button with improved feedback
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button("Add to Selected Rooms", key="add_to_rooms_button"):
-                    selected_room_ids = [
-                        room['room_id'] for room in st.session_state.recommended_rooms
-                        if f"room_{room['room_id']}" in st.session_state.selected_rooms
-                    ]
+                            # Try to extract category from room name or topic
+                            category = "General"
+                            room_name = room.get('name', f"Room {room_id}")
+                            room_topic = room.get('topic', '')
+                            
+                            # Look for category indicators in name or topic
+                            if ":" in room_name:
+                                parts = room_name.split(":", 1)
+                                if len(parts[0].strip()) <= 20:  # Reasonable category length
+                                    category = parts[0].strip()
+                            
+                            # Add room to category
+                            if category not in room_categories:
+                                room_categories[category] = []
+                            
+                            room_categories[category].append({
+                                'id': room_id,
+                                'key': room_key,
+                                'name': room_name,
+                                'description': room.get('description', room.get('topic', '')),
+                                'selected': room_key in st.session_state.selected_rooms
+                            })
+                        except Exception as room_err:
+                            # Log error but continue with other rooms
+                            logging.error(f"Error processing room: {str(room_err)}")
+                            continue
                     
-                    if selected_room_ids:
-                        with st.spinner("Adding to rooms..."):
-                            try:
-                                # Track progress for each room
-                                progress_placeholder = st.empty()
-                                results_container = st.container()
+                    # Display rooms by category
+                    for category, rooms in sorted(room_categories.items()):
+                        if category != "General":
+                            st.subheader(f"{category}")
+                        
+                        # Create columns for better layout
+                        cols = st.columns(2)
+                        col_idx = 0
+                        
+                        for room in sorted(rooms, key=lambda r: r['name']):
+                            with cols[col_idx]:
+                                # Create checkbox with room name and description
+                                description = room['description']
+                                # Add null check for description to handle None values
+                                if description is None:
+                                    description = ""
+                                tooltip = description if len(description) > 50 else ""
+                                display_desc = description[:50] + "..." if len(description) > 50 else description
                                 
-                                total_rooms = len(selected_room_ids)
-                                successful = 0
-                                failed = 0
-                                
-                                # Process each room individually for better feedback
-                                for i, room_id in enumerate(selected_room_ids):
-                                    room_name = next((room['name'] for room in st.session_state.recommended_rooms 
-                                                    if room['room_id'] == room_id), f"Room {room_id}")
+                                if st.checkbox(
+                                    f"{room['name']}",
+                                    key=room['key'],
+                                    value=room['selected'],
+                                    help=tooltip
+                                ):
+                                    st.session_state.selected_rooms.add(room['key'])
+                                    st.caption(display_desc)
+                                else:
+                                    st.session_state.selected_rooms.discard(room['key'])
+                                    st.caption(display_desc)
+                            
+                            # Alternate columns
+                            col_idx = (col_idx + 1) % 2
+                
+                # Add to selected rooms button with improved feedback
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if st.button("Add to Selected Rooms", key="add_to_rooms_button"):
+                        selected_room_ids = [
+                            room['room_id'] for room in st.session_state.recommended_rooms
+                            if f"room_{room['room_id']}" in st.session_state.selected_rooms
+                        ]
+                        
+                        if selected_room_ids:
+                            with st.spinner("Adding to rooms..."):
+                                try:
+                                    # Track progress for each room
+                                    progress_placeholder = st.empty()
+                                    results_container = st.container()
                                     
-                                    progress_placeholder.progress((i) / total_rooms, 
-                                                                text=f"Processing {i+1}/{total_rooms}: {room_name}")
+                                    total_rooms = len(selected_room_ids)
+                                    successful = 0
+                                    failed = 0
                                     
-                                    try:
-                                        # Invite to this specific room
-                                        from app.utils.matrix_actions import invite_to_matrix_room_sync
+                                    # Process each room individually for better feedback
+                                    for i, room_id in enumerate(selected_room_ids):
+                                        room_name = next((room['name'] for room in st.session_state.recommended_rooms 
+                                                        if room['room_id'] == room_id), f"Room {room_id}")
                                         
-                                        matrix_user_id = st.session_state.get('matrix_user_selected')
-                                        if not matrix_user_id:
-                                            with results_container:
-                                                st.error("Invalid Matrix user ID. Please select a user first.")
-                                            failed += 1
-                                            continue
+                                        progress_placeholder.progress((i) / total_rooms, 
+                                                                    text=f"Processing {i+1}/{total_rooms}: {room_name}")
+                                        
+                                        try:
+                                            # Invite to this specific room
+                                            from app.utils.matrix_actions import invite_to_matrix_room_sync
                                             
-                                        success = invite_to_matrix_room_sync(
-                                            room_id, 
-                                            matrix_user_id
-                                        )
-                                        
-                                        if success:
+                                            matrix_user_id = st.session_state.get('matrix_user_selected')
+                                            if not matrix_user_id:
+                                                with results_container:
+                                                    st.error("Invalid Matrix user ID. Please select a user first.")
+                                                failed += 1
+                                                continue
+                                                
+                                            success = invite_to_matrix_room_sync(
+                                                room_id, 
+                                                matrix_user_id
+                                            )
+                                            
+                                            if success:
+                                                with results_container:
+                                                    st.success(f"Added to: {room_name}")
+                                                successful += 1
+                                            else:
+                                                with results_container:
+                                                    st.warning(f"Failed to add to: {room_name}")
+                                                failed += 1
+                                        except Exception as e:
                                             with results_container:
-                                                st.success(f"Added to: {room_name}")
-                                            successful += 1
-                                        else:
-                                            with results_container:
-                                                st.warning(f"Failed to add to: {room_name}")
+                                                st.error(f"Error adding to {room_name}: {str(e)}")
                                             failed += 1
-                                    except Exception as e:
-                                        with results_container:
-                                            st.error(f"Error adding to {room_name}: {str(e)}")
-                                        failed += 1
-                                
-                                # Final progress and summary
-                                progress_placeholder.progress(1.0, text="Completed")
-                                
-                                if successful > 0:
-                                    st.success(f"Successfully added to {successful} out of {total_rooms} rooms")
-                                if failed > 0:
-                                    st.warning(f"Failed to add to {failed} rooms. You may need to try again later.")
-                            except Exception as e:
-                                st.error(f"Error adding to rooms: {str(e)}")
-                                logging.error(f"Error adding to rooms: {str(e)}")
-                                logging.error(traceback.format_exc())
+                                    
+                                    # Final progress and summary
+                                    progress_placeholder.progress(1.0, text="Completed")
+                                    
+                                    if successful > 0:
+                                        st.success(f"Successfully added to {successful} out of {total_rooms} rooms")
+                                    if failed > 0:
+                                        st.warning(f"Failed to add to {failed} rooms. You may need to try again later.")
+                                except Exception as e:
+                                    st.error(f"Error adding to rooms: {str(e)}")
+                                    logging.error(f"Error adding to rooms: {str(e)}")
+                                    logging.error(traceback.format_exc())
                     else:
                         st.warning("Please select at least one room to join")
-            
-            with col2:
-                if st.button("Select All Rooms", key="select_all_rooms"):
-                    # Add all room keys to selected_rooms
-                    for room in st.session_state.recommended_rooms:
-                        room_key = f"room_{room['room_id']}"
-                        st.session_state.selected_rooms.add(room_key)
-                    # Use the appropriate rerun method based on Streamlit version
-                    try:
-                        # First try the current recommended method
-                        st.rerun()
-                    except AttributeError:
-                        # Fall back to experimental_rerun if rerun is not available
-                        logging.warning("st.rerun() not available, falling back to st.experimental_rerun()")
-                        st.experimental_rerun()
+                
+                with col2:
+                    if st.button("Select All Rooms", key="select_all_rooms"):
+                        # Add all room keys to selected_rooms
+                        for room in st.session_state.recommended_rooms:
+                            room_key = f"room_{room['room_id']}"
+                            st.session_state.selected_rooms.add(room_key)
+                        # Use the appropriate rerun method based on Streamlit version
+                        try:
+                            # First try the current recommended method
+                            st.rerun()
+                        except AttributeError:
+                            # Fall back to experimental_rerun if rerun is not available
+                            logging.warning("st.rerun() not available, falling back to st.experimental_rerun()")
+                            st.experimental_rerun()
+            except Exception as rec_error:
+                # Log error but allow form to continue functioning for user creation
+                st.warning("Could not display room recommendations due to an error. You can still create the user.")
+                logging.error(f"Error displaying room recommendations: {str(rec_error)}")
+                logging.error(traceback.format_exc())
         
         # Display the "No recommended rooms" message only if there are no recommended rooms
         else:
@@ -1652,31 +1670,39 @@ async def render_create_user_form():
                         room_categories = {}
                         
                         for room in search_results:
-                            room_id = room['room_id']
-                            room_key = f"search_room_{room_id}"
-                            
-                            # Try to extract category from room name or topic
-                            category = "General"
-                            room_name = room['name']
-                            room_topic = room.get('topic', '')
-                            
-                            # Look for category indicators in name or topic
-                            if ":" in room_name:
-                                parts = room_name.split(":", 1)
-                                if len(parts[0].strip()) <= 20:  # Reasonable category length
-                                    category = parts[0].strip()
-                            
-                            # Add room to category
-                            if category not in room_categories:
-                                room_categories[category] = []
-                            
-                            room_categories[category].append({
-                                'id': room_id,
-                                'key': room_key,
-                                'name': room_name,
-                                'description': room.get('description', room.get('topic', '')),
-                                'selected': room_key in st.session_state.selected_rooms
-                            })
+                            try:
+                                room_id = room.get('room_id', '')
+                                if not room_id:
+                                    continue  # Skip rooms without ID
+                                    
+                                room_key = f"search_room_{room_id}"
+                                
+                                # Try to extract category from room name or topic
+                                category = "General"
+                                room_name = room.get('name', f"Room {room_id}")
+                                room_topic = room.get('topic', '')
+                                
+                                # Look for category indicators in name or topic
+                                if ":" in room_name:
+                                    parts = room_name.split(":", 1)
+                                    if len(parts[0].strip()) <= 20:  # Reasonable category length
+                                        category = parts[0].strip()
+                                
+                                # Add room to category
+                                if category not in room_categories:
+                                    room_categories[category] = []
+                                
+                                room_categories[category].append({
+                                    'id': room_id,
+                                    'key': room_key,
+                                    'name': room_name,
+                                    'description': room.get('description', room.get('topic', '')),
+                                    'selected': room_key in st.session_state.selected_rooms
+                                })
+                            except Exception as room_err:
+                                # Log error but continue with other rooms
+                                logging.error(f"Error processing search room: {str(room_err)}")
+                                continue
                         
                         # Display rooms by category
                         for category, rooms in sorted(room_categories.items()):
@@ -1691,6 +1717,9 @@ async def render_create_user_form():
                                 with cols[col_idx]:
                                     # Create checkbox with room name and description
                                     description = room['description']
+                                    # Add null check for description to handle None values
+                                    if description is None:
+                                        description = ""
                                     tooltip = description if len(description) > 50 else ""
                                     display_desc = description[:50] + "..." if len(description) > 50 else description
                                     

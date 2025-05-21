@@ -10,10 +10,12 @@ services:
       - PYTHONUNBUFFERED=1  # Enable unbuffered output
       - IN_DOCKER=true      # Indicate we're running in Docker
       - DB_HOST=db          # Explicitly set database host
+      # Use variables from .env file
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_PORT=5432  # This is the internal port in the container
+      # Use the POSTGRES_PORT from .env file
+      - POSTGRES_PORT=${POSTGRES_PORT}
     depends_on:
       db:
         condition: service_healthy
@@ -30,12 +32,13 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
+      # Use variables from .env file
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     ports:
-      - "${POSTGRES_PORT:-5436}:5432" # Default to port 5436 if POSTGRES_PORT not set
-      # it will still work on the new port 
+      - "${POSTGRES_PORT:-5436}:5432" # Map host port (from .env or default 5436) to internal port (5432)
+      # Note: Inside containers, always connect to port 5432, but from host use POSTGRES_PORT
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s

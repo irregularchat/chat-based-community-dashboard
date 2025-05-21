@@ -14,10 +14,42 @@ PORT="${PORT:-8503}"
 export IN_DOCKER=true
 export PYTHONUNBUFFERED=1
 
-# Extract database connection information using improved regex patterns
+# Process environment variable substitution in .env file
+echo "Processing environment variables from .env file for substitution..."
+# Handle spaces and quotes properly in .env file
+while IFS= read -r line || [[ -n "$line" ]]; do
+    # Skip comments and empty lines
+    [[ "$line" =~ ^[[:space:]]*#.*$ || -z "$line" ]] && continue
+    
+    # Extract variable name and value, handling spaces around equals sign
+    if [[ "$line" =~ ^[[:space:]]*([A-Za-z0-9_]+)[[:space:]]*=[[:space:]]*(.*)[[:space:]]*$ ]]; then
+        var_name="${BASH_REMATCH[1]}"
+        var_value="${BASH_REMATCH[2]}"
+        # Remove surrounding quotes if present
+        var_value="${var_value#\"}"
+        var_value="${var_value%\"}"
+        # Export the variable
+        export "$var_name"="$var_value"
+    fi
+done < /app/.env
+echo "Processed environment variables from .env file"
+
+# Debug the environment variables
+echo "DEBUG: Environment variables:"
+echo "POSTGRES_USER=${POSTGRES_USER}"
+echo "POSTGRES_PASSWORD=****" # Don't log the actual password
+echo "POSTGRES_DB=${POSTGRES_DB}"
+echo "POSTGRES_PORT=${POSTGRES_PORT}"
+echo "DB_HOST=${DB_HOST}"
+
+# Extract database connection information
 if grep -q "DATABASE_URL" /app/.env; then
-    DB_URL=$(grep "DATABASE_URL" /app/.env | cut -d= -f2- | tr -d ' ')
-    echo "Found DATABASE_URL: ${DB_URL//:*@/:***@}"
+    echo "Found DATABASE_URL in .env file, but not using it"
+fi
+
+# Set DB_URL directly from environment variables
+DB_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+echo "Created DB_URL: ${DB_URL//:*@/:***@}"
     
     # Extract hostname using better regex pattern
     if [[ $DB_URL =~ @([^:/]+)[:/] ]]; then
@@ -68,16 +100,27 @@ if grep -q "DATABASE_URL" /app/.env; then
         POSTGRES_PASSWORD=$(grep "POSTGRES_PASSWORD" /app/.env | cut -d= -f2- | tr -d ' ' || echo "password_for_db")
         echo "Could not parse password from DATABASE_URL, using env variable"
     fi
-else
-    # No DATABASE_URL found, use environment variables
-    echo "DATABASE_URL not found in .env, using individual environment variables"
-    
-    # Default to 'db' if DATABASE_URL is not in .env
+
+# In case we need to fallback to environment variables
+if [ -z "$DB_HOST" ]; then
     DB_HOST="db"
-    POSTGRES_DB=$(grep "POSTGRES_DB" /app/.env | cut -d= -f2- | tr -d ' ' || echo "dashboarddb")
-    POSTGRES_USER=$(grep "POSTGRES_USER" /app/.env | cut -d= -f2- | tr -d ' ' || echo "dashboarduser")
-    POSTGRES_PASSWORD=$(grep "POSTGRES_PASSWORD" /app/.env | cut -d= -f2- | tr -d ' ' || echo "password_for_db")
-    POSTGRES_PORT=$(grep "POSTGRES_PORT" /app/.env | cut -d= -f2- | tr -d ' ' || echo "5432")
+    echo "Using default DB_HOST=db"
+fi
+if [ -z "$POSTGRES_DB" ]; then
+    POSTGRES_DB="dashboarddb"
+    echo "Using default POSTGRES_DB=dashboarddb"
+fi
+if [ -z "$POSTGRES_USER" ]; then
+    POSTGRES_USER="postgres"
+    echo "Using default POSTGRES_USER=postgres"
+fi
+if [ -z "$POSTGRES_PASSWORD" ]; then
+    POSTGRES_PASSWORD="password_for_db"
+    echo "Using default POSTGRES_PASSWORD=password_for_db"
+fi
+if [ -z "$POSTGRES_PORT" ]; then
+    POSTGRES_PORT="5436"
+    echo "Using default POSTGRES_PORT=5436"
 fi
 
 # Export variables for the application to use
@@ -121,9 +164,8 @@ else
     if psql -h $DB_HOST -U $POSTGRES_USER -d $POSTGRES_DB -c "SELECT 1;" > /dev/null 2>&1; then
         echo "✅ Database connection test successful!"
         
-        # Create or update the DATABASE_URL in the application environment
-        export DATABASE_URL="postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$DB_HOST:$POSTGRES_PORT/$POSTGRES_DB"
-        echo "Set DATABASE_URL for application: ${DATABASE_URL//:*@/:***@}"
+        # DATABASE_URL already set with direct values earlier
+        echo "Using DATABASE_URL for application: ${DATABASE_URL//:*@/:***@}"
     else
         echo "⚠️ Database connection test failed. The application may not function correctly."
         echo "Error code: $?"
@@ -158,15 +200,21 @@ grep -v '^#' /app/.env | grep '=' | cut -d= -f1 | while read -r var; do
     fi
 done
 
-# Override DATABASE_URL in .env if it exists
+# Process the DATABASE_URL with direct values
+echo "Creating DATABASE_URL with direct values"
+# Create the URL with actual values, not variables
+export DATABASE_URL="postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$DB_HOST:$POSTGRES_PORT/$POSTGRES_DB"
+echo "Using DATABASE_URL: ${DATABASE_URL//:*@/:***@}"
+
+# Update the .env file for future runs with direct values, no variable substitution
 if grep -q "DATABASE_URL" /app/.env; then
-    echo "Ensuring DATABASE_URL in .env points to the correct database"
+    echo "Updating DATABASE_URL in .env file with direct values"
     sed -i "s|DATABASE_URL.*|DATABASE_URL = postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$DB_HOST:$POSTGRES_PORT/$POSTGRES_DB|g" /app/.env
-    echo "Updated DATABASE_URL in .env file"
 else
-    echo "Adding DATABASE_URL to .env file"
+    echo "Adding DATABASE_URL to .env file with direct values"
     echo "DATABASE_URL = postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$DB_HOST:$POSTGRES_PORT/$POSTGRES_DB" >> /app/.env
 fi
+echo "Updated .env file with direct values"
 
 # Print final connection information
 echo "Final database connection:"

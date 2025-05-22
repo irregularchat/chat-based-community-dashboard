@@ -262,9 +262,21 @@ class MatrixClient:
                 logger.error("Failed to create Matrix client")
                 return None
 
+            # Try to get display name from user profile
+            display_name = user_id.split(":")[0].lstrip("@")  # Default fallback
+            try:
+                profile_response = await client.get_profile(user_id)
+                if hasattr(profile_response, "displayname") and profile_response.displayname:
+                    display_name = profile_response.displayname
+                    logger.info(f"Retrieved display name for {user_id}: {display_name}")
+            except Exception as e:
+                logger.warning(f"Could not get display name for {user_id}: {str(e)}")
+
+            # Create a direct message room - without encryption for now
             response = await client.room_create(
                 visibility="private",  # Use string instead of enum
                 is_direct=True,
+                name=f"Welcome {display_name}",  # Set a friendly room name
                 invite=[user_id],
                 preset="trusted_private_chat"
             )
@@ -367,7 +379,7 @@ async def get_matrix_client() -> Optional[AsyncClient]:
             max_limit_exceeded=0,
             max_timeouts=0,
             store_sync_tokens=False,
-            encryption_enabled=True,  # Enable encryption support
+            encryption_enabled=False,  # Disable encryption due to missing dependencies
         )
 
         client = AsyncClient(
@@ -453,26 +465,17 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
         except Exception as e:
             logger.warning(f"Could not get display name for {user_id}: {str(e)}")
 
-        # Create a direct message room with encryption enabled
+        # Create a direct message room - without encryption for now
         response = await client.room_create(
             visibility="private",  # Use string instead of enum
             is_direct=True,
             name=f"Welcome {display_name}",  # Set a friendly room name
             invite=[user_id],
-            preset="trusted_private_chat",
-            initial_state=[
-                {
-                    "type": "m.room.encryption",
-                    "state_key": "",
-                    "content": {
-                        "algorithm": "m.megolm.v1.aes-sha2"
-                    }
-                }
-            ]
+            preset="trusted_private_chat"
         )
         
         if isinstance(response, RoomCreateResponse) and response.room_id:
-            logger.info(f"Created direct chat room with {user_id}: {response.room_id} with encryption enabled")
+            logger.info(f"Created direct chat room with {user_id}: {response.room_id}")
             return response.room_id
         else:
             logger.error(f"Failed to create direct chat with {user_id}: {response}")
@@ -1518,29 +1521,21 @@ async def _send_direct_message_async(user_id: str, message: str) -> Tuple[bool, 
         if not room_id:
             logger.info(f"Creating new direct chat with {user_id}")
             try:
-                # Create a direct chat room with encryption enabled
-                creation_result = await client.room_create(
-                    visibility=RoomVisibility.private,
-                    name=f"Welcome {display_name}",
+                # Create a direct chat room - without encryption for now
+                response = await client.room_create(
+                    visibility="private",  # Use string instead of enum
                     is_direct=True,
+                    name=f"Welcome {display_name}",  # Set a friendly room name
                     invite=[user_id],
-                    initial_state=[
-                        {
-                            "type": "m.room.encryption",
-                            "state_key": "",
-                            "content": {
-                                "algorithm": "m.megolm.v1.aes-sha2"
-                            }
-                        }
-                    ]
+                    preset="trusted_private_chat"
                 )
                 
                 # Check if room creation was successful
-                if isinstance(creation_result, RoomCreateResponse):
-                    room_id = creation_result.room_id
-                    logger.info(f"Created new direct chat room with {user_id}: {room_id} with encryption enabled")
+                if isinstance(response, RoomCreateResponse):
+                    room_id = response.room_id
+                    logger.info(f"Created new direct chat room with {user_id}: {room_id}")
                 else:
-                    logger.error(f"Failed to create direct chat room. Response: {creation_result}")
+                    logger.error(f"Failed to create direct chat room. Response: {response}")
                     return False, None, None
             except Exception as e:
                 logger.error(f"Error creating direct chat room: {str(e)}")

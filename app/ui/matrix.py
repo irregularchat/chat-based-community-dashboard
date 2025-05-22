@@ -332,7 +332,7 @@ async def render_matrix_messaging_page():
         st.subheader("Connect users from INDOC room with dashboard accounts")
         
         # Get entrance room ID
-        entrance_room_id = "!bPROVgpotAcdXGxXUN:irregularchat.com"  # IrregularChat Actions/INDOC
+        entrance_room_id = "!bPROVgpotAcdXGxXUN:irregularchat.com"  # IrregularChat Entry/INDOC
         
         # Button to refresh user list
         if st.button("Refresh Entrance Room Users", key="refresh_entrance_users"):

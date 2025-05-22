@@ -1226,9 +1226,17 @@ async def render_create_user_form():
             st.session_state['matrix_user_display_name'] = display_name
             st.session_state.matrix_user_display_name = display_name
             
-            # If the selection changed, clear recommendations for a fresh start
+            # If the selection changed (user selected a new Matrix user), 
+            # clear prior message state and reset for new auto-sending
             if previous_selection != user_id:
                 st.session_state.recommended_rooms = []
+                # Reset message sending status to allow auto-sending to the newly selected user
+                if 'welcome_message_sent' in st.session_state:
+                    del st.session_state['welcome_message_sent']
+                if 'welcome_message_status' in st.session_state:
+                    del st.session_state['welcome_message_status']
+                # Force a rerun to trigger the automatic message sending logic
+                st.rerun()
             
             # Initialize recommended_rooms if it does not exist
             if "recommended_rooms" not in st.session_state:
@@ -1887,13 +1895,80 @@ async def render_create_user_form():
                             message_sent = st.session_state.get('welcome_message_sent', False)
                             message_status = st.session_state.get('welcome_message_status', {})
                             
+                            # If the send_matrix_welcome checkbox is checked and message hasn't been sent yet,
+                            # automatically send the welcome message
+                            if st.session_state.get('send_matrix_welcome', True) and not message_sent:
+                                try:
+                                    from app.utils.matrix_actions import send_direct_message
+                                    
+                                    # Log the attempt for debugging
+                                    logging.info(f"Automatically sending welcome message to {matrix_user}...")
+                                    
+                                    # Show progress indicator
+                                    with st.spinner(f"Sending welcome message to {matrix_user}..."):
+                                        # Send the message directly with enhanced return values
+                                        success, room_id, event_id = send_direct_message(
+                                            st.session_state.get('matrix_user_selected'),
+                                            welcome_message
+                                        )
+                                    
+                                    # Track message status details for verification
+                                    message_status = {
+                                        'success': success,
+                                        'room_id': room_id,
+                                        'event_id': event_id,
+                                        'timestamp': datetime.now().isoformat(),
+                                        'verified': False,
+                                        'auto_sent': True
+                                    }
+                                    
+                                    # Store message status for verification
+                                    st.session_state['welcome_message_status'] = message_status
+                                    
+                                    # Mark the message as sent in session state to preserve state
+                                    st.session_state['welcome_message_sent'] = success
+                                    
+                                    if success:
+                                        st.success(f"Welcome message automatically sent to {matrix_user}!")
+                                        
+                                        # Add verification button if we have event_id
+                                        if room_id and event_id:
+                                            if st.button("Verify Delivery", key="verify_delivery_after_auto_send"):
+                                                try:
+                                                    from app.utils.matrix_actions import verify_direct_message_delivery_sync
+                                                    verified = verify_direct_message_delivery_sync(room_id, event_id)
+                                                    
+                                                    if verified:
+                                                        st.success("✅ Message delivery confirmed!")
+                                                        # Update session state
+                                                        message_status['verified'] = True
+                                                        st.session_state['welcome_message_status'] = message_status
+                                                    else:
+                                                        st.warning("⚠️ Could not verify message delivery. The user might not have received it.")
+                                                        
+                                                except Exception as e:
+                                                    logging.error(f"Error verifying message delivery: {str(e)}")
+                                                    st.error(f"Error verifying delivery: {str(e)}")
+                                    else:
+                                        st.error(f"Failed to automatically send welcome message to {matrix_user}")
+                                        # Allow manual retry
+                                        st.session_state['welcome_message_sent'] = False
+                                except Exception as e:
+                                    logging.error(f"Error automatically sending message: {str(e)}")
+                                    st.error(f"Error sending welcome message: {str(e)}")
+                                    # Keep current state and don't mark as sent
+                                    st.session_state['welcome_message_sent'] = False
+                            
                             if message_sent:
                                 # Show the success message if the message was sent
                                 # Include delivery verification information if available
                                 room_id = message_status.get('room_id')
                                 event_id = message_status.get('event_id')
                                 
-                                st.success(f"Welcome message sent to {matrix_user}!")
+                                if message_status.get('auto_sent', False):
+                                    st.success(f"Welcome message automatically sent to {matrix_user}!")
+                                else:
+                                    st.success(f"Welcome message sent to {matrix_user}!")
                                 
                                 # Add verification status if available
                                 if message_status.get('verified'):
@@ -1916,16 +1991,15 @@ async def render_create_user_form():
                                         except Exception as e:
                                             logging.error(f"Error verifying message delivery: {str(e)}")
                                             st.error(f"Error verifying delivery: {str(e)}")
-                                
-                                # No need to display the message again - remove duplicate display
                             else:
-                                # Show the send button if message hasn't been sent yet
+                                # Show the send button if message hasn't been sent yet and wasn't sent automatically
+                                # (this provides a manual fallback if auto-send fails or is disabled)
                                 if st.button(f"Send Message to {matrix_user}", key="send_direct"):
                                     try:
                                         from app.utils.matrix_actions import send_direct_message
                                         
                                         # Log the attempt for debugging
-                                        logging.info(f"Attempting to send welcome message to {matrix_user}...")
+                                        logging.info(f"Manually sending welcome message to {matrix_user}...")
                                         
                                         # Show progress indicator
                                         with st.spinner(f"Sending message to {matrix_user}..."):
@@ -1941,7 +2015,8 @@ async def render_create_user_form():
                                             'room_id': room_id,
                                             'event_id': event_id,
                                             'timestamp': datetime.now().isoformat(),
-                                            'verified': False
+                                            'verified': False,
+                                            'auto_sent': False
                                         }
                                         
                                         # Store message status for verification
@@ -1971,10 +2046,10 @@ async def render_create_user_form():
                                                     except Exception as e:
                                                         logging.error(f"Error verifying message delivery: {str(e)}")
                                                         st.error(f"Error verifying delivery: {str(e)}")
-                                            else:
-                                                st.error(f"Failed to send welcome message to {matrix_user}")
-                                                # Keep current state and don't mark as sent
-                                                st.session_state['welcome_message_sent'] = False
+                                        else:
+                                            st.error(f"Failed to send welcome message to {matrix_user}")
+                                            # Keep current state and don't mark as sent
+                                            st.session_state['welcome_message_sent'] = False
                                     except Exception as e:
                                         logging.error(f"Error sending message: {str(e)}")
                                         st.error(f"Error sending welcome message: {str(e)}")

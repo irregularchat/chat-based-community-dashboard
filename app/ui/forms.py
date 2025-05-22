@@ -596,17 +596,6 @@ async def render_create_user_form():
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
     
-    .check-btn button {
-        background-color: var(--info-color);
-        color: white;
-        border: none;
-    }
-    
-    .check-btn button:hover {
-        background-color: #138496;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-    }
-    
     /* Custom help text styling */
     .help-text {
         font-size: 0.8rem;
@@ -1033,8 +1022,8 @@ async def render_create_user_form():
                 placeholder="username"
             )
     
-    # Row 3: Organization, Username, and Check Username button
-    col1, col2, col3 = st.columns([2, 2, 1])
+    # Row 3: Organization and Username
+    col1, col2 = st.columns([2, 2])
     
     with col1:
         # Organization field
@@ -1076,115 +1065,6 @@ async def render_create_user_form():
                 placeholder="firstname-l"
             )
         st.markdown("<div class='help-text'>Username auto-generated. Edit to create custom username.</div>", unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown("<br>", unsafe_allow_html=True)  # Add spacing to align with text input
-        st.markdown("<div class='check-btn'>", unsafe_allow_html=True)
-        check_button = st.button("Check Username")
-        st.markdown("</div>", unsafe_allow_html=True)
-    
-    # Handle Check Username logic
-    if check_button:
-        if not username:
-            st.warning("Please enter a username to check")
-        else:
-            try:
-                # First, clean the username to ensure it follows proper format
-                import re
-                cleaned_username = re.sub(r'[^a-z0-9-]', '', username.lower())
-                
-                if cleaned_username != username:
-                    st.warning(f"Username has been cleaned to '{cleaned_username}'. Please use this version.")
-                    username = cleaned_username
-                    st.session_state['username_input'] = cleaned_username
-                    st.session_state['username_input_outside'] = cleaned_username
-                
-                # Check local database
-                from app.db.database import get_db
-                from app.db.models import User
-                db = next(get_db())
-                
-                local_exists = False
-                sso_exists = False
-                
-                try:
-                    # Check local database first
-                    existing_user = db.query(User).filter(User.username == username).first()
-                    if existing_user:
-                        local_exists = True
-                        st.warning(f"Username '{username}' already exists in local database.")
-                    
-                    # Also check in Authentik SSO
-                    headers = {
-                        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-                        'Content-Type': 'application/json'
-                    }
-                    
-                    # Check two ways: exact match and prefix match
-                    sso_exists = False
-                    
-                    # 1. Check for exact match first
-                    exact_check_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username={username}"
-                    try:
-                        response = requests.get(exact_check_url, headers=headers, timeout=10)
-                        
-                        if response.status_code == 200:
-                            auth_data = response.json()
-                            if auth_data.get('count', 0) > 0 or len(auth_data.get('results', [])) > 0:
-                                sso_exists = True
-                                st.warning(f"Username '{username}' already exists in Authentik SSO.")
-                        else:
-                            st.error(f"Error checking username in Authentik: {response.status_code} - {response.text}")
-                            logging.error(f"Error checking username: {response.status_code} - {response.text}")
-                    except requests.exceptions.RequestException as req_err:
-                        st.error(f"Network error checking username in Authentik: {str(req_err)}")
-                        logging.error(f"Network error checking username: {str(req_err)}")
-                        
-                    # 2. If exact match doesn't exist, check if it starts with the username (for incremented usernames)
-                    if not sso_exists:
-                        prefix_check_url = f"{Config.AUTHENTIK_API_URL}/core/users/?username__startswith={username}"
-                        try:
-                            response = requests.get(prefix_check_url, headers=headers, timeout=10)
-                            if response.status_code == 200:
-                                auth_data = response.json()
-                                matches = auth_data.get('results', [])
-                                # Check if there's an exact match in the results
-                                exact_matches = [u for u in matches if u.get('username') == username]
-                                if exact_matches:
-                                    sso_exists = True
-                                    st.warning(f"Username '{username}' already exists in Authentik SSO.")
-                                elif matches:
-                                    # Show how many similar usernames exist
-                                    similar_count = len(matches)
-                                    st.info(f"Found {similar_count} similar usernames starting with '{username}' in Authentik SSO.")
-                        except requests.exceptions.RequestException as req_err:
-                            logging.error(f"Network error checking username prefix in Authentik: {str(req_err)}")
-                    
-                    # If username exists in either system, suggest alternatives
-                    if local_exists or sso_exists:
-                        # Generate alternative username suggestions
-                        import random
-                        base_username = username.rstrip('0123456789')  # Remove any trailing numbers
-                        
-                        # Try sequential numbers first
-                        suggestions = []
-                        for i in range(1, 4):
-                            suggestions.append(f"{base_username}{i}")
-                        
-                        # Also add a random suggestion
-                        random_suffix = random.randint(100, 999)
-                        suggestions.append(f"{base_username}{random_suffix}")
-                        
-                        # Show suggestions
-                        st.info(f"Suggested alternatives: {', '.join(suggestions)}")
-                    else:
-                        st.success(f"Username '{username}' is available!")
-                finally:
-                    db.close()
-            except Exception as e:
-                logging.error(f"Error checking username: {str(e)}")
-                logging.error(traceback.format_exc())
-                st.error(f"An error occurred while checking username: {str(e)}")
     
     # Additional Information heading
     st.markdown("<div class='divider'></div>", unsafe_allow_html=True)

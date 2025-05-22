@@ -1426,101 +1426,115 @@ async def _send_direct_message_async(user_id: str, message: str) -> Tuple[bool, 
         return False, None, None
     
     try:
+        # Log Matrix configuration for debugging
+        logger.info(f"Matrix configuration: MATRIX_ACTIVE={MATRIX_ACTIVE}, HOMESERVER={HOMESERVER}, BOT_USERNAME={MATRIX_BOT_USERNAME}")
+        
         # Log the attempt
+        logger.info(f"Attempting to send direct message to user_id: {user_id}")
         logger.info(f"Attempting to send direct message to Matrix user: {user_id}")
         
         # Create Matrix client
         client = await get_matrix_client()
         if not client:
-            logger.error("Failed to create Matrix client")
+            logger.error("Failed to create Matrix client for direct message")
             return False, None, None
         
+        # Get joined rooms
+        joined_rooms = await client.joined_rooms()
+        if isinstance(joined_rooms, JoinedRoomsResponse) and joined_rooms.rooms:
+            logger.info(f"Bot is in {len(joined_rooms.rooms)} rooms")
+        
+        # Try to find existing direct chat room with this user
+        room_id = None
+        
+        # First method: check account data for direct chats
         try:
-            # First check if a direct chat already exists with this user
-            room_id = None
-            
-            # Log joined rooms for debugging
+            account_data = await client.get_account_data()
+            if account_data and "m.direct" in account_data:
+                direct_rooms = account_data["m.direct"]
+                if user_id in direct_rooms:
+                    # Use the first direct chat room
+                    room_id = direct_rooms[user_id][0]
+                    logger.info(f"Found existing direct chat room with {user_id}: {room_id}")
+        except Exception as e:
+            logger.warning(f"Error getting direct chat room ID from account data: {str(e)}")
+        
+        # Second method: check joined rooms for direct chats
+        if not room_id:
+            for joined_room in joined_rooms.rooms:
+                try:
+                    # Get room members
+                    members_response = await client.room_get_state(joined_room)
+                    if isinstance(members_response, RoomGetStateResponse):
+                        members = []
+                        for event in members_response.events:
+                            if event.get("type") == "m.room.member" and event.get("state_key"):
+                                member_id = event.get("state_key")
+                                content = event.get("content", {})
+                                if content.get("membership") == "join":
+                                    members.append(member_id)
+                        
+                        # If this is a direct chat (only 2 members: bot and user)
+                        if len(members) == 2 and user_id in members and MATRIX_BOT_USERNAME in members:
+                            room_id = joined_room
+                            logger.info(f"Found existing direct chat room with {user_id} by member check: {room_id}")
+                            break
+                except Exception as room_err:
+                    logger.warning(f"Error checking room {joined_room} for direct chat: {str(room_err)}")
+        
+        # If no direct chat room found, create one
+        if not room_id:
+            logger.info(f"Creating new direct chat with {user_id}")
             try:
-                joined_rooms = await client.joined_rooms()
-                logger.info(f"Bot is in {len(joined_rooms.rooms)} rooms")
-            except Exception as room_err:
-                logger.warning(f"Could not get joined rooms: {str(room_err)}")
-            
-            # First, check if we already have a direct chat with this user
-            try:
-                # Get account data which might contain direct chats info
-                account_data = await client.get_account_data("m.direct")
-                if account_data and hasattr(account_data, 'content') and user_id in account_data.content:
-                    # Get the first room ID from the list
-                    direct_rooms = account_data.content.get(user_id, [])
-                    if direct_rooms and isinstance(direct_rooms, list) and len(direct_rooms) > 0:
-                        room_id = direct_rooms[0]
-                        logger.info(f"Found existing direct chat room with {user_id}: {room_id}")
-            except Exception as e:
-                logger.warning(f"Error getting direct chat room ID from account data: {str(e)}")
-                # Continue with normal room creation if this fails
-            
-            # If we don't have a room ID yet, create a new direct chat
-            if not room_id:
-                logger.info(f"Creating new direct chat with {user_id}")
-                # Set message type to "m.room.message" for direct message
-                response = await client.room_create(
+                # Create a direct chat room
+                creation_result = await client.room_create(
                     visibility=RoomVisibility.private,
-                    name=f"Direct Message",
+                    name=f"Direct chat with {user_id}",
                     is_direct=True,
                     invite=[user_id]
                 )
                 
-                if not isinstance(response, RoomCreateResponse):
-                    logger.error(f"Failed to create direct chat room with {user_id}: {response}")
-                    await client.close()
+                # Check if room creation was successful
+                if isinstance(creation_result, RoomCreateResponse):
+                    room_id = creation_result.room_id
+                    logger.info(f"Created new direct chat room with {user_id}: {room_id}")
+                else:
+                    logger.error(f"Failed to create direct chat room. Response: {creation_result}")
                     return False, None, None
-                
-                room_id = response.room_id
-                logger.info(f"Created new direct chat room with {user_id}: {room_id}")
+            except Exception as e:
+                logger.error(f"Error creating direct chat room: {str(e)}")
+                return False, None, None
+        
+        # Send message to the room
+        if room_id:
+            logger.info(f"Sending message to room {room_id}")
+            text_content = {
+                "msgtype": "m.text",
+                "body": message
+            }
             
-            # Once we have a room, send the message
-            if room_id:
-                logger.info(f"Sending message to room {room_id}")
-                
-                # Create message content
-                content = {
-                    "msgtype": "m.text",
-                    "body": message
-                }
-                
-                # Send message
-                send_response = await client.room_send(
+            try:
+                # Send the message
+                response = await client.room_send(
                     room_id=room_id,
                     message_type="m.room.message",
-                    content=content
+                    content=text_content
                 )
                 
-                if not isinstance(send_response, RoomSendResponse):
-                    logger.error(f"Failed to send message to {user_id} in room {room_id}: {send_response}")
-                    await client.close()
-                    return False, room_id, None
-                
-                event_id = send_response.event_id
-                logger.info(f"Message sent successfully to {user_id} in room {room_id}. Event ID: {event_id}")
-                
-                # Close the client
-                await client.close()
-                
-                return True, room_id, event_id
-            else:
-                logger.error(f"No room ID available to send message to {user_id}")
-                await client.close()
-                return False, None, None
-        except Exception as e:
-            logger.error(f"Error in _send_direct_message_async inner logic: {str(e)}")
-            logger.error(traceback.format_exc())
-            if client:
-                await client.close()
-            return False, None, None
+                # Check if message was sent successfully
+                if isinstance(response, RoomSendResponse):
+                    logger.info(f"Message sent successfully to {user_id} in room {room_id}. Event ID: {response.event_id}")
+                    return True, room_id, response.event_id
+                else:
+                    logger.error(f"Failed to send message. Response: {response}")
+            except Exception as e:
+                logger.error(f"Error sending message to room {room_id}: {str(e)}")
+                return False, room_id, None
+        
+        await client.close()
+        return False, None, None
     except Exception as e:
         logger.error(f"Error in _send_direct_message_async: {str(e)}")
-        logger.error(traceback.format_exc())
         return False, None, None
 
 def send_direct_message(user_id: str, message: str) -> Tuple[bool, Optional[str], Optional[str]]:
@@ -1542,35 +1556,27 @@ def send_direct_message(user_id: str, message: str) -> Tuple[bool, Optional[str]
         return False, None, None
     
     # Log Matrix configuration for debugging
+    logger.info(f"Matrix direct message function called for user_id: {user_id}")
+    logger.info(f"Message length: {len(message)} characters")
     logger.info(f"Matrix configuration: MATRIX_ACTIVE={MATRIX_ACTIVE}, HOMESERVER={HOMESERVER}, BOT_USERNAME={MATRIX_BOT_USERNAME}")
-    logger.info(f"Attempting to send direct message to user_id: {user_id}")
-    
-    if not user_id:
-        logger.error("Cannot send direct message: No user_id provided")
-        return False, None, None
-    
-    if not message:
-        logger.error("Cannot send direct message: No message content provided")
-        return False, None, None
         
     try:
         # Create a new event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        # Run the async function in the new event loop
-        success, room_id, event_id = loop.run_until_complete(_send_direct_message_async(user_id, message))
-        
-        # Close the event loop
-        loop.close()
-        
-        # Log the result
-        logger.info(f"Direct message to {user_id} result: success={success}, room_id={room_id}, event_id={event_id}")
-        
-        return success, room_id, event_id
+        try:
+            # Call the async function with the new event loop
+            logger.info(f"Creating new event loop for direct message to {user_id}")
+            result = loop.run_until_complete(_send_direct_message_async(user_id, message))
+            logger.info(f"Direct message to {user_id} result: success={result[0]}, room_id={result[1]}, event_id={result[2]}")
+            return result
+        finally:
+            # Close the event loop
+            loop.close()
+            logger.info(f"Event loop closed for direct message to {user_id}")
     except Exception as e:
         logger.error(f"Error in send_direct_message: {str(e)}")
-        logger.error(traceback.format_exc())
         return False, None, None
 
 async def _send_room_message_async(room_id: str, message: str) -> bool:

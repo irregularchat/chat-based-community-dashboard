@@ -13,7 +13,8 @@ services:
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_PORT=5432  # This is the internal port in the container
+      # When inside Docker network, always use the internal port 5432
+      - POSTGRES_PORT=5432
     depends_on:
       db:
         condition: service_healthy

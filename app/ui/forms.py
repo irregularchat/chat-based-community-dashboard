@@ -1208,6 +1208,9 @@ async def render_create_user_form():
         # Store previous selection to detect changes
         previous_selection = st.session_state.get('matrix_user_selected')
             
+        # Log current state for debugging
+        logging.info(f"Before selection - matrix_user_selected: {previous_selection}, welcome_message_sent: {st.session_state.get('welcome_message_sent', False)}")
+            
         matrix_user_options = [f"{user['display_name']} ({user['user_id']})" for user in st.session_state.matrix_users]
         selected_user = st.selectbox(
             "Select Matrix User",
@@ -1220,6 +1223,13 @@ async def render_create_user_form():
             user_id = selected_user.split("(")[-1].rstrip(")")
             display_name = selected_user.split("(")[0].strip()
             
+            # Ensure user_id is a valid Matrix ID format
+            if not user_id.startswith('@'):
+                logging.warning(f"Invalid Matrix user ID format: {user_id}, should start with @")
+            
+            # Log the selection for debugging
+            logging.info(f"Selected Matrix user: {display_name} ({user_id})")
+            
             # Always explicitly set both keys for the session state 
             st.session_state['matrix_user_selected'] = user_id
             st.session_state.matrix_user_selected = user_id
@@ -1229,14 +1239,22 @@ async def render_create_user_form():
             # If the selection changed (user selected a new Matrix user), 
             # clear prior message state and reset for new auto-sending
             if previous_selection != user_id:
+                logging.info(f"Matrix user selection changed from {previous_selection} to {user_id}. Resetting message status.")
                 st.session_state.recommended_rooms = []
                 # Reset message sending status to allow auto-sending to the newly selected user
                 if 'welcome_message_sent' in st.session_state:
                     del st.session_state['welcome_message_sent']
                 if 'welcome_message_status' in st.session_state:
                     del st.session_state['welcome_message_status']
+                
+                # Explicitly set welcome_message_sent to False for clarity
+                st.session_state['welcome_message_sent'] = False
+                
                 # Force a rerun to trigger the automatic message sending logic
                 st.rerun()
+            else:
+                # If selection didn't change, log current message status
+                logging.info(f"Matrix user selection unchanged. Current welcome_message_sent: {st.session_state.get('welcome_message_sent', False)}")
             
             # Initialize recommended_rooms if it does not exist
             if "recommended_rooms" not in st.session_state:
@@ -1262,28 +1280,8 @@ async def render_create_user_form():
                         st.success(f"Matrix username {display_name} linked to account")
             except Exception as e:
                 st.error(f"Error storing Matrix username: {str(e)}")
-                
-            # Add a button to get room recommendations
-            user_interests = st.session_state.get('interests_input', '')
-            get_recommendations = st.button("Get Room Recommendations", key="get_recommendations_button")
-            
-            if get_recommendations and user_interests:
-                with st.spinner("Getting room recommendations based on interests..."):
-                    try:
-                        from app.utils.recommendation import get_room_recommendations_sync
-                        logging.info(f"Getting manual room recommendations for interests: {user_interests}")
-                        
-                        # Use a longer timeout when explicitly requested
-                        recommended_rooms = get_room_recommendations_sync(user_id, user_interests)
-                        
-                        # Store the recommendations in session state
-                        st.session_state.recommended_rooms = recommended_rooms
-                        
-                        if not recommended_rooms:
-                            st.warning("No recommended rooms found based on interests. Please try again.")
-                    except Exception as e:
-                        st.error(f"Error getting room recommendations: {str(e)}")
-                        logging.error(f"Error in manual room recommendations: {str(e)}")
+                logging.error(f"Error storing Matrix username in database: {str(e)}")
+                logging.error(traceback.format_exc())
     
     # Room recommendations based on interests - check that matrix_user_selected exists and is not None
     # Use a more robust check to handle different ways the key might be stored
@@ -1877,8 +1875,8 @@ async def render_create_user_form():
                                 **[View forum post]({st.session_state.get('discourse_post_url')})**
                                 """)
                         
-                        # Copy button
-                        if st.button("Copy Welcome Message to Clipboard", key="copy_welcome"):
+                        # Copy button with unique key
+                        if st.button("Copy Welcome Message to Clipboard", key="copy_welcome_after_creation"):
                             try:
                                 import pyperclip
                                 pyperclip.copy(welcome_message)
@@ -1899,14 +1897,17 @@ async def render_create_user_form():
                             st.markdown("### 📩 Welcome Message")
                             st.code(welcome_message, language="")
                             
-                            # Copy button - always visible
-                            if st.button("Copy Welcome Message to Clipboard", key="copy_welcome"):
+                            # Copy button - always visible - with a unique key
+                            if st.button("Copy Welcome Message to Clipboard", key="copy_welcome_in_form"):
                                 try:
                                     import pyperclip
                                     pyperclip.copy(welcome_message)
                                     st.success("Welcome message copied to clipboard!")
                                 except ImportError:
                                     st.warning("Could not copy to clipboard. Please manually copy the message above.")
+                            
+                            # DEBUG - Add logging to understand what's happening with auto-sending
+                            logging.info(f"Matrix user: {matrix_user}, message_sent: {message_sent}, send_matrix_welcome: {st.session_state.get('send_matrix_welcome', True)}")
                             
                             # If the send_matrix_welcome checkbox is checked and message hasn't been sent yet,
                             # automatically send the welcome message
@@ -1915,15 +1916,26 @@ async def render_create_user_form():
                                     from app.utils.matrix_actions import send_direct_message
                                     
                                     # Log the attempt for debugging
-                                    logging.info(f"Automatically sending welcome message to {matrix_user}...")
+                                    logging.info(f"Starting automatic send process to {matrix_user}...")
+                                    
+                                    # Explicitly log the Matrix user ID we're sending to
+                                    matrix_user_id = st.session_state.get('matrix_user_selected')
+                                    logging.info(f"Sending to Matrix user ID: {matrix_user_id}")
                                     
                                     # Show progress indicator
                                     with st.spinner(f"Sending welcome message to {matrix_user}..."):
+                                        # Add a slight delay to ensure UI updates before sending
+                                        import time
+                                        time.sleep(0.5)
+                                        
                                         # Send the message directly with enhanced return values
                                         success, room_id, event_id = send_direct_message(
-                                            st.session_state.get('matrix_user_selected'),
+                                            matrix_user_id,
                                             welcome_message
                                         )
+                                        
+                                        # Log the result immediately
+                                        logging.info(f"Auto-send result: success={success}, room_id={room_id}, event_id={event_id}")
                                     
                                     # Track message status details for verification
                                     message_status = {
@@ -1941,6 +1953,7 @@ async def render_create_user_form():
                                     # Mark the message as sent in session state to preserve state
                                     st.session_state['welcome_message_sent'] = success
                                     
+                                    # Force update of the UI to show the result
                                     if success:
                                         st.success(f"Welcome message automatically sent to {matrix_user}!")
                                         
@@ -1968,6 +1981,7 @@ async def render_create_user_form():
                                         st.session_state['welcome_message_sent'] = False
                                 except Exception as e:
                                     logging.error(f"Error automatically sending message: {str(e)}")
+                                    logging.error(traceback.format_exc())
                                     st.error(f"Error sending welcome message: {str(e)}")
                                     # Keep current state and don't mark as sent
                                     st.session_state['welcome_message_sent'] = False
@@ -1993,7 +2007,7 @@ async def render_create_user_form():
                                         st.success("✅ Message delivery confirmed!")
                                     elif room_id and event_id:
                                         # Add a verification button
-                                        if st.button("Verify Delivery", key="verify_delivery"):
+                                        if st.button("Verify Delivery", key="verify_delivery_status"):
                                             try:
                                                 from app.utils.matrix_actions import verify_direct_message_delivery_sync
                                                 verified = verify_direct_message_delivery_sync(room_id, event_id)
@@ -2015,7 +2029,7 @@ async def render_create_user_form():
                             with status_col2:
                                 # Always show the send button as an option, even if the message was already sent
                                 # This ensures the button doesn't disappear
-                                if st.button(f"Send Message to {matrix_user}", key="send_direct", disabled=message_sent):
+                                if st.button(f"Send Message to {matrix_user}", key="send_direct_button", disabled=message_sent):
                                     try:
                                         from app.utils.matrix_actions import send_direct_message
                                         
@@ -2051,7 +2065,7 @@ async def render_create_user_form():
                                             
                                             # Add verification button if we have event_id
                                             if room_id and event_id:
-                                                if st.button("Verify Delivery", key="verify_delivery_after_send"):
+                                                if st.button("Verify Delivery", key="verify_delivery_after_manual_send"):
                                                     try:
                                                         from app.utils.matrix_actions import verify_direct_message_delivery_sync
                                                         verified = verify_direct_message_delivery_sync(room_id, event_id)
@@ -2079,7 +2093,7 @@ async def render_create_user_form():
                                 
                                 # If message was already sent, show a resend button
                                 if message_sent:
-                                    if st.button(f"Resend Message to {matrix_user}", key="resend_direct"):
+                                    if st.button(f"Resend Message to {matrix_user}", key="resend_direct_button"):
                                         # Reset message sent state to allow a new send
                                         st.session_state['welcome_message_sent'] = False
                                         # Force rerun to show the send button again

@@ -1407,7 +1407,7 @@ async def get_all_accessible_users() -> List[Dict]:
         logger.error(f"Error getting accessible users: {e}")
         return []
 
-async def _send_direct_message_async(user_id: str, message: str) -> bool:
+async def _send_direct_message_async(user_id: str, message: str) -> Tuple[bool, Optional[str], Optional[str]]:
     """
     Send a direct message to a Matrix user asynchronously.
     
@@ -1416,11 +1416,14 @@ async def _send_direct_message_async(user_id: str, message: str) -> bool:
         message (str): The message content
         
     Returns:
-        bool: True if successful, False otherwise
+        Tuple[bool, Optional[str], Optional[str]]: Tuple containing:
+            - Success status (bool)
+            - Room ID where message was sent (str or None)
+            - Event ID of the sent message (str or None)
     """
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Cannot send direct message.")
-        return False
+        return False, None, None
     
     try:
         # Log the attempt
@@ -1435,7 +1438,7 @@ async def _send_direct_message_async(user_id: str, message: str) -> bool:
         client = await get_matrix_client()
         if not client:
             logger.error("Failed to create Matrix client")
-            return False
+            return False, None, None
         
         try:
             # Check if we already have a direct chat with this user
@@ -1505,7 +1508,7 @@ async def _send_direct_message_async(user_id: str, message: str) -> bool:
                                 await asyncio.sleep(1)
                             else:
                                 logger.error(f"Failed to create direct chat room for Signal user: {response}")
-                                return False
+                                return False, None, None
                         except Exception as signal_err:
                             logger.error(f"Special error creating room for Signal user: {signal_err}")
                             logger.error(traceback.format_exc())
@@ -1522,7 +1525,7 @@ async def _send_direct_message_async(user_id: str, message: str) -> bool:
                                 logger.info(f"Created direct chat room using fallback method: {direct_room_id}")
                             else:
                                 logger.error(f"Failed to create direct chat room using fallback method: {response}")
-                                return False
+                                return False, None, None
                     else:
                         # Standard room creation
                         response = await client.room_create(
@@ -1537,10 +1540,10 @@ async def _send_direct_message_async(user_id: str, message: str) -> bool:
                         logger.info(f"Created direct chat room: {direct_room_id}")
                     else:
                         logger.error(f"Failed to create direct chat room: {response}")
-                        return False
+                        return False, None, None
                 except Exception as create_err:
                     logger.error(f"Error creating direct chat room: {create_err}")
-                    return False
+                    return False, None, None
             
             # Send the message
             try:
@@ -1586,14 +1589,15 @@ async def _send_direct_message_async(user_id: str, message: str) -> bool:
                     )
                 
                 if hasattr(response, 'event_id'):
-                    logger.info(f"Message sent to {user_id} successfully with event_id {response.event_id}")
-                    return True
+                    event_id = response.event_id
+                    logger.info(f"Message sent to {user_id} successfully with event_id {event_id}")
+                    return True, direct_room_id, event_id
                 else:
                     logger.error(f"Failed to send message: {response}")
-                    return False
+                    return False, direct_room_id, None
             except Exception as send_err:
                 logger.error(f"Error sending message: {send_err}")
-                return False
+                return False, direct_room_id, None
                 
         finally:
             # Close the client
@@ -1602,9 +1606,9 @@ async def _send_direct_message_async(user_id: str, message: str) -> bool:
     except Exception as e:
         logger.error(f"Error sending direct message: {e}")
         logger.error(f"Traceback: {traceback.format_exc()}")
-        return False
+        return False, None, None
 
-def send_direct_message(user_id: str, message: str) -> bool:
+def send_direct_message(user_id: str, message: str) -> Tuple[bool, Optional[str], Optional[str]]:
     """
     Send a direct message to a Matrix user.
     
@@ -1613,11 +1617,14 @@ def send_direct_message(user_id: str, message: str) -> bool:
         message: The message content
         
     Returns:
-        bool: True if the message was sent successfully, False otherwise
+        Tuple[bool, Optional[str], Optional[str]]: Tuple containing:
+            - Success status (bool)
+            - Room ID where message was sent (str or None)
+            - Event ID of the sent message (str or None)
     """
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping send_direct_message.")
-        return False
+        return False, None, None
         
     try:
         # Create a new event loop
@@ -1625,12 +1632,12 @@ def send_direct_message(user_id: str, message: str) -> bool:
         asyncio.set_event_loop(loop)
         
         # Send the message
-        result = loop.run_until_complete(_send_direct_message_async(user_id, message))
-        return result
+        success, room_id, event_id = loop.run_until_complete(_send_direct_message_async(user_id, message))
+        return success, room_id, event_id
         
     except Exception as e:
         logger.error(f"Error sending direct message to {user_id}: {e}")
-        return False
+        return False, None, None
     finally:
         loop.close()
 
@@ -1981,3 +1988,77 @@ def invite_user_to_recommended_rooms_sync(user_id: str, room_ids: List[str]) -> 
     finally:
         # Don't close the loop as it might be shared
         pass
+
+async def verify_direct_message_delivery(room_id: str, event_id: str) -> bool:
+    """
+    Verify if a direct message was delivered successfully.
+    
+    Args:
+        room_id: The Matrix room ID where the message was sent
+        event_id: The event ID of the sent message
+        
+    Returns:
+        bool: True if the message was delivered, False otherwise
+    """
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active. Cannot verify message delivery.")
+        return False
+        
+    try:
+        # Create Matrix client
+        client = await get_matrix_client()
+        if not client:
+            logger.error("Failed to create Matrix client")
+            return False
+        
+        try:
+            # Get the room messages to check if our event appears
+            response = await client.room_messages(room_id, limit=20)
+            
+            if hasattr(response, 'chunk'):
+                # Check if our event ID is in the recent messages
+                for event in response.chunk:
+                    if hasattr(event, 'event_id') and event.event_id == event_id:
+                        logger.info(f"Message with event_id {event_id} found in room {room_id}")
+                        return True
+            
+            logger.warning(f"Message with event_id {event_id} not found in room {room_id}")
+            return False
+            
+        finally:
+            # Close the client
+            await client.close()
+            
+    except Exception as e:
+        logger.error(f"Error verifying message delivery: {e}")
+        return False
+
+def verify_direct_message_delivery_sync(room_id: str, event_id: str) -> bool:
+    """
+    Synchronous wrapper for verifying if a direct message was delivered.
+    
+    Args:
+        room_id: The Matrix room ID where the message was sent
+        event_id: The event ID of the sent message
+        
+    Returns:
+        bool: True if the message was delivered, False otherwise
+    """
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active. Cannot verify message delivery.")
+        return False
+        
+    try:
+        # Create a new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Verify message delivery
+        result = loop.run_until_complete(verify_direct_message_delivery(room_id, event_id))
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error verifying message delivery: {e}")
+        return False
+    finally:
+        loop.close()

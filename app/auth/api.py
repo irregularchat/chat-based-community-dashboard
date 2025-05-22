@@ -6,6 +6,7 @@ from app.utils.config import Config # This will import the Config class from the
 from datetime import datetime, timedelta
 from pytz import timezone  
 import logging
+import traceback
 
 # Initialize the logger
 logger = logging.getLogger(__name__)
@@ -21,7 +22,6 @@ import hmac
 import hashlib
 from typing import Optional, List, Dict, Any
 import string
-import traceback
 from app.auth.utils import generate_secure_passphrase, force_password_reset, shorten_url, generate_username_with_random_word
 import threading
 from app.db.session import get_db
@@ -429,6 +429,36 @@ def create_user(
                     # Send message via Matrix
                     send_welcome_to_user(message)
                     logger.info(f"Welcome message sent to {username}")
+                    
+                    # Also send welcome email if email address is provided
+                    if email:
+                        try:
+                            from app.utils.helpers import community_intro_email
+                            # Get full name from the user data
+                            full_name = f"{first_name} {last_name}".strip()
+                            # Default topic ID for welcome page
+                            topic_id = "84"
+                            
+                            logger.info(f"Sending welcome email to {email} for user {username}")
+                            email_result = community_intro_email(
+                                to=email,
+                                subject="Welcome to IrregularChat!",
+                                full_name=full_name,
+                                username=username,
+                                password=temp_password,
+                                topic_id=topic_id,
+                                discourse_post_url=response.get("discourse_url")
+                            )
+                            
+                            if email_result:
+                                logger.info(f"Successfully sent welcome email to {email}")
+                            else:
+                                logger.warning(f"Failed to send welcome email to {email}")
+                        except Exception as email_err:
+                            logger.error(f"Error sending welcome email: {str(email_err)}")
+                            logger.error(traceback.format_exc())
+                    else:
+                        logger.warning(f"No email address provided for user {username}, skipping welcome email")
                 except Exception as e:
                     logger.error(f"Error sending welcome message: {str(e)}")
             

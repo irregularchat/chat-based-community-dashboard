@@ -57,22 +57,26 @@ elif os.getenv("SQLITE_DEV"):
 elif os.getenv("LOCAL_DEV"):
     # For local development without Docker, replace 'db' with 'localhost'
     # and use the specified port in the environment
-    postgres_port = os.getenv("POSTGRES_PORT", "5432")
+    # When connecting to localhost, we use the external port mapping
+    external_postgres_port = os.getenv("POSTGRES_PORT", "5432")
     postgres_user = os.getenv("POSTGRES_USER", "dashboarduser")
     postgres_password = os.getenv("POSTGRES_PASSWORD", "password_for_db")
     postgres_db = os.getenv("POSTGRES_DB", "dashboarddb")
-    DATABASE_URL = f"postgresql://{postgres_user}:{postgres_password}@localhost:{postgres_port}/{postgres_db}"
-    logger.info(f"Using local PostgreSQL database at localhost:{postgres_port}")
+    DATABASE_URL = f"postgresql://{postgres_user}:{postgres_password}@localhost:{external_postgres_port}/{postgres_db}"
+    logger.info(f"Using local PostgreSQL database at localhost:{external_postgres_port}")
 elif os.getenv("IN_DOCKER", "").lower() == "true" or os.getenv("DB_HOST") == "db":
     # We're running in Docker, ensure we use the Docker service name
     postgres_user = os.getenv("POSTGRES_USER", "dashboarduser")
     postgres_password = os.getenv("POSTGRES_PASSWORD", "password_for_db")
     postgres_db = os.getenv("POSTGRES_DB", "dashboarddb")
-    postgres_port = os.getenv("POSTGRES_PORT", "5432")
+    # For Docker internal network connections, always use port 5432
+    # Note: POSTGRES_PORT is used for the external port mapping on the host
+    # but within the Docker network, PostgreSQL is always on 5432
+    internal_postgres_port = "5432"  # This is the Docker internal network port
     db_host = os.getenv("DB_HOST", "db")  # Use DB_HOST or default to 'db'
     # In Docker, the host should be the service name from docker-compose.yml
-    DATABASE_URL = f"postgresql://{postgres_user}:{postgres_password}@{db_host}:{postgres_port}/{postgres_db}"
-    logger.info(f"Running in Docker environment, using database at {db_host}:{postgres_port}")
+    DATABASE_URL = f"postgresql://{postgres_user}:{postgres_password}@{db_host}:{internal_postgres_port}/{postgres_db}"
+    logger.info(f"Running in Docker environment, using database at {db_host}:{internal_postgres_port}")
 else:
     # Check if DATABASE_URL is already specified in the environment or config
     env_db_url = os.getenv("DATABASE_URL")
@@ -111,7 +115,16 @@ else:
         postgres_password = os.getenv("POSTGRES_PASSWORD", "password_for_db")
         postgres_db = os.getenv("POSTGRES_DB", "dashboarddb")
         postgres_host = os.getenv("DB_HOST", "localhost")  # Default to localhost as last resort
-        postgres_port = os.getenv("POSTGRES_PORT", "5432")
+        
+        # If connecting to localhost, use the external port mapping
+        # If connecting to 'db' (Docker), use the internal Docker network port
+        if postgres_host == "db" or os.getenv("IN_DOCKER", "").lower() == "true":
+            postgres_port = "5432"  # Internal Docker network port
+            logger.info("Using internal Docker network port 5432 for database connection")
+        else:
+            postgres_port = os.getenv("POSTGRES_PORT", "5432")  # External port mapping
+            logger.info(f"Using external port mapping {postgres_port} for database connection")
+            
         DATABASE_URL = f"postgresql://{postgres_user}:{postgres_password}@{postgres_host}:{postgres_port}/{postgres_db}"
         logger.info(f"Constructed DATABASE_URL using environment variables: {postgres_user}:****@{postgres_host}:{postgres_port}/{postgres_db}")
 

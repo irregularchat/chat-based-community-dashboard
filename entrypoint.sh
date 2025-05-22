@@ -203,16 +203,23 @@ done
 # Process the DATABASE_URL with direct values
 echo "Creating DATABASE_URL with direct values"
 # Create the URL with actual values, not variables
-export DATABASE_URL="postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$DB_HOST:$POSTGRES_PORT/$POSTGRES_DB"
+# When running in Docker, always use port 5432 for internal communication
+if [ "$IN_DOCKER" = "true" ] && [ "$DB_HOST" = "db" ]; then
+    DB_PORT="5432"  # Use internal Docker network port
+    echo "Using internal Docker network port 5432 for database connection"
+else
+    DB_PORT="$POSTGRES_PORT"  # Otherwise use the configured port
+fi
+export DATABASE_URL="postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$DB_HOST:$DB_PORT/$POSTGRES_DB"
 echo "Using DATABASE_URL: ${DATABASE_URL//:*@/:***@}"
 
 # Update the .env file for future runs with direct values, no variable substitution
 if grep -q "DATABASE_URL" /app/.env; then
     echo "Updating DATABASE_URL in .env file with direct values"
-    sed -i "s|DATABASE_URL.*|DATABASE_URL = postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$DB_HOST:$POSTGRES_PORT/$POSTGRES_DB|g" /app/.env
+    sed -i "s|DATABASE_URL.*|DATABASE_URL = postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$DB_HOST:$DB_PORT/$POSTGRES_DB|g" /app/.env
 else
     echo "Adding DATABASE_URL to .env file with direct values"
-    echo "DATABASE_URL = postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$DB_HOST:$POSTGRES_PORT/$POSTGRES_DB" >> /app/.env
+    echo "DATABASE_URL = postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$DB_HOST:$DB_PORT/$POSTGRES_DB" >> /app/.env
 fi
 echo "Updated .env file with direct values"
 

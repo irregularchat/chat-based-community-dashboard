@@ -35,8 +35,8 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     ports:
-      - "${POSTGRES_PORT:-5436}:5432" # Default to port 5436 if POSTGRES_PORT not set
-      # it will still work on the new port 
+      - "${POSTGRES_PORT:-5436}:5432" # POSTGRES_PORT is the external host port (default 5436), 5432 is the internal container port
+      # Applications inside Docker should always connect to port 5432 via the internal Docker network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s

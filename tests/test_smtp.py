@@ -9,6 +9,11 @@ import traceback
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
+def test_email_connection():
+    """Test SMTP connectivity"""
+    from app.utils.helpers import test_email_connection as app_test_email_connection
+    return app_test_email_connection()
+
 def run_smtp_tests():
     """Run a series of tests for SMTP functionality"""
     
@@ -31,61 +36,35 @@ def run_smtp_tests():
         print(f"Connection test exception: {e}")
         traceback.print_exc()
     
-    # Set temporary values for testing if needed
-    if not all([Config.SMTP_USERNAME, Config.SMTP_FROM_EMAIL]):
-        print("\n===== Mock Test: Setting temporary values =====")
-        old_username = Config.SMTP_USERNAME
-        old_from_email = Config.SMTP_FROM_EMAIL
-        
-        # Set temporary values
-        Config.SMTP_USERNAME = "test@example.com" if not Config.SMTP_USERNAME else Config.SMTP_USERNAME
-        Config.SMTP_FROM_EMAIL = "test@example.com" if not Config.SMTP_FROM_EMAIL else Config.SMTP_FROM_EMAIL
-        
-        print(f"Temporary SMTP_USERNAME: {Config.SMTP_USERNAME}")
-        print(f"Temporary SMTP_FROM_EMAIL: {Config.SMTP_FROM_EMAIL}")
-        
-        # Run connection test with temp values
-        print("\n===== Mock Test: Testing connection with temporary values =====")
-        try:
-            result = test_email_connection()
-            print(f"Mock connection test result: {result}")
-        except Exception as e:
-            print(f"Mock connection test exception: {e}")
-            traceback.print_exc()
-        
-        # Test sending an actual email
-        print("\n===== Mock Test: Testing email sending =====")
-        test_email = os.environ.get("TEST_EMAIL", "test@example.com")
-        try:
-            result = send_email(
-                to=test_email,
-                subject="Test Email from Community Dashboard",
-                body="<html><body><h1>Test Email</h1><p>This is a test email from the Community Dashboard.</p></body></html>"
-            )
-            print(f"Email sending result: {result}")
-        except Exception as e:
-            print(f"Email sending exception: {e}")
-            traceback.print_exc()
-        
-        # Test community intro email
-        print("\n===== Mock Test: Testing community intro email =====")
-        try:
-            result = community_intro_email(
-                to=test_email,
-                subject="Test Welcome Email",
-                full_name="Test User",
-                username="testuser",
-                password="testpassword123",
-                topic_id="1"
-            )
-            print(f"Community intro email result: {result}")
-        except Exception as e:
-            print(f"Community intro email exception: {e}")
-            traceback.print_exc()
-        
-        # Restore original values
-        Config.SMTP_USERNAME = old_username
-        Config.SMTP_FROM_EMAIL = old_from_email
+    # Test 2: Email sending test
+    print("\n===== Test 2: Testing Email Sending =====")
+    test_email = os.environ.get("TEST_EMAIL", "test@example.com")
+    try:
+        result = send_email(
+            to=test_email,
+            subject="Test Email from Community Dashboard",
+            body="<html><body><h1>Test Email</h1><p>This is a test email from the Community Dashboard.</p></body></html>"
+        )
+        print(f"Email sending result: {result}")
+    except Exception as e:
+        print(f"Email sending exception: {e}")
+        traceback.print_exc()
+    
+    # Test 3: Community intro email test
+    print("\n===== Test 3: Testing Community Intro Email =====")
+    try:
+        result = community_intro_email(
+            to=test_email,
+            subject="Test Welcome Email",
+            full_name="Test User",
+            username="testuser",
+            password="testpassword123",
+            topic_id="1"
+        )
+        print(f"Community intro email result: {result}")
+    except Exception as e:
+        print(f"Community intro email exception: {e}")
+        traceback.print_exc()
 
 if __name__ == "__main__":
     run_smtp_tests() 

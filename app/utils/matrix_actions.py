@@ -50,7 +50,9 @@ if MATRIX_ACTIVE:
             RoomInviteResponse,
             RoomSendResponse,
             RoomMessagesResponse,
-            RoomMessageText
+            RoomMessageText,
+            JoinedRoomsResponse,
+            RoomGetStateResponse
         )
     except ImportError:
         logger.error("Failed to import matrix-nio. Make sure it's installed from the requirements.txt: pip install matrix-nio")
@@ -64,6 +66,8 @@ else:
     class RoomSendResponse: pass
     class RoomMessagesResponse: pass
     class RoomMessageText: pass
+    class JoinedRoomsResponse: pass
+    class RoomGetStateResponse: pass
 
 # Get Matrix configuration from environment variables
 MATRIX_HOMESERVER_URL = Config.MATRIX_HOMESERVER_URL or "https://matrix.org"

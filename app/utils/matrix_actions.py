@@ -11,7 +11,7 @@ import nest_asyncio
 from typing import List, Dict, Optional, Union, Set, Any, Tuple
 from urllib.parse import urlparse
 import json
-from nio import AsyncClient, AsyncClientConfig, RoomVisibility
+from nio import AsyncClient, AsyncClientConfig
 import traceback
 import uuid
 import threading
@@ -1797,7 +1797,7 @@ async def send_signal_message_async(user_id: str, message: str) -> bool:
             try:
                 # Create the room first with a name
                 response = await client.room_create(
-                    visibility=RoomVisibility.TRUSTED_PRIVATE_CHAT,
+                    visibility="private",  # Use string instead of enum
                     name=temp_room_name,
                     topic="Temporary room for Signal message"
                 )

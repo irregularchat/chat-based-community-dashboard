@@ -1884,7 +1884,7 @@ async def render_create_user_form():
                             except ImportError:
                                 st.warning("Could not copy to clipboard. Please manually copy the message above.")
                         
-                                                    # Add a button to send welcome message if Matrix user is selected
+                        # Add a button to send welcome message if Matrix user is selected
                         if st.session_state.get('matrix_user_selected'):
                             matrix_user = st.session_state.get('matrix_user_display_name', 
                                            st.session_state.get('matrix_user_selected'))
@@ -1997,60 +1997,55 @@ async def render_create_user_form():
                                     st.info("📤 Message not yet sent to Matrix user")
                             
                             with status_col2:
-                                # Always show a button - either Send or Resend
-                                if not message_sent:
-                                    send_btn = st.button(f"Send Message to {matrix_user}", key="send_direct_button")
-                                    if send_btn:
-                                        try:
-                                            from app.utils.matrix_actions import send_direct_message
-                                            
-                                            # Log the attempt for debugging
-                                            logging.info(f"Manually sending welcome message to {matrix_user}...")
-                                            
-                                            # Show progress indicator
-                                            with st.spinner(f"Sending message to {matrix_user}..."):
-                                                # Send the message directly with enhanced return values
-                                                success, room_id, event_id = send_direct_message(
-                                                    st.session_state.get('matrix_user_selected'),
-                                                    welcome_message
-                                                )
-                                            
-                                            # Track message status details for verification
-                                            message_status = {
-                                                'success': success,
-                                                'room_id': room_id,
-                                                'event_id': event_id,
-                                                'timestamp': datetime.now().isoformat(),
-                                                'verified': False,
-                                                'auto_sent': False
-                                            }
-                                            
-                                            # Store message status for verification
-                                            st.session_state['welcome_message_status'] = message_status
-                                            
-                                            # Mark the message as sent in session state to preserve state
-                                            st.session_state['welcome_message_sent'] = success
-                                            
-                                            if success:
-                                                st.success(f"Welcome message sent to {matrix_user}!")
-                                                # Force refresh with rerun to update UI
-                                                st.rerun()
-                                            else:
-                                                st.error(f"Failed to send welcome message to {matrix_user}")
-                                                # Keep current state and don't mark as sent
-                                                st.session_state['welcome_message_sent'] = False
-                                        except Exception as e:
-                                            logging.error(f"Error sending message: {str(e)}")
-                                            st.error(f"Error sending welcome message: {str(e)}")
+                                # Always show a send/resend button
+                                button_text = "Resend Message" if message_sent else f"Send Message to {matrix_user}"
+                                button_key = "resend_direct_button" if message_sent else "send_direct_button"
+                                
+                                send_btn = st.button(button_text, key=button_key)
+                                if send_btn:
+                                    try:
+                                        from app.utils.matrix_actions import send_direct_message
+                                        
+                                        # Log the attempt for debugging
+                                        logging.info(f"Manually sending welcome message to {matrix_user}...")
+                                        
+                                        # Show progress indicator
+                                        with st.spinner(f"Sending message to {matrix_user}..."):
+                                            # Send the message directly with enhanced return values
+                                            success, room_id, event_id = send_direct_message(
+                                                st.session_state.get('matrix_user_selected'),
+                                                welcome_message
+                                            )
+                                        
+                                        # Track message status details for verification
+                                        message_status = {
+                                            'success': success,
+                                            'room_id': room_id,
+                                            'event_id': event_id,
+                                            'timestamp': datetime.now().isoformat(),
+                                            'verified': False,
+                                            'auto_sent': False
+                                        }
+                                        
+                                        # Store message status for verification
+                                        st.session_state['welcome_message_status'] = message_status
+                                        
+                                        # Mark the message as sent in session state to preserve state
+                                        st.session_state['welcome_message_sent'] = success
+                                        
+                                        if success:
+                                            st.success(f"Welcome message sent to {matrix_user}!")
+                                            # Force refresh with rerun to update UI
+                                            st.rerun()
+                                        else:
+                                            st.error(f"Failed to send welcome message to {matrix_user}")
                                             # Keep current state and don't mark as sent
                                             st.session_state['welcome_message_sent'] = False
-                                else:
-                                    # If message was already sent, show a resend button
-                                    if st.button(f"Resend Message", key="resend_direct_button"):
-                                        # Reset message sent state to allow a new send
+                                    except Exception as e:
+                                        logging.error(f"Error sending message: {str(e)}")
+                                        st.error(f"Error sending welcome message: {str(e)}")
+                                        # Keep current state and don't mark as sent
                                         st.session_state['welcome_message_sent'] = False
-                                        # Force rerun to show the send button again
-                                        st.rerun()
                         
                         # Add a section to manually connect with Matrix if not already done
                         if not st.session_state.get('matrix_user_id'):

@@ -79,6 +79,11 @@ async def test_create_matrix_direct_chat():
     # Create a proper Mock client
     mock_client = AsyncMock()
     
+    # Mock the profile response to return a display name
+    mock_profile_response = AsyncMock()
+    mock_profile_response.displayname = "Test User"
+    mock_client.get_profile.return_value = mock_profile_response
+    
     # Instead of mocking the RoomCreateResponse class, create an object
     # with the properties we need for the isinstance check to pass
     class MockRoomCreateResponse:
@@ -104,6 +109,7 @@ async def test_create_matrix_direct_chat():
         mock_client.room_create.assert_called_once_with(
             visibility="private",
             is_direct=True,
+            name="Welcome Test User",
             invite=[user_id],
             preset="trusted_private_chat"
         )
@@ -144,21 +150,35 @@ async def test_send_direct_message():
     mock_response.event_id = "event123"
     
     # Configure the mock to return appropriate values
-    mock_room_create_response = AsyncMock()
-    mock_room_create_response.room_id = "!directroom:matrix.org"
+    # Use the same approach as in test_create_matrix_direct_chat
+    class MockRoomCreateResponse:
+        def __init__(self):
+            self.room_id = "!directroom:matrix.org"
     
-    mock_client.room_create.return_value = mock_room_create_response
+    # Mock profile response
+    mock_profile_response = AsyncMock()
+    mock_profile_response.displayname = "Test User"
+    mock_client.get_profile.return_value = mock_profile_response
+    
+    mock_client.room_create.return_value = MockRoomCreateResponse()
     mock_client.room_send.return_value = mock_response
     
     # Mock room members to simulate empty room list
-    mock_rooms_response = AsyncMock()
-    mock_rooms_response.rooms = []
-    mock_client.joined_rooms.return_value = mock_rooms_response
+    mock_client.joined_rooms.return_value = AsyncMock(rooms=[])
+    
+    # Mock get_account_data to return empty results
+    mock_client.get_account_data.return_value = {}
+    
+    # Create a patch for isinstance to recognize our mock
+    def patched_isinstance(obj, classinfo):
+        if classinfo == RoomCreateResponse:
+            return isinstance(obj, MockRoomCreateResponse)
+        return isinstance(obj, type(obj))
     
     with patch('app.utils.matrix_actions.get_matrix_client', return_value=mock_client), \
          patch('app.utils.matrix_actions.get_room_members_async', return_value={}), \
-         patch('app.utils.matrix_actions.RoomVisibility', return_value=RoomVisibility), \
-         patch('app.utils.matrix_actions.MATRIX_ACTIVE', True):
+         patch('app.utils.matrix_actions.MATRIX_ACTIVE', True), \
+         patch('app.utils.matrix_actions.isinstance', patched_isinstance):
         
         # Test the async function directly
         from app.utils.matrix_actions import _send_direct_message_async

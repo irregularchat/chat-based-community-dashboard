@@ -49,15 +49,25 @@ class SSLCompatibilityAdapter(HTTPAdapter):
         try:
             context = create_urllib3_context()
             context.set_ciphers('DEFAULT@SECLEVEL=1')  # Allow older cipher suites
+            # Disable SSL verification and hostname checking
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
             kwargs['ssl_context'] = context
         except Exception as e:
             logging.warning(f"Could not configure SSL context: {e}")
         return super().init_poolmanager(*args, **kwargs)
 
-# Mount the SSL-compatible adapter
+# Mount the SSL-compatible adapter and disable SSL verification
 ssl_adapter = SSLCompatibilityAdapter(max_retries=retry)
 session.mount("http://", HTTPAdapter(max_retries=retry))
 session.mount("https://", ssl_adapter)
+
+# Disable SSL verification since SSL is handled by Cloudflare
+session.verify = False
+
+# Suppress InsecureRequestWarning since we're intentionally disabling SSL verification
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def generate_webhook_signature(payload: dict) -> str:
     """
@@ -155,7 +165,7 @@ def reset_user_password(auth_api_url, headers, user_id, temp_password=None):
     try:
         # First try with POST method
         logger.info(f"Attempting POST request to {url}")
-        response = requests.post(url, headers=headers, json=data, timeout=30, verify=True)
+        response = requests.post(url, headers=headers, json=data, timeout=30)
         
         # Log response for debugging
         logger.info(f"POST response status code: {response.status_code}")
@@ -163,7 +173,7 @@ def reset_user_password(auth_api_url, headers, user_id, temp_password=None):
         # If POST fails with 405, try PUT method
         if response.status_code == 405:  # Method Not Allowed
             logger.info(f"POST method not allowed for password reset, trying PUT")
-            response = requests.put(url, headers=headers, json=data, timeout=30, verify=True)
+            response = requests.put(url, headers=headers, json=data, timeout=30)
             logger.info(f"PUT response status code: {response.status_code}")
         
         # Check if any of the requests was successful

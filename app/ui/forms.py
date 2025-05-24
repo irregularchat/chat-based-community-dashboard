@@ -67,7 +67,7 @@ from datetime import datetime
 def run_async_safely(async_func, *args, **kwargs):
     """
     Safely runs an async function in a Streamlit app.
-    Handles event loop conflicts using nest_asyncio.
+    Handles event loop conflicts and closed loops gracefully.
     
     Args:
         async_func: The async function to run
@@ -77,31 +77,71 @@ def run_async_safely(async_func, *args, **kwargs):
         The result of the async function
     """
     import nest_asyncio
+    import threading
+    import concurrent.futures
     
     # Apply nest_asyncio to patch current event loop
     nest_asyncio.apply()
     
     try:
-        # Get or create event loop
+        # Try to get the current event loop
         try:
             loop = asyncio.get_event_loop()
+            # Check if the loop is closed
+            if loop.is_closed():
+                raise RuntimeError("Event loop is closed")
         except RuntimeError:
-            # If there's no event loop, create a new one
+            # Create a new event loop if none exists or current one is closed
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
         
-        # Handle the case when the loop is already running
+        # Handle the case when the loop is already running or closed
         if loop.is_running():
-            # Create a future in the existing loop
-            future = asyncio.ensure_future(async_func(*args, **kwargs), loop=loop)
-            # Wait for it to complete
-            while not future.done():
-                loop._run_once()
-            # Get the result
-            return future.result()
+            # If loop is running, create a task in the existing loop
+            try:
+                future = asyncio.ensure_future(async_func(*args, **kwargs), loop=loop)
+                # Wait for it to complete without blocking
+                while not future.done():
+                    loop._run_once()
+                return future.result()
+            except RuntimeError as e:
+                if "Event loop is closed" in str(e):
+                    # Fall through to thread execution
+                    pass
+                else:
+                    raise
         else:
-            # Standard approach if loop is not running
-            return loop.run_until_complete(async_func(*args, **kwargs))
+            # Try to run in the current loop
+            try:
+                return loop.run_until_complete(async_func(*args, **kwargs))
+            except RuntimeError as e:
+                if "Event loop is closed" in str(e):
+                    # Fall through to thread execution
+                    pass
+                else:
+                    raise  # Re-raise other RuntimeErrors
+        
+        # If we get here, the event loop was closed - run in a separate thread
+        logging.warning(f"Event loop closed, running {async_func.__name__} in separate thread")
+        
+        def run_in_thread():
+            # Create a new event loop for this thread
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                return new_loop.run_until_complete(async_func(*args, **kwargs))
+            finally:
+                new_loop.close()
+        
+        # Run in a thread with timeout
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_in_thread)
+            try:
+                return future.result(timeout=30)  # 30 second timeout
+            except concurrent.futures.TimeoutError:
+                logging.error(f"Timeout running async function {async_func.__name__}")
+                return None
+    
     except Exception as e:
         logging.error(f"Error running async function {async_func.__name__}: {str(e)}")
         logging.error(traceback.format_exc())
@@ -799,7 +839,7 @@ async def render_create_user_form():
                     response = requests.get(api_url, headers={
                         'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
                         'Content-Type': 'application/json'
-                    }, timeout=15, verify=True)
+                    }, timeout=15, verify=False)
                     
                     if response.status_code == 200:
                         groups = response.json().get('results', [])
@@ -1277,7 +1317,8 @@ async def render_create_user_form():
                 # Check if we should trigger auto-send for existing welcome message
                 if (st.session_state.get('welcome_message') and 
                     st.session_state.get('send_matrix_welcome', True) and 
-                    not st.session_state.get('welcome_message_sent', False)):
+                    not st.session_state.get('welcome_message_sent', False) and
+                    not st.session_state.get('welcome_message_is_placeholder', False)):  # Don't auto-send placeholder messages
                     logging.info(f"Setting trigger flag for auto-send to unchanged Matrix user selection")
                     st.session_state['trigger_auto_send'] = True
             
@@ -1318,7 +1359,8 @@ async def render_create_user_form():
             # Check if there's already a welcome message and auto-send is enabled
             if (st.session_state.get('welcome_message') and 
                 st.session_state.get('send_matrix_welcome', True) and 
-                not st.session_state.get('welcome_message_sent', False)):
+                not st.session_state.get('welcome_message_sent', False) and
+                not st.session_state.get('welcome_message_is_placeholder', False)):  # Don't auto-send placeholder messages
                 
                 # Also check for manual trigger flag
                 should_auto_send = (
@@ -1330,6 +1372,7 @@ async def render_create_user_form():
                 logging.info(f"Auto-send check - welcome_message exists: {bool(st.session_state.get('welcome_message'))}")
                 logging.info(f"Auto-send check - send_matrix_welcome: {st.session_state.get('send_matrix_welcome', True)}")
                 logging.info(f"Auto-send check - message_sent: {st.session_state.get('welcome_message_sent', False)}")
+                logging.info(f"Auto-send check - is_placeholder: {st.session_state.get('welcome_message_is_placeholder', False)}")
                 logging.info(f"Auto-send check - should_auto_send: {should_auto_send}")
                 logging.info(f"Auto-send check - trigger_auto_send flag: {st.session_state.get('trigger_auto_send', False)}")
                 
@@ -1389,7 +1432,7 @@ async def render_create_user_form():
                         # Keep current state and don't mark as sent
                         st.session_state['welcome_message_sent'] = False
             
-            # Create a default welcome message if none exists yet
+            # Create a default welcome message if none exists yet (but mark it as placeholder)
             if not st.session_state.get('welcome_message'):
                 # Get form field values to create a default welcome message
                 username = st.session_state.get('username_input_outside', 'newuser')
@@ -1408,9 +1451,10 @@ You'll receive your login credentials shortly. Welcome to the community!
 
 If you have any questions, feel free to reach out to the community admins.
 """
-                # Store the default welcome message
+                # Store the default welcome message and mark it as placeholder
                 st.session_state['welcome_message'] = default_welcome
-                logging.info(f"Created default welcome message for Matrix user: {display_name}")
+                st.session_state['welcome_message_is_placeholder'] = True  # Mark as placeholder to prevent auto-send
+                logging.info(f"Created placeholder welcome message for Matrix user: {display_name}")
     
     # Room recommendations based on interests - check that matrix_user_selected exists and is not None
     matrix_user = st.session_state.get('matrix_user_selected')
@@ -1991,6 +2035,10 @@ If you have any questions, feel free to reach out to the community admins.
                         # Store the welcome message in session state for persistence
                         st.session_state['welcome_message'] = welcome_message
                         st.session_state['discourse_post_url'] = discourse_post_url
+                        # Clear the placeholder flag since this is now a real welcome message
+                        st.session_state['welcome_message_is_placeholder'] = False
+                        # Reset message sent status to allow auto-sending of the new real message
+                        st.session_state['welcome_message_sent'] = False
                         
                         # Display the welcome message using direct code block for maximum persistence
                         st.markdown("### 📩 Welcome Message")

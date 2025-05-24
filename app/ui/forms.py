@@ -1215,10 +1215,10 @@ async def render_create_user_form():
         
         st.write("")  # Add some space
         add_to_recommended_rooms = st.checkbox(
-            "Add to recommended Matrix rooms",
+            "Add to selected Matrix rooms",
             value=True,
             key="add_to_recommended_rooms",
-            help="Automatically add the user to recommended rooms based on their interests"
+            help="Automatically add the user to Matrix rooms that you select in the recommendations below"
         )
     
     # Data parsing section
@@ -2258,104 +2258,79 @@ If you have any questions, feel free to reach out to the community admins.
                         # Invite to recommended rooms based on interests if a Matrix user is selected
                         matrix_user_id = st.session_state.get('matrix_user_selected')
                         if matrix_user_id and st.session_state.get('add_to_recommended_rooms', True):
-                            # Process interests for room recommendations
+                            # Process selected rooms instead of all recommended rooms
                             try:
-                                from app.utils.recommendation import invite_user_to_recommended_rooms_sync, get_room_recommendations_sync
-                                
-                                # Get interests from the form
-                                user_interests = interests if interests else ""
-                                if not user_interests and organization:
-                                    user_interests = organization
-                                
-                                # Enhance the interests string to include keywords from intro text
-                                if intro_text:
-                                    user_interests = f"{user_interests}, {intro_text}" if user_interests else intro_text
-                                
-                                # Log interests for debugging
-                                logging.info(f"Getting room recommendations for interests: {user_interests}")
-                                
-                                # Invite to recommended rooms based on interests
-                                if user_interests:
-                                    with st.spinner("Inviting user to recommended rooms based on interests..."):
-                                        try:
-                                            # Get room recommendations with timeout handling
-                                            recommended_rooms = get_room_recommendations_sync(matrix_user_id, user_interests)
-                                            
-                                            if recommended_rooms:
-                                                # Use the new bulk invitation function
-                                                room_ids = []
-                                                for room in recommended_rooms:
-                                                    # Try different possible keys for room ID
-                                                    room_id = room.get('room_id') or room.get('id')
-                                                    if room_id:
-                                                        room_ids.append(room_id)
-                                                
-                                                if room_ids:
-                                                    # Log the room IDs for debugging
-                                                    logging.info(f"Found {len(room_ids)} room IDs to invite user to: {room_ids}")
+                                # Get only the rooms that were specifically selected via checkboxes
+                                if 'recommended_rooms' in st.session_state and st.session_state.recommended_rooms:
+                                    selected_room_ids = [
+                                        room['room_id'] for room in st.session_state.recommended_rooms
+                                        if f"room_{room['room_id']}" in st.session_state.get('selected_rooms', set())
+                                    ]
+                                    
+                                    if selected_room_ids:
+                                        # Log the selected room IDs for debugging
+                                        logging.info(f"Found {len(selected_room_ids)} selected room IDs to invite user to: {selected_room_ids}")
+                                        
+                                        with st.spinner("Inviting user to selected rooms..."):
+                                            try:
+                                                # Create a custom async function for room invitations that we can run with run_async_safely
+                                                async def invite_to_rooms_async(user_id, room_ids):
+                                                    results = []
+                                                    failed_rooms = []
                                                     
-                                                    # Create a custom async function for room invitations that we can run with run_async_safely
-                                                    async def invite_to_rooms_async(user_id, room_ids):
-                                                        results = []
-                                                        failed_rooms = []
-                                                        
-                                                        for room_id in room_ids:
-                                                            try:
-                                                                # Invite to this specific room with timeout
-                                                                from app.utils.matrix_actions import invite_to_matrix_room
-                                                                success = await invite_to_matrix_room(user_id, room_id)
-                                                                
-                                                                if success:
-                                                                    # Get room name if available
-                                                                    from app.utils.matrix_actions import get_room_name_by_id, get_matrix_client
-                                                                    client = await get_matrix_client()
-                                                                    room_name = await get_room_name_by_id(client, room_id) if client else room_id
-                                                                    if client:
-                                                                        await client.close()
-                                                                    results.append((room_id, room_name or room_id))
-                                                                else:
-                                                                    failed_rooms.append(room_id)
-                                                            except Exception as e:
-                                                                logging.error(f"Error inviting to room {room_id}: {str(e)}")
+                                                    for room_id in room_ids:
+                                                        try:
+                                                            # Invite to this specific room with timeout
+                                                            from app.utils.matrix_actions import invite_to_matrix_room
+                                                            success = await invite_to_matrix_room(user_id, room_id)
+                                                            
+                                                            if success:
+                                                                # Get room name if available
+                                                                from app.utils.matrix_actions import get_room_name_by_id, get_matrix_client
+                                                                client = await get_matrix_client()
+                                                                room_name = await get_room_name_by_id(client, room_id) if client else room_id
+                                                                if client:
+                                                                    await client.close()
+                                                                results.append((room_id, room_name or room_id))
+                                                            else:
                                                                 failed_rooms.append(room_id)
-                                                        
-                                                        return {
-                                                            "success": len(results) > 0,
-                                                            "invited_rooms": results,
-                                                            "failed_rooms": failed_rooms
-                                                        }
+                                                        except Exception as e:
+                                                            logging.error(f"Error inviting to room {room_id}: {str(e)}")
+                                                            failed_rooms.append(room_id)
                                                     
-                                                    # Use run_async_safely to handle event loop properly
-                                                    invitation_results = run_async_safely(invite_to_rooms_async, matrix_user_id, room_ids)
+                                                    return {
+                                                        "success": len(results) > 0,
+                                                        "invited_rooms": results,
+                                                        "failed_rooms": failed_rooms
+                                                    }
+                                                
+                                                # Use run_async_safely to handle event loop properly
+                                                invitation_results = run_async_safely(invite_to_rooms_async, matrix_user_id, selected_room_ids)
+                                                
+                                                # Process results
+                                                if invitation_results and invitation_results.get('success'):
+                                                    invited_rooms = invitation_results.get('invited_rooms', [])
+                                                    failed_rooms = invitation_results.get('failed_rooms', [])
                                                     
-                                                    # Process results
-                                                    if invitation_results and invitation_results.get('success'):
-                                                        invited_rooms = invitation_results.get('invited_rooms', [])
-                                                        failed_rooms = invitation_results.get('failed_rooms', [])
-                                                        
-                                                        if invited_rooms:
-                                                            st.success(f"Added to {len(invited_rooms)} rooms based on interests!")
-                                                            for room_id, room_name in invited_rooms:
-                                                                st.info(f"✅ Added to {room_name}")
-                                                        
-                                                        if failed_rooms:
-                                                            st.warning(f"Failed to add to {len(failed_rooms)} rooms. You may need to try again later.")
-                                                    else:
-                                                        st.warning(f"Room invitations failed: {invitation_results.get('error', 'Unknown error')}")
+                                                    if invited_rooms:
+                                                        st.success(f"Added to {len(invited_rooms)} selected rooms!")
+                                                        for room_id, room_name in invited_rooms:
+                                                            st.info(f"✅ Added to {room_name}")
+                                                    
+                                                    if failed_rooms:
+                                                        st.warning(f"Failed to add to {len(failed_rooms)} rooms. You may need to try again later.")
                                                 else:
-                                                    st.info("No valid room IDs found in recommendations")
-                                                    
-                                            else:
-                                                st.info("No rooms were recommended based on the user's interests.")
-                                        except Exception as e:
-                                            # Log the error but continue with user creation process
-                                            logging.error(f"Error getting room recommendations: {str(e)}")
-                                            st.warning(f"Could not get room recommendations: {str(e)}")
+                                                    st.warning(f"Room invitations failed: {invitation_results.get('error', 'Unknown error')}")
+                                            except Exception as e:
+                                                # Log the error but continue with user creation process
+                                                logging.error(f"Error inviting to selected rooms: {str(e)}")
+                                                st.warning(f"Could not invite to selected rooms: {str(e)}")
                                 else:
-                                    logging.info("No interests specified for room recommendations.")
+                                    st.info("No rooms were selected. User was not added to any rooms automatically.")
+                                    logging.info("No rooms selected for automatic invitation.")
                             except Exception as e:
-                                logging.error(f"Error inviting Matrix user to rooms: {str(e)}")
-                                st.error("Error inviting to recommended rooms")
+                                logging.error(f"Error processing selected rooms for Matrix user: {str(e)}")
+                                st.error("Error processing room selections")
             except Exception as e:
                 logging.error(f"Error creating user: {str(e)}")
                 logging.error(traceback.format_exc())

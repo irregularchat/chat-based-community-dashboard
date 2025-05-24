@@ -38,29 +38,6 @@ import asyncio
 import traceback
 import sys
 
-# Import the reset_create_user_form_fields function from ui.forms
-# Use a try/except block to handle potential circular imports
-try:
-    from ui.forms import reset_create_user_form_fields
-except ImportError:
-    # Define a fallback function in case of circular import
-    def reset_create_user_form_fields():
-        """Fallback function to reset form fields in case of circular import"""
-        if 'first_name_input' in st.session_state:
-            st.session_state['first_name_input'] = ""
-        if 'last_name_input' in st.session_state:
-            st.session_state['last_name_input'] = ""
-        if 'username_input' in st.session_state:
-            st.session_state['username_input'] = ""
-        if 'email_input' in st.session_state:
-            st.session_state['email_input'] = ""
-        if 'invited_by_input' in st.session_state:
-            st.session_state['invited_by_input'] = ""
-        if 'intro_input' in st.session_state:
-            st.session_state['intro_input'] = ""
-        if 'data_to_parse_input' in st.session_state:
-            st.session_state['data_to_parse_input'] = ""
-
 def setup_logging():
     logging.basicConfig(
         level=logging.INFO,

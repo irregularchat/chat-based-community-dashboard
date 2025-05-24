@@ -694,54 +694,55 @@ async def render_create_user_form():
     if 'fetch_indoc_users_started' not in st.session_state:
         st.session_state['fetch_indoc_users_started'] = False
 
-    # Start background fetching of INDOC users
+    # Start background fetching of INDOC users - but only if not already in progress
     if not st.session_state.get('fetch_indoc_users_started', False):
         try:
-            import threading
-            
-            def fetch_indoc_users_thread():
-                logging.info("Background INDOC user fetch thread started.")
-                try:
-                    # Import the needed function
-                    from app.utils.recommendation import get_entrance_room_users_sync
-                    import asyncio
-                    import nest_asyncio
-                    
-                    # Create a new event loop for this thread
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    
-                    # Apply nest_asyncio to allow nested event loops (if needed)
-                    nest_asyncio.apply(loop)
-                    
-                    try:
-                        # Get the users using the thread's event loop
-                        fetched_users = get_entrance_room_users_sync()
-                        st.session_state['indoc_users'] = fetched_users
-                        st.session_state['fetch_indoc_users_complete'] = True
-                        logging.info(f"Background INDOC user fetch completed. Found {len(fetched_users) if fetched_users else 0} users.")
-                    finally:
-                        # Always close the loop properly when done
-                        loop.close()
-                        logging.info("Event loop closed properly in background thread.")
-                        
-                except Exception as e:
-                    logging.error(f"Error in background INDOC user fetch thread: {str(e)}")
-                    logging.error(traceback.format_exc())
-                    st.session_state['fetch_indoc_users_error'] = str(e)
-                finally:
-                    st.session_state['fetch_indoc_users_finished'] = True
-                    logging.info("Background INDOC user fetch thread finished.")
-            
-            # Mark as started and launch thread
+            # Mark as started immediately to prevent multiple starts
             st.session_state['fetch_indoc_users_started'] = True
             st.session_state['fetch_indoc_users_finished'] = False
-            thread = threading.Thread(target=fetch_indoc_users_thread)
-            thread.start()
-            logging.info("Started background thread to fetch INDOC room users")
+            
+            # Use a simpler approach - just get cached users if available
+            if 'matrix_users' not in st.session_state:
+                st.session_state.matrix_users = []
+            
+            # Only start background fetch if we have no users yet
+            if not st.session_state.matrix_users:
+                import threading
+                
+                def fetch_indoc_users_thread():
+                    try:
+                        # Import the needed function
+                        from app.utils.recommendation import get_entrance_room_users_sync
+                        
+                        # Get the users using sync function (which handles its own event loop)
+                        fetched_users = get_entrance_room_users_sync()
+                        st.session_state['indoc_users'] = fetched_users or []
+                        st.session_state.matrix_users = fetched_users or []
+                        st.session_state['fetch_indoc_users_complete'] = True
+                        logging.info(f"Background INDOC user fetch completed. Found {len(fetched_users) if fetched_users else 0} users.")
+                    except Exception as e:
+                        logging.error(f"Error in background INDOC user fetch thread: {str(e)}")
+                        st.session_state['fetch_indoc_users_error'] = str(e)
+                        # Set empty list as fallback
+                        st.session_state['indoc_users'] = []
+                        st.session_state.matrix_users = []
+                    finally:
+                        st.session_state['fetch_indoc_users_finished'] = True
+                
+                # Launch thread in daemon mode to avoid blocking
+                thread = threading.Thread(target=fetch_indoc_users_thread, daemon=True)
+                thread.start()
+                logging.info("Started background thread to fetch INDOC room users")
+            else:
+                # Already have users, mark as complete
+                st.session_state['fetch_indoc_users_complete'] = True
+                st.session_state['fetch_indoc_users_finished'] = True
+                
         except Exception as e:
             logging.error(f"Error starting background fetch of INDOC users: {str(e)}")
-            logging.error(traceback.format_exc())
+            # Fallback: set empty list
+            st.session_state['indoc_users'] = []
+            st.session_state.matrix_users = []
     
     # Form clearing logic
     if st.session_state.get('should_clear_form', False):
@@ -857,36 +858,121 @@ async def render_create_user_form():
             groups = st.session_state.authentik_groups
             logging.info("Using cached Authentik groups")
         else:
-            # Fetch groups from Authentik
+            # Fetch groups from Authentik with improved error handling
             api_url = f"{Config.AUTHENTIK_API_URL}/core/groups/"
-            try:
-                response = requests.get(api_url, headers={
-                    'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-                    'Content-Type': 'application/json'
-                }, timeout=10)
-                
-                if response.status_code == 200:
-                    groups = response.json().get('results', [])
-                    # Cache the groups and timestamp
-                    st.session_state.authentik_groups = groups
-                    st.session_state.authentik_groups_timestamp = time.time()
-                    logging.info(f"Fetched and cached {len(groups)} Authentik groups")
+            max_retries = 3
+            retry_delay = 2
+            
+            # Simple session with SSL fallback
+            for attempt in range(max_retries):
+                try:
+                    # Try with SSL verification first
+                    response = requests.get(api_url, headers={
+                        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                        'Content-Type': 'application/json'
+                    }, timeout=15, verify=True)
+                    
+                    if response.status_code == 200:
+                        groups = response.json().get('results', [])
+                        # Cache the groups and timestamp
+                        st.session_state.authentik_groups = groups
+                        st.session_state.authentik_groups_timestamp = time.time()
+                        logging.info(f"Fetched and cached {len(groups)} Authentik groups on attempt {attempt + 1}")
+                        break  # Success, exit retry loop
+                    else:
+                        if attempt == max_retries - 1:  # Last attempt
+                            st.error(f"Error fetching groups: {response.status_code}")
+                            logging.error(f"Error fetching groups: {response.status_code}")
+                        else:
+                            logging.warning(f"Attempt {attempt + 1} failed with status {response.status_code}, retrying...")
+                            time.sleep(retry_delay)
+                            
+                except requests.exceptions.SSLError as ssl_err:
+                    # SSL error - try without verification
+                    logging.warning(f"SSL error on attempt {attempt + 1}, trying without verification: {ssl_err}")
+                    try:
+                        import urllib3
+                        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                        
+                        response = requests.get(api_url, headers={
+                            'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
+                            'Content-Type': 'application/json'
+                        }, timeout=15, verify=False)
+                        
+                        if response.status_code == 200:
+                            groups = response.json().get('results', [])
+                            st.session_state.authentik_groups = groups
+                            st.session_state.authentik_groups_timestamp = time.time()
+                            logging.info(f"Fetched groups without SSL verification on attempt {attempt + 1}")
+                            st.warning("🔒 Connected using relaxed SSL settings due to server compatibility issues.")
+                            break
+                        elif attempt == max_retries - 1:
+                            st.error("🔒 SSL/TLS connectivity issue. Using cached data if available.")
+                            
+                    except Exception as fallback_err:
+                        if attempt == max_retries - 1:
+                            st.error("🔒 Unable to connect to authentication server.")
+                            logging.error(f"SSL fallback failed: {fallback_err}")
+                        
+                except requests.exceptions.ConnectionError as conn_err:
+                    error_msg = str(conn_err)
+                    if attempt == max_retries - 1:  # Last attempt
+                        if "Failed to resolve" in error_msg or "NameResolutionError" in error_msg:
+                            st.error("🌐 Cannot resolve sso.irregularchat.com. Check internet connection.")
+                        else:
+                            st.error("🌐 Connection error. Using cached data if available.")
+                        logging.error(f"Connection error: {error_msg}")
+                        
+                        # Try to use cached data as fallback
+                        if 'authentik_groups' in st.session_state:
+                            groups = st.session_state.authentik_groups
+                            st.info("Using previously cached groups.")
+                    else:
+                        logging.warning(f"Connection error on attempt {attempt + 1}, retrying...")
+                        time.sleep(retry_delay)
+                        
+                except requests.exceptions.Timeout:
+                    if attempt == max_retries - 1:  # Last attempt
+                        st.warning("⏱️ Request timeout. Using cached data if available.")
+                        if 'authentik_groups' in st.session_state:
+                            groups = st.session_state.authentik_groups
+                            st.info("Using previously cached groups.")
+                    else:
+                        logging.warning(f"Timeout on attempt {attempt + 1}, retrying...")
+                        time.sleep(retry_delay)
+                        
+                except Exception as e:
+                    if attempt == max_retries - 1:  # Last attempt
+                        st.error(f"Unexpected error: {str(e)}")
+                        logging.error(f"Unexpected error fetching groups: {str(e)}")
+                        # Try to use cached data as fallback
+                        if 'authentik_groups' in st.session_state:
+                            groups = st.session_state.authentik_groups
+                            st.info("Using cached groups due to error.")
+                    else:
+                        logging.warning(f"Error on attempt {attempt + 1}, retrying...")
+                        time.sleep(retry_delay)
+                        
+            # If we still have no groups after all retries, create a minimal fallback
+            if not groups and not st.session_state.get('authentik_groups'):
+                logging.warning("No groups available, creating fallback")
+                if Config.MAIN_GROUP_ID:
+                    groups = [{"pk": Config.MAIN_GROUP_ID, "name": "Default Group"}]
+                    st.info("🔧 Using default group configuration.")
                 else:
-                    st.error(f"Error fetching groups: {response.status_code} - {response.text}")
-                    logging.error(f"Error fetching groups: {response.status_code} - {response.text}")
-            except requests.exceptions.Timeout:
-                st.warning("Timeout while fetching groups. Using cached data if available.")
-                logging.warning("Timeout while fetching Authentik groups")
-                if 'authentik_groups' in st.session_state:
-                    groups = st.session_state.authentik_groups
-            except requests.exceptions.RequestException as e:
-                st.warning(f"Network error while fetching groups: {str(e)}")
-                logging.warning(f"Network error fetching Authentik groups: {str(e)}")
-                if 'authentik_groups' in st.session_state:
-                    groups = st.session_state.authentik_groups
+                    groups = []
+                    st.warning("⚠️ No groups available. Some features may be limited.")
+    
     except Exception as e:
         logging.error(f"Error getting groups: {str(e)}")
         logging.error(traceback.format_exc())
+        # Fallback to cached groups or default
+        if 'authentik_groups' in st.session_state:
+            groups = st.session_state.authentik_groups
+            st.info("Using cached groups due to unexpected error.")
+        else:
+            st.error("Unable to fetch groups. Please refresh the page or contact support if the issue persists.")
+            groups = []
     
     # Row 1: First Name, Last Name, and Invited By
     col1, col2, col3 = st.columns([2, 2, 2])
@@ -949,6 +1035,7 @@ async def render_create_user_form():
                 placeholder="username or name"
             )
     
+    # Continue with the rest of the form fields...
     # Row 2: Email, Signal Username, Phone Number, LinkedIn Username
     col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
     
@@ -1194,7 +1281,9 @@ async def render_create_user_form():
                 if not st.session_state.matrix_users:
                     st.warning("No Matrix users found in INDOC room. Please try again later.")
             except Exception as e:
+                logging.error(f"Error loading Matrix users: {str(e)}")
                 st.error(f"Error loading Matrix users: {str(e)}")
+                logging.error(traceback.format_exc())
                 st.session_state.matrix_users = []
     
     # Display Matrix user selection
@@ -1255,6 +1344,20 @@ async def render_create_user_form():
             else:
                 # If selection didn't change, log current message status
                 logging.info(f"Matrix user selection unchanged. Current welcome_message_sent: {st.session_state.get('welcome_message_sent', False)}")
+                
+                # Check if we should trigger auto-send for existing welcome message
+                if (st.session_state.get('welcome_message') and 
+                    st.session_state.get('send_matrix_welcome', True) and 
+                    not st.session_state.get('welcome_message_sent', False)):
+                    logging.info(f"Setting trigger flag for auto-send to unchanged Matrix user selection")
+                    st.session_state['trigger_auto_send'] = True
+            
+            # Manual trigger button for debugging
+            if (st.session_state.get('welcome_message') and 
+                not st.session_state.get('welcome_message_sent', False)):
+                if st.button(f"🔄 Manually Send Welcome Message to {display_name}", key="manual_send_welcome"):
+                    st.session_state['trigger_auto_send'] = True
+                    st.rerun()
             
             # Initialize recommended_rooms if it does not exist
             if "recommended_rooms" not in st.session_state:
@@ -1282,10 +1385,107 @@ async def render_create_user_form():
                 st.error(f"Error storing Matrix username: {str(e)}")
                 logging.error(f"Error storing Matrix username in database: {str(e)}")
                 logging.error(traceback.format_exc())
+            
+            # Check if there's already a welcome message and auto-send is enabled
+            if (st.session_state.get('welcome_message') and 
+                st.session_state.get('send_matrix_welcome', True) and 
+                not st.session_state.get('welcome_message_sent', False)):
+                
+                # Also check for manual trigger flag
+                should_auto_send = (
+                    st.session_state.get('trigger_auto_send', False) or  # Manual trigger
+                    previous_selection != user_id  # Selection changed
+                )
+                
+                # Debug logging
+                logging.info(f"Auto-send check - welcome_message exists: {bool(st.session_state.get('welcome_message'))}")
+                logging.info(f"Auto-send check - send_matrix_welcome: {st.session_state.get('send_matrix_welcome', True)}")
+                logging.info(f"Auto-send check - message_sent: {st.session_state.get('welcome_message_sent', False)}")
+                logging.info(f"Auto-send check - should_auto_send: {should_auto_send}")
+                logging.info(f"Auto-send check - trigger_auto_send flag: {st.session_state.get('trigger_auto_send', False)}")
+                
+                if should_auto_send:
+                    # Clear the trigger flag
+                    if 'trigger_auto_send' in st.session_state:
+                        del st.session_state['trigger_auto_send']
+                        
+                    try:
+                        from app.utils.matrix_actions import send_direct_message
+                        
+                        # Log the attempt for debugging
+                        logging.info(f"Auto-sending existing welcome message to {display_name} ({user_id})...")
+                        
+                        # Show progress indicator
+                        with st.spinner(f"Sending welcome message to {display_name}..."):
+                            # Add a slight delay to ensure UI updates before sending
+                            import time
+                            time.sleep(0.5)
+                            
+                            # Send the message directly with enhanced return values
+                            success, room_id, event_id = send_direct_message(
+                                user_id,
+                                st.session_state['welcome_message']
+                            )
+                            
+                            # Log the result immediately
+                            logging.info(f"Auto-send result: success={success}, room_id={room_id}, event_id={event_id}")
+                        
+                        # Track message status details for verification
+                        message_status = {
+                            'success': success,
+                            'room_id': room_id,
+                            'event_id': event_id,
+                            'timestamp': datetime.now().isoformat(),
+                            'verified': False,
+                            'auto_sent': True
+                        }
+                        
+                        # Store message status for verification
+                        st.session_state['welcome_message_status'] = message_status
+                        
+                        # Mark the message as sent in session state to preserve state
+                        st.session_state['welcome_message_sent'] = success
+                        
+                        if success:
+                            st.success(f"✅ Welcome message automatically sent to {display_name}!")
+                            # Force refresh with rerun to update UI
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Failed to automatically send welcome message to {display_name}")
+                            
+                    except Exception as e:
+                        logging.error(f"Error automatically sending existing welcome message: {str(e)}")
+                        logging.error(traceback.format_exc())
+                        st.error(f"Error sending welcome message: {str(e)}")
+                        # Keep current state and don't mark as sent
+                        st.session_state['welcome_message_sent'] = False
+            
+            # Create a default welcome message if none exists yet
+            if not st.session_state.get('welcome_message'):
+                # Get form field values to create a default welcome message
+                username = st.session_state.get('username_input_outside', 'newuser')
+                first_name = st.session_state.get('first_name_input_outside', '')
+                last_name = st.session_state.get('last_name_input_outside', '')
+                
+                # Create a basic welcome message template
+                default_welcome = f"""
+🌟 Welcome to IrregularChat! 🌟
+
+Hello {display_name}!
+
+{f"We're creating an account for {first_name} {last_name}".strip() if first_name or last_name else "We're setting up your account"} with username: {username}
+
+You'll receive your login credentials shortly. Welcome to the community!
+
+If you have any questions, feel free to reach out to the community admins.
+"""
+                # Store the default welcome message
+                st.session_state['welcome_message'] = default_welcome
+                logging.info(f"Created default welcome message for Matrix user: {display_name}")
     
     # Room recommendations based on interests - check that matrix_user_selected exists and is not None
-    # Use a more robust check to handle different ways the key might be stored
     matrix_user = st.session_state.get('matrix_user_selected')
+    
     if matrix_user and interests:
         st.subheader("Recommended Rooms")
         

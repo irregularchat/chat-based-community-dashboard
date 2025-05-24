@@ -34,7 +34,6 @@ import traceback
 import requests
 import os
 import time
-from app.utils.async_helpers import create_async_wrapper
 
 # Initialize logging first
 setup_logging()
@@ -78,7 +77,7 @@ def setup_page_config():
     )
 
 def render_sidebar():
-    """Render the sidebar navigation (converted to sync)"""
+    """Render the sidebar navigation"""
     # Use synchronous Streamlit components
     st.sidebar.title("Navigation")
     
@@ -183,7 +182,7 @@ def render_sidebar():
     return selected_page
 
 def render_main_content():
-    """Render the main content area (converted to sync with proper async handling)"""
+    """Render the main content area"""
     st.title("Community Dashboard")
     
     # Handle redirect query parameter first (before any other processing)
@@ -859,51 +858,28 @@ def render_main_content():
     try:
         # Import UI components only when needed to avoid circular imports
         if current_page == "Create User":
-            # Import and call the form function directly
-            # Note: We'll need to convert the async functions to sync
-            try:
-                # For now, show a placeholder since we need to convert the async function
-                st.info("Loading user creation form...")
-                st.write("User creation form is being updated to work with the new sync architecture.")
-                st.write("This will be functional in the next update.")
-            except Exception as e:
-                st.error(f"Error loading form: {str(e)}")
+            # Protect with admin check
+            if st.session_state.get('is_admin', False):
+                from app.ui.forms import run_async_safely
+                run_async_safely(render_create_user_form)
+            else:
+                st.error("You need administrator privileges to access this page.")
+                st.info("Please contact an administrator if you need to create a user account.")
             
         elif current_page == "Create Invite":
-            # Similar approach for invite form
-            try:
-                st.info("Loading invite form...")
-                st.write("Invite form is being updated to work with the new sync architecture.")
-                st.write("This will be functional in the next update.")
-            except Exception as e:
-                st.error(f"Error loading invite form: {str(e)}")
+            from app.ui.forms import run_async_safely
+            run_async_safely(render_invite_form)
             
         elif current_page == "List & Manage Users":
-            # Similar approach for user list
-            try:
-                st.info("Loading user list...")
-                st.write("User management is being updated to work with the new sync architecture.")
-                st.write("This will be functional in the next update.")
-            except Exception as e:
-                st.error(f"Error loading users: {str(e)}")
+            from app.ui.forms import run_async_safely
+            run_async_safely(display_user_list)
             
         elif current_page == "Matrix Messages and Rooms":
-            if is_authenticated:
-                render_matrix_messaging_page()
-            else:
-                from app.ui.common import display_login_button
-                st.markdown("## Authentication Required")
-                st.markdown("You must login to access Matrix messaging.")
-                display_login_button(location="main")
+            from app.ui.forms import run_async_safely
+            run_async_safely(render_matrix_messaging_page)
                 
         elif current_page == "Signal Association":
-            if is_authenticated:
-                render_signal_association()
-            else:
-                from app.ui.common import display_login_button
-                st.markdown("## Authentication Required")
-                st.markdown("You must login to access Signal association features.")
-                display_login_button(location="main")
+            render_signal_association()
             
         elif current_page == "Settings":
             # Protect with admin check
@@ -933,7 +909,8 @@ def render_main_content():
         elif current_page == "Test SMTP":
             # Protect with admin check
             if st.session_state.get('is_admin', False):
-                test_smtp_connection()
+                from app.ui.forms import run_async_safely
+                run_async_safely(test_smtp_connection)
             else:
                 st.error("You need administrator privileges to access this page.")
     except Exception as e:
@@ -941,7 +918,7 @@ def render_main_content():
         logging.error(f"Error in render_main_content: {str(e)}", exc_info=True)
 
 def test_smtp_connection():
-    """Test SMTP connection and settings (converted to sync)"""
+    """Test SMTP connection and settings"""
     try:
         from app.utils.helpers import test_email_connection
         # Test the email connection
@@ -969,7 +946,7 @@ def test_smtp_connection():
         return False
 
 def main():
-    """Main application entry point (converted to sync)"""
+    """Main application entry point"""
     try:
         # Initialize the application
         initialize_session_state()
@@ -1104,21 +1081,8 @@ def main():
 # Only run main() when executed directly (not imported by Streamlit)
 # This prevents the event loop error when Streamlit imports this file
 if __name__ == "__main__":
-    # When run directly (e.g., python main.py), create an event loop
-    import asyncio
-    
-    # Check if we're in a Streamlit context
-    try:
-        import streamlit as st
-        # If we can access streamlit session state, we're in Streamlit context
-        # so just run the sync main function
-        main()
-    except (ImportError, AttributeError):
-        # Not in Streamlit context, so we can use asyncio.run
-        # Convert main back to async for direct execution
-        async def async_main():
-            main()
-        asyncio.run(async_main())
+    # When run directly (e.g., python main.py), just run the sync main function
+    main()
 else:
     # When imported by Streamlit, just run the sync main function
     main()

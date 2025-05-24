@@ -9,8 +9,17 @@ from typing import List
 def mock_streamlit():
     """Mock the Streamlit library for testing"""
     with patch('app.ui.forms.st') as mock_st:
-        # Create a basic mock session state as a dict
-        mock_st.session_state = {}
+        # Create a session state that supports both dict and attribute access
+        class MockSessionState(dict):
+            def __getattr__(self, name):
+                return self.get(name)
+            def __setattr__(self, name, value):
+                self[name] = value
+            def __delattr__(self, name):
+                if name in self:
+                    del self[name]
+        
+        mock_st.session_state = MockSessionState()
         
         # Set mock for nested items
         mock_st.sidebar = MagicMock()
@@ -24,6 +33,7 @@ def mock_streamlit():
         mock_st.expander = MagicMock()
         mock_st.query_params = {}
         mock_st.rerun = MagicMock()
+        mock_st.spinner = MagicMock()
         
         # Common mock for form components
         mock_st.text_input = MagicMock()
@@ -123,8 +133,8 @@ def mock_db():
 @pytest.mark.asyncio
 async def test_render_create_user_form(mock_streamlit, mock_db, mock_config):
     """Test create user form rendering"""
-    # Set up mock form values
-    mock_streamlit.session_state = {
+    # Set up mock form values using the MockSessionState
+    mock_streamlit.session_state.update({
         'first_name_input': '',
         'last_name_input': '',
         'username_input': '',
@@ -137,7 +147,7 @@ async def test_render_create_user_form(mock_streamlit, mock_db, mock_config):
         'fetch_indoc_users_finished': True,
         'indoc_users': [],
         'authentik_groups': []
-    }
+    })
     
     # Mock the form components with enough side effects for all text inputs
     mock_streamlit.text_input.side_effect = [''] * 20  # Provide enough empty strings for all text inputs
@@ -193,8 +203,8 @@ async def test_render_create_user_form(mock_streamlit, mock_db, mock_config):
         # Call the function
         result = await forms.render_create_user_form()
     
-    # Verify the result
-    assert result == ('', '', '', '', '', '', False)  # Last value is submit_button
+    # Verify the result - the function doesn't return anything, so result should be None
+    assert result is None
     
     # Verify Config was accessed correctly
     assert mock_streamlit.session_state.get('selected_groups', []) == [mock_config.MAIN_GROUP_ID]
@@ -206,6 +216,9 @@ async def test_render_create_user_form(mock_streamlit, mock_db, mock_config):
 
 def test_reset_create_user_form_fields(mock_streamlit, mock_config):
     """Test resetting create user form fields"""
+    # Import from the new location
+    from app.utils.form_helpers import reset_create_user_form_fields
+    
     # Set up initial session state
     mock_streamlit.session_state = {
         'username_input': 'test',
@@ -216,8 +229,11 @@ def test_reset_create_user_form_fields(mock_streamlit, mock_config):
         'group_selection': ['group1']
     }
     
-    # Call the function
-    forms.reset_create_user_form_fields()
+    # Mock the streamlit session state and Config for the form_helpers module
+    with patch('app.utils.form_helpers.st', mock_streamlit), \
+         patch('app.utils.form_helpers.Config', mock_config):
+        # Call the function
+        reset_create_user_form_fields()
     
     # Verify fields were reset
     assert mock_streamlit.session_state.get('username_input', '') == ''

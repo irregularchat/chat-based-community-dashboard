@@ -109,15 +109,8 @@ if __name__ == "__main__":
         theme_toggle()
         
         # Run the application
-        # Create a utility function to run the async main
-        def run_async_main():
-            import asyncio
-            loop = asyncio.get_event_loop()
-            # Run the async main function
-            return loop.run_until_complete(main())
-        
-        # Run the main function
-        run_async_main()
+        # Since main() is now synchronous, we can call it directly
+        main()
         
         # Add mobile bottom navigation
         bottom_nav()

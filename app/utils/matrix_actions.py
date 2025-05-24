@@ -15,6 +15,7 @@ from nio import AsyncClient, AsyncClientConfig
 import traceback
 import uuid
 import threading
+from contextlib import asynccontextmanager
 
 # Import Config first
 from app.utils.config import Config
@@ -52,7 +53,8 @@ if MATRIX_ACTIVE:
             RoomMessagesResponse,
             RoomMessageText,
             JoinedRoomsResponse,
-            RoomGetStateResponse
+            RoomGetStateResponse,
+            RoomPreset
         )
     except ImportError:
         logger.error("Failed to import matrix-nio. Make sure it's installed from the requirements.txt: pip install matrix-nio")
@@ -68,6 +70,8 @@ else:
     class RoomMessageText: pass
     class JoinedRoomsResponse: pass
     class RoomGetStateResponse: pass
+    class RoomPreset: 
+        trusted_private_chat = "trusted_private_chat"
 
 # Get Matrix configuration from environment variables
 MATRIX_HOMESERVER_URL = Config.MATRIX_HOMESERVER_URL or "https://matrix.org"
@@ -80,6 +84,54 @@ MATRIX_WELCOME_ROOM_ID = Config.MATRIX_WELCOME_ROOM_ID or ""
 # Parse the homeserver URL from MATRIX_HOMESERVER_URL
 parsed_url = urlparse(MATRIX_HOMESERVER_URL)
 HOMESERVER = f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+# Add after the imports and before the existing classes
+@asynccontextmanager
+async def matrix_client_context():
+    """Context manager for Matrix client connections to ensure proper cleanup."""
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active")
+        yield None
+        return
+
+    client = None
+    client_created = False
+    
+    try:
+        client_config = AsyncClientConfig(
+            max_limit_exceeded=0,
+            max_timeouts=0,
+            store_sync_tokens=False,
+            encryption_enabled=False,  # Disable encryption due to missing dependencies
+        )
+
+        client = AsyncClient(
+            homeserver=MATRIX_HOMESERVER_URL,
+            config=client_config,
+        )
+        client.access_token = MATRIX_ACCESS_TOKEN
+        client.user_id = MATRIX_BOT_USERNAME
+        client_created = True
+
+        logger.info(f"Matrix client created with user_id: {MATRIX_BOT_USERNAME}")
+        yield client
+        
+    except GeneratorExit:
+        # Handle generator exit gracefully
+        logger.debug("Matrix client context manager exiting")
+        raise
+    except Exception as e:
+        logger.error(f"Error in matrix_client_context: {e}")
+        yield None
+    finally:
+        if client_created and client:
+            try:
+                await client.close()
+                logger.debug("Matrix client connection closed properly")
+            except Exception as close_error:
+                logger.warning(f"Error closing Matrix client: {close_error}")
+            finally:
+                client = None
 
 class MatrixClient:
     """
@@ -278,11 +330,9 @@ class MatrixClient:
 
             # Create a direct message room - without encryption for now
             response = await client.room_create(
-                visibility="private",  # Use string instead of enum
                 is_direct=True,
-                name=f"Welcome {display_name}",  # Set a friendly room name
                 invite=[user_id],
-                preset="trusted_private_chat"
+                preset=RoomPreset.trusted_private_chat
             )
             
             if isinstance(response, RoomCreateResponse) and response.room_id:
@@ -471,11 +521,9 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
 
         # Create a direct message room - without encryption for now
         response = await client.room_create(
-            visibility="private",  # Use string instead of enum
             is_direct=True,
-            name=f"Welcome {display_name}",  # Set a friendly room name
             invite=[user_id],
-            preset="trusted_private_chat"
+            preset=RoomPreset.trusted_private_chat
         )
         
         if isinstance(response, RoomCreateResponse) and response.room_id:
@@ -1453,8 +1501,8 @@ async def _send_direct_message_async(user_id: str, message: str) -> Tuple[bool, 
         return False, None, None
     
     try:
-        # Log Matrix configuration for debugging
-        logger.info(f"Matrix configuration: MATRIX_ACTIVE={MATRIX_ACTIVE}, HOMESERVER={HOMESERVER}, BOT_USERNAME={MATRIX_BOT_USERNAME}")
+        # Log Matrix configuration for debugging (only on first call or errors)
+        logger.debug(f"Matrix configuration: MATRIX_ACTIVE={MATRIX_ACTIVE}, HOMESERVER={HOMESERVER}, BOT_USERNAME={MATRIX_BOT_USERNAME}")
         
         # Log the attempt
         logger.info(f"Attempting to send direct message to user_id: {user_id}")
@@ -1474,19 +1522,10 @@ async def _send_direct_message_async(user_id: str, message: str) -> Tuple[bool, 
         # Try to find existing direct chat room with this user
         room_id = None
         
-        # First method: check account data for direct chats
-        try:
-            account_data = await client.get_account_data()
-            if account_data and "m.direct" in account_data:
-                direct_rooms = account_data["m.direct"]
-                if user_id in direct_rooms:
-                    # Use the first direct chat room
-                    room_id = direct_rooms[user_id][0]
-                    logger.info(f"Found existing direct chat room with {user_id}: {room_id}")
-        except Exception as e:
-            logger.warning(f"Error getting direct chat room ID from account data: {str(e)}")
+        # Skip account data method since get_account_data() doesn't exist in current client version
+        logger.info("Skipping account data check for direct chats (method not available)")
         
-        # Second method: check joined rooms for direct chats
+        # Check joined rooms for direct chats
         if not room_id:
             for joined_room in joined_rooms.rooms:
                 try:
@@ -1525,13 +1564,11 @@ async def _send_direct_message_async(user_id: str, message: str) -> Tuple[bool, 
         if not room_id:
             logger.info(f"Creating new direct chat with {user_id}")
             try:
-                # Create a direct chat room - without encryption for now
+                # Create a direct chat room with simplified parameters
                 response = await client.room_create(
-                    visibility="private",  # Use string instead of enum
                     is_direct=True,
-                    name=f"Welcome {display_name}",  # Set a friendly room name
                     invite=[user_id],
-                    preset="trusted_private_chat"
+                    preset=RoomPreset.trusted_private_chat
                 )
                 
                 # Check if room creation was successful
@@ -1581,6 +1618,11 @@ def send_direct_message(user_id: str, message: str) -> Tuple[bool, Optional[str]
     """
     Send a direct message to a Matrix user.
     
+    This is a synchronous wrapper around the async implementation.
+    Creates a new event loop for each call - this is appropriate for infrequent
+    Matrix operations. For high-frequency usage, consider implementing a shared
+    event loop in a background thread.
+    
     Args:
         user_id: The Matrix ID of the user to message
         message: The message content
@@ -1595,26 +1637,34 @@ def send_direct_message(user_id: str, message: str) -> Tuple[bool, Optional[str]
         logger.warning("Matrix integration is not active. Skipping send_direct_message.")
         return False, None, None
     
-    # Log Matrix configuration for debugging
-    logger.info(f"Matrix direct message function called for user_id: {user_id}")
-    logger.info(f"Message length: {len(message)} characters")
-    logger.info(f"Matrix configuration: MATRIX_ACTIVE={MATRIX_ACTIVE}, HOMESERVER={HOMESERVER}, BOT_USERNAME={MATRIX_BOT_USERNAME}")
+    # Log call details at DEBUG level to reduce noise (config logging is in async function)
+    logger.debug(f"Matrix direct message function called for user_id: {user_id}")
+    logger.debug(f"Message length: {len(message)} characters")
         
     try:
-        # Create a new event loop
+        # Create a new event loop for this operation
+        # NOTE: This approach is suitable for infrequent Matrix calls.
+        # For high-frequency usage, consider a shared background event loop.
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
         try:
             # Call the async function with the new event loop
-            logger.info(f"Creating new event loop for direct message to {user_id}")
+            logger.debug(f"Creating new event loop for direct message to {user_id}")
             result = loop.run_until_complete(_send_direct_message_async(user_id, message))
-            logger.info(f"Direct message to {user_id} result: success={result[0]}, room_id={result[1]}, event_id={result[2]}")
+            
+            # Log result at INFO level for important success/failure tracking
+            if result[0]:
+                logger.info(f"✅ Direct message sent to {user_id}: room_id={result[1]}, event_id={result[2]}")
+            else:
+                logger.warning(f"❌ Failed to send direct message to {user_id}")
+            
             return result
         finally:
-            # Close the event loop
+            # Always close the event loop to prevent resource leaks
             loop.close()
-            logger.info(f"Event loop closed for direct message to {user_id}")
+            logger.debug(f"Event loop closed for direct message to {user_id}")
+            
     except Exception as e:
         logger.error(f"Error in send_direct_message: {str(e)}")
         return False, None, None
@@ -1634,6 +1684,7 @@ async def _send_room_message_async(room_id: str, message: str) -> bool:
         logger.warning("Matrix integration is not active. Cannot send room message.")
         return False
     
+    client = None
     try:
         # Create Matrix client
         client = await get_matrix_client()
@@ -1651,9 +1702,6 @@ async def _send_room_message_async(room_id: str, message: str) -> bool:
             }
         )
         
-        # Close the client
-        await client.close()
-        
         if isinstance(response, RoomSendResponse):
             logger.info(f"Message sent to room {room_id} successfully")
             return True
@@ -1663,10 +1711,20 @@ async def _send_room_message_async(room_id: str, message: str) -> bool:
     except Exception as e:
         logger.error(f"Error sending room message: {e}")
         return False
+    finally:
+        # Ensure client is closed
+        if client:
+            try:
+                await client.close()
+            except Exception as close_error:
+                logger.warning(f"Error closing Matrix client: {close_error}")
 
 def send_room_message(room_id: str, message: str) -> bool:
     """
     Send a message to a Matrix room.
+    
+    This is a synchronous wrapper around the async implementation.
+    Creates a new event loop for each call - appropriate for infrequent operations.
     
     Args:
         room_id: The ID of the room to send the message to
@@ -1679,20 +1737,31 @@ def send_room_message(room_id: str, message: str) -> bool:
         logger.warning("Matrix integration is not active. Skipping send_room_message.")
         return False
         
+    logger.debug(f"Sending room message to {room_id}, length: {len(message)} chars")
+        
     try:
-        # Create a new event loop
+        # Create a new event loop for this operation
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        # Send the message
-        result = loop.run_until_complete(_send_room_message_async(room_id, message))
-        return result
-        
+        try:
+            # Send the message
+            result = loop.run_until_complete(_send_room_message_async(room_id, message))
+            
+            # Log result
+            if result:
+                logger.info(f"✅ Room message sent to {room_id}")
+            else:
+                logger.warning(f"❌ Failed to send room message to {room_id}")
+                
+            return result
+        finally:
+            # Always close the event loop
+            loop.close()
+            
     except Exception as e:
         logger.error(f"Error sending message to room {room_id}: {e}")
         return False
-    finally:
-        loop.close()
 
 async def send_matrix_message_async(user_id: str, message: str) -> bool:
     """
@@ -1717,8 +1786,8 @@ async def send_matrix_message_async(user_id: str, message: str) -> bool:
             logger.error(f"Failed to create direct chat with {user_id}")
             return False
             
-        # Send the message
-        return await send_matrix_message(room_id, message)
+        # Send the message using the correct async function
+        return await _send_room_message_async(room_id, message)
     except Exception as e:
         logger.error(f"Error sending message to {user_id}: {e}")
         return False
@@ -1913,47 +1982,59 @@ def invite_user_to_recommended_rooms_sync(user_id: str, room_ids: List[str]) -> 
     import traceback
     import time
     
-    # Define a thread-local event loop storage
-    thread_local = threading.local()
-    
-    try:
-        # Get current thread's event loop or create a new one
-        try:
-            # Try to get the current event loop
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            # Create a new event loop if there isn't one
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            setattr(thread_local, 'loop', loop)
-            
-        # Apply nest_asyncio to allow nested event loops 
-        import nest_asyncio
-        nest_asyncio.apply()
-            
-        # Run the async function in the event loop
+    async def invite_to_rooms_async():
+        """Async function that properly manages client connections."""
         results = []
         failed_rooms = []
         
-        for room_id in room_ids:
-            try:
-                # Use a short timeout per room to prevent hanging
-                result = loop.run_until_complete(asyncio.wait_for(invite_to_matrix_room(user_id, room_id), timeout=10.0))
-                if result:
-                    room_name = loop.run_until_complete(asyncio.wait_for(get_room_name(room_id), timeout=5.0))
-                    results.append((room_id, room_name or room_id))
-                else:
+        # Use a single client for all operations
+        async with matrix_client_context() as client:
+            if not client:
+                logger.error("Failed to create Matrix client")
+                return {
+                    "success": False,
+                    "error": "Failed to create Matrix client",
+                    "invited_rooms": [],
+                    "failed_rooms": room_ids
+                }
+            
+            for room_id in room_ids:
+                try:
+                    # Invite to room using the shared client
+                    await client.room_invite(room_id, user_id)
+                    
+                    # Get room name using the shared client
+                    try:
+                        room_name = await get_room_name_by_id(client, room_id)
+                    except:
+                        room_name = room_id  # Fallback to room ID
+                    
+                    results.append((room_id, room_name))
+                    logger.info(f"Successfully invited {user_id} to room {room_id}")
+                    
+                except Exception as e:
+                    logger.error(f"Error inviting {user_id} to room {room_id}: {str(e)}")
                     failed_rooms.append(room_id)
-            except Exception as e:
-                logging.error(f"Error inviting to room {room_id}: {str(e)}")
-                logging.error(traceback.format_exc())
-                failed_rooms.append(room_id)
                 
         return {
             "success": len(results) > 0,
             "invited_rooms": results,
             "failed_rooms": failed_rooms
         }
+    
+    try:
+        # Create a new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Apply nest_asyncio to allow nested event loops 
+        import nest_asyncio
+        nest_asyncio.apply()
+            
+        # Run the async function
+        result = loop.run_until_complete(invite_to_rooms_async())
+        return result
+        
     except Exception as e:
         logging.error(f"Error in invite_user_to_recommended_rooms_sync: {str(e)}")
         logging.error(traceback.format_exc())
@@ -1964,8 +2045,11 @@ def invite_user_to_recommended_rooms_sync(user_id: str, room_ids: List[str]) -> 
             "failed_rooms": room_ids
         }
     finally:
-        # Don't close the loop as it might be shared
-        pass
+        # Clean up the event loop
+        try:
+            loop.close()
+        except:
+            pass
 
 async def verify_direct_message_delivery(room_id: str, event_id: str) -> bool:
     """

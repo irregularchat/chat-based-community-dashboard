@@ -54,6 +54,8 @@ def initialize_session_state():
         st.session_state['is_authenticated'] = False
     if 'is_admin' not in st.session_state:
         st.session_state['is_admin'] = False
+    if 'is_moderator' not in st.session_state:
+        st.session_state['is_moderator'] = False
     if 'matrix_users' not in st.session_state:
         st.session_state['matrix_users'] = []
     if 'matrix_user_selected' not in st.session_state:
@@ -84,6 +86,8 @@ def render_sidebar():
     # Define pages based on authentication status and admin rights
     is_authenticated = st.session_state.get('is_authenticated', False)
     is_admin = st.session_state.get('is_admin', False)
+    is_moderator = st.session_state.get('is_moderator', False)
+    username = st.session_state.get('username', '')
     
     # Check if we just completed authentication (within the last 5 seconds)
     recent_auth = False
@@ -91,7 +95,18 @@ def render_sidebar():
         auth_time = st.session_state.get('auth_timestamp', 0)
         recent_auth = (time.time() - auth_time) < 5  # Consider auth "recent" if within 5 seconds
     
-    # Define page options based on authentication and admin status
+    # Get user's accessible sections if they are a moderator
+    accessible_sections = []
+    if is_authenticated and is_moderator and not is_admin:
+        # Get database session
+        db = next(get_db())
+        try:
+            from app.utils.auth_helpers import get_user_accessible_sections
+            accessible_sections = get_user_accessible_sections(db, username)
+        finally:
+            db.close()
+    
+    # Define page options based on authentication, admin status, and moderator permissions
     if is_authenticated:
         if is_admin:
             # Admin users get all pages
@@ -106,6 +121,35 @@ def render_sidebar():
                 "Admin Dashboard",
                 "Test SMTP"  # Add the new page for admin users
             ]
+        elif is_moderator:
+            # Moderator users get pages based on their permissions
+            page_options = []
+            
+            # Always allow Create User for authenticated users
+            if not accessible_sections or 'Onboarding' in accessible_sections:
+                page_options.extend([
+                    "Create User",
+                    "Create Invite"
+                ])
+            
+            # List & Manage Users for those with User Reports access
+            if not accessible_sections or 'User Reports' in accessible_sections:
+                page_options.append("List & Manage Users")
+            
+            # Matrix and Signal for those with Messaging access
+            if not accessible_sections or 'Messaging' in accessible_sections:
+                page_options.extend([
+                    "Matrix Messages and Rooms",
+                    "Signal Association"
+                ])
+            
+            # Prompts Manager for those with Prompt Editor access
+            if not accessible_sections or 'Prompt Editor' in accessible_sections:
+                page_options.append("Prompts Manager")
+            
+            # If no specific permissions, give basic access
+            if not page_options:
+                page_options = ["Create User", "List & Manage Users"]
         else:
             # Regular authenticated users
             page_options = [
@@ -159,6 +203,12 @@ def render_sidebar():
         st.sidebar.write(f"Logged in as: **{username}**")
         if is_admin:
             st.sidebar.write("📊 Admin privileges")
+        elif is_moderator:
+            st.sidebar.write("🛡️ Moderator privileges")
+            if accessible_sections:
+                with st.sidebar.expander("Accessible Sections"):
+                    for section in accessible_sections:
+                        st.sidebar.write(f"• {section}")
         
         if st.sidebar.button("Logout"):
             # Clear session state and redirect
@@ -167,6 +217,7 @@ def render_sidebar():
                     del st.session_state[key]
             st.session_state['is_authenticated'] = False
             st.session_state['is_admin'] = False
+            st.session_state['is_moderator'] = False
             st.rerun()
     else:
         # Display login button for non-authenticated users

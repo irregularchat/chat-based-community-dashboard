@@ -11,6 +11,8 @@ from datetime import datetime
 import streamlit as st
 
 from app.utils.config import Config
+from app.db.session import get_db
+from app.db.operations import is_moderator
 
 
 def validate_local_admin(username, password):
@@ -69,9 +71,23 @@ def handle_local_login(username, password):
         # Set admin privileges
         st.session_state['is_admin'] = True
         
+        # Check if user is also moderator (unlikely for local admin, but for consistency)
+        db = next(get_db())
+        try:
+            is_mod = is_moderator(db, username)
+            st.session_state['is_moderator'] = is_mod
+            logging.info(f"Moderator status for local admin {username}: {is_mod}")
+        except Exception as e:
+            logging.error(f"Error checking moderator status: {e}")
+            st.session_state['is_moderator'] = False
+        finally:
+            db.close()
+        
         # Add persistence flags to avoid losing login state on redirect
         st.session_state['permanent_auth'] = True
         st.session_state['permanent_admin'] = True
+        if st.session_state['is_moderator']:
+            st.session_state['permanent_moderator'] = True
         st.session_state['auth_timestamp'] = datetime.timestamp(datetime.now())
         st.session_state['username'] = username
         

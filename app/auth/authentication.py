@@ -9,6 +9,8 @@ from app.auth.local_auth import display_local_login_form
 import os
 import time
 from requests.auth import HTTPBasicAuth
+from app.db.session import get_db
+from app.db.operations import is_moderator
 
 def get_login_url(redirect_path=None):
     """
@@ -261,6 +263,18 @@ def handle_auth_callback(code, state):
             is_admin = username in admin_usernames if admin_usernames else False
             st.session_state['is_admin'] = is_admin
             
+            # Check if user is moderator
+            db = next(get_db())
+            try:
+                is_mod = is_moderator(db, username)
+                st.session_state['is_moderator'] = is_mod
+                logging.info(f"Moderator status for {username}: {is_mod}")
+            except Exception as e:
+                logging.error(f"Error checking moderator status: {e}")
+                st.session_state['is_moderator'] = False
+            finally:
+                db.close()
+            
             # Add a timestamp to track when authentication completed
             st.session_state['auth_timestamp'] = time.time()
             
@@ -269,11 +283,17 @@ def handle_auth_callback(code, state):
             
             logging.info(f"Authentication successful for user: {username}")
             logging.info(f"Admin status: {st.session_state['is_admin']}")
+            logging.info(f"Moderator status: {st.session_state['is_moderator']}")
             
             # If user is an admin, set a permanent admin flag for session restoration
             if is_admin:
                 st.session_state['permanent_admin'] = True
                 logging.info("Set permanent admin flag")
+            
+            # If user is a moderator, set a permanent moderator flag for session restoration
+            if st.session_state['is_moderator']:
+                st.session_state['permanent_moderator'] = True
+                logging.info("Set permanent moderator flag")
             
             return True
         except Exception as e:

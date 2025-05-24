@@ -60,6 +60,7 @@ from app.messages import create_invite_message, create_user_message, display_wel
 from app.utils.messages import WELCOME_MESSAGE
 from app.utils.helpers import send_invite_email
 from app.utils.recommendation import invite_user_to_recommended_rooms_sync
+from app.utils.form_helpers import reset_create_user_form_fields
 from datetime import datetime
 
 # Utility function for running async tasks safely in Streamlit
@@ -106,79 +107,7 @@ def run_async_safely(async_func, *args, **kwargs):
         logging.error(traceback.format_exc())
         return None
 
-def reset_create_user_form_fields():
-    """Helper function to reset all fields related to create user."""
-    # List of keys to reset
-    keys_to_reset = [
-        "username_input",
-        "username_input_outside",
-        "first_name_input",
-        "first_name_input_outside",
-        "last_name_input",
-        "last_name_input_outside",
-        "email_input",
-        "invited_by_input",
-        "data_to_parse_input",
-        "intro_input",
-        "is_admin_checkbox",
-        "username_was_auto_generated",
-        "organization_input",
-        "organization_input_outside",
-        "interests_input",
-        "interests_input_outside",
-        "signal_username_input",
-        "signal_username_input_outside",
-        "phone_number_input",
-        "phone_number_input_outside",
-        "linkedin_username_input",
-        "linkedin_username_input_outside",
-        "parse_data_input_outside",
-        # Add Matrix-related state variables
-        "matrix_user_id",
-        "matrix_user_select",
-        "matrix_user_selected",
-        "recommended_rooms",
-        "selected_rooms",
-        "group_selection"
-    ]
-    
-    # Clear the values in session state
-    for key in keys_to_reset:
-        if key in st.session_state:
-            del st.session_state[key]
-    
-    # Clear any parsed data
-    for key in list(st.session_state.keys()):
-        if key.startswith('_parsed'):
-            del st.session_state[key]
-            
-    # Reset Matrix-related flags
-    st.session_state["recommended_rooms"] = []
-    st.session_state["selected_rooms"] = set()
-    
-    # Reset parsing flags
-    st.session_state["parsing_successful"] = False
-    if 'clear_fields' in st.session_state:
-        del st.session_state['clear_fields']
-    if 'old_values' in st.session_state:
-        del st.session_state['old_values']
-    
-    # Set a flag in session state to indicate we should clear fields
-    st.session_state['clear_fields'] = True
-    
-    # Store current values temporarily to detect changes
-    old_values = {key: st.session_state.get(key, "") for key in keys_to_reset}
-    st.session_state['old_values'] = old_values
-    
-    # Clear the values
-    for key in keys_to_reset:
-        if key in st.session_state:
-            st.session_state[key] = ""
-    
-    # Handle group selection separately - reset to default MAIN_GROUP_ID
-    main_group_id = Config.MAIN_GROUP_ID
-    st.session_state['selected_groups'] = [main_group_id] if main_group_id else []
-    st.session_state['group_selection'] = [main_group_id] if main_group_id else []
+# reset_create_user_form_fields function is now imported from app.utils.form_helpers
 
 def parse_and_rerun():
     """Callback to parse data and rerun the script so widgets see updated session state."""

@@ -14,6 +14,7 @@ class User(Base):
     last_name = Column(String)
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
+    is_moderator = Column(Boolean, default=False)  # New field for moderator role
     date_joined = Column(DateTime, default=datetime.utcnow)
     last_login = Column(DateTime)
     attributes = Column(JSON)
@@ -43,6 +44,7 @@ class User(Base):
             'email': self.email,
             'is_active': self.is_active,
             'is_admin': self.is_admin,
+            'is_moderator': self.is_moderator,
             'date_joined': self.date_joined.isoformat() if self.date_joined else None,
             'last_login': self.last_login.isoformat() if self.last_login else None,
             'attributes': self.attributes,
@@ -176,3 +178,36 @@ user_groups = Table('user_groups', Base.metadata,
     Column('user_id', Integer, ForeignKey('users.id'), primary_key=True),
     Column('group_id', Integer, ForeignKey('groups.id'), primary_key=True)
 )
+
+class ModeratorPermission(Base):
+    """Model for storing moderator permissions"""
+    __tablename__ = 'moderator_permissions'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    permission_type = Column(String, nullable=False)  # 'section', 'room', 'global'
+    permission_value = Column(String, nullable=True)  # Section name, room ID, or null for global
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_by = Column(String, nullable=False)  # Username of admin who granted permission
+    
+    # Relationship to User model
+    user = relationship("User", backref="moderator_permissions")
+    
+    # Index for faster lookups
+    __table_args__ = (
+        Index('idx_moderator_permission_user', 'user_id'),
+        Index('idx_moderator_permission_type_value', 'permission_type', 'permission_value'),
+    )
+    
+    def __repr__(self):
+        return f"<ModeratorPermission(user_id={self.user_id}, type='{self.permission_type}', value='{self.permission_value}')>"
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'permission_type': self.permission_type,
+            'permission_value': self.permission_value,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'created_by': self.created_by
+        }

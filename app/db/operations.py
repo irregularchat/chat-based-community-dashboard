@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import logging
 from app.utils.config import Config
-from app.db.models import User, AdminEvent, MatrixRoomMember, VerificationCode, UserNote
+from app.db.models import User, AdminEvent, MatrixRoomMember, VerificationCode, UserNote, ModeratorPermission
 from app.db.database import get_db
 
 def sync_user_data(db: Session, authentik_users: List[Dict[str, Any]]):
@@ -1121,17 +1121,390 @@ def delete_user_note(db: Session, note_id: int, deleted_by: str) -> bool:
 
 def get_user_note_count(db: Session, user_id: int) -> int:
     """
-    Get the number of notes for a specific user.
+    Get the count of notes for a specific user.
     
     Args:
         db (Session): Database session
-        user_id (int): ID of the user to get note count for
+        user_id (int): ID of the user
         
     Returns:
         int: Number of notes for the user
     """
     try:
         return db.query(UserNote).filter(UserNote.user_id == user_id).count()
+        
     except Exception as e:
-        logging.error(f"Error getting note count for user {user_id}: {e}")
+        logging.error(f"Error getting user note count: {e}")
         return 0
+
+
+# Moderator Management Functions
+def is_moderator(db: Session, username: str) -> bool:
+    """
+    Check if a user is a moderator.
+    
+    Args:
+        db (Session): Database session
+        username (str): Username to check
+        
+    Returns:
+        bool: True if user is a moderator, False otherwise
+    """
+    try:
+        user = db.query(User).filter(User.username == username).first()
+        return user.is_moderator if user else False
+        
+    except Exception as e:
+        logging.error(f"Error checking moderator status: {e}")
+        return False
+
+
+def update_moderator_status(db: Session, username: str, is_moderator: bool) -> bool:
+    """
+    Update a user's moderator status.
+    
+    Args:
+        db (Session): Database session
+        username (str): Username to update
+        is_moderator (bool): New moderator status
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        user = db.query(User).filter(User.username == username).first()
+        if user:
+            user.is_moderator = is_moderator
+            db.commit()
+            logging.info(f"Updated moderator status for user {username} to {is_moderator}")
+            return True
+        else:
+            logging.warning(f"User {username} not found when updating moderator status")
+            return False
+            
+    except Exception as e:
+        logging.error(f"Error updating moderator status: {e}")
+        db.rollback()
+        return False
+
+
+def get_moderator_users(db: Session) -> List[User]:
+    """
+    Get all users who are moderators.
+    
+    Args:
+        db (Session): Database session
+        
+    Returns:
+        List[User]: List of moderator users
+    """
+    try:
+        return db.query(User).filter(User.is_moderator == True).all()
+        
+    except Exception as e:
+        logging.error(f"Error getting moderator users: {e}")
+        return []
+
+
+def get_moderator_count(db: Session) -> int:
+    """
+    Get the count of moderator users.
+    
+    Args:
+        db (Session): Database session
+        
+    Returns:
+        int: Number of moderator users
+    """
+    try:
+        return db.query(User).filter(User.is_moderator == True).count()
+        
+    except Exception as e:
+        logging.error(f"Error getting moderator count: {e}")
+        return 0
+
+
+def get_users_with_roles(db: Session, include_admins: bool = True, include_moderators: bool = True) -> List[User]:
+    """
+    Get all users with admin and/or moderator roles.
+    
+    Args:
+        db (Session): Database session
+        include_admins (bool): Include admin users
+        include_moderators (bool): Include moderator users
+        
+    Returns:
+        List[User]: List of users with specified roles
+    """
+    try:
+        query = db.query(User)
+        
+        if include_admins and include_moderators:
+            query = query.filter((User.is_admin == True) | (User.is_moderator == True))
+        elif include_admins:
+            query = query.filter(User.is_admin == True)
+        elif include_moderators:
+            query = query.filter(User.is_moderator == True)
+        else:
+            return []
+            
+        return query.all()
+        
+    except Exception as e:
+        logging.error(f"Error getting users with roles: {e}")
+        return []
+
+
+def promote_to_moderator(db: Session, username: str, promoted_by: str) -> bool:
+    """
+    Promote a user to moderator and log the event.
+    
+    Args:
+        db (Session): Database session
+        username (str): Username to promote
+        promoted_by (str): Username of the admin who promoted the user
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Update moderator status
+        if update_moderator_status(db, username, True):
+            # Log the admin event
+            create_admin_event(
+                db,
+                event_type="MODERATOR_PROMOTED",
+                username=promoted_by,
+                details=f"Promoted user {username} to moderator"
+            )
+            return True
+        return False
+        
+    except Exception as e:
+        logging.error(f"Error promoting user to moderator: {e}")
+        return False
+
+
+def demote_from_moderator(db: Session, username: str, demoted_by: str) -> bool:
+    """
+    Demote a user from moderator and log the event.
+    
+    Args:
+        db (Session): Database session
+        username (str): Username to demote
+        demoted_by (str): Username of the admin who demoted the user
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Update moderator status
+        if update_moderator_status(db, username, False):
+            # Log the admin event
+            create_admin_event(
+                db,
+                event_type="MODERATOR_DEMOTED",
+                username=demoted_by,
+                details=f"Demoted user {username} from moderator"
+            )
+            return True
+        return False
+        
+    except Exception as e:
+        logging.error(f"Error demoting user from moderator: {e}")
+        return False
+
+
+# Moderator Permission Management Functions
+def grant_moderator_permission(db: Session, user_id: int, permission_type: str, permission_value: Optional[str], granted_by: str) -> Optional[ModeratorPermission]:
+    """
+    Grant a specific permission to a moderator.
+    
+    Args:
+        db (Session): Database session
+        user_id (int): ID of the user to grant permission to
+        permission_type (str): Type of permission ('section', 'room', 'global')
+        permission_value (Optional[str]): Value of permission (section name, room ID, or None for global)
+        granted_by (str): Username of admin who granted the permission
+        
+    Returns:
+        Optional[ModeratorPermission]: The created permission object if successful
+    """
+    try:
+        # Check if permission already exists
+        existing = db.query(ModeratorPermission).filter(
+            ModeratorPermission.user_id == user_id,
+            ModeratorPermission.permission_type == permission_type,
+            ModeratorPermission.permission_value == permission_value
+        ).first()
+        
+        if existing:
+            logging.warning(f"Permission already exists for user {user_id}")
+            return existing
+        
+        # Create new permission
+        permission = ModeratorPermission(
+            user_id=user_id,
+            permission_type=permission_type,
+            permission_value=permission_value,
+            created_by=granted_by
+        )
+        
+        db.add(permission)
+        db.commit()
+        
+        # Log the event
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            create_admin_event(
+                db,
+                event_type="MODERATOR_PERMISSION_GRANTED",
+                username=granted_by,
+                details=f"Granted {permission_type} permission '{permission_value}' to moderator {user.username}"
+            )
+        
+        return permission
+        
+    except Exception as e:
+        logging.error(f"Error granting moderator permission: {e}")
+        db.rollback()
+        return None
+
+
+def revoke_moderator_permission(db: Session, permission_id: int, revoked_by: str) -> bool:
+    """
+    Revoke a specific permission from a moderator.
+    
+    Args:
+        db (Session): Database session
+        permission_id (int): ID of the permission to revoke
+        revoked_by (str): Username of admin who revoked the permission
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        permission = db.query(ModeratorPermission).filter(ModeratorPermission.id == permission_id).first()
+        
+        if not permission:
+            logging.warning(f"Permission {permission_id} not found")
+            return False
+        
+        # Get user for logging
+        user = db.query(User).filter(User.id == permission.user_id).first()
+        
+        # Delete the permission
+        db.delete(permission)
+        db.commit()
+        
+        # Log the event
+        if user:
+            create_admin_event(
+                db,
+                event_type="MODERATOR_PERMISSION_REVOKED",
+                username=revoked_by,
+                details=f"Revoked {permission.permission_type} permission '{permission.permission_value}' from moderator {user.username}"
+            )
+        
+        return True
+        
+    except Exception as e:
+        logging.error(f"Error revoking moderator permission: {e}")
+        db.rollback()
+        return False
+
+
+def get_moderator_permissions(db: Session, user_id: int) -> List[ModeratorPermission]:
+    """
+    Get all permissions for a specific moderator.
+    
+    Args:
+        db (Session): Database session
+        user_id (int): ID of the moderator user
+        
+    Returns:
+        List[ModeratorPermission]: List of permissions for the user
+    """
+    try:
+        return db.query(ModeratorPermission).filter(ModeratorPermission.user_id == user_id).all()
+        
+    except Exception as e:
+        logging.error(f"Error getting moderator permissions: {e}")
+        return []
+
+
+def has_moderator_permission(db: Session, user_id: int, permission_type: str, permission_value: Optional[str]) -> bool:
+    """
+    Check if a moderator has a specific permission.
+    
+    Args:
+        db (Session): Database session
+        user_id (int): ID of the moderator user
+        permission_type (str): Type of permission to check
+        permission_value (Optional[str]): Value of permission to check
+        
+    Returns:
+        bool: True if user has the permission, False otherwise
+    """
+    try:
+        # Check for global permission first
+        if permission_type != 'global':
+            global_perm = db.query(ModeratorPermission).filter(
+                ModeratorPermission.user_id == user_id,
+                ModeratorPermission.permission_type == 'global'
+            ).first()
+            
+            if global_perm:
+                return True
+        
+        # Check for specific permission
+        query = db.query(ModeratorPermission).filter(
+            ModeratorPermission.user_id == user_id,
+            ModeratorPermission.permission_type == permission_type
+        )
+        
+        if permission_value is not None:
+            query = query.filter(ModeratorPermission.permission_value == permission_value)
+        
+        return query.first() is not None
+        
+    except Exception as e:
+        logging.error(f"Error checking moderator permission: {e}")
+        return False
+
+
+def clear_moderator_permissions(db: Session, user_id: int, cleared_by: str) -> bool:
+    """
+    Clear all permissions for a moderator.
+    
+    Args:
+        db (Session): Database session
+        user_id (int): ID of the moderator user
+        cleared_by (str): Username of admin who cleared the permissions
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Get user for logging
+        user = db.query(User).filter(User.id == user_id).first()
+        
+        # Delete all permissions for the user
+        db.query(ModeratorPermission).filter(ModeratorPermission.user_id == user_id).delete()
+        db.commit()
+        
+        # Log the event
+        if user:
+            create_admin_event(
+                db,
+                event_type="MODERATOR_PERMISSIONS_CLEARED",
+                username=cleared_by,
+                details=f"Cleared all permissions for moderator {user.username}"
+            )
+        
+        return True
+        
+    except Exception as e:
+        logging.error(f"Error clearing moderator permissions: {e}")
+        db.rollback()
+        return False

@@ -1407,19 +1407,356 @@ def render_advanced_settings():
     st.header("Advanced Settings")
     st.warning("These settings are for advanced users only. Incorrect configuration may cause the application to malfunction.")
     
-    # OpenAI settings
-    st.subheader("OpenAI Integration")
-    openai_api_key = st.text_input("OpenAI API Key", value=getattr(Config, "OPENAI_API_KEY", "") or "", type="password", key="advanced_openai_api_key")
+    # Create tabs for different advanced settings
+    tabs = st.tabs(["OpenAI Integration", "Moderator Management"])
     
-    # Save button
-    if st.button("Save Advanced Settings", key="advanced_save_button"):
-        success = True
-        success &= save_env_variable("OPENAI_API_KEY", openai_api_key)
+    with tabs[0]:
+        # OpenAI settings
+        st.subheader("OpenAI Integration")
+        openai_api_key = st.text_input("OpenAI API Key", value=getattr(Config, "OPENAI_API_KEY", "") or "", type="password", key="advanced_openai_api_key")
         
-        if success:
-            st.success("Advanced settings saved successfully! Please restart the application for changes to take effect.")
+        # Save button
+        if st.button("Save OpenAI Settings", key="advanced_openai_save_button"):
+            success = True
+            success &= save_env_variable("OPENAI_API_KEY", openai_api_key)
+            
+            if success:
+                st.success("OpenAI settings saved successfully! Please restart the application for changes to take effect.")
+            else:
+                st.error("There was an error saving some settings. Please check the logs for details.")
+    
+    with tabs[1]:
+        render_moderator_management()
+
+def render_moderator_management():
+    """Render the moderator management section"""
+    st.subheader("Moderator Management")
+    
+    # Import necessary operations
+    from app.db.operations import (
+        get_moderator_users, 
+        get_moderator_count,
+        promote_to_moderator,
+        demote_from_moderator,
+        get_moderator_permissions,
+        grant_moderator_permission,
+        revoke_moderator_permission,
+        clear_moderator_permissions,
+        search_users
+    )
+    
+    # Get database session
+    db = next(get_db())
+    
+    # Create tabs for different moderator management functions
+    mod_tabs = st.tabs([
+        "View Moderators",
+        "Add Moderator",
+        "Manage Permissions",
+        "Revoke Access"
+    ])
+    
+    with mod_tabs[0]:
+        st.write("### Current Moderators")
+        
+        # Get all moderator users
+        moderators = get_moderator_users(db)
+        moderator_count = get_moderator_count(db)
+        
+        st.info(f"Total moderators: {moderator_count}")
+        
+        if not moderators:
+            st.warning("No moderators found.")
         else:
-            st.error("There was an error saving some settings. Please check the logs for details.")
+            # Create a table of moderators
+            import pandas as pd
+            mod_data = []
+            
+            for mod in moderators:
+                # Get permissions for this moderator
+                permissions = get_moderator_permissions(db, mod.id)
+                perm_summary = []
+                
+                for perm in permissions:
+                    if perm.permission_type == 'global':
+                        perm_summary.append("Global Access")
+                    elif perm.permission_type == 'section':
+                        perm_summary.append(f"Section: {perm.permission_value}")
+                    elif perm.permission_type == 'room':
+                        perm_summary.append(f"Room: {perm.permission_value}")
+                
+                mod_data.append({
+                    "Username": mod.username,
+                    "Name": f"{mod.first_name} {mod.last_name}".strip() or "N/A",
+                    "Email": mod.email or "N/A",
+                    "Auth Type": "SSO" if mod.authentik_id else "Local",
+                    "Last Login": mod.last_login.isoformat() if mod.last_login else "Never",
+                    "Permissions": ", ".join(perm_summary) if perm_summary else "No specific permissions"
+                })
+            
+            mod_df = pd.DataFrame(mod_data)
+            st.dataframe(mod_df, use_container_width=True)
+    
+    with mod_tabs[1]:
+        st.write("### Add New Moderator")
+        
+        # Search for users
+        search_term = st.text_input("Search for user (by username, email, or name)", key="mod_search")
+        
+        if search_term:
+            # Search for users
+            users = search_users(db, search_term)
+            
+            # Filter out already moderators
+            non_mod_users = [u for u in users if not u.is_moderator and not u.is_admin]
+            
+            if not non_mod_users:
+                st.warning("No eligible users found. Users may already be moderators or admins.")
+            else:
+                # Create a dropdown of users
+                user_options = ["-- Select a user --"]
+                user_map = {}
+                
+                for user in non_mod_users:
+                    display_name = f"{user.username} ({user.first_name} {user.last_name})".strip()
+                    if user.email:
+                        display_name += f" - {user.email}"
+                    user_options.append(display_name)
+                    user_map[display_name] = user
+                
+                selected_user_display = st.selectbox("Select user to promote", user_options, key="mod_promote_select")
+                
+                if selected_user_display != "-- Select a user --":
+                    selected_user = user_map[selected_user_display]
+                    
+                    st.write("#### User Details")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**Username:** {selected_user.username}")
+                        st.write(f"**Name:** {selected_user.first_name} {selected_user.last_name}".strip() or "N/A")
+                        st.write(f"**Email:** {selected_user.email or 'N/A'}")
+                    with col2:
+                        st.write(f"**Auth Type:** {'SSO' if selected_user.authentik_id else 'Local'}")
+                        st.write(f"**Active:** {'Yes' if selected_user.is_active else 'No'}")
+                        st.write(f"**Joined:** {selected_user.date_joined.isoformat() if selected_user.date_joined else 'Unknown'}")
+                    
+                    # Permission type selection
+                    st.write("#### Initial Permissions")
+                    perm_type = st.radio(
+                        "Permission Type",
+                        ["Global Access", "Section Access", "Room Access", "No Initial Permissions"],
+                        key="mod_perm_type"
+                    )
+                    
+                    perm_value = None
+                    if perm_type == "Section Access":
+                        # List available sections
+                        sections = ["Onboarding", "Messaging", "User Reports", "Prompt Editor"]
+                        perm_value = st.selectbox("Select Section", sections, key="mod_section_select")
+                    elif perm_type == "Room Access":
+                        # Get available rooms
+                        from app.utils.matrix_actions import merge_room_data
+                        rooms = merge_room_data()
+                        if rooms:
+                            room_options = [f"{room.get('name', 'Unknown')} ({room.get('room_id', '')})" for room in rooms]
+                            selected_room = st.selectbox("Select Room", room_options, key="mod_room_select")
+                            # Extract room ID
+                            if selected_room:
+                                perm_value = selected_room.split('(')[-1].rstrip(')')
+                    
+                    # Promote button
+                    if st.button("Promote to Moderator", key="mod_promote_button"):
+                        # Get current admin username
+                        admin_username = st.session_state.get('username', 'unknown')
+                        
+                        # Promote user
+                        if promote_to_moderator(db, selected_user.username, admin_username):
+                            st.success(f"Successfully promoted {selected_user.username} to moderator!")
+                            
+                            # Grant initial permission if specified
+                            if perm_type == "Global Access":
+                                grant_moderator_permission(db, selected_user.id, 'global', None, admin_username)
+                                st.info("Granted global access permission.")
+                            elif perm_type == "Section Access" and perm_value:
+                                grant_moderator_permission(db, selected_user.id, 'section', perm_value, admin_username)
+                                st.info(f"Granted access to {perm_value} section.")
+                            elif perm_type == "Room Access" and perm_value:
+                                grant_moderator_permission(db, selected_user.id, 'room', perm_value, admin_username)
+                                st.info(f"Granted access to room {perm_value}.")
+                            
+                            st.rerun()
+                        else:
+                            st.error("Failed to promote user. Please check logs for details.")
+    
+    with mod_tabs[2]:
+        st.write("### Manage Moderator Permissions")
+        
+        # Get all moderators
+        moderators = get_moderator_users(db)
+        
+        if not moderators:
+            st.warning("No moderators found.")
+        else:
+            # Select a moderator to manage
+            mod_options = ["-- Select a moderator --"]
+            mod_map = {}
+            
+            for mod in moderators:
+                display_name = f"{mod.username} ({mod.first_name} {mod.last_name})".strip()
+                mod_options.append(display_name)
+                mod_map[display_name] = mod
+            
+            selected_mod_display = st.selectbox("Select moderator", mod_options, key="mod_manage_select")
+            
+            if selected_mod_display != "-- Select a moderator --":
+                selected_mod = mod_map[selected_mod_display]
+                
+                # Show current permissions
+                st.write("#### Current Permissions")
+                permissions = get_moderator_permissions(db, selected_mod.id)
+                
+                if not permissions:
+                    st.info("This moderator has no specific permissions.")
+                else:
+                    # Display permissions with revoke buttons
+                    for perm in permissions:
+                        col1, col2, col3 = st.columns([2, 3, 1])
+                        with col1:
+                            st.write(f"**{perm.permission_type.title()}**")
+                        with col2:
+                            if perm.permission_type == 'global':
+                                st.write("Full access to all moderator functions")
+                            else:
+                                st.write(perm.permission_value or "N/A")
+                        with col3:
+                            if st.button("Revoke", key=f"revoke_perm_{perm.id}"):
+                                admin_username = st.session_state.get('username', 'unknown')
+                                if revoke_moderator_permission(db, perm.id, admin_username):
+                                    st.success("Permission revoked!")
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to revoke permission.")
+                
+                # Add new permission
+                st.write("#### Add New Permission")
+                new_perm_type = st.radio(
+                    "Permission Type",
+                    ["Global Access", "Section Access", "Room Access"],
+                    key="mod_new_perm_type"
+                )
+                
+                new_perm_value = None
+                if new_perm_type == "Section Access":
+                    sections = ["Onboarding", "Messaging", "User Reports", "Prompt Editor"]
+                    new_perm_value = st.selectbox("Select Section", sections, key="mod_new_section_select")
+                elif new_perm_type == "Room Access":
+                    from app.utils.matrix_actions import merge_room_data
+                    rooms = merge_room_data()
+                    if rooms:
+                        room_options = [f"{room.get('name', 'Unknown')} ({room.get('room_id', '')})" for room in rooms]
+                        selected_room = st.selectbox("Select Room", room_options, key="mod_new_room_select")
+                        if selected_room:
+                            new_perm_value = selected_room.split('(')[-1].rstrip(')')
+                
+                if st.button("Grant Permission", key="mod_grant_perm_button"):
+                    admin_username = st.session_state.get('username', 'unknown')
+                    
+                    perm_type_map = {
+                        "Global Access": "global",
+                        "Section Access": "section",
+                        "Room Access": "room"
+                    }
+                    
+                    if grant_moderator_permission(
+                        db, 
+                        selected_mod.id, 
+                        perm_type_map[new_perm_type], 
+                        new_perm_value if new_perm_type != "Global Access" else None,
+                        admin_username
+                    ):
+                        st.success("Permission granted successfully!")
+                        st.rerun()
+                    else:
+                        st.error("Failed to grant permission. It may already exist.")
+    
+    with mod_tabs[3]:
+        st.write("### Revoke Moderator Access")
+        
+        # Get all moderators
+        moderators = get_moderator_users(db)
+        
+        if not moderators:
+            st.warning("No moderators found.")
+        else:
+            # Select a moderator to revoke
+            mod_options = ["-- Select a moderator --"]
+            mod_map = {}
+            
+            for mod in moderators:
+                display_name = f"{mod.username} ({mod.first_name} {mod.last_name})".strip()
+                mod_options.append(display_name)
+                mod_map[display_name] = mod
+            
+            selected_mod_display = st.selectbox("Select moderator to revoke", mod_options, key="mod_revoke_select")
+            
+            if selected_mod_display != "-- Select a moderator --":
+                selected_mod = mod_map[selected_mod_display]
+                
+                # Show moderator details
+                st.write("#### Moderator Details")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**Username:** {selected_mod.username}")
+                    st.write(f"**Name:** {selected_mod.first_name} {selected_mod.last_name}".strip() or "N/A")
+                    st.write(f"**Email:** {selected_mod.email or 'N/A'}")
+                with col2:
+                    permissions = get_moderator_permissions(db, selected_mod.id)
+                    st.write(f"**Permission Count:** {len(permissions)}")
+                    st.write(f"**Last Login:** {selected_mod.last_login.isoformat() if selected_mod.last_login else 'Never'}")
+                
+                st.warning("⚠️ Revoking moderator access will remove all permissions and the moderator role.")
+                
+                # Options for revocation
+                clear_perms = st.checkbox("Clear all permissions", value=True, key="mod_clear_perms")
+                send_notification = st.checkbox("Send notification to user (if Matrix is enabled)", key="mod_notify_revoke")
+                
+                # Confirmation
+                confirm_text = st.text_input(
+                    f"Type '{selected_mod.username}' to confirm revocation",
+                    key="mod_revoke_confirm"
+                )
+                
+                if st.button("Revoke Moderator Access", key="mod_revoke_button", type="primary"):
+                    if confirm_text == selected_mod.username:
+                        admin_username = st.session_state.get('username', 'unknown')
+                        
+                        # Clear permissions if requested
+                        if clear_perms:
+                            clear_moderator_permissions(db, selected_mod.id, admin_username)
+                        
+                        # Demote from moderator
+                        if demote_from_moderator(db, selected_mod.username, admin_username):
+                            st.success(f"Successfully revoked moderator access for {selected_mod.username}!")
+                            
+                            # Send notification if requested
+                            if send_notification and getattr(Config, "MATRIX_ACTIVE", False):
+                                # Import Matrix functions
+                                from app.utils.matrix_actions import send_direct_message
+                                message = f"Your moderator access has been revoked by an administrator. If you have questions, please contact the admin team."
+                                try:
+                                    asyncio.run(send_direct_message(selected_mod.username, message))
+                                    st.info("Notification sent to user.")
+                                except Exception as e:
+                                    st.warning(f"Could not send notification: {e}")
+                            
+                            st.rerun()
+                        else:
+                            st.error("Failed to revoke moderator access. Please check logs for details.")
+                    else:
+                        st.error("Username confirmation does not match. Please type the exact username.")
+    
+    # Close database session
+    db.close()
 
 # Main execution
 render_settings_page() 

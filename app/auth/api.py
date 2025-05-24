@@ -29,9 +29,6 @@ from app.db.session import get_db
 # Define user path constant for Authentik
 USER_PATH = "users"
 
-# Initialize a session with retry strategy
-# auth/api.py
-
 # Initialize a session with adjusted retry strategy
 session = requests.Session()
 retry = Retry(
@@ -40,9 +37,27 @@ retry = Retry(
     status_forcelist=[429, 500, 502, 503, 504],
     allowed_methods=["HEAD", "GET", "POST", "PUT", "DELETE", "OPTIONS", "TRACE"]
 )
-adapter = HTTPAdapter(max_retries=retry)
-session.mount("http://", adapter)
-session.mount("https://", adapter)
+
+# Configure SSL adapter for compatibility with older TLS versions
+import ssl
+from urllib3.util.ssl_ import create_urllib3_context
+
+class SSLCompatibilityAdapter(HTTPAdapter):
+    """Custom HTTP adapter with SSL compatibility for older servers."""
+    
+    def init_poolmanager(self, *args, **kwargs):
+        try:
+            context = create_urllib3_context()
+            context.set_ciphers('DEFAULT@SECLEVEL=1')  # Allow older cipher suites
+            kwargs['ssl_context'] = context
+        except Exception as e:
+            logging.warning(f"Could not configure SSL context: {e}")
+        return super().init_poolmanager(*args, **kwargs)
+
+# Mount the SSL-compatible adapter
+ssl_adapter = SSLCompatibilityAdapter(max_retries=retry)
+session.mount("http://", HTTPAdapter(max_retries=retry))
+session.mount("https://", ssl_adapter)
 
 def generate_webhook_signature(payload: dict) -> str:
     """

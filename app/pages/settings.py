@@ -1582,19 +1582,137 @@ def render_moderator_management():
                 mask = mod_df.apply(lambda row: search_query.lower() in row.astype(str).str.lower().to_string(), axis=1)
                 mod_df = mod_df[mask]
             
-            # Hide internal columns
-            display_df = mod_df.drop(columns=['_matrix_username'], errors='ignore')
+            # Enhanced display with inline actions
+            st.write("### Moderator List")
             
-            st.dataframe(
-                display_df,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Status": st.column_config.TextColumn("", width="small"),
-                    "Username": st.column_config.TextColumn("Username", width="medium"),
-                    "Auth": st.column_config.TextColumn("Type", width="small"),
-                }
-            )
+            # Add filter options
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                auth_filter = st.selectbox("Filter by Auth Type", ["All", "SSO Only", "Local Only"], key="auth_filter_overview")
+            with col2:
+                status_filter = st.selectbox("Filter by Status", ["All", "Active (30d)", "Inactive"], key="status_filter_overview")
+            with col3:
+                perm_filter = st.selectbox("Filter by Permissions", ["All", "Global Access", "Limited Access", "No Permissions"], key="perm_filter_overview")
+            
+            # Apply filters
+            filtered_df = mod_df.copy()
+            if auth_filter == "SSO Only":
+                filtered_df = filtered_df[filtered_df['Auth'] == "🔐 SSO"]
+            elif auth_filter == "Local Only":
+                filtered_df = filtered_df[filtered_df['Auth'] == "🏠 Local"]
+            
+            if status_filter == "Active (30d)":
+                filtered_df = filtered_df[filtered_df['Status'] == "🟢"]
+            elif status_filter == "Inactive":
+                filtered_df = filtered_df[filtered_df['Status'] == "🔴"]
+            
+            if perm_filter == "Global Access":
+                filtered_df = filtered_df[filtered_df['Permissions'].str.contains("🌐 Full Access")]
+            elif perm_filter == "Limited Access":
+                filtered_df = filtered_df[~filtered_df['Permissions'].str.contains("🌐 Full Access") & ~filtered_df['Permissions'].str.contains("⚠️ No permissions")]
+            elif perm_filter == "No Permissions":
+                filtered_df = filtered_df[filtered_df['Permissions'].str.contains("⚠️ No permissions")]
+            
+            # Display enhanced moderator cards
+            if not filtered_df.empty:
+                for idx, mod_row in filtered_df.iterrows():
+                    with st.container():
+                        # Create a card-like layout
+                        col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+                        
+                        with col1:
+                            # Main info with badges
+                            st.markdown(f"""
+                            **{mod_row['Status']} {mod_row['Username']}** {mod_row['Auth']}
+                            
+                            {mod_row['Name']} • {mod_row['Email']}
+                            """)
+                        
+                        with col2:
+                            st.write(f"**Last Active:** {mod_row['Last Active']}")
+                            st.write(f"**Permissions:** {mod_row['Permissions']}")
+                        
+                        with col3:
+                            # Quick action buttons
+                            if st.button(f"✉️ Message", key=f"msg_{mod_row['Username']}", help="Send direct message"):
+                                st.session_state[f'show_message_form_{mod_row["Username"]}'] = True
+                            
+                            if st.button(f"🔧 Manage", key=f"manage_{mod_row['Username']}", help="Manage permissions"):
+                                st.session_state['selected_moderator_manage'] = mod_row['Username']
+                                st.session_state['active_tab'] = 1  # Switch to manage permissions tab
+                        
+                        with col4:
+                            # Status actions
+                            if mod_row['Status'] == "🔴":
+                                if st.button(f"📧 Resend Welcome", key=f"welcome_{mod_row['Username']}", help="Resend welcome email"):
+                                    # Add logic to resend welcome email
+                                    st.info(f"Welcome email resent to {mod_row['Username']}")
+                            
+                            if st.button(f"📊 Details", key=f"details_{mod_row['Username']}", help="View detailed info"):
+                                st.session_state[f'show_details_{mod_row["Username"]}'] = True
+                        
+                        # Show message form if requested
+                        if st.session_state.get(f'show_message_form_{mod_row["Username"]}', False):
+                            with st.expander(f"Send Message to {mod_row['Username']}", expanded=True):
+                                message_text = st.text_area(f"Message for {mod_row['Username']}", key=f"msg_text_{mod_row['Username']}")
+                                col_send, col_cancel = st.columns(2)
+                                with col_send:
+                                    if st.button("Send", key=f"send_msg_{mod_row['Username']}"):
+                                        # Add logic to send message
+                                        st.success(f"Message sent to {mod_row['Username']}")
+                                        st.session_state[f'show_message_form_{mod_row["Username"]}'] = False
+                                        st.rerun()
+                                with col_cancel:
+                                    if st.button("Cancel", key=f"cancel_msg_{mod_row['Username']}"):
+                                        st.session_state[f'show_message_form_{mod_row["Username"]}'] = False
+                                        st.rerun()
+                        
+                        # Show details if requested
+                        if st.session_state.get(f'show_details_{mod_row["Username"]}', False):
+                            with st.expander(f"Details for {mod_row['Username']}", expanded=True):
+                                # Get the actual moderator object for detailed info
+                                mod_obj = next((m for m in moderators if m.username == mod_row['Username']), None)
+                                if mod_obj:
+                                    col_det1, col_det2 = st.columns(2)
+                                    with col_det1:
+                                        st.write(f"**User ID:** {mod_obj.id}")
+                                        st.write(f"**Date Joined:** {mod_obj.date_joined.strftime('%Y-%m-%d') if mod_obj.date_joined else 'N/A'}")
+                                        st.write(f"**Matrix Username:** {mod_obj.matrix_username or 'Not linked'}")
+                                    with col_det2:
+                                        st.write(f"**Authentik ID:** {mod_obj.authentik_id or 'Local account'}")
+                                        st.write(f"**Active Status:** {'✅ Active' if mod_obj.is_active else '❌ Inactive'}")
+                                        
+                                        # Show detailed permissions
+                                        perms = get_moderator_permissions(db, mod_obj.id)
+                                        if perms:
+                                            st.write("**Detailed Permissions:**")
+                                            for perm in perms:
+                                                perm_display = format_permission_display(perm)
+                                                st.write(f"- {perm_display}")
+                                        else:
+                                            st.write("**Permissions:** None assigned")
+                                
+                                if st.button("Close Details", key=f"close_details_{mod_row['Username']}"):
+                                    st.session_state[f'show_details_{mod_row["Username"]}'] = False
+                                    st.rerun()
+                        
+                        st.divider()
+            else:
+                st.info("No moderators match the selected filters.")
+            
+            # Legacy table view toggle
+            if st.checkbox("Show table view", key="show_table_view"):
+                display_df = filtered_df.drop(columns=['_matrix_username'], errors='ignore')
+                st.dataframe(
+                    display_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Status": st.column_config.TextColumn("", width="small"),
+                        "Username": st.column_config.TextColumn("Username", width="medium"),
+                        "Auth": st.column_config.TextColumn("Type", width="small"),
+                    }
+                )
             
             # Export functionality
             st.write("### Export Options")
@@ -1698,12 +1816,26 @@ def render_moderator_management():
         with perm_tabs[0]:
             st.write("#### Add New Moderator or Change User Role")
             
-            # Search for users
-            search_term = st.text_input("🔍 Search for user (by username, email, or name)", key="mod_search")
+            # Enhanced search for users
+            col_search, col_org = st.columns([2, 1])
+            with col_search:
+                search_term = st.text_input("🔍 Search for user (by username, email, or name)", key="mod_search")
+            with col_org:
+                org_filter = st.text_input("🏢 Filter by organization", key="mod_org_filter", help="Filter users by organization attribute")
             
-            if search_term:
+            if search_term or org_filter:
                 # Search for users
                 users = search_users(db, search_term)
+                
+                # Apply organization filter if specified
+                if org_filter and users:
+                    filtered_users = []
+                    for user in users:
+                        if user.attributes and isinstance(user.attributes, dict):
+                            user_org = user.attributes.get('organization', '').lower()
+                            if org_filter.lower() in user_org:
+                                filtered_users.append(user)
+                    users = filtered_users
                 
                 if not users:
                     st.warning("No users found matching your search.")
@@ -1738,11 +1870,42 @@ def render_moderator_management():
                                 st.write(f"**Username:** {selected_user.username}")
                                 st.write(f"**Name:** {selected_user.first_name} {selected_user.last_name}".strip() or "N/A")
                                 st.write(f"**Email:** {selected_user.email or 'N/A'}")
+                                
+                                # Show user attributes if available
+                                if selected_user.attributes:
+                                    if selected_user.attributes.get('organization'):
+                                        st.write(f"**Organization:** {selected_user.attributes['organization']}")
+                                    if selected_user.attributes.get('interests'):
+                                        st.write(f"**Interests:** {selected_user.attributes['interests']}")
                             with col2:
                                 auth_type = "🔐 SSO" if selected_user.authentik_id else "🏠 Local"
                                 st.write(f"**Auth Type:** {auth_type}")
                                 st.write(f"**Status:** {'✅ Active' if selected_user.is_active else '❌ Inactive'}")
                                 st.write(f"**Current Role:** {'👑 Admin' if selected_user.is_admin else ('🛡️ Moderator' if selected_user.is_moderator else '👤 Regular User')}")
+                        
+                        # Show auto-promotion suggestion if applicable
+                        from app.utils.auth_helpers import should_auto_promote_to_moderator, get_suggested_permissions_for_user
+                        
+                        if selected_user.attributes and should_auto_promote_to_moderator(selected_user.attributes):
+                            st.info("💡 **Auto-promotion suggestion:** This user's organization indicates they should be considered for moderator status.")
+                        
+                        # Show permission suggestions
+                        if selected_user.attributes:
+                            suggestions = get_suggested_permissions_for_user(selected_user.attributes)
+                            if suggestions:
+                                st.write("#### 💡 Permission Suggestions")
+                                st.info("Based on this user's background, consider these permissions:")
+                                for suggestion in suggestions:
+                                    perm_type = suggestion['type']
+                                    perm_value = suggestion['value']
+                                    reason = suggestion['reason']
+                                    
+                                    if perm_type == 'global':
+                                        st.write(f"🌐 **Global Access** - {reason}")
+                                    elif perm_type == 'section':
+                                        st.write(f"📑 **{perm_value} Section** - {reason}")
+                                    elif perm_type == 'room':
+                                        st.write(f"🏠 **Room: {perm_value}** - {reason}")
                         
                         # Role change options
                         st.write("#### Change User Role")

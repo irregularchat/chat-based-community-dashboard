@@ -2,7 +2,7 @@
 Authentication helper functions for checking user permissions
 """
 import logging
-from typing import Optional, List
+from typing import Optional, List, Dict
 from sqlalchemy.orm import Session
 from app.db.models import User, ModeratorPermission
 from app.db.operations import is_moderator, has_moderator_permission, get_moderator_permissions
@@ -188,4 +188,84 @@ def format_permission_display(permission: ModeratorPermission) -> str:
     elif permission.permission_type == 'room':
         return f"🏠 Room: {permission.permission_value}"
     else:
-        return f"❓ {permission.permission_type}: {permission.permission_value}" 
+        return f"❓ {permission.permission_type}: {permission.permission_value}"
+
+
+def should_auto_promote_to_moderator(user_attributes: dict) -> bool:
+    """
+    Check if a user should be automatically promoted to moderator based on their attributes.
+    
+    Args:
+        user_attributes: User attributes from SSO or local account
+        
+    Returns:
+        bool: True if user should be auto-promoted to moderator
+    """
+    if not user_attributes or not isinstance(user_attributes, dict):
+        return False
+    
+    # Check organization-based auto-promotion
+    organization = user_attributes.get('organization', '').lower()
+    
+    # Define organizations that should get automatic moderator status
+    # This could be moved to Config for easier management
+    auto_moderator_organizations = [
+        'admin team',
+        'core team', 
+        'leadership',
+        'board of directors',
+        'steering committee'
+    ]
+    
+    return any(org in organization for org in auto_moderator_organizations)
+
+
+def get_suggested_permissions_for_user(user_attributes: dict) -> List[Dict[str, str]]:
+    """
+    Get suggested permissions for a user based on their attributes.
+    
+    Args:
+        user_attributes: User attributes from SSO or local account
+        
+    Returns:
+        List[Dict[str, str]]: List of suggested permissions
+    """
+    suggestions = []
+    
+    if not user_attributes or not isinstance(user_attributes, dict):
+        return suggestions
+    
+    organization = user_attributes.get('organization', '').lower()
+    interests = user_attributes.get('interests', '').lower()
+    
+    # Organization-based suggestions
+    if 'hr' in organization or 'human resources' in organization:
+        suggestions.append({
+            'type': 'section',
+            'value': 'Onboarding',
+            'reason': 'HR background suggests onboarding expertise'
+        })
+    
+    if 'tech' in organization or 'engineering' in organization or 'it' in organization:
+        suggestions.append({
+            'type': 'section', 
+            'value': 'Messaging',
+            'reason': 'Technical background for messaging/Matrix management'
+        })
+    
+    if 'community' in organization or 'outreach' in organization:
+        suggestions.append({
+            'type': 'global',
+            'value': None,
+            'reason': 'Community management experience'
+        })
+    
+    # Interest-based suggestions
+    if 'moderation' in interests or 'community management' in interests:
+        suggestions.append({
+            'type': 'global',
+            'value': None,
+            'reason': 'Expressed interest in moderation'
+        })
+    
+    return suggestions 

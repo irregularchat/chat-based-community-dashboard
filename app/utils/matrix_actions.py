@@ -433,7 +433,7 @@ async def get_matrix_client() -> Optional[AsyncClient]:
             max_limit_exceeded=0,
             max_timeouts=0,
             store_sync_tokens=False,
-            encryption_enabled=False,  # Disable encryption due to missing dependencies
+            encryption_enabled=True,  # Enable encryption for Signal bridge compatibility
         )
 
         client = AsyncClient(
@@ -445,7 +445,7 @@ async def get_matrix_client() -> Optional[AsyncClient]:
 
         # Skip sync for initial connection - some servers have issues with the next_batch property
         # Just return the client as it's authenticated with the access token
-        logger.info(f"Matrix client created with user_id: {MATRIX_BOT_USERNAME}")
+        logger.info(f"Matrix client created with user_id: {MATRIX_BOT_USERNAME} (encryption enabled)")
         return client
     except Exception as e:
         logger.error(f"Error creating Matrix client: {e}")

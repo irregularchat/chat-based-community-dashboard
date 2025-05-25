@@ -99,7 +99,7 @@ async def render_matrix_messaging_page():
         
         # Display message history if user ID is provided
         if user_id and user_id.strip():
-            display_matrix_message_history(user_id.strip())
+            await display_matrix_message_history(user_id.strip())
         
         message = st.text_area("Message", height=150, key="direct_message")
         if st.button("Send Direct Message"):
@@ -533,7 +533,7 @@ async def render_matrix_messaging_page():
         else:
             st.warning("No non-admin users found in the entrance room")
 
-def display_matrix_message_history(user_id):
+async def display_matrix_message_history(user_id):
     """Display the message history for a direct message conversation."""
     st.subheader("💬 Conversation History")
     
@@ -548,28 +548,24 @@ def display_matrix_message_history(user_id):
     with col2:
         st.write("*Click 'Load History' to view recent messages*")
     
-    # Handle loading message history in background
+    # Handle loading message history
     if st.session_state.get(f'loading_matrix_history_{user_id}', False):
-        import threading
-        
         if f'matrix_message_history_{user_id}' not in st.session_state or st.session_state[f'matrix_message_history_{user_id}'] is None:
-            # Define the function to run in the background
-            def load_history():
-                try:
-                    # Get message history using the sync wrapper
-                    st.session_state[f'matrix_message_history_{user_id}'] = get_direct_message_history_sync(user_id, limit=20)
-                    
-                except Exception as e:
-                    st.session_state[f'matrix_history_error_{user_id}'] = str(e)
-                    logging.error(f"Error loading message history: {str(e)}", exc_info=True)
-                finally:
-                    st.session_state[f'loading_matrix_history_{user_id}'] = False
-            
-            # Start the background thread
-            thread = threading.Thread(target=load_history)
-            thread.start()
-            st.info("Loading conversation history, please wait...")
-            st.rerun()
+            try:
+                st.info("Loading conversation history, please wait...")
+                # Import the async function directly
+                from app.utils.matrix_actions import get_direct_message_history
+                
+                # Get message history using the async function
+                messages = await get_direct_message_history(user_id, limit=20)
+                st.session_state[f'matrix_message_history_{user_id}'] = messages
+                st.session_state[f'loading_matrix_history_{user_id}'] = False
+                st.rerun()
+                
+            except Exception as e:
+                st.session_state[f'matrix_history_error_{user_id}'] = str(e)
+                logging.error(f"Error loading message history: {str(e)}", exc_info=True)
+                st.session_state[f'loading_matrix_history_{user_id}'] = False
             
         # Check if we have history or an error
         if f'matrix_history_error_{user_id}' in st.session_state:

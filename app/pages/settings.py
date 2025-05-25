@@ -1449,13 +1449,16 @@ def render_advanced_settings():
     st.warning("These settings are for advanced users only. Incorrect configuration may cause the application to malfunction.")
     
     # Create tabs for different advanced settings
-    tabs = st.tabs(["🔌 Integration Settings", "🛡️ Moderator Management"])
+    tabs = st.tabs(["🔌 Integration Settings", "🛡️ Moderator Management", "📧 Test SMTP"])
     
     with tabs[0]:
         render_integration_settings()
     
     with tabs[1]:
         render_moderator_management()
+    
+    with tabs[2]:
+        render_test_smtp()
 
 def render_moderator_management():
     """Render the moderator management section"""
@@ -2585,6 +2588,165 @@ def render_moderator_management():
     
     # Close database session
     db.close()
+
+def render_test_smtp():
+    """Render the Test SMTP section"""
+    st.subheader("📧 Test SMTP Connection")
+    st.info("Test your email configuration to ensure notifications and invites are working properly.")
+    
+    # Display current SMTP configuration (without sensitive data)
+    st.write("### Current SMTP Configuration")
+    
+    config_data = {
+        "SMTP Server": getattr(Config, "SMTP_SERVER", "Not configured"),
+        "SMTP Port": getattr(Config, "SMTP_PORT", "Not configured"),
+        "SMTP Username": getattr(Config, "SMTP_USERNAME", "Not configured"),
+        "From Email": getattr(Config, "SMTP_FROM_EMAIL", "Not configured"),
+        "SMTP Active": getattr(Config, "SMTP_ACTIVE", False),
+        "BCC Email": getattr(Config, "SMTP_BCC", "Not configured")
+    }
+    
+    # Display in a nice format
+    col1, col2 = st.columns(2)
+    with col1:
+        for key, value in list(config_data.items())[:3]:
+            if value == "Not configured":
+                st.error(f"**{key}:** {value}")
+            else:
+                st.success(f"**{key}:** {value}")
+    
+    with col2:
+        for key, value in list(config_data.items())[3:]:
+            if value == "Not configured" or value is False:
+                st.error(f"**{key}:** {value}")
+            else:
+                st.success(f"**{key}:** {value}")
+    
+    st.divider()
+    
+    # Test connection section
+    st.write("### Test Email Connection")
+    
+    # Test email form
+    with st.form("test_email_form"):
+        test_email = st.text_input(
+            "Test Email Address",
+            value=st.session_state.get('user_info', {}).get('email', ''),
+            help="Enter an email address to send a test message to"
+        )
+        
+        test_subject = st.text_input(
+            "Test Subject",
+            value="Test Email from Community Dashboard",
+            help="Subject line for the test email"
+        )
+        
+        test_message = st.text_area(
+            "Test Message",
+            value="This is a test email from the Community Dashboard to verify SMTP configuration is working correctly.",
+            help="Message content for the test email"
+        )
+        
+        submit_test = st.form_submit_button("📧 Send Test Email", type="primary")
+    
+    if submit_test:
+        if not test_email:
+            st.error("Please enter a test email address.")
+        else:
+            with st.spinner("Testing SMTP connection and sending email..."):
+                try:
+                    # Import the email testing function
+                    from app.utils.helpers import test_email_connection, send_email
+                    
+                    # First test the connection
+                    st.write("**Step 1:** Testing SMTP connection...")
+                    connection_result = test_email_connection()
+                    
+                    if connection_result:
+                        st.success("✅ SMTP connection successful!")
+                        
+                        # Now try to send the test email
+                        st.write("**Step 2:** Sending test email...")
+                        
+                        try:
+                            email_result = send_email(
+                                to_email=test_email,
+                                subject=test_subject,
+                                body=test_message,
+                                is_html=False
+                            )
+                            
+                            if email_result:
+                                st.success(f"✅ Test email sent successfully to {test_email}!")
+                                st.balloons()
+                                
+                                # Show additional info
+                                st.info("📬 Please check your inbox (and spam folder) for the test email.")
+                            else:
+                                st.error("❌ Failed to send test email. Check the logs for details.")
+                                
+                        except Exception as e:
+                            st.error(f"❌ Error sending test email: {str(e)}")
+                            st.write("**Troubleshooting tips:**")
+                            st.write("- Check that your SMTP credentials are correct")
+                            st.write("- Verify that your email provider allows SMTP access")
+                            st.write("- Check if you need to enable 'Less secure app access' or use an app password")
+                    else:
+                        st.error("❌ SMTP connection failed!")
+                        st.write("**Common issues:**")
+                        st.write("- Incorrect SMTP server or port")
+                        st.write("- Invalid username or password")
+                        st.write("- Firewall blocking SMTP connections")
+                        st.write("- Email provider requires app-specific passwords")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error testing SMTP: {str(e)}")
+    
+    st.divider()
+    
+    # Configuration help section
+    with st.expander("📚 SMTP Configuration Help"):
+        st.markdown("""
+        ### Common SMTP Settings
+        
+        **Gmail:**
+        - Server: `smtp.gmail.com`
+        - Port: `587` (TLS) or `465` (SSL)
+        - Requires app password (not regular password)
+        
+        **Outlook/Hotmail:**
+        - Server: `smtp-mail.outlook.com`
+        - Port: `587`
+        - Use your regular email and password
+        
+        **Yahoo:**
+        - Server: `smtp.mail.yahoo.com`
+        - Port: `587` or `465`
+        - Requires app password
+        
+        **Custom SMTP:**
+        - Check with your email provider for specific settings
+        - Most providers use port 587 with TLS encryption
+        
+        ### Troubleshooting
+        
+        1. **Authentication Failed:** Check username and password
+        2. **Connection Timeout:** Verify server and port
+        3. **SSL/TLS Errors:** Try different ports (587 vs 465)
+        4. **App Passwords:** Many providers require app-specific passwords instead of regular passwords
+        """)
+    
+    # Quick links to configure SMTP
+    st.write("### Quick Actions")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🔧 Configure SMTP Settings", key="goto_smtp_config"):
+            st.info("💡 Go to **Integration Settings** tab above to configure your SMTP settings.")
+    
+    with col2:
+        if st.button("📖 View Email Logs", key="view_email_logs"):
+            st.info("📋 Check the application logs for detailed email sending information.")
 
 # Main execution
 render_settings_page() 

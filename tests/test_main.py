@@ -269,10 +269,7 @@ def test_render_sidebar(mock_streamlit):
             "List & Manage Users",
             "Create Invite",
             "Matrix Messages and Rooms",
-            "Signal Association",
-            "Settings",
-            "Prompts Manager",
-            "Test SMTP"
+            "Signal Association"
         ],
         index=mock_selectbox.call_args[0][1].index("Create User"),
         key='current_page'
@@ -413,10 +410,7 @@ async def test_session_state_modification_after_widget(mock_streamlit):
             "List & Manage Users",
             "Create Invite",
             "Matrix Messages and Rooms",
-            "Signal Association",
-            "Settings",
-            "Prompts Manager",
-            "Test SMTP"
+            "Signal Association"
         ],
         index=0,  # Create User is at index 0
         key='current_page'

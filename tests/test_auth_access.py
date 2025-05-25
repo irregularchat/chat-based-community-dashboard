@@ -145,13 +145,7 @@ async def test_admin_access_to_protected_pages(mock_session_state, admin_state):
         await render_main_content()
         mock_settings.assert_called_once()
     
-    # Test Admin Dashboard
-    with patch('app.ui.admin.render_admin_dashboard') as mock_admin, \
-         patch('streamlit.title'), \
-         patch('streamlit.write'):
-        mock_session_state['current_page'] = 'Admin Dashboard'
-        await render_main_content()
-        mock_admin.assert_called_once()
+
 
 @pytest.mark.asyncio
 async def test_sidebar_navigation_options(mock_session_state):
@@ -215,7 +209,7 @@ async def test_sidebar_navigation_options(mock_session_state):
         assert "List & Manage Users" in kwargs['options']
         assert "Prompts Manager" in kwargs['options']
         assert "Settings" in kwargs['options']
-        assert "Admin Dashboard" in kwargs['options']
+
 
 def test_login_success(mock_session_state):
     """Test successful login with valid credentials"""

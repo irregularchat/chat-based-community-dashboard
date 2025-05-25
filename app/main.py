@@ -115,10 +115,7 @@ def render_sidebar():
                 "List & Manage Users",
                 "Create Invite",
                 "Matrix Messages and Rooms",
-                "Signal Association",
-                "Settings",
-                "Prompts Manager",
-                "Test SMTP"  # Add the new page for admin users
+                "Signal Association"
             ]
         elif is_moderator:
             # Moderator users get pages based on their permissions
@@ -142,9 +139,7 @@ def render_sidebar():
                     "Signal Association"
                 ])
             
-            # Prompts Manager for those with Prompt Editor access
-            if not accessible_sections or 'Prompt Editor' in accessible_sections:
-                page_options.append("Prompts Manager")
+
             
             # If no specific permissions, give basic access
             if not page_options:
@@ -156,8 +151,7 @@ def render_sidebar():
                 "List & Manage Users",
                 "Create Invite",
                 "Matrix Messages and Rooms",
-                "Signal Association",
-                "Prompts Manager"  # No Settings page for non-admin users
+                "Signal Association"
             ]
     else:
         # Non-authenticated users only see the Create User page
@@ -906,64 +900,12 @@ def render_main_content():
         elif current_page == "Signal Association":
             render_signal_association()
             
-        elif current_page == "Settings":
-            # Protect with admin check
-            if is_admin:
-                render_home_page()
-            else:
-                st.error("You need administrator privileges to access this page.")
-                
-        elif current_page == "Prompts Manager":
-            # Additional authentication check to ensure no unauthenticated access
-            if is_authenticated:
-                from app.pages.prompts_manager import render_prompts_manager
-                render_prompts_manager()
-            else:
-                from app.ui.common import display_login_button
-                st.markdown("## Authentication Required")
-                st.markdown("You must login to access the Prompts Manager.")
-                display_login_button(location="main")
-            
 
-
-        elif current_page == "Test SMTP":
-            # Protect with admin check
-            if st.session_state.get('is_admin', False):
-                from app.ui.forms import run_async_safely
-                run_async_safely(test_smtp_connection)
-            else:
-                st.error("You need administrator privileges to access this page.")
     except Exception as e:
         st.error(f"Error rendering content: {str(e)}")
         logging.error(f"Error in render_main_content: {str(e)}", exc_info=True)
 
-def test_smtp_connection():
-    """Test SMTP connection and settings"""
-    try:
-        from app.utils.helpers import test_email_connection
-        # Test the email connection
-        result = test_email_connection()
-        if result:
-            st.success("SMTP connection test successful! Email sending should work.")
-        else:
-            st.error("SMTP connection test failed. Check your SMTP settings and logs.")
-            
-        # Display current SMTP settings
-        from app.utils.config import Config
-        st.subheader("Current SMTP Configuration")
-        st.json({
-            "SMTP_SERVER": Config.SMTP_SERVER,
-            "SMTP_PORT": Config.SMTP_PORT,
-            "SMTP_USERNAME": Config.SMTP_USERNAME,
-            "SMTP_FROM_EMAIL": Config.SMTP_FROM_EMAIL,
-            "SMTP_ACTIVE": Config.SMTP_ACTIVE,
-            "SMTP_BCC": Config.SMTP_BCC
-        })
-        
-        return True
-    except Exception as e:
-        st.error(f"Error testing SMTP connection: {str(e)}")
-        return False
+
 
 def main():
     """Main application entry point"""

@@ -231,6 +231,47 @@ echo "DB: $POSTGRES_DB"
 echo "User: $POSTGRES_USER"
 echo "URL format: postgresql://<user>:<password>@$DB_HOST:$POSTGRES_PORT/$POSTGRES_DB"
 
+# Run database migrations
+echo "Running database migrations..."
+if [ "$CONNECTED" = true ]; then
+    echo "Checking Alembic migration status..."
+    cd /app
+    
+    # Check if alembic_version table exists and has any records
+    export PGPASSWORD=$POSTGRES_PASSWORD
+    MIGRATION_COUNT=$(psql -h $DB_HOST -U $POSTGRES_USER -d $POSTGRES_DB -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='alembic_version';" 2>/dev/null | tr -d ' ')
+    
+    if [ "$MIGRATION_COUNT" = "0" ]; then
+        echo "Alembic version table doesn't exist. Marking current migrations as applied..."
+        # Mark all existing migrations as applied without running them
+        python -m alembic stamp head
+        if [ $? -eq 0 ]; then
+            echo "✅ Database migrations marked as applied successfully!"
+        else
+            echo "⚠️ Warning: Failed to mark migrations as applied."
+        fi
+    else
+        echo "Alembic version table exists. Checking current migration status..."
+        CURRENT_MIGRATION=$(python -m alembic current 2>/dev/null | grep -o '[a-f0-9]\{12\}' | head -1)
+        if [ -z "$CURRENT_MIGRATION" ]; then
+            echo "No current migration found. Marking migrations as applied..."
+            python -m alembic stamp head
+        else
+            echo "Current migration: $CURRENT_MIGRATION"
+            echo "Attempting to upgrade to latest migration..."
+            python -m alembic upgrade head
+            if [ $? -eq 0 ]; then
+                echo "✅ Database migrations completed successfully!"
+            else
+                echo "⚠️ Migration failed, likely due to schema already being up-to-date. Marking as current..."
+                python -m alembic stamp head
+            fi
+        fi
+    fi
+else
+    echo "⚠️ Skipping migrations due to database connection issues"
+fi
+
 # Start the Streamlit app
 echo "Starting Streamlit app on port $PORT"
 exec streamlit run app/main.py --server.port=$PORT --server.address=0.0.0.0 

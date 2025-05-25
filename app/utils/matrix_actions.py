@@ -2095,6 +2095,112 @@ async def verify_direct_message_delivery(room_id: str, event_id: str) -> bool:
         logger.error(f"Error verifying message delivery: {e}")
         return False
 
+async def get_direct_message_history(user_id: str, limit: int = 20) -> List[Dict]:
+    """
+    Get the message history for a direct message conversation with a user.
+    
+    Args:
+        user_id: The Matrix user ID to get conversation history with
+        limit: Maximum number of messages to retrieve (default: 20)
+        
+    Returns:
+        List[Dict]: List of message dictionaries with sender, content, timestamp, etc.
+                   Returns empty list if no messages or on error.
+    """
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active. Cannot get message history.")
+        return []
+        
+    try:
+        # First, get or create the direct chat room
+        room_id = await create_matrix_direct_chat(user_id)
+        if not room_id:
+            logger.warning(f"Could not find or create direct chat room with {user_id}")
+            return []
+        
+        # Create Matrix client
+        client = await get_matrix_client()
+        if not client:
+            logger.error("Failed to create Matrix client")
+            return []
+        
+        try:
+            # Get the room messages
+            response = await client.room_messages(room_id, limit=limit)
+            
+            messages = []
+            if hasattr(response, 'chunk'):
+                # Process messages in reverse order (oldest first)
+                for event in reversed(response.chunk):
+                    try:
+                        # Only process text messages
+                        if hasattr(event, 'msgtype') and event.msgtype == 'm.text':
+                            message_data = {
+                                'event_id': getattr(event, 'event_id', ''),
+                                'sender': getattr(event, 'sender', ''),
+                                'content': getattr(event, 'body', ''),
+                                'timestamp': getattr(event, 'server_timestamp', 0),
+                                'formatted_time': '',
+                                'is_bot_message': False
+                            }
+                            
+                            # Format timestamp
+                            if message_data['timestamp']:
+                                import datetime
+                                dt = datetime.datetime.fromtimestamp(message_data['timestamp'] / 1000)
+                                message_data['formatted_time'] = dt.strftime('%Y-%m-%d %H:%M:%S')
+                            
+                            # Check if message is from the bot
+                            message_data['is_bot_message'] = message_data['sender'] == MATRIX_BOT_USERNAME
+                            
+                            messages.append(message_data)
+                            
+                    except Exception as e:
+                        logger.warning(f"Error processing message event: {e}")
+                        continue
+            
+            logger.info(f"Retrieved {len(messages)} messages from room {room_id}")
+            return messages
+            
+        finally:
+            # Close the client
+            await client.close()
+            
+    except Exception as e:
+        logger.error(f"Error getting message history for {user_id}: {e}")
+        return []
+
+def get_direct_message_history_sync(user_id: str, limit: int = 20) -> List[Dict]:
+    """
+    Synchronous wrapper for getting direct message history.
+    
+    Args:
+        user_id: The Matrix user ID to get conversation history with
+        limit: Maximum number of messages to retrieve (default: 20)
+        
+    Returns:
+        List[Dict]: List of message dictionaries with sender, content, timestamp, etc.
+                   Returns empty list if no messages or on error.
+    """
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active. Cannot get message history.")
+        return []
+        
+    try:
+        # Create a new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Get message history
+        result = loop.run_until_complete(get_direct_message_history(user_id, limit))
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting message history: {e}")
+        return []
+    finally:
+        loop.close()
+
 def verify_direct_message_delivery_sync(room_id: str, event_id: str) -> bool:
     """
     Synchronous wrapper for verifying if a direct message was delivered.

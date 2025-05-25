@@ -17,6 +17,8 @@ alembic
 openai
 email-validator
 matrix-nio
+matrix-nio[e2e]
+python-olm
 nest-asyncio
 streamlit-extras
 streamlit-option-menu

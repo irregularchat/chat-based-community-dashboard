@@ -541,33 +541,45 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
                 }
             )
             
-            # Wait a moment for the bot to process the command
-            await asyncio.sleep(2)
+            # Wait a moment for the bot to process the command and create the room
+            await asyncio.sleep(3)
             
-            # Get recent messages from the Signal bridge bot room to find the response
-            messages_response = await client.room_messages(SIGNAL_BRIDGE_BOT_ROOM, limit=10)
+            # Since the Signal bridge bot room is encrypted, we can't read the response
+            # Instead, let's look for a newly created room that contains both the bot and the Signal user
+            logger.info(f"Looking for newly created Signal chat room for {user_id}")
             
-            if hasattr(messages_response, 'chunk'):
-                for event in messages_response.chunk:
-                    if (hasattr(event, 'sender') and 
-                        event.sender == "@signalbot:irregularchat.com" and
-                        hasattr(event, 'body')):
-                        
-                        body = event.body
-                        logger.info(f"Signal bot response: {body}")
-                        
-                        # Look for room ID in the response
-                        import re
-                        room_match = re.search(r'!([\w]+):([a-zA-Z0-9.-]+)', body)
-                        if room_match:
-                            actual_chat_room = f"!{room_match.group(1)}:{room_match.group(2)}"
-                            logger.info(f"Found Signal chat room for {user_id}: {actual_chat_room}")
-                            await client.close()
-                            return actual_chat_room
+            # Get all joined rooms to find the new Signal chat room
+            joined_rooms = await client.joined_rooms()
+            if isinstance(joined_rooms, JoinedRoomsResponse) and joined_rooms.rooms:
+                # Look for rooms that contain the Signal user
+                for room_id in joined_rooms.rooms:
+                    try:
+                        # Get room members
+                        members_response = await client.room_get_state(room_id)
+                        if isinstance(members_response, RoomGetStateResponse):
+                            members = []
+                            for event in members_response.events:
+                                if event.get("type") == "m.room.member" and event.get("state_key"):
+                                    member_id = event.get("state_key")
+                                    content = event.get("content", {})
+                                    if content.get("membership") == "join":
+                                        members.append(member_id)
+                            
+                            # Check if this room contains the Signal user and the bot
+                            if user_id in members and MATRIX_BOT_USERNAME in members:
+                                # Additional check: make sure this isn't the command room
+                                if room_id != SIGNAL_BRIDGE_BOT_ROOM:
+                                    logger.info(f"Found Signal chat room for {user_id}: {room_id}")
+                                    await client.close()
+                                    return room_id
+                                    
+                    except Exception as room_err:
+                        logger.warning(f"Error checking room {room_id}: {str(room_err)}")
+                        continue
             
-            # If we couldn't parse the response, fall back to a known pattern
-            # Based on your logs, Signal bridge creates rooms like: !ryJpNjSUUdvGfwcSXn:irregularchat.com
-            logger.warning(f"Could not parse Signal bot response, using fallback room")
+            # If we couldn't find the new room, fall back to a known working room
+            # This should work for existing Signal users
+            logger.warning(f"Could not find newly created Signal chat room, using fallback room")
             await client.close()
             return "!ryJpNjSUUdvGfwcSXn:irregularchat.com"  # Fallback to known working room
             

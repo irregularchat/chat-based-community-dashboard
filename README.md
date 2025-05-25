@@ -2,6 +2,9 @@
 
 > **A simple, powerful tool to help community builders manage their members across Signal, Matrix, and other platforms - no technical expertise required.**
 
+See [forum post about this project](https://forum.irregularchat.com/t/forking-authentik-distro-for-better-community-management/647?u=sac) for more information.
+
+
 ## 🎯 Why This Matters for Your Community
 
 **Are you a community organizer struggling with:**

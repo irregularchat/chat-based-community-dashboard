@@ -241,8 +241,7 @@ async def test_display_user_list(mock_streamlit, mock_db, mock_config):
         # Verify the call - either the main or forms version should be called once
         assert mock_display.await_count + mock_main_display.await_count == 1
 
-@pytest.mark.asyncio
-async def test_render_sidebar(mock_streamlit):
+def test_render_sidebar(mock_streamlit):
     """Test sidebar rendering"""
     # Set up the mock to return a value directly (not a coroutine)
     mock_selectbox = Mock()
@@ -258,8 +257,8 @@ async def test_render_sidebar(mock_streamlit):
     mock_streamlit.session_state['is_admin'] = True
     mock_streamlit.session_state['current_page'] = 'Create User'
     
-    # Call the function and await its result
-    result = await app.main.render_sidebar()
+    # Call the function (not async)
+    result = app.main.render_sidebar()
     
     # Verify the calls
     mock_title.assert_called_once_with("Navigation")
@@ -323,7 +322,7 @@ async def test_main(mock_streamlit, mock_config):
     """Test main function"""
     with patch('app.main.setup_page_config') as mock_setup, \
          patch('app.main.initialize_session_state') as mock_init, \
-         patch('app.main.render_sidebar', new_callable=AsyncMock) as mock_sidebar, \
+         patch('app.main.render_sidebar') as mock_sidebar, \
          patch('app.main.render_main_content', new_callable=AsyncMock) as mock_content, \
          patch('app.main.init_db') as mock_init_db:
 
@@ -334,7 +333,7 @@ async def test_main(mock_streamlit, mock_config):
         mock_setup.assert_called_once()
         mock_init.assert_called_once()
         mock_init_db.assert_called_once()
-        mock_sidebar.assert_awaited_once()
+        mock_sidebar.assert_called_once()
         mock_content.assert_awaited_once()
 
 @pytest.mark.asyncio
@@ -388,7 +387,7 @@ async def test_session_state_modification_after_widget(mock_streamlit):
     mock_streamlit.sidebar.title = mock_title
     
     # First render the sidebar to create the widget
-    result = await app.main.render_sidebar()
+    result = app.main.render_sidebar()
     
     # Verify the result
     assert result == "Create User"
@@ -431,7 +430,7 @@ async def test_main_session_state_handling(mock_streamlit):
     
     with patch('app.main.setup_page_config'), \
          patch('app.main.initialize_session_state') as mock_init, \
-         patch('app.main.render_sidebar', new_callable=AsyncMock) as mock_sidebar, \
+         patch('app.main.render_sidebar') as mock_sidebar, \
          patch('app.main.render_main_content', new_callable=AsyncMock), \
          patch('app.main.init_db'):
         

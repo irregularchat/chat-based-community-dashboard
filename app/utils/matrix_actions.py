@@ -491,14 +491,14 @@ async def send_matrix_message(room_id, message, client=None):
 
 async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
     """
-    Create a named room for chatting with another user.
-    Skips direct message creation to avoid "already have direct chat" issues.
+    Create or find an existing direct chat with another user.
+    If a direct chat already exists, attempt to leave and rejoin it to refresh the connection.
     
     Args:
         user_id: The Matrix ID of the user to chat with
         
     Returns:
-        Optional[str]: The room ID of the created chat room, or None if creation failed
+        Optional[str]: The room ID of the direct chat, or None if creation/finding failed
     """
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping create_direct_chat.")
@@ -510,43 +510,135 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
             logger.error("Failed to create Matrix client")
             return None
 
-        # Get display name from user profile
-        display_name = user_id.split(":")[0].lstrip("@")  # Default fallback
-        try:
-            profile_response = await client.get_profile(user_id)
-            if hasattr(profile_response, "displayname") and profile_response.displayname:
-                display_name = profile_response.displayname
-                logger.info(f"Retrieved display name for {user_id}: {display_name}")
-        except Exception as e:
-            logger.warning(f"Could not get display name for {user_id}: {str(e)}")
-
-        # Always create a named room instead of trying direct messages
-        logger.info(f"Creating named room for conversation with {user_id}")
+        # First, try to find existing direct chat room with this user
+        room_id = None
         
-        try:
-            # Create a named room for the conversation
-            room_name = f"Chat with {display_name}"
-            response = await client.room_create(
-                name=room_name,
-                invite=[user_id],
-                preset=RoomPreset.trusted_private_chat,
-                is_direct=False  # Named room, not a direct chat
-            )
+        # Get joined rooms
+        joined_rooms = await client.joined_rooms()
+        if isinstance(joined_rooms, JoinedRoomsResponse) and joined_rooms.rooms:
+            logger.info(f"Bot is in {len(joined_rooms.rooms)} rooms, searching for existing direct chat with {user_id}")
             
-            if isinstance(response, RoomCreateResponse) and response.room_id:
-                room_id = response.room_id
-                logger.info(f"Created new named room '{room_name}' with {user_id}: {room_id}")
-                return room_id
-            else:
-                logger.error(f"Failed to create named room with {user_id}: {response}")
-                return None
+            # Check joined rooms for direct chats
+            for joined_room in joined_rooms.rooms:
+                try:
+                    # Get room members
+                    members_response = await client.room_get_state(joined_room)
+                    if isinstance(members_response, RoomGetStateResponse):
+                        members = []
+                        for event in members_response.events:
+                            if event.get("type") == "m.room.member" and event.get("state_key"):
+                                member_id = event.get("state_key")
+                                content = event.get("content", {})
+                                if content.get("membership") == "join":
+                                    members.append(member_id)
+                        
+                        # If this is a direct chat (only 2 members: bot and user)
+                        if len(members) == 2 and user_id in members and MATRIX_BOT_USERNAME in members:
+                            room_id = joined_room
+                            logger.info(f"Found existing direct chat room with {user_id}: {room_id}")
+                            
+                            # Try to leave and rejoin the room to refresh the connection
+                            try:
+                                logger.info(f"Attempting to leave and rejoin existing direct chat room {room_id}")
+                                await client.room_leave(room_id)
+                                logger.info(f"Left room {room_id}")
+                                
+                                # Wait a moment before rejoining
+                                await asyncio.sleep(1)
+                                
+                                # Rejoin the room
+                                await client.join_room(room_id)
+                                logger.info(f"Rejoined room {room_id}")
+                                
+                                return room_id
+                                
+                            except Exception as rejoin_error:
+                                logger.warning(f"Failed to leave/rejoin room {room_id}: {str(rejoin_error)}")
+                                # If leave/rejoin fails, still try to use the existing room
+                                return room_id
+                            
+                except Exception as room_err:
+                    logger.warning(f"Error checking room {joined_room} for direct chat: {str(room_err)}")
+
+        # If no existing direct chat found, try to create a new direct message room
+        if not room_id:
+            logger.info(f"No existing direct chat found with {user_id}, attempting to create new direct message room")
+            
+            # Get display name from user profile
+            display_name = user_id.split(":")[0].lstrip("@")  # Default fallback
+            try:
+                profile_response = await client.get_profile(user_id)
+                if hasattr(profile_response, "displayname") and profile_response.displayname:
+                    display_name = profile_response.displayname
+                    logger.info(f"Retrieved display name for {user_id}: {display_name}")
+            except Exception as e:
+                logger.warning(f"Could not get display name for {user_id}: {str(e)}")
+
+            # Try to create a direct message room
+            try:
+                response = await client.room_create(
+                    is_direct=True,
+                    invite=[user_id],
+                    preset=RoomPreset.trusted_private_chat
+                )
                 
-        except Exception as room_error:
-            logger.error(f"Failed to create named room with {user_id}: {str(room_error)}")
-            return None
+                if isinstance(response, RoomCreateResponse) and response.room_id:
+                    room_id = response.room_id
+                    logger.info(f"Created new direct chat room with {user_id}: {room_id}")
+                    return room_id
+                else:
+                    logger.warning(f"Direct chat creation failed, response: {response}")
+                    
+            except Exception as direct_error:
+                logger.warning(f"Failed to create direct chat room with {user_id}: {str(direct_error)}")
+                
+                # If direct chat creation fails, try to find any existing room with this user
+                # and attempt to leave/rejoin it
+                logger.info(f"Searching for any existing room with {user_id} to refresh connection")
+                
+                try:
+                    # Search through all joined rooms again for any room containing this user
+                    for joined_room in joined_rooms.rooms:
+                        try:
+                            members_response = await client.room_get_state(joined_room)
+                            if isinstance(members_response, RoomGetStateResponse):
+                                members = []
+                                for event in members_response.events:
+                                    if event.get("type") == "m.room.member" and event.get("state_key"):
+                                        member_id = event.get("state_key")
+                                        content = event.get("content", {})
+                                        if content.get("membership") == "join":
+                                            members.append(member_id)
+                                
+                                # If this room contains both bot and user (regardless of room size)
+                                if user_id in members and MATRIX_BOT_USERNAME in members:
+                                    logger.info(f"Found existing room with {user_id}: {joined_room}")
+                                    
+                                    # Try to leave and rejoin this room
+                                    try:
+                                        await client.room_leave(joined_room)
+                                        await asyncio.sleep(1)
+                                        await client.join_room(joined_room)
+                                        logger.info(f"Successfully refreshed connection to room {joined_room}")
+                                        return joined_room
+                                    except Exception as refresh_error:
+                                        logger.warning(f"Failed to refresh room {joined_room}: {str(refresh_error)}")
+                                        # Still return the room ID even if refresh failed
+                                        return joined_room
+                                        
+                        except Exception as search_error:
+                            logger.warning(f"Error searching room {joined_room}: {str(search_error)}")
+                            continue
+                            
+                except Exception as search_error:
+                    logger.error(f"Error searching for existing rooms with {user_id}: {str(search_error)}")
+                
+                return None
+        
+        return room_id
             
     except Exception as e:
-        logger.error(f"Failed to create Matrix chat room: {e}")
+        logger.error(f"Failed to create/find Matrix direct chat: {e}")
         return None
     finally:
         if client:

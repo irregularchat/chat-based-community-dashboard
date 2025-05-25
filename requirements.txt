@@ -21,3 +21,4 @@ nest-asyncio
 streamlit-extras
 streamlit-option-menu
 pytest-asyncio
+bcrypt

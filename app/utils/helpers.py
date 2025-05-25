@@ -388,7 +388,7 @@ def send_email(to, subject, body):
         logging.error(f"Error details: {str(e)}")
         return False
 
-def get_email_html_content(full_name, username, password, topic_id, discourse_post_url=None):
+def get_email_html_content(full_name, username, password, topic_id, discourse_post_url=None, is_local_account=False):
     """
     Generate the HTML content for the email.
 
@@ -398,15 +398,59 @@ def get_email_html_content(full_name, username, password, topic_id, discourse_po
         password (str): Password for the user.
         topic_id (str): Topic ID for the introduction post.
         discourse_post_url (str, optional): URL to the user's introduction post on Discourse.
+        is_local_account (bool): Whether this is a local dashboard account.
 
     Returns:
         str: HTML content for the email.
+        
+    Note:
+        The is_local_account parameter defaults to False for backward compatibility.
+        When False (default), generates SSO-style email with sso.irregularchat.com login.
+        When True, generates local account email with dashboard login instructions.
     """
     # Create Discourse post link section if URL is available
     discourse_section = ""
     if discourse_post_url:
         discourse_section = f"""
             <p>Your introduction post: <a href="{discourse_post_url}">View your introduction post</a></p>
+        """
+    
+    # Different login instructions based on account type
+    if is_local_account:
+        login_instructions = """
+            <h3>Next Steps:</h3>
+            
+            <ol>
+                <li>Log in to the <strong>Community Dashboard</strong> at <a href="http://localhost:8503">http://localhost:8503</a> (or your dashboard URL)</li>
+                <li>Use the "Local Account Login" option</li>
+                <li>Change your temporary password after your first login</li>
+                <li>Explore the dashboard features available to you</li>
+            </ol>
+            
+            <p><strong>Note:</strong> This is a local dashboard account. You can access community management features through the dashboard interface.</p>
+            
+            <a href="http://localhost:8503" class="button">Access Dashboard</a>
+        """
+    else:
+        login_instructions = """
+            <h3>Next Steps:</h3>
+            
+            <ol>
+                <li>Log in at <a href="https://sso.irregularchat.com">https://sso.irregularchat.com</a></li>
+                <li>Change your temporary password to something secure</li>
+                <li>Join our Signal groups to connect with the community</li>
+                <li>Explore our community resources and events</li>
+            </ol>
+            
+            <h3>Community Resources:</h3>
+            
+            <ul>
+                <li><a href="https://forum.irregularchat.com">Community Forum</a> - Discussions, announcements, and resources</li>
+                <li><a href="https://wiki.irregularchat.com">Community Wiki</a> - Knowledge base and documentation</li>
+                <li><a href="https://calendar.irregularchat.com">Community Calendar</a> - Upcoming events and activities</li>
+            </ul>
+            
+            <a href="https://sso.irregularchat.com" class="button">Log in Now</a>
         """
     
     return f"""
@@ -471,24 +515,7 @@ def get_email_html_content(full_name, username, password, topic_id, discourse_po
                 <p><em>Please change your password after your first login.</em></p>
             </div>
             
-            <h3>Next Steps:</h3>
-            
-            <ol>
-                <li>Log in at <a href="https://sso.irregularchat.com">https://sso.irregularchat.com</a></li>
-                <li>Change your temporary password to something secure</li>
-                <li>Join our Signal groups to connect with the community</li>
-                <li>Explore our community resources and events</li>
-            </ol>
-            
-            <h3>Community Resources:</h3>
-            
-            <ul>
-                <li><a href="https://forum.irregularchat.com">Community Forum</a> - Discussions, announcements, and resources</li>
-                <li><a href="https://wiki.irregularchat.com">Community Wiki</a> - Knowledge base and documentation</li>
-                <li><a href="https://calendar.irregularchat.com">Community Calendar</a> - Upcoming events and activities</li>
-            </ul>
-            
-            <a href="https://sso.irregularchat.com" class="button">Log in Now</a>
+            {login_instructions}
 
             {discourse_section}
 
@@ -500,7 +527,7 @@ def get_email_html_content(full_name, username, password, topic_id, discourse_po
     </html>
     """
 
-def community_intro_email(to, subject, full_name, username, password, topic_id, discourse_post_url=None):
+def community_intro_email(to, subject, full_name, username, password, topic_id, discourse_post_url=None, is_local_account=False):
     """
     Send a community introduction email to a new user.
     
@@ -512,12 +539,18 @@ def community_intro_email(to, subject, full_name, username, password, topic_id, 
         password (str): User's temporary password
         topic_id (str): Topic ID for the welcome page
         discourse_post_url (str, optional): URL to the user's introduction post
+        is_local_account (bool): Whether this is a local dashboard account
         
     Returns:
         bool: True if email was sent successfully, False otherwise
+        
+    Note:
+        The is_local_account parameter defaults to False for backward compatibility.
+        Existing calls (SSO user creation) will continue to work unchanged and send
+        SSO-style emails. Only new local account creation explicitly passes True.
     """
     try:
-        logging.info(f"Preparing community intro email for {username}")
+        logging.info(f"Preparing community intro email for {username} (local_account: {is_local_account})")
         logging.info(f"Email configuration active: {Config.SMTP_ACTIVE}")
         
         if not Config.SMTP_ACTIVE:
@@ -534,7 +567,7 @@ def community_intro_email(to, subject, full_name, username, password, topic_id, 
             return False
         
         # Get the HTML content for the email
-        html_content = get_email_html_content(full_name, username, password, topic_id, discourse_post_url)
+        html_content = get_email_html_content(full_name, username, password, topic_id, discourse_post_url, is_local_account)
         
         # Send the email and get the result
         logging.info(f"Attempting to send email to {to} using SMTP server {Config.SMTP_SERVER}:{Config.SMTP_PORT}")

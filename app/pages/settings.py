@@ -1485,10 +1485,8 @@ def render_moderator_management():
     # Create tabs for different moderator management functions
     mod_tabs = st.tabs([
         "📊 Overview",
-        "➕ Add Moderator",
-        "👤 Create Account",
         "🔧 Manage Permissions",
-        "❌ Revoke Access",
+        "👤 Create Account",
         "🔄 Matrix Sync",
         "📋 Audit Log"
     ])
@@ -1691,124 +1689,376 @@ def render_moderator_management():
                         st.write(f"- {status}: {count}")
     
     with mod_tabs[1]:
-        st.write("### Add New Moderator")
+        st.write("### Manage User Permissions")
+        st.info("💡 Grant or modify dashboard permissions for existing users (SSO or local accounts)")
         
-        # Search for users
-        search_term = st.text_input("🔍 Search for user (by username, email, or name)", key="mod_search")
+        # Create sub-tabs for different permission management functions
+        perm_tabs = st.tabs(["➕ Add/Promote User", "🔧 Modify Permissions", "❌ Revoke Access"])
         
-        if search_term:
+        with perm_tabs[0]:
+            st.write("#### Add New Moderator or Change User Role")
+            
             # Search for users
-            users = search_users(db, search_term)
+            search_term = st.text_input("🔍 Search for user (by username, email, or name)", key="mod_search")
             
-            # Filter out already moderators
-            non_mod_users = [u for u in users if not u.is_moderator and not u.is_admin]
-            
-            if not non_mod_users:
-                st.warning("No eligible users found. Users may already be moderators or admins.")
-            else:
-                # Create a dropdown of users
-                user_options = ["-- Select a user --"]
-                user_map = {}
+            if search_term:
+                # Search for users
+                users = search_users(db, search_term)
                 
-                for user in non_mod_users:
-                    auth_type = "🔐 SSO" if user.authentik_id else "🏠 Local"
-                    display_name = f"{user.username} ({user.first_name} {user.last_name})".strip()
-                    if user.email:
-                        display_name += f" - {user.email}"
-                    display_name += f" [{auth_type}]"
-                    user_options.append(display_name)
-                    user_map[display_name] = user
-                
-                selected_user_display = st.selectbox("Select user to promote", user_options, key="mod_promote_select")
-                
-                if selected_user_display != "-- Select a user --":
-                    selected_user = user_map[selected_user_display]
+                if not users:
+                    st.warning("No users found matching your search.")
+                else:
+                    # Create a dropdown of users (include all users, not just non-moderators)
+                    user_options = ["-- Select a user --"]
+                    user_map = {}
                     
-                    # User details card
-                    with st.container():
-                        st.write("#### 👤 User Details")
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.write(f"**Username:** {selected_user.username}")
-                            st.write(f"**Name:** {selected_user.first_name} {selected_user.last_name}".strip() or "N/A")
-                            st.write(f"**Email:** {selected_user.email or 'N/A'}")
-                        with col2:
-                            st.write(f"**Auth Type:** {auth_type}")
-                            st.write(f"**Status:** {'✅ Active' if selected_user.is_active else '❌ Inactive'}")
-                            st.write(f"**Joined:** {selected_user.date_joined.strftime('%Y-%m-%d') if selected_user.date_joined else 'Unknown'}")
-                    
-                    # Permission type selection
-                    st.write("#### Initial Permissions")
-                    perm_type = st.radio(
-                        "Permission Type",
-                        ["🌐 Global Access", "📑 Section Access", "🏠 Room Access", "⚠️ No Initial Permissions"],
-                        key="mod_perm_type"
-                    )
-                    
-                    perm_value = None
-                    if perm_type == "📑 Section Access":
-                        # List available sections
-                        sections = ["Onboarding", "Messaging", "User Reports", "Prompt Editor"]
-                        perm_value = st.selectbox("Select Section", sections, key="mod_section_select")
-                    elif perm_type == "🏠 Room Access":
-                        # Get available rooms
-                        from app.utils.matrix_actions import merge_room_data
-                        rooms = merge_room_data()
-                        if rooms:
-                            room_options = [f"{room.get('name', 'Unknown')} ({room.get('room_id', '')})" for room in rooms]
-                            selected_room = st.selectbox("Select Room", room_options, key="mod_room_select")
-                            # Extract room ID
-                            if selected_room:
-                                perm_value = selected_room.split('(')[-1].rstrip(')')
-                    
-                    # Matrix sync option
-                    sync_matrix = st.checkbox(
-                        "🔄 Sync to Matrix rooms (grant moderator power level)",
-                        value=True,
-                        key="mod_sync_matrix",
-                        help="If enabled, the user will be granted moderator power level (50) in their accessible rooms"
-                    )
-                    
-                    # Promote button
-                    if st.button("✅ Promote to Moderator", key="mod_promote_button", type="primary"):
-                        # Get current admin username
-                        admin_username = st.session_state.get('username', 'unknown')
+                    for user in users:
+                        auth_type = "🔐 SSO" if user.authentik_id else "🏠 Local"
                         
-                        # Promote user
-                        if promote_to_moderator(db, selected_user.username, admin_username):
-                            st.success(f"✅ Successfully promoted {selected_user.username} to moderator!")
+                        # Show current role
+                        current_role = "👑 Admin" if user.is_admin else ("🛡️ Moderator" if user.is_moderator else "👤 User")
+                        
+                        display_name = f"{user.username} ({user.first_name} {user.last_name})".strip()
+                        if user.email:
+                            display_name += f" - {user.email}"
+                        display_name += f" [{auth_type}] [{current_role}]"
+                        user_options.append(display_name)
+                        user_map[display_name] = user
+                    
+                    selected_user_display = st.selectbox("Select user to manage", user_options, key="mod_promote_select")
+                    
+                    if selected_user_display != "-- Select a user --":
+                        selected_user = user_map[selected_user_display]
+                        
+                        # User details card
+                        with st.container():
+                            st.write("#### 👤 User Details")
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write(f"**Username:** {selected_user.username}")
+                                st.write(f"**Name:** {selected_user.first_name} {selected_user.last_name}".strip() or "N/A")
+                                st.write(f"**Email:** {selected_user.email or 'N/A'}")
+                            with col2:
+                                auth_type = "🔐 SSO" if selected_user.authentik_id else "🏠 Local"
+                                st.write(f"**Auth Type:** {auth_type}")
+                                st.write(f"**Status:** {'✅ Active' if selected_user.is_active else '❌ Inactive'}")
+                                st.write(f"**Current Role:** {'👑 Admin' if selected_user.is_admin else ('🛡️ Moderator' if selected_user.is_moderator else '👤 Regular User')}")
+                        
+                        # Role change options
+                        st.write("#### Change User Role")
+                        current_role_index = 0
+                        if selected_user.is_admin:
+                            current_role_index = 0
+                        elif selected_user.is_moderator:
+                            current_role_index = 1
+                        else:
+                            current_role_index = 2
+                        
+                        new_role = st.radio(
+                            "Select new role",
+                            ["👑 Admin (Full dashboard access)", "🛡️ Moderator (User management)", "👤 Regular User (No special access)"],
+                            index=current_role_index,
+                            key="mod_new_role"
+                        )
+                        
+                        # Permission type selection (only for moderators)
+                        perm_value = None
+                        if new_role == "🛡️ Moderator (User management)":
+                            st.write("#### Moderator Permissions")
+                            perm_type = st.radio(
+                                "Permission Type",
+                                ["🌐 Global Access", "📑 Section Access", "🏠 Room Access", "⚠️ No Initial Permissions"],
+                                key="mod_perm_type"
+                            )
                             
-                            # Grant initial permission if specified
-                            granted_permission = False
-                            if perm_type == "🌐 Global Access":
-                                grant_moderator_permission(db, selected_user.id, 'global', None, admin_username)
-                                st.info("Granted global access permission.")
-                                granted_permission = True
-                            elif perm_type == "📑 Section Access" and perm_value:
-                                grant_moderator_permission(db, selected_user.id, 'section', perm_value, admin_username)
-                                st.info(f"Granted access to {perm_value} section.")
-                                granted_permission = True
-                            elif perm_type == "🏠 Room Access" and perm_value:
-                                grant_moderator_permission(db, selected_user.id, 'room', perm_value, admin_username)
-                                st.info(f"Granted access to room {perm_value}.")
-                                granted_permission = True
+                            if perm_type == "📑 Section Access":
+                                # List available sections
+                                sections = ["Onboarding", "Messaging", "User Reports", "Prompt Editor"]
+                                perm_value = st.selectbox("Select Section", sections, key="mod_section_select")
+                            elif perm_type == "🏠 Room Access":
+                                # Get available rooms
+                                from app.utils.matrix_actions import merge_room_data
+                                rooms = merge_room_data()
+                                if rooms:
+                                    room_options = [f"{room.get('name', 'Unknown')} ({room.get('room_id', '')})" for room in rooms]
+                                    selected_room = st.selectbox("Select Room", room_options, key="mod_room_select")
+                                    # Extract room ID
+                                    if selected_room:
+                                        perm_value = selected_room.split('(')[-1].rstrip(')')
+                        
+                        # Matrix sync option
+                        sync_matrix = st.checkbox(
+                            "🔄 Sync to Matrix rooms",
+                            value=True,
+                            key="mod_sync_matrix",
+                            help="If enabled, the user's Matrix permissions will be updated accordingly"
+                        )
+                        
+                        # Update button
+                        if st.button("✅ Update User Role", key="mod_update_button", type="primary"):
+                            admin_username = st.session_state.get('username', 'unknown')
+                            success = False
                             
-                            # Sync to Matrix if requested
-                            if sync_matrix and selected_user.matrix_username and Config.MATRIX_ACTIVE:
+                            # Handle role changes
+                            if new_role == "👑 Admin (Full dashboard access)":
+                                # Promote to admin (remove moderator status first if needed)
+                                if selected_user.is_moderator:
+                                    demote_from_moderator(db, selected_user.username, admin_username)
+                                success = update_admin_status(db, selected_user.username, True)
+                                if success:
+                                    create_admin_event(db, "ADMIN_PROMOTED", admin_username, f"Promoted user {selected_user.username} to admin")
+                                    st.success(f"✅ Successfully promoted {selected_user.username} to admin!")
+                                
+                            elif new_role == "🛡️ Moderator (User management)":
+                                # Promote to moderator (remove admin status first if needed)
+                                if selected_user.is_admin:
+                                    update_admin_status(db, selected_user.username, False)
+                                    create_admin_event(db, "ADMIN_DEMOTED", admin_username, f"Demoted admin {selected_user.username} to moderator")
+                                
+                                success = promote_to_moderator(db, selected_user.username, admin_username)
+                                if success:
+                                    st.success(f"✅ Successfully promoted {selected_user.username} to moderator!")
+                                    
+                                    # Grant initial permission if specified
+                                    if perm_type == "🌐 Global Access":
+                                        grant_moderator_permission(db, selected_user.id, 'global', None, admin_username)
+                                        st.info("Granted global access permission.")
+                                    elif perm_type == "📑 Section Access" and perm_value:
+                                        grant_moderator_permission(db, selected_user.id, 'section', perm_value, admin_username)
+                                        st.info(f"Granted access to {perm_value} section.")
+                                    elif perm_type == "🏠 Room Access" and perm_value:
+                                        grant_moderator_permission(db, selected_user.id, 'room', perm_value, admin_username)
+                                        st.info(f"Granted access to room {perm_value}.")
+                                
+                            else:  # Regular User
+                                # Remove both admin and moderator status
+                                if selected_user.is_admin:
+                                    update_admin_status(db, selected_user.username, False)
+                                    create_admin_event(db, "ADMIN_DEMOTED", admin_username, f"Demoted admin {selected_user.username} to regular user")
+                                if selected_user.is_moderator:
+                                    demote_from_moderator(db, selected_user.username, admin_username)
+                                    clear_moderator_permissions(db, selected_user.id, admin_username)
+                                success = True
+                                st.success(f"✅ Successfully changed {selected_user.username} to regular user!")
+                            
+                            # Sync to Matrix if requested and successful
+                            if success and sync_matrix and selected_user.matrix_username and Config.MATRIX_ACTIVE:
                                 with st.spinner("Syncing to Matrix rooms..."):
                                     import asyncio
                                     from app.utils.matrix_moderator_actions import auto_sync_all_moderator_rooms
                                     
                                     try:
-                                        sync_count = asyncio.run(auto_sync_all_moderator_rooms(db, selected_user.username, promote=True))
+                                        promote = new_role in ["👑 Admin (Full dashboard access)", "🛡️ Moderator (User management)"]
+                                        sync_count = asyncio.run(auto_sync_all_moderator_rooms(db, selected_user.username, promote=promote))
                                         if sync_count > 0:
-                                            st.success(f"🔄 Synced moderator status to {sync_count} Matrix rooms")
+                                            action = "granted" if promote else "removed"
+                                            st.success(f"🔄 {action.title()} moderator status in {sync_count} Matrix rooms")
                                     except Exception as e:
                                         st.error(f"Matrix sync failed: {e}")
                             
+                            if success:
+                                st.rerun()
+                            else:
+                                st.error("Failed to update user role. Please check logs for details.")
+        
+        with perm_tabs[1]:
+            st.write("#### Modify Existing Moderator Permissions")
+            
+            # Get all moderators
+            moderators = get_moderator_users(db)
+            
+            if not moderators:
+                st.warning("No moderators found.")
+            else:
+                # Select a moderator to manage
+                mod_options = ["-- Select a moderator --"]
+                mod_map = {}
+                
+                for mod in moderators:
+                    auth_badge = "🔐" if mod.authentik_id else "🏠"
+                    display_name = f"{auth_badge} {mod.username} ({mod.first_name} {mod.last_name})".strip()
+                    mod_options.append(display_name)
+                    mod_map[display_name] = mod
+                
+                selected_mod_display = st.selectbox("Select moderator", mod_options, key="mod_manage_select")
+                
+                if selected_mod_display != "-- Select a moderator --":
+                    selected_mod = mod_map[selected_mod_display]
+                    
+                    # Show current permissions
+                    st.write("#### Current Permissions")
+                    permissions = get_moderator_permissions(db, selected_mod.id)
+                    
+                    if not permissions:
+                        st.info("ℹ️ This moderator has no specific permissions.")
+                    else:
+                        # Display permissions with better formatting
+                        for perm in permissions:
+                            with st.container():
+                                col1, col2, col3, col4 = st.columns([1, 2, 2, 1])
+                                with col1:
+                                    st.write(format_permission_display(perm).split()[0])  # Just emoji
+                                with col2:
+                                    st.write(f"**{perm.permission_type.title()}**")
+                                with col3:
+                                    if perm.permission_type == 'global':
+                                        st.write("Full access to all moderator functions")
+                                    else:
+                                        st.write(perm.permission_value or "N/A")
+                                with col4:
+                                    if st.button("❌", key=f"revoke_perm_{perm.id}", help="Revoke this permission"):
+                                        admin_username = st.session_state.get('username', 'unknown')
+                                        if revoke_moderator_permission(db, perm.id, admin_username):
+                                            st.success("Permission revoked!")
+                                            st.rerun()
+                                        else:
+                                            st.error("Failed to revoke permission.")
+                    
+                    # Add new permission
+                    st.write("#### Add New Permission")
+                    new_perm_type = st.radio(
+                        "Permission Type",
+                        ["🌐 Global Access", "📑 Section Access", "🏠 Room Access"],
+                        key="mod_new_perm_type"
+                    )
+                    
+                    new_perm_value = None
+                    if new_perm_type == "📑 Section Access":
+                        sections = ["Onboarding", "Messaging", "User Reports", "Prompt Editor"]
+                        new_perm_value = st.selectbox("Select Section", sections, key="mod_new_section_select")
+                    elif new_perm_type == "🏠 Room Access":
+                        from app.utils.matrix_actions import merge_room_data
+                        rooms = merge_room_data()
+                        if rooms:
+                            room_options = [f"{room.get('name', 'Unknown')} ({room.get('room_id', '')})" for room in rooms]
+                            selected_room = st.selectbox("Select Room", room_options, key="mod_new_room_select")
+                            if selected_room:
+                                new_perm_value = selected_room.split('(')[-1].rstrip(')')
+                    
+                    if st.button("➕ Grant Permission", key="mod_grant_perm_button", type="primary"):
+                        admin_username = st.session_state.get('username', 'unknown')
+                        
+                        perm_type_map = {
+                            "🌐 Global Access": "global",
+                            "📑 Section Access": "section",
+                            "🏠 Room Access": "room"
+                        }
+                        
+                        if grant_moderator_permission(
+                            db, 
+                            selected_mod.id, 
+                            perm_type_map[new_perm_type], 
+                            new_perm_value if new_perm_type != "🌐 Global Access" else None,
+                            admin_username
+                        ):
+                            st.success("✅ Permission granted successfully!")
                             st.rerun()
                         else:
-                            st.error("Failed to promote user. Please check logs for details.")
+                            st.error("Failed to grant permission. It may already exist.")
+        
+        with perm_tabs[2]:
+            st.write("#### Revoke Moderator Access")
+            st.error("⚠️ **Warning:** This will completely remove moderator status and all permissions.")
+            
+            # Get all moderators
+            moderators = get_moderator_users(db)
+            
+            if not moderators:
+                st.warning("No moderators found.")
+            else:
+                # Select a moderator to revoke
+                mod_options = ["-- Select a moderator --"]
+                mod_map = {}
+                
+                for mod in moderators:
+                    auth_badge = "🔐" if mod.authentik_id else "🏠"
+                    status = "🟢" if mod.last_login and (datetime.now() - mod.last_login).days < 30 else "🔴"
+                    display_name = f"{status} {auth_badge} {mod.username} ({mod.first_name} {mod.last_name})".strip()
+                    mod_options.append(display_name)
+                    mod_map[display_name] = mod
+                
+                selected_mod_display = st.selectbox("Select moderator to revoke", mod_options, key="mod_revoke_select")
+                
+                if selected_mod_display != "-- Select a moderator --":
+                    selected_mod = mod_map[selected_mod_display]
+                    
+                    # Show moderator details card
+                    with st.container():
+                        st.write("**Moderator Details**")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**Username:** {selected_mod.username}")
+                            st.write(f"**Name:** {selected_mod.first_name} {selected_mod.last_name}".strip() or "N/A")
+                            st.write(f"**Email:** {selected_mod.email or 'N/A'}")
+                        with col2:
+                            permissions = get_moderator_permissions(db, selected_mod.id)
+                            st.write(f"**Permission Count:** {len(permissions)}")
+                            st.write(f"**Last Login:** {selected_mod.last_login.isoformat() if selected_mod.last_login else 'Never'}")
+                    
+                    # Options for revocation
+                    clear_perms = st.checkbox("🗑️ Clear all permissions", value=True, key="mod_clear_perms")
+                    sync_matrix_revoke = st.checkbox(
+                        "🔄 Sync to Matrix (remove moderator power level)",
+                        value=True,
+                        key="mod_sync_matrix_revoke",
+                        disabled=not Config.MATRIX_ACTIVE or not selected_mod.matrix_username
+                    )
+                    send_notification = st.checkbox("📧 Send notification to user", value=True, key="mod_notify_revoke")
+                    
+                    # Confirmation
+                    st.write("**Confirmation Required**")
+                    confirm_text = st.text_input(
+                        f"Type '{selected_mod.username}' to confirm revocation",
+                        key="mod_revoke_confirm"
+                    )
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("❌ Revoke Moderator Access", key="mod_revoke_button", type="primary"):
+                            if confirm_text == selected_mod.username:
+                                admin_username = st.session_state.get('username', 'unknown')
+                                
+                                # Clear permissions if requested
+                                if clear_perms:
+                                    clear_moderator_permissions(db, selected_mod.id, admin_username)
+                                
+                                # Demote from moderator
+                                if demote_from_moderator(db, selected_mod.username, admin_username):
+                                    st.success(f"✅ Successfully revoked moderator access for {selected_mod.username}!")
+                                    
+                                    # Sync to Matrix if requested
+                                    if sync_matrix_revoke and selected_mod.matrix_username and Config.MATRIX_ACTIVE:
+                                        with st.spinner("Syncing to Matrix rooms..."):
+                                            import asyncio
+                                            from app.utils.matrix_moderator_actions import auto_sync_all_moderator_rooms
+                                            
+                                            try:
+                                                sync_count = asyncio.run(auto_sync_all_moderator_rooms(db, selected_mod.username, promote=False))
+                                                if sync_count > 0:
+                                                    st.success(f"🔄 Removed moderator status from {sync_count} Matrix rooms")
+                                            except Exception as e:
+                                                st.error(f"Matrix sync failed: {e}")
+                                    
+                                    # Send notification if requested
+                                    if send_notification and Config.MATRIX_ACTIVE:
+                                        # Import Matrix functions
+                                        from app.utils.matrix_actions import send_direct_message
+                                        message = f"Your moderator access has been revoked by {admin_username}. If you have questions, please contact the admin team."
+                                        try:
+                                            asyncio.run(send_direct_message(selected_mod.username, message))
+                                            st.info("📧 Notification sent to user.")
+                                        except Exception as e:
+                                            st.warning(f"Could not send notification: {e}")
+                                    
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to revoke moderator access. Please check logs for details.")
+                            else:
+                                st.error("❌ Username confirmation does not match. Please type the exact username.")
+                    
+                    with col2:
+                        if st.button("Cancel", key="mod_revoke_cancel"):
+                            st.info("Revocation cancelled.")
     
     with mod_tabs[2]:
         st.write("### 👤 Create New Moderator Account")
@@ -1824,6 +2074,24 @@ def render_moderator_management():
                 last_name = st.text_input("Last Name *", placeholder="Enter last name")
                 username = st.text_input("Username (optional)", placeholder="Auto-generated if blank")
             
+            # Dashboard role selection
+            st.write("**Dashboard Access Level**")
+            dashboard_role = st.radio(
+                "Select dashboard access level",
+                ["👑 Admin (Full dashboard access)", "🛡️ Moderator (User management only)", "👤 Basic User (View only)"],
+                index=1,
+                key="create_mod_dashboard_role",
+                help="This determines what sections of the dashboard this user can access"
+            )
+            
+            # Welcome message option
+            send_welcome = st.checkbox(
+                "📧 Send welcome email with credentials",
+                value=True,
+                key="create_mod_send_welcome",
+                help="Send an email with login credentials and welcome message"
+            )
+            
             submitted = st.form_submit_button("✅ Create Moderator Account", type="primary")
             
             if submitted:
@@ -1834,28 +2102,68 @@ def render_moderator_management():
                 else:
                     with st.spinner("🔄 Creating moderator account..."):
                         try:
-                            from app.auth.api import create_user
-                            from app.db.operations import promote_to_moderator
+                            from app.db.operations import create_user, promote_to_moderator, update_admin_status, create_admin_event
+                            from app.auth.utils import generate_secure_passphrase, generate_username_with_random_word
                             
-                            # Create user account
-                            user_result = create_user(
+                            # Generate username if not provided
+                            if not username:
+                                # Use the existing utility to generate a username with random word
+                                username = generate_username_with_random_word(first_name)
+                            
+                            # Generate secure temporary password using existing utility
+                            temp_password = generate_secure_passphrase()
+                            
+                            # Create local user directly in database
+                            # Note: generate_username_with_random_word() already creates unique usernames with random suffixes
+                            
+                            # Create user in local database only
+                            new_user = create_user(
+                                db=db,
+                                username=username,
                                 email=email,
                                 first_name=first_name,
                                 last_name=last_name,
-                                desired_username=username if username else None,
-                                reset_password=True,
-                                send_welcome=False,
-                                should_create_discourse_post=False
+                                attributes={
+                                    "local_account": True,
+                                    "created_by": st.session_state.get('username', 'admin'),
+                                    "temp_password": temp_password
+                                }
                             )
                             
-                            if user_result["success"]:
-                                final_username = user_result["username"]
-                                temp_password = user_result["temp_password"]
-                                
-                                # Promote to moderator
+                            if new_user:
+                                final_username = new_user.username
+                                actual_temp_password = temp_password
                                 admin_username = st.session_state.get('username', 'unknown')
-                                if promote_to_moderator(db, final_username, admin_username):
-                                    st.success(f"✅ Successfully created moderator account: **{final_username}**")
+                                
+                                st.info(f"✅ Created local user {final_username}")
+                                
+                                # Set dashboard role based on selection
+                                role_success = False
+                                role_name = ""
+                                
+                                if dashboard_role == "👑 Admin (Full dashboard access)":
+                                    # Promote to admin (this gives full access)
+                                    role_success = update_admin_status(db, final_username, True)
+                                    if role_success:
+                                        create_admin_event(db, "ADMIN_PROMOTED", final_username, f"Promoted to admin by {admin_username}")
+                                    role_name = "Admin"
+                                    
+                                elif dashboard_role == "🛡️ Moderator (User management only)":
+                                    # Promote to moderator
+                                    role_success = promote_to_moderator(db, final_username, admin_username)
+                                    if role_success:
+                                        st.info(f"✅ Successfully promoted {final_username} to moderator")
+                                    else:
+                                        st.error(f"❌ Failed to promote {final_username} to moderator")
+                                    role_name = "Moderator"
+                                    
+                                else:  # Basic User
+                                    # Keep as regular user (no promotion needed)
+                                    role_success = True
+                                    role_name = "Basic User"
+                                
+                                if role_success:
+                                    st.success(f"✅ Successfully created {role_name.lower()} account: **{final_username}**")
                                     
                                     # Display credentials
                                     st.markdown("#### 📋 Account Details")
@@ -1863,222 +2171,75 @@ def render_moderator_management():
                                     with col1:
                                         st.code(f"Username: {final_username}")
                                         st.code(f"Email: {email}")
+                                        st.code(f"Name: {first_name} {last_name}")
                                     with col2:
-                                        st.code(f"Temp Password: {temp_password}")
-                                        st.code(f"Status: Moderator")
+                                        st.code(f"Temp Password: {actual_temp_password}")
+                                        st.code(f"Dashboard Role: {role_name}")
+                                        st.code(f"Account Type: Local")
+                                        
+                                        # Show access level
+                                        if role_name == "Admin":
+                                            st.code("Access: Full Dashboard")
+                                        elif role_name == "Moderator":
+                                            st.code("Access: User Management")
+                                        else:
+                                            st.code("Access: View Only")
                                     
-                                    st.warning(f"🔐 **Important:** Provide these credentials to the new moderator and ask them to change their password on first login.")
-                                    st.info("📧 **Welcome Message:** 'You've been selected to be a moderator and help the community by using the community dashboard to process users from the community.'")
+                                    # Role-specific welcome message
+                                    st.markdown("#### 📧 Welcome Message")
+                                    if role_name == "Admin":
+                                        welcome_msg = "You've been granted administrator access to the community dashboard. You have full access to all dashboard features including settings, user management, and system configuration."
+                                    elif role_name == "Moderator":
+                                        welcome_msg = "You've been selected to be a moderator and help the community by using the community dashboard to process users from the community."
+                                    else:
+                                        welcome_msg = "You've been granted access to the community dashboard with view-only permissions. Contact an administrator if you need additional access."
+                                    
+                                    st.info(f"**Message sent:** {welcome_msg}")
+                                    
+                                    # Send welcome email if requested
+                                    if send_welcome:
+                                        try:
+                                            # Send welcome email with credentials using existing email system
+                                            from app.utils.helpers import community_intro_email
+                                            
+                                            # Send email using the existing community intro email function
+                                            email_sent = community_intro_email(
+                                                to=email,
+                                                subject="Welcome to IrregularChat!",
+                                                full_name=f"{first_name} {last_name}",
+                                                username=final_username,
+                                                password=actual_temp_password,
+                                                topic_id="dashboard_access",  # Placeholder topic ID
+                                                is_local_account=True  # This is a local dashboard account
+                                            )
+                                            
+                                            if email_sent:
+                                                st.success("📧 Welcome email sent with credentials!")
+                                            else:
+                                                st.warning("⚠️ Account created but email failed to send. Please provide credentials manually.")
+                                        except Exception as email_error:
+                                            st.warning(f"⚠️ Account created but email failed: {email_error}")
+                                    else:
+                                        st.warning("🔐 **Important:** Manually provide these credentials to the new user and ask them to change their password on first login.")
+                                    
+                                    # Show dashboard access summary
+                                    st.markdown("#### 🎛️ Dashboard Access Summary")
+                                    if role_name == "Admin":
+                                        st.success("✅ **Full Dashboard Access**: Settings, User Management, Advanced Settings, All Features")
+                                    elif role_name == "Moderator":
+                                        st.info("🛡️ **Moderator Access**: User Management, Message Users, Prompts (No Settings/Advanced)")
+                                    else:
+                                        st.warning("👁️ **View Only Access**: Can view dashboard but cannot make changes")
                                     
                                     st.balloons()
                                 else:
-                                    st.error("❌ Failed to promote user to moderator.")
+                                    st.error(f"❌ Failed to assign {role_name.lower()} role to user.")
                             else:
-                                st.error(f"❌ Failed to create account: {user_result.get('error', 'Unknown error')}")
+                                st.error(f"❌ Failed to create local account. Please check if username already exists.")
                         except Exception as e:
                             st.error(f"❌ Error: {str(e)}")
     
     with mod_tabs[3]:
-        st.write("### Manage Moderator Permissions")
-        
-        # Get all moderators
-        moderators = get_moderator_users(db)
-        
-        if not moderators:
-            st.warning("No moderators found.")
-        else:
-            # Select a moderator to manage
-            mod_options = ["-- Select a moderator --"]
-            mod_map = {}
-            
-            for mod in moderators:
-                auth_badge = "🔐" if mod.authentik_id else "🏠"
-                display_name = f"{auth_badge} {mod.username} ({mod.first_name} {mod.last_name})".strip()
-                mod_options.append(display_name)
-                mod_map[display_name] = mod
-            
-            selected_mod_display = st.selectbox("Select moderator", mod_options, key="mod_manage_select")
-            
-            if selected_mod_display != "-- Select a moderator --":
-                selected_mod = mod_map[selected_mod_display]
-                
-                # Show current permissions
-                st.write("#### Current Permissions")
-                permissions = get_moderator_permissions(db, selected_mod.id)
-                
-                if not permissions:
-                    st.info("ℹ️ This moderator has no specific permissions.")
-                else:
-                    # Display permissions with better formatting
-                    for perm in permissions:
-                        with st.container():
-                            col1, col2, col3, col4 = st.columns([1, 2, 2, 1])
-                            with col1:
-                                st.write(format_permission_display(perm).split()[0])  # Just emoji
-                            with col2:
-                                st.write(f"**{perm.permission_type.title()}**")
-                            with col3:
-                                if perm.permission_type == 'global':
-                                    st.write("Full access to all moderator functions")
-                                else:
-                                    st.write(perm.permission_value or "N/A")
-                            with col4:
-                                if st.button("❌", key=f"revoke_perm_{perm.id}", help="Revoke this permission"):
-                                    admin_username = st.session_state.get('username', 'unknown')
-                                    if revoke_moderator_permission(db, perm.id, admin_username):
-                                        st.success("Permission revoked!")
-                                        st.rerun()
-                                    else:
-                                        st.error("Failed to revoke permission.")
-                
-                # Add new permission
-                st.write("#### Add New Permission")
-                new_perm_type = st.radio(
-                    "Permission Type",
-                    ["🌐 Global Access", "📑 Section Access", "🏠 Room Access"],
-                    key="mod_new_perm_type"
-                )
-                
-                new_perm_value = None
-                if new_perm_type == "📑 Section Access":
-                    sections = ["Onboarding", "Messaging", "User Reports", "Prompt Editor"]
-                    new_perm_value = st.selectbox("Select Section", sections, key="mod_new_section_select")
-                elif new_perm_type == "🏠 Room Access":
-                    from app.utils.matrix_actions import merge_room_data
-                    rooms = merge_room_data()
-                    if rooms:
-                        room_options = [f"{room.get('name', 'Unknown')} ({room.get('room_id', '')})" for room in rooms]
-                        selected_room = st.selectbox("Select Room", room_options, key="mod_new_room_select")
-                        if selected_room:
-                            new_perm_value = selected_room.split('(')[-1].rstrip(')')
-                
-                if st.button("➕ Grant Permission", key="mod_grant_perm_button", type="primary"):
-                    admin_username = st.session_state.get('username', 'unknown')
-                    
-                    perm_type_map = {
-                        "🌐 Global Access": "global",
-                        "📑 Section Access": "section",
-                        "🏠 Room Access": "room"
-                    }
-                    
-                    if grant_moderator_permission(
-                        db, 
-                        selected_mod.id, 
-                        perm_type_map[new_perm_type], 
-                        new_perm_value if new_perm_type != "🌐 Global Access" else None,
-                        admin_username
-                    ):
-                        st.success("✅ Permission granted successfully!")
-                        st.rerun()
-                    else:
-                        st.error("Failed to grant permission. It may already exist.")
-    
-    with mod_tabs[4]:
-        st.write("### Revoke Moderator Access")
-        
-        # Get all moderators
-        moderators = get_moderator_users(db)
-        
-        if not moderators:
-            st.warning("No moderators found.")
-        else:
-            # Select a moderator to revoke
-            mod_options = ["-- Select a moderator --"]
-            mod_map = {}
-            
-            for mod in moderators:
-                auth_badge = "🔐" if mod.authentik_id else "🏠"
-                status = "🟢" if mod.last_login and (datetime.now() - mod.last_login).days < 30 else "🔴"
-                display_name = f"{status} {auth_badge} {mod.username} ({mod.first_name} {mod.last_name})".strip()
-                mod_options.append(display_name)
-                mod_map[display_name] = mod
-            
-            selected_mod_display = st.selectbox("Select moderator to revoke", mod_options, key="mod_revoke_select")
-            
-            if selected_mod_display != "-- Select a moderator --":
-                selected_mod = mod_map[selected_mod_display]
-                
-                # Show moderator details card
-                with st.container():
-                    st.write("#### Moderator Details")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.write(f"**Username:** {selected_mod.username}")
-                        st.write(f"**Name:** {selected_mod.first_name} {selected_mod.last_name}".strip() or "N/A")
-                        st.write(f"**Email:** {selected_mod.email or 'N/A'}")
-                    with col2:
-                        permissions = get_moderator_permissions(db, selected_mod.id)
-                        st.write(f"**Permission Count:** {len(permissions)}")
-                        st.write(f"**Last Login:** {selected_mod.last_login.isoformat() if selected_mod.last_login else 'Never'}")
-                
-                st.error("⚠️ **Warning:** Revoking moderator access will remove all permissions and the moderator role.")
-                
-                # Options for revocation
-                clear_perms = st.checkbox("🗑️ Clear all permissions", value=True, key="mod_clear_perms")
-                sync_matrix_revoke = st.checkbox(
-                    "🔄 Sync to Matrix (remove moderator power level)",
-                    value=True,
-                    key="mod_sync_matrix_revoke",
-                    disabled=not Config.MATRIX_ACTIVE or not selected_mod.matrix_username
-                )
-                send_notification = st.checkbox("📧 Send notification to user", value=True, key="mod_notify_revoke")
-                
-                # Confirmation
-                st.write("**Confirmation Required**")
-                confirm_text = st.text_input(
-                    f"Type '{selected_mod.username}' to confirm revocation",
-                    key="mod_revoke_confirm"
-                )
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("❌ Revoke Moderator Access", key="mod_revoke_button", type="primary"):
-                        if confirm_text == selected_mod.username:
-                            admin_username = st.session_state.get('username', 'unknown')
-                            
-                            # Clear permissions if requested
-                            if clear_perms:
-                                clear_moderator_permissions(db, selected_mod.id, admin_username)
-                            
-                            # Demote from moderator
-                            if demote_from_moderator(db, selected_mod.username, admin_username):
-                                st.success(f"✅ Successfully revoked moderator access for {selected_mod.username}!")
-                                
-                                # Sync to Matrix if requested
-                                if sync_matrix_revoke and selected_mod.matrix_username and Config.MATRIX_ACTIVE:
-                                    with st.spinner("Syncing to Matrix rooms..."):
-                                        import asyncio
-                                        from app.utils.matrix_moderator_actions import auto_sync_all_moderator_rooms
-                                        
-                                        try:
-                                            sync_count = asyncio.run(auto_sync_all_moderator_rooms(db, selected_mod.username, promote=False))
-                                            if sync_count > 0:
-                                                st.success(f"🔄 Removed moderator status from {sync_count} Matrix rooms")
-                                        except Exception as e:
-                                            st.error(f"Matrix sync failed: {e}")
-                                
-                                # Send notification if requested
-                                if send_notification and Config.MATRIX_ACTIVE:
-                                    # Import Matrix functions
-                                    from app.utils.matrix_actions import send_direct_message
-                                    message = f"Your moderator access has been revoked by {admin_username}. If you have questions, please contact the admin team."
-                                    try:
-                                        asyncio.run(send_direct_message(selected_mod.username, message))
-                                        st.info("📧 Notification sent to user.")
-                                    except Exception as e:
-                                        st.warning(f"Could not send notification: {e}")
-                                
-                                st.rerun()
-                            else:
-                                st.error("Failed to revoke moderator access. Please check logs for details.")
-                        else:
-                            st.error("❌ Username confirmation does not match. Please type the exact username.")
-                
-                with col2:
-                    if st.button("Cancel", key="mod_revoke_cancel"):
-                        st.info("Revocation cancelled.")
-    
-    with mod_tabs[5]:
         st.write("### Matrix Room Sync")
         st.info("🔄 Sync moderator power levels across Matrix rooms")
         
@@ -2177,7 +2338,7 @@ def render_moderator_management():
                     
                     status_text.text(f"✅ Sync complete! Successfully synced {success_count}/{total} moderators")
     
-    with mod_tabs[6]:
+    with mod_tabs[4]:
         st.write("### Audit Log")
         st.info("📋 View recent moderator-related administrative actions")
         

@@ -545,12 +545,14 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
             await asyncio.sleep(3)
             
             # Since the Signal bridge bot room is encrypted, we can't read the response
-            # Instead, let's look for a newly created room that contains both the bot and the Signal user
-            logger.info(f"Looking for newly created Signal chat room for {user_id}")
+            # Instead, let's look for the Signal chat room that contains both the bot and the Signal user
+            logger.info(f"Looking for Signal chat room for {user_id}")
+            logger.info(f"Will prioritize small rooms and exclude community rooms like INDOC")
             
-            # Get all joined rooms to find the new Signal chat room
+            # Get all joined rooms to find the Signal chat room
             joined_rooms = await client.joined_rooms()
             if isinstance(joined_rooms, JoinedRoomsResponse) and joined_rooms.rooms:
+                logger.info(f"Searching through {len(joined_rooms.rooms)} joined rooms for Signal chat")
                 # Look for rooms that contain the Signal user
                 for room_id in joined_rooms.rooms:
                     try:
@@ -567,11 +569,46 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
                             
                             # Check if this room contains the Signal user and the bot
                             if user_id in members and MATRIX_BOT_USERNAME in members:
-                                # Additional check: make sure this isn't the command room
+                                # Additional checks to ensure this is the right room:
+                                # 1. Not the Signal bridge bot command room
+                                # 2. Should be a very small room (direct chat has 2-3 members)
+                                # 3. Exclude community rooms and group chats
                                 if room_id != SIGNAL_BRIDGE_BOT_ROOM:
-                                    logger.info(f"Found Signal chat room for {user_id}: {room_id}")
-                                    await client.close()
-                                    return room_id
+                                    
+                                    # Get room name and topic to help identify the room type
+                                    room_name = ""
+                                    room_topic = ""
+                                    try:
+                                        for event in members_response.events:
+                                            if event.get("type") == "m.room.name":
+                                                room_name = event.get("content", {}).get("name", "")
+                                            elif event.get("type") == "m.room.topic":
+                                                room_topic = event.get("content", {}).get("topic", "")
+                                    except Exception:
+                                        pass
+                                    
+                                    # Priority 1: Very small rooms (2-3 members) - likely direct chats
+                                    if len(members) <= 3:
+                                        # Skip rooms with community-like names
+                                        if not any(keyword in room_name.lower() for keyword in 
+                                                 ["entry", "indoc", "welcome", "general", "main", "community", "alabama", "chat"]):
+                                            logger.info(f"Found Signal direct chat for {user_id}: {room_id} (members: {len(members)}, name: '{room_name}')")
+                                            await client.close()
+                                            return room_id
+                                        else:
+                                            logger.debug(f"Skipping small community room {room_id} with name '{room_name}'")
+                                    
+                                    # Priority 2: Rooms with Signal-specific topics or names
+                                    elif (len(members) <= 6 and 
+                                          ("signal" in room_topic.lower() or 
+                                           "private chat" in room_topic.lower() or
+                                           room_name == "" or  # Unnamed rooms are often direct chats
+                                           user_id.split("@signal_")[1].split(":")[0] in room_name)):  # Room name contains Signal UUID
+                                        logger.info(f"Found Signal bridge room for {user_id}: {room_id} (members: {len(members)}, name: '{room_name}', topic: '{room_topic}')")
+                                        await client.close()
+                                        return room_id
+                                    else:
+                                        logger.debug(f"Skipping larger room {room_id} with {len(members)} members, name: '{room_name}'")
                                     
                     except Exception as room_err:
                         logger.warning(f"Error checking room {room_id}: {str(room_err)}")

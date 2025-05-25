@@ -1,130 +1,181 @@
-# Chat Based Community Dashboard
+# Chat-Based Community Dashboard
 
-## About
-See [forum post about this fork](https://forum.irregularchat.com/t/forking-authentik-distro-for-better-community-management/647?u=sac) for more information.
+> **A simple, powerful tool to help community builders manage their members across Signal, Matrix, and other platforms - no technical expertise required.**
 
-While platforms like Discord and Slack are great for general communities, and tools like Matrix/Element Messenger offer self-hosting and encryption, many users are hesitant to adopt new platforms. Signal's wide adoption and default status make it an ideal starting point for community interaction.
+## 🎯 Why This Matters for Your Community
 
-This repo bridges the gap by providing community management tools that extend Signal's capabilities, along with integration options like:
+**Are you a community organizer struggling with:**
+- Managing member accounts across different platforms?
+- Onboarding new members efficiently?
+- Keeping track of who has access to what?
+- Bridging conversations between Signal, Matrix, and other chat platforms?
 
-Signal Bots: Enable interaction and updates directly through Signal.
-Maubot for Matrix: Allow easy management and messaging in Matrix ecosystems.
-Bridged Chats: Seamlessly connect chats across platforms.
-SMTP Emails: Enable email-based communications for users.
-Webhooks: Automate and streamline tasks.
-NoCoDB Database Integration: Simplify community data handling and tracking.
-### Aims
+**This dashboard solves these problems** by giving you a simple web interface to:
+- ✅ Create and manage user accounts in one place
+- ✅ Send automated welcome messages and invitations
+- ✅ Bridge chats between Signal, Matrix, and other platforms
+- ✅ Track member activity and permissions
+- ✅ Handle password resets and account issues quickly
 
-This project aims to retain Signal as a base platform while expanding its usability for community managers. With additional tools and integrations, this repo provides options for:
+## 🚀 Perfect for Communities That Want To
 
-Enhanced Signal bot functionality.
-Bridging chats across different platforms.
-Managing community databases and communication through an accessible GUI.
+- **Start with Signal** (since most people already have it) and expand to other platforms
+- **Self-host their community tools** instead of relying on big tech
+- **Give members choice** in how they participate (Signal, Matrix, email, etc.)
+- **Scale efficiently** without drowning in administrative tasks
 
-### Features 
-The application has the following features:
-- Create a new user account, generating a custom message for the user
-- Reset the password for an existing user account
-- Create a temporary invite link for a user, group, event, or person, with an expiration time and label
-- List all users in the system
-- Search users and filter by multiple attributes
-- Update selected users by:
-   - Activating / Deactivating
-   - Changing password
-   - Deleting
+## ✨ What You Get
 
-### Roadmap
-See [ROADMAP.md](ROADMAP.md) for more information.
+### For Community Builders
+- **Web dashboard** - No command line needed, just point and click
+- **Member management** - Create accounts, reset passwords, manage permissions
+- **Cross-platform bridging** - Connect Signal groups with Matrix rooms
+- **Automated onboarding** - Send welcome messages and invites automatically
+- **Moderation tools** - Manage moderators and handle conflicts efficiently
 
-## Prerequisites
+### For Developers (Entry to Mid-Level)
+- **Python/Streamlit** - Easy to understand and modify
+- **Docker setup** - Get running in minutes
+- **Clear codebase** - Well-organized with tests
+- **API integrations** - Authentik, Matrix, Signal bots
+- **Database management** - PostgreSQL with migrations
 
-- Docker Compose
-- Access to the Authentik API
-   - If you are an admin, you can generate an API token from the Authentik web interface: https://sso.domain.tld/if/admin/#/core/tokens
-## Installation
+## 🏃‍♀️ Quick Start (5 Minutes)
 
-1. **Clone the Repository**
-   ```bash
-   git clone https://github.com/irregularchat/authentik-account-creation.git
-   cd authentik-user-creation
-   ```
+### Option 1: I Just Want to Try It (Easiest)
+```bash
+# Clone and run with SQLite (no database setup needed)
+git clone https://github.com/irregularchat/chat-based-community-dashboard.git
+cd chat-based-community-dashboard
+cp .env-template .env
+# Edit .env with your API tokens (see setup guide below)
+./run_sqlite.sh
+```
+Open http://localhost:8501 in your browser!
 
-2. **Set Up Environment Variables**
-   - Copy the .env template, gitignore it so that it doesn't sync and edit
-   ```bash
-   cp .env-template .env
-   echo ".env" >> .gitignore
-   echo "venv" >> .gitignore
+### Option 2: Full Setup with Docker
+```bash
+# Clone the repository
+git clone https://github.com/irregularchat/chat-based-community-dashboard.git
+cd chat-based-community-dashboard
 
-   nano .env
-   ```
-   - Or create a `.env` file in the project directory and add the following:
-   ```env
-   AUTHENTIK_API_TOKEN=your_api_token_here
-   base_password = "usePasswordManager-" #Looking to remind the user 
-   MAIN_GROUP_ID = GROUP_ID #The group id you want to add the user to    
-   ```
-     - add to gitignore
+# Setup environment
+cp .env-template .env
+nano .env  # Add your API tokens (see setup guide below)
 
-    ```bash
-    echo ".env" >> .gitignore
-    ```
-3. **Build and Run the Docker Container**
-   ```bash
-   docker-compose up -d --build
-   ```
-## Usage
+# Run with Docker
+docker-compose up -d --build
+```
+Open http://localhost:8501 in your browser!
 
-### Local Development
-1. **Access the Application**
-   - Open a web browser and navigate to `http://localhost:8501` to access the application.
+## 🔧 Setup Guide
 
-### Running Without Docker
-To run the application directly on your local machine without Docker, you have two options:
+### Getting Your API Tokens
 
-#### Option 1: Local PostgreSQL
-1. **Ensure PostgreSQL is installed** on your local machine
-2. **Create a database** with the credentials specified in your `.env` file:
-   ```bash
-   createdb -U dashboarduser dashboarddb
-   ```
-3. **Run the local development script**:
-   ```bash
-   ./run_local.sh
-   ```
-   This script will:
-   - Configure the application to connect to PostgreSQL on localhost
-   - Check if PostgreSQL is running
-   - Start the Streamlit application
+**Authentik API Token** (Required for user management):
+1. Go to your Authentik admin panel: `https://your-sso-domain.com/if/admin/`
+2. Navigate to System → Tokens
+3. Create a new token with appropriate permissions
+4. Copy the token to your `.env` file
 
-#### Option 2: SQLite (Simplest)
-If you don't want to install PostgreSQL, you can use SQLite:
-1. **Run the SQLite development script**:
-   ```bash
-   ./run_sqlite.sh
-   ```
-   This script will:
-   - Configure the application to use a SQLite database file (local_dev.db)
-   - Start the Streamlit application
+**Matrix Integration** (Optional, for bridging):
+- Add your Matrix homeserver URL and access token to `.env`
+- See our [Matrix Setup Guide](docs/matrix-setup.md) for details
 
-Note: Some features that rely on PostgreSQL-specific functionality may not work correctly in SQLite mode.
+### Environment Configuration
+Edit your `.env` file:
+```env
+# Required: Authentik integration
+AUTHENTIK_API_TOKEN=your_api_token_here
+AUTHENTIK_BASE_URL=https://your-sso-domain.com
 
-### Production Deployment
-1. **Setup Cloudflared Tunnel**
-2. **Serve Application**
-   - Set domain or subdomain 
-   - Point cloudflare tunnel to  `http://localhost:8501` to access the application
-3. **Access the Application**
-   - Open a web browser and navigate to `http://your.domain.tld` to access the application.
+# Optional: Matrix integration
+MATRIX_HOMESERVER=https://matrix.your-domain.com
+MATRIX_ACCESS_TOKEN=your_matrix_token
 
-## Best Practices for Setting Up the Environment
+# Database (auto-configured for Docker)
+DATABASE_URL=postgresql://user:pass@db:5432/dashboard
+```
 
-1. **Use a Virtual Environment**: Always use a virtual environment to manage dependencies and avoid conflicts with other projects.
-2. **Store Sensitive Information Securely**: Use environment variables to store sensitive information like API tokens. Never hard-code them in your script.
-3. **Use a `.env` File**: Use a `.env` file to manage environment variables. Make sure to add the `.env` file to your `.gitignore` to avoid committing sensitive information to version control.
+## 📖 How to Use
 
+### For Community Organizers
+1. **Access the dashboard** at http://localhost:8501
+2. **Create user accounts** - Fill in member details, system generates secure passwords
+3. **Send invitations** - Automated emails with login instructions
+4. **Manage permissions** - Add/remove moderators, manage group access
+5. **Bridge platforms** - Connect your Signal groups with Matrix rooms
 
-## Contributing
+### For Developers
+- **Main app**: `app/main.py` - Streamlit interface
+- **Database models**: `app/db/` - SQLAlchemy models
+- **API integrations**: `app/utils/` - Authentik, Matrix APIs
+- **Tests**: `tests/` - Pytest test suite
+- **UI components**: `app/ui/` - Reusable Streamlit components
 
-Contributions are welcome! 
-Please see [CONTRIBUTING.md](CONTRIBUTING.md) for more information.
+## 🛣️ What's Coming Next
+
+See our [detailed roadmap](ROADMAP.md) for the full picture. Key highlights:
+
+**🔥 Coming Soon (Next 2-4 weeks)**
+- Enhanced user list with bulk actions
+- Direct email messaging to users
+- Admin audit logging
+
+**🚀 This Quarter**
+- Signal bot integration for automated announcements
+- Conflict resolution room creation
+- Advanced Matrix room management
+
+**🌟 Future Vision**
+- Support for more identity providers (Keycloak, etc.)
+- Mobile-friendly interface
+- Advanced analytics and reporting
+
+## 🤝 How to Contribute
+
+**New to open source?** Perfect! This project is designed to be beginner-friendly.
+
+### 🕐 Got 15 minutes?
+- Report bugs or suggest features in [Issues](https://github.com/irregularchat/chat-based-community-dashboard/issues)
+- Improve documentation (fix typos, clarify instructions)
+- Test the setup process and report any problems
+
+### 🕐 Got 1-2 hours?
+- Pick up a "good first issue" from our [issue tracker](https://github.com/irregularchat/chat-based-community-dashboard/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+- Add tests for existing features
+- Improve error messages and user experience
+
+### 🕐 Got more time?
+- Implement features from our [roadmap](ROADMAP.md)
+- Add new integrations (Discord, Slack, etc.)
+- Improve the UI/UX design
+
+**See our [Contributing Guide](CONTRIBUTING.md) for detailed instructions.**
+
+## 🏗️ Technical Details
+
+**Built with:**
+- **Frontend**: Streamlit (Python web framework)
+- **Backend**: SQLAlchemy + PostgreSQL/SQLite
+- **Integrations**: Authentik API, Matrix API, Email (SMTP)
+- **Deployment**: Docker + Docker Compose
+
+**System Requirements:**
+- Python 3.8+
+- Docker (recommended) or PostgreSQL
+- 512MB RAM minimum, 1GB recommended
+
+## 📞 Getting Help
+
+- **Community Forum**: [forum.irregularchat.com](https://forum.irregularchat.com/t/forking-authentik-distro-for-better-community-management/647)
+- **GitHub Issues**: For bugs and feature requests
+- **Documentation**: Check the `docs/` folder for detailed guides
+
+## 📄 License
+
+This project is open source. See [LICENSE](LICENSE) for details.
+
+---
+
+**Ready to transform your community management?** [Get started in 5 minutes](#-quick-start-5-minutes) or [join our community](https://forum.irregularchat.com/) to learn more!

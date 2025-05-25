@@ -16,6 +16,7 @@ import traceback
 import uuid
 import threading
 from contextlib import asynccontextmanager
+import re
 
 # Import Config first
 from app.utils.config import Config
@@ -492,7 +493,7 @@ async def send_matrix_message(room_id, message, client=None):
 async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
     """
     Create or find an existing direct chat with another user.
-    If a direct chat already exists, attempt to leave and rejoin it to refresh the connection.
+    For Signal bridge users, uses the known existing Signal bridge room.
     
     Args:
         user_id: The Matrix ID of the user to chat with
@@ -503,7 +504,21 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping create_direct_chat.")
         return None
+    
+    # Check if this is a Signal bridge user
+    if user_id.startswith("@signal_"):
+        logger.info(f"Detected Signal bridge user: {user_id}")
         
+        # For Signal bridge users, use the configured Signal bridge room
+        KNOWN_SIGNAL_BRIDGE_ROOM = Config.MATRIX_SIGNAL_BRIDGE_ROOM_ID
+        if not KNOWN_SIGNAL_BRIDGE_ROOM:
+            logger.error(f"MATRIX_SIGNAL_BRIDGE_ROOM_ID not configured for Signal bridge user {user_id}")
+            return None
+        
+        logger.info(f"Using known Signal bridge room for {user_id}: {KNOWN_SIGNAL_BRIDGE_ROOM}")
+        return KNOWN_SIGNAL_BRIDGE_ROOM
+        
+    # For non-Signal users, use the original Matrix direct chat logic
     try:
         client = await get_matrix_client()
         if not client:
@@ -2334,3 +2349,57 @@ def verify_direct_message_delivery_sync(room_id: str, event_id: str) -> bool:
         return False
     finally:
         loop.close()
+
+async def send_signal_bridge_message(user_id: str, message: str) -> bool:
+    """
+    Send a message to a Signal bridge user using the known Signal bridge room.
+    
+    Args:
+        user_id: The Matrix ID of the Signal bridge user (e.g., @signal_xxx:domain.com)
+        message: The message content
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active. Cannot send Signal bridge message.")
+        return False
+    
+    # Use the configured Signal bridge room for this user
+    KNOWN_SIGNAL_BRIDGE_ROOM = Config.MATRIX_SIGNAL_BRIDGE_ROOM_ID
+    if not KNOWN_SIGNAL_BRIDGE_ROOM:
+        logger.error(f"MATRIX_SIGNAL_BRIDGE_ROOM_ID not configured for Signal bridge user {user_id}")
+        return False
+    
+    try:
+        client = await get_matrix_client()
+        if not client:
+            logger.error("Failed to create Matrix client")
+            return False
+        
+        try:
+            # Send message directly to the known Signal bridge room
+            logger.info(f"Sending message to Signal bridge room {KNOWN_SIGNAL_BRIDGE_ROOM}: {message}")
+            
+            response = await client.room_send(
+                room_id=KNOWN_SIGNAL_BRIDGE_ROOM,
+                message_type="m.room.message",
+                content={
+                    "msgtype": "m.text",
+                    "body": message
+                }
+            )
+            
+            if hasattr(response, 'event_id'):
+                logger.info(f"Successfully sent Signal bridge message: {response.event_id}")
+                return True
+            else:
+                logger.error(f"Failed to send Signal bridge message, response: {response}")
+                return False
+                
+        finally:
+            await client.close()
+            
+    except Exception as e:
+        logger.error(f"Error sending Signal bridge message: {e}")
+        return False

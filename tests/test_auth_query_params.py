@@ -269,9 +269,8 @@ def test_render_main_content_auth_params(mock_session_state, mock_query_params, 
             f"Login success page: user=admin, admin=True, method=local"
         )
         
-        # Should redirect to admin dashboard
-        assert st.session_state.get('current_page') == 'Admin Dashboard'
-        mock_streamlit['rerun'].assert_called_once()
+        # Should set admin status
+        assert st.session_state.get('is_admin') is True
 
 def test_permanent_flag_persistence(mock_session_state, mock_streamlit):
     """Test persistence mechanism with permanent flags"""
@@ -365,9 +364,8 @@ def test_full_local_login_flow(mock_session_state, mock_query_params, mock_strea
         welcome_msg = mock_streamlit['success'].call_args[0][0]
         assert 'Welcome' in welcome_msg
         
-        # Should redirect to admin dashboard
-        assert st.session_state.get('current_page') == 'Admin Dashboard'
-        mock_streamlit['rerun'].assert_called_once()
+        # Should set admin status
+        assert st.session_state.get('is_admin') is True
         
     # All query params should be cleared
     assert 'auth_success' not in mock_query_params 

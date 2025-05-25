@@ -152,7 +152,6 @@ class TestDashboardAccessControl:
         
         # Should NOT have access to admin pages
         assert "Settings" not in options
-        assert "Admin Dashboard" not in options
         assert "Test SMTP" not in options
 
     def test_moderator_sidebar_access(self, mock_streamlit, moderator_state):
@@ -189,7 +188,6 @@ class TestDashboardAccessControl:
             
             # Should NOT have access to admin pages
             assert "Settings" not in options
-            assert "Admin Dashboard" not in options
             assert "Test SMTP" not in options
 
     def test_admin_sidebar_access(self, mock_streamlit, admin_state):
@@ -218,7 +216,6 @@ class TestDashboardAccessControl:
         assert "Signal Association" in options
         assert "Prompts Manager" in options
         assert "Settings" in options
-        assert "Admin Dashboard" in options
         assert "Test SMTP" in options
 
     def test_unauthenticated_page_access(self, mock_streamlit, unauthenticated_state):
@@ -244,7 +241,7 @@ class TestDashboardAccessControl:
         """Test that regular users cannot access admin pages"""
         mock_streamlit['session_state'].update(regular_user_state)
         
-        admin_pages = ["Settings", "Admin Dashboard", "Test SMTP"]
+        admin_pages = ["Settings", "Test SMTP"]
         
         for page in admin_pages:
             mock_streamlit['session_state']['current_page'] = page
@@ -263,7 +260,7 @@ class TestDashboardAccessControl:
         """Test that moderators cannot access admin pages"""
         mock_streamlit['session_state'].update(moderator_state)
         
-        admin_pages = ["Settings", "Admin Dashboard", "Test SMTP"]
+        admin_pages = ["Settings", "Test SMTP"]
         
         for page in admin_pages:
             mock_streamlit['session_state']['current_page'] = page
@@ -296,12 +293,7 @@ class TestDashboardAccessControl:
             mock_render_home.assert_called_once()
             mock_streamlit['error'].assert_not_called()
         
-        # Test Admin Dashboard
-        mock_streamlit['session_state']['current_page'] = "Admin Dashboard"
-        with patch('app.main.render_admin_dashboard') as mock_render_admin:
-            render_main_content()
-            mock_render_admin.assert_called_once()
-            mock_streamlit['error'].assert_not_called()
+
 
     def test_settings_page_access_control(self, mock_streamlit):
         """Test access control specifically for Settings page"""

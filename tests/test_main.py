@@ -273,7 +273,6 @@ async def test_render_sidebar(mock_streamlit):
             "Signal Association",
             "Settings",
             "Prompts Manager",
-            "Admin Dashboard",
             "Test SMTP"
         ],
         index=mock_selectbox.call_args[0][1].index("Create User"),
@@ -418,7 +417,6 @@ async def test_session_state_modification_after_widget(mock_streamlit):
             "Signal Association",
             "Settings",
             "Prompts Manager",
-            "Admin Dashboard",
             "Test SMTP"
         ],
         index=0,  # Create User is at index 0

@@ -15,7 +15,7 @@ from app.ui.summary import main as render_summary_page
 from app.ui.help_resources import main as render_help_page
 from app.ui.prompts import main as render_prompts_page
 from app.ui.matrix import render_matrix_messaging_page
-from app.ui.admin import render_admin_dashboard
+
 from app.ui.signal_association import render_signal_association
 from app.utils.helpers import (
     create_unique_username,
@@ -118,7 +118,6 @@ def render_sidebar():
                 "Signal Association",
                 "Settings",
                 "Prompts Manager",
-                "Admin Dashboard",
                 "Test SMTP"  # Add the new page for admin users
             ]
         elif is_moderator:
@@ -245,32 +244,7 @@ def render_main_content():
         query_params.clear()
         
         # Handle specific redirects - these will be managed by the sidebar selectbox
-        if redirect_to == 'admin_dashboard':
-            # Initialize page options based on user's authentication status
-            is_authenticated = st.session_state.get('is_authenticated', False)
-            is_admin = st.session_state.get('is_admin', False)
-            
-            # Only redirect to Admin Dashboard if user is authenticated and admin
-            if is_authenticated and is_admin:
-                # We'll manually select this in the sidebar on the next rerun
-                page_options = [
-                    "Create User", 
-                    "List & Manage Users",
-                    "Create Invite",
-                    "Matrix Messages and Rooms",
-                    "Signal Association",
-                    "Settings",
-                    "Prompts Manager",
-                    "Admin Dashboard",
-                    "Test SMTP"
-                ]
-                
-                # Find the index of the Admin Dashboard option
-                if "Admin Dashboard" in page_options:
-                    admin_index = page_options.index("Admin Dashboard")
-                    # Force a rerun using URL parameters to rerender the sidebar
-                    st.query_params["sidebar_selection"] = admin_index
-                    st.rerun()
+        # No specific redirects currently handled
         
         # For other redirects, just rerun to reset the page
         st.rerun()
@@ -950,12 +924,7 @@ def render_main_content():
                 st.markdown("You must login to access the Prompts Manager.")
                 display_login_button(location="main")
             
-        elif current_page == "Admin Dashboard":
-            # Protect with admin check
-            if st.session_state.get('is_admin', False):
-                render_admin_dashboard()
-            else:
-                st.error("You need administrator privileges to access this page.")
+
 
         elif current_page == "Test SMTP":
             # Protect with admin check

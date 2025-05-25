@@ -94,13 +94,110 @@ async def render_matrix_messaging_page():
     
     with tab1:
         st.header("Send Direct Message")
-        # Direct message UI
-        user_id = st.text_input("Matrix User ID (e.g., @username:domain.com)")
+        
+        # Initialize Matrix users in session state if not already done
+        if 'matrix_users' not in st.session_state:
+            st.session_state.matrix_users = []
+        
+        # Button to fetch Matrix users from entrance room
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.button("🔄 Load Users", key="load_matrix_users"):
+                with st.spinner("Loading Matrix users from all accessible rooms..."):
+                    try:
+                        # Import the function to get users from all accessible rooms
+                        fetched_users = await get_all_accessible_users()
+                        st.session_state.matrix_users = fetched_users or []
+                        if fetched_users:
+                            st.success(f"Loaded {len(fetched_users)} Matrix users from all rooms")
+                        else:
+                            st.warning("No Matrix users found in accessible rooms")
+                    except Exception as e:
+                        st.error(f"Error loading Matrix users: {str(e)}")
+                        logging.error(f"Error loading Matrix users: {str(e)}")
+                        st.session_state.matrix_users = []
+        
+        with col2:
+            st.write("*Click 'Load Users' to fetch available Matrix users from all accessible rooms*")
+        
+        # Matrix User Selection Dropdown
+        user_id = None
+        if st.session_state.matrix_users:
+            # Create dropdown options
+            matrix_user_options = [f"{user['display_name']} ({user['user_id']})" for user in st.session_state.matrix_users]
+            selected_user = st.selectbox(
+                "Select Matrix User",
+                options=[""] + matrix_user_options,
+                key="dm_matrix_user_select",
+                help="Select a Matrix user to send a direct message to"
+            )
+            
+            if selected_user:
+                # Extract user_id from the selected option
+                user_id = selected_user.split("(")[-1].rstrip(")")
+                display_name = selected_user.split("(")[0].strip()
+                st.info(f"Selected: {display_name} ({user_id})")
+        
+        # Fallback: Manual input if no users loaded or user wants to enter manually
+        if not st.session_state.matrix_users or st.checkbox("Enter Matrix User ID manually", key="manual_user_input"):
+            manual_user_id = st.text_input(
+                "Matrix User ID (e.g., @username:domain.com)", 
+                key="manual_matrix_user_id",
+                help="Enter a Matrix User ID manually if not in the dropdown"
+            )
+            if manual_user_id and manual_user_id.strip():
+                user_id = manual_user_id.strip()
         
         # Display message history if user ID is provided
         if user_id and user_id.strip():
-            await display_matrix_message_history(user_id.strip())
+            st.subheader("💬 Conversation History")
+            
+            # Create a button to load/refresh message history
+            col1, col2 = st.columns([1, 4])
+            with col1:
+                if st.button("🔄 Load History", key=f"load_matrix_history_{user_id.strip()}"):
+                    st.session_state[f'loading_matrix_history_{user_id.strip()}'] = True
+                    st.session_state[f'matrix_message_history_{user_id.strip()}'] = None  # Reset to ensure fresh data
+                    st.rerun()
+            
+            with col2:
+                st.write("*Click 'Load History' to view recent messages*")
+            
+            # Handle loading message history
+            if st.session_state.get(f'loading_matrix_history_{user_id.strip()}', False):
+                if f'matrix_message_history_{user_id.strip()}' not in st.session_state or st.session_state[f'matrix_message_history_{user_id.strip()}'] is None:
+                    try:
+                        with st.spinner("Loading conversation history, please wait..."):
+                            # Use the sync wrapper function
+                            messages = get_direct_message_history_sync(user_id.strip(), limit=20)
+                            st.session_state[f'matrix_message_history_{user_id.strip()}'] = messages
+                            st.session_state[f'loading_matrix_history_{user_id.strip()}'] = False
+                            st.rerun()
+                        
+                    except Exception as e:
+                        st.session_state[f'matrix_history_error_{user_id.strip()}'] = str(e)
+                        logging.error(f"Error loading message history: {str(e)}", exc_info=True)
+                        st.session_state[f'loading_matrix_history_{user_id.strip()}'] = False
+                
+                # Check if we have history or an error
+                if f'matrix_history_error_{user_id.strip()}' in st.session_state:
+                    st.error(f"Error loading message history: {st.session_state[f'matrix_history_error_{user_id.strip()}']}")
+                    del st.session_state[f'matrix_history_error_{user_id.strip()}']
+                    st.session_state[f'loading_matrix_history_{user_id.strip()}'] = False
+                
+                if f'matrix_message_history_{user_id.strip()}' in st.session_state:
+                    st.session_state[f'loading_matrix_history_{user_id.strip()}'] = False
+                    display_matrix_chat_messages(st.session_state[f'matrix_message_history_{user_id.strip()}'])
+                else:
+                    st.info("Loading conversation history...")
+            else:
+                # Display cached history if available
+                if f'matrix_message_history_{user_id.strip()}' in st.session_state and st.session_state[f'matrix_message_history_{user_id.strip()}'] is not None:
+                    display_matrix_chat_messages(st.session_state[f'matrix_message_history_{user_id.strip()}'])
+                else:
+                    st.info("Click 'Load History' to view recent messages with this user")
         
+        # Message input and send button
         message = st.text_area("Message", height=150, key="direct_message")
         if st.button("Send Direct Message"):
             if user_id and message:
@@ -117,7 +214,7 @@ async def render_matrix_messaging_page():
                 else:
                     st.error(f"Failed to create direct chat with {user_id}")
             else:
-                st.warning("Please enter both a user ID and a message")
+                st.warning("Please select a user and enter a message")
     
     with tab2:
         st.header("Send Room Message")
@@ -532,58 +629,6 @@ async def render_matrix_messaging_page():
                         st.warning("Please enter user interests to match with rooms")
         else:
             st.warning("No non-admin users found in the entrance room")
-
-async def display_matrix_message_history(user_id):
-    """Display the message history for a direct message conversation."""
-    st.subheader("💬 Conversation History")
-    
-    # Create a button to load/refresh message history
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        if st.button("🔄 Load History", key=f"load_matrix_history_{user_id}"):
-            st.session_state[f'loading_matrix_history_{user_id}'] = True
-            st.session_state[f'matrix_message_history_{user_id}'] = None  # Reset to ensure fresh data
-            st.rerun()
-    
-    with col2:
-        st.write("*Click 'Load History' to view recent messages*")
-    
-    # Handle loading message history
-    if st.session_state.get(f'loading_matrix_history_{user_id}', False):
-        if f'matrix_message_history_{user_id}' not in st.session_state or st.session_state[f'matrix_message_history_{user_id}'] is None:
-            try:
-                st.info("Loading conversation history, please wait...")
-                # Import the async function directly
-                from app.utils.matrix_actions import get_direct_message_history
-                
-                # Get message history using the async function
-                messages = await get_direct_message_history(user_id, limit=20)
-                st.session_state[f'matrix_message_history_{user_id}'] = messages
-                st.session_state[f'loading_matrix_history_{user_id}'] = False
-                st.rerun()
-                
-            except Exception as e:
-                st.session_state[f'matrix_history_error_{user_id}'] = str(e)
-                logging.error(f"Error loading message history: {str(e)}", exc_info=True)
-                st.session_state[f'loading_matrix_history_{user_id}'] = False
-            
-        # Check if we have history or an error
-        if f'matrix_history_error_{user_id}' in st.session_state:
-            st.error(f"Error loading message history: {st.session_state[f'matrix_history_error_{user_id}']}")
-            del st.session_state[f'matrix_history_error_{user_id}']
-            st.session_state[f'loading_matrix_history_{user_id}'] = False
-        
-        if f'matrix_message_history_{user_id}' in st.session_state:
-            st.session_state[f'loading_matrix_history_{user_id}'] = False
-            display_matrix_chat_messages(st.session_state[f'matrix_message_history_{user_id}'])
-        else:
-            st.info("Loading conversation history...")
-    else:
-        # Display cached history if available
-        if f'matrix_message_history_{user_id}' in st.session_state and st.session_state[f'matrix_message_history_{user_id}'] is not None:
-            display_matrix_chat_messages(st.session_state[f'matrix_message_history_{user_id}'])
-        else:
-            st.info("Click 'Load History' to view recent messages with this user")
 
 def display_matrix_chat_messages(messages):
     """Display chat messages in a conversation format."""

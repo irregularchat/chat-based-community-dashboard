@@ -491,13 +491,13 @@ async def send_matrix_message(room_id, message, client=None):
 
 async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
     """
-    Create a direct chat with another user.
+    Create or find an existing direct chat with another user.
     
     Args:
         user_id: The Matrix ID of the user to chat with
         
     Returns:
-        Optional[str]: The room ID of the created chat, or None if creation failed
+        Optional[str]: The room ID of the direct chat, or None if creation/finding failed
     """
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping create_direct_chat.")
@@ -509,32 +509,69 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
             logger.error("Failed to create Matrix client")
             return None
 
-        # Try to get display name from user profile
-        display_name = user_id.split(":")[0].lstrip("@")  # Default fallback
-        try:
-            profile_response = await client.get_profile(user_id)
-            if hasattr(profile_response, "displayname") and profile_response.displayname:
-                display_name = profile_response.displayname
-                logger.info(f"Retrieved display name for {user_id}: {display_name}")
-        except Exception as e:
-            logger.warning(f"Could not get display name for {user_id}: {str(e)}")
-
-        # Create a direct message room - without encryption for now
-        response = await client.room_create(
-            is_direct=True,
-            invite=[user_id],
-            preset=RoomPreset.trusted_private_chat
-        )
+        # First, try to find existing direct chat room with this user
+        room_id = None
         
-        if isinstance(response, RoomCreateResponse) and response.room_id:
-            logger.info(f"Created direct chat room with {user_id}: {response.room_id}")
-            return response.room_id
-        else:
-            logger.error(f"Failed to create direct chat with {user_id}: {response}")
-            return None
+        # Get joined rooms
+        joined_rooms = await client.joined_rooms()
+        if isinstance(joined_rooms, JoinedRoomsResponse) and joined_rooms.rooms:
+            logger.info(f"Bot is in {len(joined_rooms.rooms)} rooms, searching for existing direct chat with {user_id}")
+            
+            # Check joined rooms for direct chats
+            for joined_room in joined_rooms.rooms:
+                try:
+                    # Get room members
+                    members_response = await client.room_get_state(joined_room)
+                    if isinstance(members_response, RoomGetStateResponse):
+                        members = []
+                        for event in members_response.events:
+                            if event.get("type") == "m.room.member" and event.get("state_key"):
+                                member_id = event.get("state_key")
+                                content = event.get("content", {})
+                                if content.get("membership") == "join":
+                                    members.append(member_id)
+                        
+                        # If this is a direct chat (only 2 members: bot and user)
+                        if len(members) == 2 and user_id in members and MATRIX_BOT_USERNAME in members:
+                            room_id = joined_room
+                            logger.info(f"Found existing direct chat room with {user_id}: {room_id}")
+                            return room_id
+                except Exception as room_err:
+                    logger.warning(f"Error checking room {joined_room} for direct chat: {str(room_err)}")
+
+        # If no existing direct chat found, create a new one
+        if not room_id:
+            logger.info(f"No existing direct chat found with {user_id}, creating new room")
+            
+            # Try to get display name from user profile
+            display_name = user_id.split(":")[0].lstrip("@")  # Default fallback
+            try:
+                profile_response = await client.get_profile(user_id)
+                if hasattr(profile_response, "displayname") and profile_response.displayname:
+                    display_name = profile_response.displayname
+                    logger.info(f"Retrieved display name for {user_id}: {display_name}")
+            except Exception as e:
+                logger.warning(f"Could not get display name for {user_id}: {str(e)}")
+
+            # Create a direct message room
+            response = await client.room_create(
+                is_direct=True,
+                invite=[user_id],
+                preset=RoomPreset.trusted_private_chat
+            )
+            
+            if isinstance(response, RoomCreateResponse) and response.room_id:
+                room_id = response.room_id
+                logger.info(f"Created new direct chat room with {user_id}: {room_id}")
+                return room_id
+            else:
+                logger.error(f"Failed to create direct chat with {user_id}: {response}")
+                return None
+        
+        return room_id
             
     except Exception as e:
-        logger.error(f"Failed to create Matrix direct chat: {e}")
+        logger.error(f"Failed to create/find Matrix direct chat: {e}")
         return None
     finally:
         if client:

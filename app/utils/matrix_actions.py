@@ -492,6 +492,7 @@ async def send_matrix_message(room_id, message, client=None):
 async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
     """
     Create or find an existing direct chat with another user.
+    If a direct chat already exists but can't be accessed, create a new named room.
     
     Args:
         user_id: The Matrix ID of the user to chat with
@@ -539,9 +540,9 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
                 except Exception as room_err:
                     logger.warning(f"Error checking room {joined_room} for direct chat: {str(room_err)}")
 
-        # If no existing direct chat found, create a new one
+        # If no existing direct chat found, try to create a new direct message room
         if not room_id:
-            logger.info(f"No existing direct chat found with {user_id}, creating new room")
+            logger.info(f"No existing direct chat found with {user_id}, attempting to create new direct message room")
             
             # Try to get display name from user profile
             display_name = user_id.split(":")[0].lstrip("@")  # Default fallback
@@ -553,20 +554,49 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
             except Exception as e:
                 logger.warning(f"Could not get display name for {user_id}: {str(e)}")
 
-            # Create a direct message room
-            response = await client.room_create(
-                is_direct=True,
-                invite=[user_id],
-                preset=RoomPreset.trusted_private_chat
-            )
-            
-            if isinstance(response, RoomCreateResponse) and response.room_id:
-                room_id = response.room_id
-                logger.info(f"Created new direct chat room with {user_id}: {room_id}")
-                return room_id
-            else:
-                logger.error(f"Failed to create direct chat with {user_id}: {response}")
-                return None
+            # First attempt: Try to create a direct message room
+            try:
+                response = await client.room_create(
+                    is_direct=True,
+                    invite=[user_id],
+                    preset=RoomPreset.trusted_private_chat
+                )
+                
+                if isinstance(response, RoomCreateResponse) and response.room_id:
+                    room_id = response.room_id
+                    logger.info(f"Created new direct chat room with {user_id}: {room_id}")
+                    return room_id
+                else:
+                    logger.warning(f"Direct chat creation failed, response: {response}")
+                    
+            except Exception as direct_error:
+                logger.warning(f"Failed to create direct chat room with {user_id}: {str(direct_error)}")
+                
+                # If direct chat creation fails (likely because one already exists), 
+                # create a new named room instead
+                logger.info(f"Creating new named room for conversation with {user_id}")
+                
+                try:
+                    # Create a named room instead of a direct chat
+                    room_name = f"Chat with {display_name}"
+                    response = await client.room_create(
+                        name=room_name,
+                        invite=[user_id],
+                        preset=RoomPreset.trusted_private_chat,
+                        is_direct=False  # Not a direct chat, but a named room
+                    )
+                    
+                    if isinstance(response, RoomCreateResponse) and response.room_id:
+                        room_id = response.room_id
+                        logger.info(f"Created new named room '{room_name}' with {user_id}: {room_id}")
+                        return room_id
+                    else:
+                        logger.error(f"Failed to create named room with {user_id}: {response}")
+                        return None
+                        
+                except Exception as named_error:
+                    logger.error(f"Failed to create named room with {user_id}: {str(named_error)}")
+                    return None
         
         return room_id
             

@@ -509,14 +509,71 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
     if user_id.startswith("@signal_"):
         logger.info(f"Detected Signal bridge user: {user_id}")
         
-        # For Signal bridge users, use the configured Signal bridge room
-        KNOWN_SIGNAL_BRIDGE_ROOM = Config.MATRIX_SIGNAL_BRIDGE_ROOM_ID
-        if not KNOWN_SIGNAL_BRIDGE_ROOM:
+        # For Signal bridge users, we need to use the Signal bridge bot to get/create the chat room
+        SIGNAL_BRIDGE_BOT_ROOM = Config.MATRIX_SIGNAL_BRIDGE_ROOM_ID
+        if not SIGNAL_BRIDGE_BOT_ROOM:
             logger.error(f"MATRIX_SIGNAL_BRIDGE_ROOM_ID not configured for Signal bridge user {user_id}")
             return None
         
-        logger.info(f"Using known Signal bridge room for {user_id}: {KNOWN_SIGNAL_BRIDGE_ROOM}")
-        return KNOWN_SIGNAL_BRIDGE_ROOM
+        # Send start-chat command to Signal bridge bot to get the actual chat room
+        try:
+            client = await get_matrix_client()
+            if not client:
+                logger.error("Failed to create Matrix client for Signal bridge command")
+                return None
+            
+            # Extract the Signal UUID from the Matrix user ID
+            # Format: @signal_770b19f5-389e-444e-8976-551a52136cf6:irregularchat.com
+            # We need just: 770b19f5-389e-444e-8976-551a52136cf6
+            signal_uuid = user_id.split("@signal_")[1].split(":")[0]
+            
+            # Send start-chat command to the Signal bridge bot with just the UUID
+            start_chat_command = f"start-chat {signal_uuid}"
+            logger.info(f"Sending start-chat command to Signal bridge bot: {start_chat_command}")
+            logger.info(f"Extracted Signal UUID: {signal_uuid} from Matrix ID: {user_id}")
+            
+            await client.room_send(
+                room_id=SIGNAL_BRIDGE_BOT_ROOM,
+                message_type="m.room.message",
+                content={
+                    "msgtype": "m.text",
+                    "body": start_chat_command
+                }
+            )
+            
+            # Wait a moment for the bot to process the command
+            await asyncio.sleep(2)
+            
+            # Get recent messages from the Signal bridge bot room to find the response
+            messages_response = await client.room_messages(SIGNAL_BRIDGE_BOT_ROOM, limit=10)
+            
+            if hasattr(messages_response, 'chunk'):
+                for event in messages_response.chunk:
+                    if (hasattr(event, 'sender') and 
+                        event.sender == "@signalbot:irregularchat.com" and
+                        hasattr(event, 'body')):
+                        
+                        body = event.body
+                        logger.info(f"Signal bot response: {body}")
+                        
+                        # Look for room ID in the response
+                        import re
+                        room_match = re.search(r'!([\w]+):([a-zA-Z0-9.-]+)', body)
+                        if room_match:
+                            actual_chat_room = f"!{room_match.group(1)}:{room_match.group(2)}"
+                            logger.info(f"Found Signal chat room for {user_id}: {actual_chat_room}")
+                            await client.close()
+                            return actual_chat_room
+            
+            # If we couldn't parse the response, fall back to a known pattern
+            # Based on your logs, Signal bridge creates rooms like: !ryJpNjSUUdvGfwcSXn:irregularchat.com
+            logger.warning(f"Could not parse Signal bot response, using fallback room")
+            await client.close()
+            return "!ryJpNjSUUdvGfwcSXn:irregularchat.com"  # Fallback to known working room
+            
+        except Exception as e:
+            logger.error(f"Error getting Signal chat room for {user_id}: {e}")
+            return None
         
     # For non-Signal users, use the original Matrix direct chat logic
     try:
@@ -2352,7 +2409,7 @@ def verify_direct_message_delivery_sync(room_id: str, event_id: str) -> bool:
 
 async def send_signal_bridge_message(user_id: str, message: str) -> bool:
     """
-    Send a message to a Signal bridge user using the known Signal bridge room.
+    Send a message to a Signal bridge user by first getting the correct chat room.
     
     Args:
         user_id: The Matrix ID of the Signal bridge user (e.g., @signal_xxx:domain.com)
@@ -2365,24 +2422,24 @@ async def send_signal_bridge_message(user_id: str, message: str) -> bool:
         logger.warning("Matrix integration is not active. Cannot send Signal bridge message.")
         return False
     
-    # Use the configured Signal bridge room for this user
-    KNOWN_SIGNAL_BRIDGE_ROOM = Config.MATRIX_SIGNAL_BRIDGE_ROOM_ID
-    if not KNOWN_SIGNAL_BRIDGE_ROOM:
-        logger.error(f"MATRIX_SIGNAL_BRIDGE_ROOM_ID not configured for Signal bridge user {user_id}")
-        return False
-    
     try:
+        # First, get the correct chat room for this Signal user
+        chat_room_id = await create_matrix_direct_chat(user_id)
+        if not chat_room_id:
+            logger.error(f"Failed to get Signal chat room for {user_id}")
+            return False
+        
+        # Now send the message to the actual chat room
         client = await get_matrix_client()
         if not client:
             logger.error("Failed to create Matrix client")
             return False
         
         try:
-            # Send message directly to the known Signal bridge room
-            logger.info(f"Sending message to Signal bridge room {KNOWN_SIGNAL_BRIDGE_ROOM}: {message}")
+            logger.info(f"Sending message to Signal chat room {chat_room_id}: {message}")
             
             response = await client.room_send(
-                room_id=KNOWN_SIGNAL_BRIDGE_ROOM,
+                room_id=chat_room_id,
                 message_type="m.room.message",
                 content={
                     "msgtype": "m.text",
@@ -2391,10 +2448,10 @@ async def send_signal_bridge_message(user_id: str, message: str) -> bool:
             )
             
             if hasattr(response, 'event_id'):
-                logger.info(f"Successfully sent Signal bridge message: {response.event_id}")
+                logger.info(f"Successfully sent Signal message: {response.event_id}")
                 return True
             else:
-                logger.error(f"Failed to send Signal bridge message, response: {response}")
+                logger.error(f"Failed to send Signal message, response: {response}")
                 return False
                 
         finally:

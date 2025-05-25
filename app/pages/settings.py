@@ -336,7 +336,6 @@ def render_settings_page():
     # Display tabs for different setting categories
     tabs = st.tabs([
         "User Settings", 
-        "Integration Settings", 
         "Matrix Rooms", 
         "Message Users", 
         "Prompts", 
@@ -347,29 +346,44 @@ def render_settings_page():
     with tabs[0]:
         render_user_settings()
     
-    # Integration Settings Tab
-    with tabs[1]:
-        render_integration_settings()
-    
     # Matrix Rooms Tab
-    with tabs[2]:
+    with tabs[1]:
         render_matrix_rooms_settings()
     
     # Message Users Tab
-    with tabs[3]:
+    with tabs[2]:
         render_message_users_settings()
     
     # Prompts Tab
-    with tabs[4]:
+    with tabs[3]:
         render_prompts_settings()
     
     # Advanced Settings Tab
-    with tabs[5]:
+    with tabs[4]:
         render_advanced_settings()
 
 def render_integration_settings():
     """Render the integration settings tab"""
-    st.header("Integration Settings")
+    st.header("🔌 Integration Settings")
+    st.error("🔒 **ADMIN ONLY - SENSITIVE CREDENTIALS:** This section contains API tokens, passwords, and secrets that provide full access to external services. Handle with extreme care!")
+    
+    # Security guidelines
+    with st.expander("🛡️ Security Guidelines", expanded=False):
+        st.markdown("""
+        **Before proceeding, ensure:**
+        - You are in a secure, private environment
+        - No unauthorized persons can see your screen
+        - You understand the security implications
+        - You have proper credential management procedures
+        
+        **These credentials provide access to:**
+        - Matrix server (full bot capabilities)
+        - Email systems (sending capabilities)
+        - Discourse forum (administrative access)
+        - External APIs and services
+        """)
+    
+    st.divider()
     
     # Matrix Integration
     st.subheader("Matrix Integration")
@@ -377,7 +391,7 @@ def render_integration_settings():
     matrix_url = st.text_input("Matrix Server URL", value=getattr(Config, "MATRIX_HOMESERVER_URL", "") or "", key="integration_matrix_url")
     matrix_bot_username = st.text_input("Matrix Bot Username", value=getattr(Config, "MATRIX_BOT_USERNAME", "") or "", key="integration_matrix_bot_username")
     matrix_bot_display_name = st.text_input("Matrix Bot Display Name", value=getattr(Config, "MATRIX_BOT_DISPLAY_NAME", "") or "", key="integration_matrix_bot_display_name")
-    matrix_access_token = st.text_input("Matrix Access Token", value=getattr(Config, "MATRIX_ACCESS_TOKEN", "") or "", type="password", key="integration_matrix_access_token")
+    matrix_access_token = st.text_input("Matrix Access Token", value=getattr(Config, "MATRIX_ACCESS_TOKEN", "") or "", type="password", key="integration_matrix_access_token", help="⚠️ SENSITIVE: This token provides full bot access to your Matrix server")
     matrix_default_room_id = st.text_input("Matrix Default Room ID", value=getattr(Config, "MATRIX_DEFAULT_ROOM_ID", "") or "", key="integration_matrix_default_room_id")
     matrix_welcome_room_id = st.text_input("Matrix Welcome Room ID", value=getattr(Config, "MATRIX_WELCOME_ROOM_ID", "") or "", key="integration_matrix_welcome_room_id")
     
@@ -387,16 +401,52 @@ def render_integration_settings():
     smtp_server = st.text_input("SMTP Server", value=getattr(Config, "SMTP_SERVER", "") or "", key="integration_smtp_server")
     smtp_port = st.number_input("SMTP Port", value=int(getattr(Config, "SMTP_PORT", 587) or 587), min_value=1, max_value=65535, key="integration_smtp_port")
     smtp_user = st.text_input("SMTP Username", value=getattr(Config, "SMTP_USERNAME", "") or "", key="integration_smtp_user")
-    smtp_password = st.text_input("SMTP Password", value=getattr(Config, "SMTP_PASSWORD", "") or "", type="password", key="integration_smtp_password")
+    smtp_password = st.text_input("SMTP Password", value=getattr(Config, "SMTP_PASSWORD", "") or "", type="password", key="integration_smtp_password", help="⚠️ SENSITIVE: Email account password")
     smtp_from = st.text_input("From Email Address", value=getattr(Config, "SMTP_FROM_EMAIL", "") or "", key="integration_smtp_from")
     
     # Discourse Integration
     st.subheader("Discourse Integration")
     discourse_active = st.checkbox("Enable Discourse Integration", value=getattr(Config, "DISCOURSE_ACTIVE", False), key="integration_discourse_active")
     discourse_url = st.text_input("Discourse URL", value=getattr(Config, "DISCOURSE_URL", "") or "", key="integration_discourse_url")
-    discourse_api_key = st.text_input("Discourse API Key", value=getattr(Config, "DISCOURSE_API_KEY", "") or "", type="password", key="integration_discourse_api_key")
+    discourse_api_key = st.text_input("Discourse API Key", value=getattr(Config, "DISCOURSE_API_KEY", "") or "", type="password", key="integration_discourse_api_key", help="⚠️ SENSITIVE: Administrative API key for Discourse")
     discourse_api_username = st.text_input("Discourse API Username", value=getattr(Config, "DISCOURSE_API_USERNAME", "") or "", key="integration_discourse_api_username")
     discourse_category_id = st.text_input("Discourse Category ID", value=getattr(Config, "DISCOURSE_CATEGORY_ID", "") or "", key="integration_discourse_category_id")
+    
+    # Authentication System Integration
+    st.subheader("🔐 Authentication System Integration")
+    authentik_api_token = st.text_input("Authentik API Token", value=getattr(Config, "AUTHENTIK_API_TOKEN", "") or "", type="password", key="integration_authentik_api_token", help="⚠️ SENSITIVE: API token for Authentik user management system")
+    
+    # URL Shortener Integration
+    st.subheader("🔗 URL Shortener Integration")
+    shlink_url = st.text_input("Shlink URL", value=getattr(Config, "SHLINK_URL", "") or "", key="integration_shlink_url")
+    shlink_api_token = st.text_input("Shlink API Token", value=getattr(Config, "SHLINK_API_TOKEN", "") or "", type="password", key="integration_shlink_api_token", help="⚠️ SENSITIVE: API token for Shlink URL shortening service")
+    
+    # OpenAI Integration
+    st.subheader("🤖 OpenAI Integration")
+    openai_api_key = st.text_input("OpenAI API Key", value=getattr(Config, "OPENAI_API_KEY", "") or "", type="password", key="integration_openai_api_key", help="⚠️ SENSITIVE: API key for OpenAI services - this incurs billing charges")
+    
+    # Authentication System Configuration
+    st.subheader("🔐 Authentication System Configuration")
+    
+    # Group and Flow Settings
+    st.write("**Group and Flow Settings**")
+    main_group_id = st.text_input("Default Group ID", value=getattr(Config, "MAIN_GROUP_ID", "") or "", key="integration_main_group_id")
+    flow_id = st.text_input("Flow ID", value=getattr(Config, "FLOW_ID", "") or "", key="integration_flow_id")
+    
+    # Auth0 Configuration
+    st.write("**Auth0 Configuration**")
+    auth0_domain = st.text_input("Auth0 Domain", value=getattr(Config, "AUTH0_DOMAIN", "") or "", key="integration_auth0_domain")
+    auth0_callback_url = st.text_input("Auth0 Callback URL", value=getattr(Config, "AUTH0_CALLBACK_URL", "") or "", key="integration_auth0_callback_url")
+    auth0_authorize_url = st.text_input("Auth0 Authorize URL", value=getattr(Config, "AUTH0_AUTHORIZE_URL", "") or "", key="integration_auth0_authorize_url")
+    auth0_token_url = st.text_input("Auth0 Token URL", value=getattr(Config, "AUTH0_TOKEN_URL", "") or "", key="integration_auth0_token_url")
+    
+    # Authentik Configuration
+    st.write("**Authentik Configuration**")
+    authentik_api_url = st.text_input("Authentik API URL", value=getattr(Config, "AUTHENTIK_API_URL", "") or "", key="integration_authentik_api_url")
+    
+    # Encryption Settings
+    st.write("**Encryption Settings**")
+    encryption_password = st.text_input("Encryption Password", value=getattr(Config, "ENCRYPTION_PASSWORD", "") or "", type="password", key="integration_encryption_password", help="⚠️ SENSITIVE: Password used for encryption operations")
     
 
     # Save Integration Settings
@@ -427,6 +477,29 @@ def render_integration_settings():
         success &= save_env_variable("DISCOURSE_API_USERNAME", discourse_api_username)
         success &= save_env_variable("DISCOURSE_CATEGORY_ID", discourse_category_id)
         
+        # Save Authentication & URL Shortener tokens
+        success &= save_env_variable("AUTHENTIK_API_TOKEN", authentik_api_token)
+        success &= save_env_variable("SHLINK_URL", shlink_url)
+        success &= save_env_variable("SHLINK_API_TOKEN", shlink_api_token)
+        
+        # Save OpenAI settings
+        success &= save_env_variable("OPENAI_API_KEY", openai_api_key)
+        
+        # Save Group and Flow settings
+        success &= save_env_variable("MAIN_GROUP_ID", main_group_id)
+        success &= save_env_variable("FLOW_ID", flow_id)
+        
+        # Save Auth0 settings
+        success &= save_env_variable("AUTH0_DOMAIN", auth0_domain)
+        success &= save_env_variable("AUTH0_CALLBACK_URL", auth0_callback_url)
+        success &= save_env_variable("AUTH0_AUTHORIZE_URL", auth0_authorize_url)
+        success &= save_env_variable("AUTH0_TOKEN_URL", auth0_token_url)
+        
+        # Save Authentik settings
+        success &= save_env_variable("AUTHENTIK_API_URL", authentik_api_url)
+        
+        # Save Encryption settings
+        success &= save_env_variable("ENCRYPTION_PASSWORD", encryption_password)
         
         if success:
             st.success("Integration settings saved successfully! Please restart the application for changes to take effect.")
@@ -1017,76 +1090,44 @@ def display_direct_message_form(users):
 
 def render_user_settings():
     """Render user settings section"""
-    st.subheader("Integration Settings")
+    st.subheader("User Settings")
     
     # Load current settings with defaults for missing attributes
     selected_theme = os.getenv("THEME", "light")  # Default to light if not set
-    shlink_url = getattr(Config, "SHLINK_URL", "")
-    auth0_domain = getattr(Config, "AUTH0_DOMAIN", "")
-    auth0_callback_url = getattr(Config, "AUTH0_CALLBACK_URL", "")
-    auth0_authorize_url = getattr(Config, "AUTH0_AUTHORIZE_URL", "")
-    auth0_token_url = getattr(Config, "AUTH0_TOKEN_URL", "")
-    authentik_api_url = getattr(Config, "AUTHENTIK_API_URL", "")
-    authentik_api_token = getattr(Config, "AUTHENTIK_API_TOKEN", "")
-    shlink_api_token = getattr(Config, "SHLINK_API_TOKEN", "")
-    main_group_id = getattr(Config, "MAIN_GROUP_ID", "")
-    flow_id = getattr(Config, "FLOW_ID", "")
-    encryption_password = getattr(Config, "ENCRYPTION_PASSWORD", "")
     
     # Create a form for saving settings
     with st.form("user_settings_form_main"):
         # Theme selection
+        st.subheader("🎨 Theme Settings")
         theme_options = ["light", "dark"]
         selected_theme = st.selectbox("Select theme", theme_options, 
                                       index=theme_options.index(selected_theme) if selected_theme in theme_options else 0,
                                       key="settings_theme")
         
-        # Group ID settings
-        st.subheader("Group and Flow Settings")
-        main_group_id = st.text_input("Default Group ID", value=main_group_id or "", key="settings_main_group_id")
-        flow_id = st.text_input("Flow ID", value=flow_id or "", key="settings_flow_id")
+        # Information about moved settings
+        st.subheader("🔒 Integration & API Configuration")
+        st.info("🔒 **For security reasons, all integration settings, API tokens, and sensitive credentials have been moved to Advanced Settings → Integration Settings (admin-only access).**")
         
-        # Auth0 settings
-        st.subheader("Auth0 Configuration")
-        auth0_domain = st.text_input("Auth0 Domain", value=auth0_domain or "", key="settings_auth0_domain")
-        auth0_callback_url = st.text_input("Auth0 Callback URL", value=auth0_callback_url or "", key="settings_auth0_callback_url")
-        auth0_authorize_url = st.text_input("Auth0 Authorize URL", value=auth0_authorize_url or "", key="settings_auth0_authorize_url")
-        auth0_token_url = st.text_input("Auth0 Token URL", value=auth0_token_url or "", key="settings_auth0_token_url")
+        st.write("**Settings now in Advanced Settings → Integration Settings:**")
+        st.write("• Matrix Access Token")
+        st.write("• SMTP Password") 
+        st.write("• Discourse API Key")
+        st.write("• OpenAI API Key")
+        st.write("• Authentik API Token & URL")
+        st.write("• Shlink API Token & URL")
+        st.write("• Auth0 Configuration")
+        st.write("• Group and Flow Settings")
+        st.write("• Encryption Password")
         
-        # Authentik settings
-        st.subheader("Authentik Configuration")
-        authentik_api_url = st.text_input("Authentik API URL", value=authentik_api_url or "", key="settings_authentik_api_url")
-        authentik_api_token = st.text_input("Authentik API Token", value=authentik_api_token or "", type="password", key="settings_authentik_api_token")
-        
-        # Shlink settings
-        st.subheader("Shlink URL Shortener Configuration")
-        shlink_url = st.text_input("Shlink URL", value=shlink_url or "", key="settings_shlink_url")
-        shlink_api_token = st.text_input("Shlink API Token", value=shlink_api_token or "", type="password", key="settings_shlink_api_token")
-        
-        # Encryption settings
-        st.subheader("Encryption Settings")
-        encryption_password = st.text_input("Encryption Password", value=encryption_password or "", type="password", key="settings_encryption_password")
-        
-        submitted = st.form_submit_button("Save Settings")
+        submitted = st.form_submit_button("Save Theme Settings")
         
         if submitted:
-            if save_user_settings(
-                selected_theme=selected_theme,
-                shlink_url=shlink_url,
-                auth0_domain=auth0_domain,
-                auth0_callback_url=auth0_callback_url,
-                auth0_authorize_url=auth0_authorize_url,
-                auth0_token_url=auth0_token_url,
-                authentik_api_url=authentik_api_url,
-                authentik_api_token=authentik_api_token,
-                shlink_api_token=shlink_api_token,
-                main_group_id=main_group_id,
-                flow_id=flow_id,
-                encryption_password=encryption_password
-            ):
-                st.success("Settings saved successfully! Refresh the page to see the changes.")
+            # Only save theme setting now
+            success = save_env_variable("THEME", selected_theme)
+            if success:
+                st.success("Theme settings saved successfully! Refresh the page to see the changes.")
             else:
-                st.error("Failed to save settings.")
+                st.error("Failed to save theme settings.")
 
 def render_prompts_settings():
     """Render the prompts management tab"""
@@ -1408,22 +1449,10 @@ def render_advanced_settings():
     st.warning("These settings are for advanced users only. Incorrect configuration may cause the application to malfunction.")
     
     # Create tabs for different advanced settings
-    tabs = st.tabs(["OpenAI Integration", "Moderator Management"])
+    tabs = st.tabs(["🔌 Integration Settings", "🛡️ Moderator Management"])
     
     with tabs[0]:
-        # OpenAI settings
-        st.subheader("OpenAI Integration")
-        openai_api_key = st.text_input("OpenAI API Key", value=getattr(Config, "OPENAI_API_KEY", "") or "", type="password", key="advanced_openai_api_key")
-        
-        # Save button
-        if st.button("Save OpenAI Settings", key="advanced_openai_save_button"):
-            success = True
-            success &= save_env_variable("OPENAI_API_KEY", openai_api_key)
-            
-            if success:
-                st.success("OpenAI settings saved successfully! Please restart the application for changes to take effect.")
-            else:
-                st.error("There was an error saving some settings. Please check the logs for details.")
+        render_integration_settings()
     
     with tabs[1]:
         render_moderator_management()
@@ -1457,6 +1486,7 @@ def render_moderator_management():
     mod_tabs = st.tabs([
         "📊 Overview",
         "➕ Add Moderator",
+        "👤 Create Account",
         "🔧 Manage Permissions",
         "❌ Revoke Access",
         "🔄 Matrix Sync",
@@ -1781,6 +1811,74 @@ def render_moderator_management():
                             st.error("Failed to promote user. Please check logs for details.")
     
     with mod_tabs[2]:
+        st.write("### 👤 Create New Moderator Account")
+        st.info("💡 Create a complete moderator account with credentials and welcome message")
+        st.warning("⚠️ This creates a new local account with temporary password. The moderator will receive the message: 'You've been selected to be a moderator and help the community by using the community dashboard to process users from the community.'")
+        
+        with st.form("create_moderator_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                first_name = st.text_input("First Name *", placeholder="Enter first name")
+                email = st.text_input("Email Address *", placeholder="moderator@example.com")
+            with col2:
+                last_name = st.text_input("Last Name *", placeholder="Enter last name")
+                username = st.text_input("Username (optional)", placeholder="Auto-generated if blank")
+            
+            submitted = st.form_submit_button("✅ Create Moderator Account", type="primary")
+            
+            if submitted:
+                if not first_name or not last_name or not email:
+                    st.error("❌ First name, last name, and email are required.")
+                elif "@" not in email:
+                    st.error("❌ Please enter a valid email address.")
+                else:
+                    with st.spinner("🔄 Creating moderator account..."):
+                        try:
+                            from app.auth.api import create_user
+                            from app.db.operations import promote_to_moderator
+                            
+                            # Create user account
+                            user_result = create_user(
+                                email=email,
+                                first_name=first_name,
+                                last_name=last_name,
+                                desired_username=username if username else None,
+                                reset_password=True,
+                                send_welcome=False,
+                                should_create_discourse_post=False
+                            )
+                            
+                            if user_result["success"]:
+                                final_username = user_result["username"]
+                                temp_password = user_result["temp_password"]
+                                
+                                # Promote to moderator
+                                admin_username = st.session_state.get('username', 'unknown')
+                                if promote_to_moderator(db, final_username, admin_username):
+                                    st.success(f"✅ Successfully created moderator account: **{final_username}**")
+                                    
+                                    # Display credentials
+                                    st.markdown("#### 📋 Account Details")
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        st.code(f"Username: {final_username}")
+                                        st.code(f"Email: {email}")
+                                    with col2:
+                                        st.code(f"Temp Password: {temp_password}")
+                                        st.code(f"Status: Moderator")
+                                    
+                                    st.warning(f"🔐 **Important:** Provide these credentials to the new moderator and ask them to change their password on first login.")
+                                    st.info("📧 **Welcome Message:** 'You've been selected to be a moderator and help the community by using the community dashboard to process users from the community.'")
+                                    
+                                    st.balloons()
+                                else:
+                                    st.error("❌ Failed to promote user to moderator.")
+                            else:
+                                st.error(f"❌ Failed to create account: {user_result.get('error', 'Unknown error')}")
+                        except Exception as e:
+                            st.error(f"❌ Error: {str(e)}")
+    
+    with mod_tabs[3]:
         st.write("### Manage Moderator Permissions")
         
         # Get all moderators
@@ -1875,7 +1973,7 @@ def render_moderator_management():
                     else:
                         st.error("Failed to grant permission. It may already exist.")
     
-    with mod_tabs[3]:
+    with mod_tabs[4]:
         st.write("### Revoke Moderator Access")
         
         # Get all moderators
@@ -1980,7 +2078,7 @@ def render_moderator_management():
                     if st.button("Cancel", key="mod_revoke_cancel"):
                         st.info("Revocation cancelled.")
     
-    with mod_tabs[4]:
+    with mod_tabs[5]:
         st.write("### Matrix Room Sync")
         st.info("🔄 Sync moderator power levels across Matrix rooms")
         
@@ -2079,7 +2177,7 @@ def render_moderator_management():
                     
                     status_text.text(f"✅ Sync complete! Successfully synced {success_count}/{total} moderators")
     
-    with mod_tabs[5]:
+    with mod_tabs[6]:
         st.write("### Audit Log")
         st.info("📋 View recent moderator-related administrative actions")
         

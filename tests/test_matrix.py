@@ -200,32 +200,144 @@ async def test_verify_message_delivery():
     room_id = "!room:matrix.org"
     event_id = "event123"
     
-    # Create mocks
+    # Create a mock client
     mock_client = AsyncMock()
-    mock_messages_response = AsyncMock(spec=RoomMessagesResponse)
     
-    # Create mock events with one matching our event_id
-    mock_event1 = MagicMock()
-    mock_event1.event_id = "other_event"
+    # Create a mock event with the event_id we're looking for
+    mock_event = AsyncMock()
+    mock_event.event_id = event_id
     
-    mock_event2 = MagicMock()
-    mock_event2.event_id = event_id
+    # Create a mock response with the event in the chunk
+    mock_response = AsyncMock(spec=RoomMessagesResponse)
+    mock_response.chunk = [mock_event]
     
-    mock_messages_response.chunk = [mock_event1, mock_event2]
-    mock_client.room_messages.return_value = mock_messages_response
+    mock_client.room_messages.return_value = mock_response
     
-    with patch('app.utils.matrix_actions.get_matrix_client', return_value=mock_client):
-        # Test verification
+    with patch('app.utils.matrix_actions.get_matrix_client', return_value=mock_client), \
+         patch('app.utils.matrix_actions.MATRIX_ACTIVE', True):
+        
         result = await verify_direct_message_delivery(room_id, event_id)
         
-        # Verify result
+        # Verify the result
         assert result is True
         
-        # Verify function calls
+        # Verify the function was called correctly
         mock_client.room_messages.assert_called_once_with(room_id, limit=20)
+
+@pytest.mark.asyncio
+async def test_get_direct_message_history():
+    """Test getting direct message history for a user."""
+    from app.utils.matrix_actions import get_direct_message_history
+    
+    # Mock user ID
+    user_id = "@user:matrix.org"
+    
+    # Create a mock client
+    mock_client = AsyncMock()
+    
+    # Create mock message events
+    mock_event1 = AsyncMock()
+    mock_event1.msgtype = 'm.text'
+    mock_event1.event_id = 'event1'
+    mock_event1.sender = '@user:matrix.org'
+    mock_event1.body = 'Hello from user'
+    mock_event1.server_timestamp = 1640995200000  # 2022-01-01 00:00:00
+    
+    mock_event2 = AsyncMock()
+    mock_event2.msgtype = 'm.text'
+    mock_event2.event_id = 'event2'
+    mock_event2.sender = '@bot:matrix.org'
+    mock_event2.body = 'Hello from bot'
+    mock_event2.server_timestamp = 1640995260000  # 2022-01-01 00:01:00
+    
+    # Create a mock response with the events
+    mock_response = AsyncMock(spec=RoomMessagesResponse)
+    mock_response.chunk = [mock_event2, mock_event1]  # Newest first (API default)
+    
+    mock_client.room_messages.return_value = mock_response
+    
+    # Mock the create_matrix_direct_chat function to return a room ID
+    mock_room_id = "!directroom:matrix.org"
+    
+    with patch('app.utils.matrix_actions.get_matrix_client', return_value=mock_client), \
+         patch('app.utils.matrix_actions.create_matrix_direct_chat', return_value=mock_room_id), \
+         patch('app.utils.matrix_actions.MATRIX_ACTIVE', True), \
+         patch('app.utils.matrix_actions.MATRIX_BOT_USERNAME', '@bot:matrix.org'):
         
-        # Test verification with non-matching event ID
-        result = await verify_direct_message_delivery(room_id, "wrong_event_id")
+        result = await get_direct_message_history(user_id, limit=20)
         
-        # Verify result
-        assert result is False
+        # Verify the result
+        assert len(result) == 2
+        
+        # Check that messages are in chronological order (oldest first)
+        assert result[0]['event_id'] == 'event1'
+        assert result[0]['sender'] == '@user:matrix.org'
+        assert result[0]['content'] == 'Hello from user'
+        assert result[0]['is_bot_message'] is False
+        # Check that formatted_time is present (timezone may vary)
+        assert 'formatted_time' in result[0]
+        assert len(result[0]['formatted_time']) > 0
+        
+        assert result[1]['event_id'] == 'event2'
+        assert result[1]['sender'] == '@bot:matrix.org'
+        assert result[1]['content'] == 'Hello from bot'
+        assert result[1]['is_bot_message'] is True
+        # Check that formatted_time is present (timezone may vary)
+        assert 'formatted_time' in result[1]
+        assert len(result[1]['formatted_time']) > 0
+        
+        # Verify the function calls
+        mock_client.room_messages.assert_called_once_with(mock_room_id, limit=20)
+
+@pytest.mark.asyncio
+async def test_get_direct_message_history_no_room():
+    """Test getting message history when no room exists."""
+    from app.utils.matrix_actions import get_direct_message_history
+    
+    user_id = "@user:matrix.org"
+    
+    # Mock create_matrix_direct_chat to return None (no room found/created)
+    with patch('app.utils.matrix_actions.create_matrix_direct_chat', return_value=None), \
+         patch('app.utils.matrix_actions.MATRIX_ACTIVE', True):
+        
+        result = await get_direct_message_history(user_id)
+        
+        # Should return empty list when no room exists
+        assert result == []
+
+@pytest.mark.asyncio
+async def test_get_direct_message_history_matrix_inactive():
+    """Test getting message history when Matrix is inactive."""
+    from app.utils.matrix_actions import get_direct_message_history
+    
+    user_id = "@user:matrix.org"
+    
+    with patch('app.utils.matrix_actions.MATRIX_ACTIVE', False):
+        result = await get_direct_message_history(user_id)
+        
+        # Should return empty list when Matrix is inactive
+        assert result == []
+
+def test_get_direct_message_history_sync():
+    """Test the synchronous wrapper for getting message history."""
+    from app.utils.matrix_actions import get_direct_message_history_sync
+    
+    user_id = "@user:matrix.org"
+    expected_messages = [
+        {
+            'event_id': 'event1',
+            'sender': '@user:matrix.org',
+            'content': 'Test message',
+            'timestamp': 1640995200000,
+            'formatted_time': '2022-01-01 00:00:00',
+            'is_bot_message': False
+        }
+    ]
+    
+    with patch('app.utils.matrix_actions.get_direct_message_history', return_value=expected_messages), \
+         patch('app.utils.matrix_actions.MATRIX_ACTIVE', True):
+        
+        result = get_direct_message_history_sync(user_id)
+        
+        # Should return the same messages as the async version
+        assert result == expected_messages

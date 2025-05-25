@@ -1010,6 +1010,9 @@ def display_direct_message_form(users):
         # Extract the user ID from the selection
         user_id = selected_user.split(" - ")[-1]
         
+        # Display message history
+        display_message_history(user_id)
+        
         # Get previous message if in session state
         default_message = st.session_state.get('direct_message_text', '')
         
@@ -1079,6 +1082,10 @@ def display_direct_message_form(users):
                 st.success(f"Message sent successfully!")
                 # Clear the message
                 st.session_state['direct_message_text'] = ''
+                # Clear cached message history to force refresh
+                user_id = st.session_state.get('message_user_id', '')
+                if user_id and f'message_history_{user_id}' in st.session_state:
+                    del st.session_state[f'message_history_{user_id}']
             else:
                 st.error(f"Failed to send message")
             
@@ -1087,6 +1094,115 @@ def display_direct_message_form(users):
             del st.session_state['message_thread_started']
             del st.session_state['message_user_id']
             del st.session_state['message_text']
+
+def display_message_history(user_id):
+    """Display the message history for a direct message conversation."""
+    st.subheader("💬 Conversation History")
+    
+    # Create a button to load/refresh message history
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        if st.button("🔄 Load History", key=f"load_history_{user_id}"):
+            st.session_state[f'loading_history_{user_id}'] = True
+            st.session_state[f'message_history_{user_id}'] = None  # Reset to ensure fresh data
+            st.rerun()
+    
+    with col2:
+        st.write("*Click 'Load History' to view recent messages*")
+    
+    # Handle loading message history in background
+    if st.session_state.get(f'loading_history_{user_id}', False):
+        import threading
+        import asyncio
+        
+        if f'message_history_{user_id}' not in st.session_state or st.session_state[f'message_history_{user_id}'] is None:
+            # Define the function to run in the background
+            def load_history():
+                try:
+                    # Create new event loop
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
+                    # Import here to avoid circular imports
+                    from app.utils.matrix_actions import get_direct_message_history_sync
+                    
+                    # Get message history
+                    st.session_state[f'message_history_{user_id}'] = get_direct_message_history_sync(user_id, limit=20)
+                    
+                except Exception as e:
+                    st.session_state[f'history_error_{user_id}'] = str(e)
+                    logging.error(f"Error loading message history: {str(e)}", exc_info=True)
+                finally:
+                    st.session_state[f'loading_history_{user_id}'] = False
+            
+            # Start the background thread
+            thread = threading.Thread(target=load_history)
+            thread.start()
+            st.info("Loading conversation history, please wait...")
+            st.rerun()
+            
+        # Check if we have history or an error
+        if f'history_error_{user_id}' in st.session_state:
+            st.error(f"Error loading message history: {st.session_state[f'history_error_{user_id}']}")
+            del st.session_state[f'history_error_{user_id}']
+            st.session_state[f'loading_history_{user_id}'] = False
+        
+        if f'message_history_{user_id}' in st.session_state:
+            st.session_state[f'loading_history_{user_id}'] = False
+            display_chat_messages(st.session_state[f'message_history_{user_id}'])
+        else:
+            st.info("Loading conversation history...")
+    else:
+        # Display cached history if available
+        if f'message_history_{user_id}' in st.session_state and st.session_state[f'message_history_{user_id}'] is not None:
+            display_chat_messages(st.session_state[f'message_history_{user_id}'])
+        else:
+            st.info("Click 'Load History' to view recent messages with this user")
+
+def display_chat_messages(messages):
+    """Display chat messages in a conversation format."""
+    if not messages:
+        st.info("No message history found. This could be a new conversation or the room may not exist yet.")
+        return
+    
+    st.write(f"**Showing {len(messages)} recent messages:**")
+    
+    # Create a container for the chat messages
+    chat_container = st.container()
+    
+    with chat_container:
+        # Display messages in a scrollable format
+        for message in messages:
+            # Create columns for message layout
+            if message.get('is_bot_message', False):
+                # Bot message (right-aligned)
+                col1, col2 = st.columns([1, 3])
+                with col2:
+                    st.markdown(f"""
+                    <div style="background-color: #e3f2fd; padding: 10px; border-radius: 10px; margin: 5px 0; text-align: right;">
+                        <strong>🤖 Bot</strong><br>
+                        {message.get('content', '')}
+                        <br><small style="color: #666;">{message.get('formatted_time', '')}</small>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                # User message (left-aligned)
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    # Extract display name from sender
+                    sender = message.get('sender', '')
+                    display_name = sender.split(':')[0].replace('@', '') if sender else 'User'
+                    
+                    st.markdown(f"""
+                    <div style="background-color: #f5f5f5; padding: 10px; border-radius: 10px; margin: 5px 0;">
+                        <strong>👤 {display_name}</strong><br>
+                        {message.get('content', '')}
+                        <br><small style="color: #666;">{message.get('formatted_time', '')}</small>
+                    </div>
+                    """, unsafe_allow_html=True)
+    
+    # Add a separator
+    st.markdown("---")
 
 def render_user_settings():
     """Render user settings section"""

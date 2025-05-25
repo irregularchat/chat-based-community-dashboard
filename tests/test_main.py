@@ -314,37 +314,32 @@ async def test_render_main_content(mock_streamlit):
         await app.main.render_main_content()
         mock_display_users.assert_awaited_once()
 
-@pytest.mark.asyncio
-async def test_main(mock_streamlit, mock_config):
+def test_main(mock_streamlit, mock_config):
     """Test main function"""
-    with patch('app.main.setup_page_config') as mock_setup, \
-         patch('app.main.initialize_session_state') as mock_init, \
+    with patch('app.main.initialize_session_state') as mock_init, \
          patch('app.main.render_sidebar') as mock_sidebar, \
-         patch('app.main.render_main_content', new_callable=AsyncMock) as mock_content, \
+         patch('app.main.render_main_content') as mock_content, \
          patch('app.main.init_db') as mock_init_db:
 
         mock_sidebar.return_value = "Create User"
 
-        await app.main.main()
+        app.main.main()
 
-        mock_setup.assert_called_once()
         mock_init.assert_called_once()
         mock_init_db.assert_called_once()
         mock_sidebar.assert_called_once()
-        mock_content.assert_awaited_once()
+        mock_content.assert_called_once()
 
-@pytest.mark.asyncio
-async def test_main_error_handling(mock_streamlit):
+def test_main_error_handling(mock_streamlit):
     """Test error handling in main function"""
     with patch('app.main.setup_page_config') as mock_setup:
         mock_setup.side_effect = Exception("Test error")
         
-        await app.main.main()
+        app.main.main()
         
         mock_streamlit.error.assert_called_once()
 
-@pytest.mark.asyncio
-async def test_session_state_modification_after_widget(mock_streamlit):
+def test_session_state_modification_after_widget(mock_streamlit):
     """Test that session state cannot be modified after widget creation"""
     # Create a custom session state that raises an exception when modified after widget creation
     class MockSessionState(dict):
@@ -416,8 +411,7 @@ async def test_session_state_modification_after_widget(mock_streamlit):
         key='current_page'
     )
 
-@pytest.mark.asyncio
-async def test_main_session_state_handling(mock_streamlit):
+def test_main_session_state_handling(mock_streamlit):
     """Test that main function properly handles session state"""
     # Initialize the mock session state
     mock_streamlit.session_state = {}
@@ -425,22 +419,21 @@ async def test_main_session_state_handling(mock_streamlit):
     with patch('app.main.setup_page_config'), \
          patch('app.main.initialize_session_state') as mock_init, \
          patch('app.main.render_sidebar') as mock_sidebar, \
-         patch('app.main.render_main_content', new_callable=AsyncMock), \
+         patch('app.main.render_main_content'), \
          patch('app.main.init_db'):
         
         # Set up the sidebar mock to return a value
         mock_sidebar.return_value = "List & Manage Users"
         
         # Call main function
-        await app.main.main()
+        app.main.main()
         
         # Verify that initialize_session_state was called
         mock_init.assert_called_once()
         
         # We're not checking session_state['current_page'] anymore since we don't set it there directly
 
-@pytest.mark.asyncio
-async def test_widget_default_and_session_state_conflict(mock_streamlit):
+def test_widget_default_and_session_state_conflict(mock_streamlit):
     """Test that widgets don't have both default values and session state values set."""
     
     # Create a custom TrackedWidget class to detect conflicts

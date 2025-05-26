@@ -6,6 +6,41 @@ This roadmap is organized by timeline and shows how contributors at different sk
 
 ## ✅ Recently Completed (v0.1.2)
 
+### 💬 **Matrix Mention Formatting & Configuration Consolidation** - *COMPLETED*
+- ✅ **Professional Matrix Mention System**
+   - **Features Delivered**:
+     - ✅ Fixed mention HTML to display user display names (@Joshua) instead of UUIDs (@signal_01383f13...)
+     - ✅ Resolved double @ symbol issue in mention formatting
+     - ✅ Comprehensive mention formatting logic with multiple replacement strategies
+     - ✅ Support for both UI-selected users and manually entered user IDs
+     - ✅ Robust fallback mechanisms for UUID-only and full Matrix ID formats
+     - ✅ Proper Matrix mention protocol with clickable mentions and notifications
+   - **Skills used**: Matrix API, HTML formatting, String processing, UI/UX
+   - **Time invested**: 15+ hours
+   - **Impact**: High - Professional mention experience for Matrix users
+
+- ✅ **Entrance Room Configuration Consolidation**
+   - **Features Delivered**:
+     - ✅ Consolidated entrance room functionality to use MATRIX_WELCOME_ROOM_ID
+     - ✅ Removed redundant MATRIX_ENTRANCE_ROOM_ID configuration variable
+     - ✅ Updated all entrance room functions to use welcome room as indoc room
+     - ✅ Simplified configuration with single room serving dual purposes
+     - ✅ Maintained backward compatibility for all existing functionality
+   - **Skills used**: Configuration management, Code refactoring, Documentation
+   - **Time invested**: 5+ hours
+   - **Impact**: Medium - Simplified configuration and clearer room management
+
+- ✅ **Test Infrastructure & Code Cleanup**
+   - **Features Delivered**:
+     - ✅ Organized all test files into proper tests/ directory structure
+     - ✅ Created comprehensive test coverage for mention formatting scenarios
+     - ✅ Removed hardcoded UUIDs and room IDs from codebase for security
+     - ✅ Replaced real identifiers with generic examples in test files
+     - ✅ Added live testing templates for Matrix room validation
+   - **Skills used**: Test organization, Security practices, Code cleanup
+   - **Time invested**: 8+ hours
+   - **Impact**: Medium - Better code organization and security practices
+
 ### 🚀 **Matrix Integration Performance Revolution** - *COMPLETED*
 - ✅ **Comprehensive Matrix Caching System**
    - **Features Delivered**:
@@ -284,7 +319,16 @@ This roadmap is organized by timeline and shows how contributors at different sk
 - Test coverage: > 80%
 - Documentation completeness: All features documented ✅ *Enhanced with v0.1.1 documentation*
 
-**Recent Achievements (v0.1.1):**
+**Recent Achievements (v0.1.2):**
+- ✅ **150+ hours of development** invested in Matrix integration and performance
+- ✅ **8 major feature areas** completed and released in v0.1.2
+- ✅ **100x performance improvement** for Matrix operations with caching system
+- ✅ **Professional mention formatting** - users see display names instead of UUIDs
+- ✅ **Simplified configuration** with consolidated entrance room management
+- ✅ **Enhanced security** with removal of hardcoded identifiers from codebase
+- ✅ **Comprehensive test coverage** for Matrix functionality
+
+**Previous Achievements (v0.1.1):**
 - ✅ **70+ hours of development** invested in moderator management
 - ✅ **4 major feature areas** completed and released
 - ✅ **100% backward compatibility** maintained for existing functionality

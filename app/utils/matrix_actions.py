@@ -1439,7 +1439,7 @@ def merge_room_data() -> List[Dict]:
 
 async def remove_from_room(client: AsyncClient, room_id: str, user_id: str, reason: str = "Removed via dashboard") -> bool:
     """
-    Remove a user from a Matrix room with enhanced error handling.
+    Remove a user from a Matrix room with enhanced error handling and multiple methods.
     
     Args:
         client: The Matrix client
@@ -1450,15 +1450,15 @@ async def remove_from_room(client: AsyncClient, room_id: str, user_id: str, reas
     Returns:
         bool: True if the user was removed successfully or was not in the room, False for other errors
     """
+    # Method 1: Try standard kick
     try:
         response = await client.room_kick(room_id, user_id, reason=reason)
         
         if hasattr(response, 'event_id'):
-            logger.info(f"Removed {user_id} from room {room_id}")
+            logger.info(f"Successfully kicked {user_id} from room {room_id}")
             return True
         else:
-            logger.error(f"Failed to remove {user_id} from room {room_id}: {response}")
-            return False
+            logger.warning(f"Kick failed for {user_id} from room {room_id}: {response}")
     except Exception as e:
         error_str = str(e)
         
@@ -1466,6 +1466,33 @@ async def remove_from_room(client: AsyncClient, room_id: str, user_id: str, reas
         if "M_FORBIDDEN" in error_str and "target user is not in the room" in error_str.lower():
             logger.info(f"User {user_id} is not in room {room_id}, skipping removal")
             return True  # Consider this success since the user is already not in the room
+        elif "M_FORBIDDEN" in error_str and "cannot kick user" in error_str.lower():
+            logger.warning(f"Permission denied kicking {user_id} from room {room_id}, trying ban+unban method")
+            
+            # Method 2: Try ban + unban (this sometimes works when kick doesn't)
+            try:
+                logger.info(f"Attempting ban+unban method for {user_id} in room {room_id}")
+                
+                # First ban the user
+                ban_response = await client.room_ban(room_id, user_id, reason=reason)
+                if hasattr(ban_response, 'event_id'):
+                    logger.info(f"Successfully banned {user_id} from room {room_id}")
+                    
+                    # Then unban them (this removes them from the room)
+                    unban_response = await client.room_unban(room_id, user_id)
+                    if hasattr(unban_response, 'event_id'):
+                        logger.info(f"Successfully unbanned {user_id} from room {room_id} - user removed via ban+unban")
+                        return True
+                    else:
+                        logger.error(f"Failed to unban {user_id} from room {room_id}: {unban_response}")
+                        return False
+                else:
+                    logger.error(f"Failed to ban {user_id} from room {room_id}: {ban_response}")
+                    return False
+                    
+            except Exception as ban_error:
+                logger.error(f"Ban+unban method also failed for {user_id} in room {room_id}: {ban_error}")
+                return False
         elif "M_FORBIDDEN" in error_str:
             logger.warning(f"Permission denied removing {user_id} from room {room_id}: {e}")
             return False

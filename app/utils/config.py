@@ -146,6 +146,7 @@ class Config:
     MATRIX_WELCOME_ROOM_ID = os.getenv("MATRIX_WELCOME_ROOM_ID")
     MATRIX_SIGNAL_BRIDGE_ROOM_ID = os.getenv("MATRIX_SIGNAL_BRIDGE_ROOM_ID")
     MATRIX_ROOM_IDS_NAME_CATEGORY = os.getenv("MATRIX_ROOM_IDS_NAME_CATEGORY")
+
     
     # Matrix cache configuration
     MATRIX_MIN_ROOM_MEMBERS = int(os.getenv("MATRIX_MIN_ROOM_MEMBERS", "5"))

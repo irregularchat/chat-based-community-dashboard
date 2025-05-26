@@ -120,55 +120,121 @@ async def render_matrix_messaging_page():
         with col2:
             st.write("*Click 'Load Users' to fetch available Matrix users from all accessible rooms*")
         
-        # Matrix User Selection Dropdown
-        user_id = None
+        # Matrix User Selection - Multiple Users
+        selected_user_ids = []
         if st.session_state.matrix_users:
             # Create dropdown options
             matrix_user_options = [f"{user['display_name']} ({user['user_id']})" for user in st.session_state.matrix_users]
-            selected_user = st.selectbox(
-                "Select Matrix User",
-                options=[""] + matrix_user_options,
-                key="dm_matrix_user_select",
-                help="Select a Matrix user to send a direct message to"
+            selected_users = st.multiselect(
+                "Select Matrix Users",
+                options=matrix_user_options,
+                key="dm_matrix_user_multiselect",
+                help="Select one or more Matrix users to send a direct message to"
             )
             
-            if selected_user:
-                # Extract user_id from the selected option
-                user_id = selected_user.split("(")[-1].rstrip(")")
-                display_name = selected_user.split("(")[0].strip()
-                st.info(f"Selected: {display_name} ({user_id})")
+            if selected_users:
+                # Extract user_ids from the selected options
+                selected_user_ids = []
+                selected_display_names = []
+                for selected_user in selected_users:
+                    user_id = selected_user.split("(")[-1].rstrip(")")
+                    display_name = selected_user.split("(")[0].strip()
+                    selected_user_ids.append(user_id)
+                    selected_display_names.append(display_name)
+                
+                st.info(f"Selected {len(selected_users)} users: {', '.join(selected_display_names)}")
         
         # Fallback: Manual input if no users loaded or user wants to enter manually
-        if not st.session_state.matrix_users or st.checkbox("Enter Matrix User ID manually", key="manual_user_input"):
-            manual_user_id = st.text_input(
-                "Matrix User ID (e.g., @username:domain.com)", 
-                key="manual_matrix_user_id",
-                help="Enter a Matrix User ID manually if not in the dropdown"
+        if not st.session_state.matrix_users or st.checkbox("Enter Matrix User IDs manually", key="manual_user_input"):
+            manual_user_ids = st.text_area(
+                "Matrix User IDs (one per line, e.g., @username:domain.com)", 
+                key="manual_matrix_user_ids",
+                help="Enter Matrix User IDs manually, one per line, if not in the dropdown",
+                height=100
             )
-            if manual_user_id and manual_user_id.strip():
-                user_id = manual_user_id.strip()
+            if manual_user_ids and manual_user_ids.strip():
+                # Parse multiple user IDs from text area
+                manual_ids = [uid.strip() for uid in manual_user_ids.strip().split('\n') if uid.strip()]
+                if manual_ids:
+                    selected_user_ids.extend(manual_ids)
+                    st.info(f"Added {len(manual_ids)} manual user IDs: {', '.join(manual_ids)}")
         
         # Message history is disabled for simplicity (encryption was removed)
-        if user_id and user_id.strip():
+        if selected_user_ids:
             st.info("💬 **Message History Disabled**: Message history requires encryption which has been disabled for simplicity. You can still send messages below.")
+        
+        # Show summary of selected users
+        if selected_user_ids:
+            with st.expander(f"📋 Selected Users ({len(selected_user_ids)})", expanded=False):
+                for i, user_id in enumerate(selected_user_ids, 1):
+                    st.write(f"{i}. {user_id}")
         
         # Message input and send button
         message = st.text_area("Message", height=150, key="direct_message")
-        if st.button("Send Direct Message"):
-            if user_id and message:
+        
+        # Add confirmation for multiple users
+        send_button_text = "Send Direct Message"
+        if len(selected_user_ids) > 1:
+            send_button_text = f"Send Message to {len(selected_user_ids)} Users"
+        elif len(selected_user_ids) == 1:
+            send_button_text = "Send Direct Message"
+        
+        # Add safety confirmation for multiple users
+        confirm_send = True
+        if len(selected_user_ids) > 3:  # Require confirmation for more than 3 users
+            confirm_send = st.checkbox(
+                f"⚠️ I confirm I want to send this message to {len(selected_user_ids)} users",
+                key="confirm_bulk_dm"
+            )
+        
+        if st.button(send_button_text, disabled=not confirm_send):
+            if selected_user_ids and message:
                 # Add no-reply footer to direct messages
                 message_with_footer = f"{message}\n\n_NOREPLY: This message was sent from the admin dashboard_"
-                room_id = await create_matrix_direct_chat(user_id)
-                if room_id:
-                    success = await send_matrix_message(room_id, message_with_footer)
-                    if success:
-                        st.success(f"Message sent to {user_id}")
-                    else:
-                        st.error(f"Failed to send message to {user_id}")
-                else:
-                    st.error(f"Failed to create direct chat with {user_id}")
+                
+                # Show progress
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                success_count = 0
+                failed_users = []
+                
+                # Loop through all selected users
+                for i, user_id in enumerate(selected_user_ids):
+                    status_text.text(f"Sending message to {user_id}...")
+                    progress_bar.progress((i + 1) / len(selected_user_ids))
+                    
+                    try:
+                        room_id = await create_matrix_direct_chat(user_id)
+                        if room_id:
+                            success = await send_matrix_message(room_id, message_with_footer)
+                            if success:
+                                success_count += 1
+                            else:
+                                failed_users.append(user_id)
+                        else:
+                            failed_users.append(user_id)
+                    except Exception as e:
+                        failed_users.append(user_id)
+                        logging.error(f"Error sending message to {user_id}: {e}")
+                
+                # Show final results
+                status_text.empty()
+                progress_bar.empty()
+                
+                if success_count > 0:
+                    st.success(f"✅ Message sent successfully to {success_count} out of {len(selected_user_ids)} users")
+                
+                if failed_users:
+                    st.error(f"❌ Failed to send message to {len(failed_users)} users:")
+                    for failed_user in failed_users:
+                        st.write(f"  • {failed_user}")
+                
+                if success_count == len(selected_user_ids):
+                    st.balloons()  # Celebrate if all messages sent successfully!
+                    
             else:
-                st.warning("Please select a user and enter a message")
+                st.warning("Please select at least one user and enter a message")
     
     with tab2:
         st.header("Send Room Message")

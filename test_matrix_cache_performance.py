@@ -90,20 +90,17 @@ async def test_cache_performance():
     finally:
         db.close()
     
-    # Test 4: Check if we need to trigger a manual sync
+    # Test 4: Check sync status
     print("\n4. Testing sync status...")
     
     db = next(get_db())
     try:
-        last_sync = matrix_cache.get_last_sync_time(db)
-        if last_sync:
-            time_since_sync = time.time() - last_sync.timestamp()
-            print(f"   📅 Last sync: {time_since_sync/3600:.1f} hours ago")
-            
-            if time_since_sync > 24 * 3600:  # 24 hours
-                print(f"   🔄 Recommendation: Run a manual sync (data is {time_since_sync/3600:.1f} hours old)")
-            else:
-                print(f"   ✅ Sync status: Recent enough")
+        sync_status = matrix_cache.get_sync_status(db)
+        if sync_status:
+            print(f"   📅 Last sync: {sync_status.get('last_sync', 'Unknown')}")
+            print(f"   📊 Status: {sync_status.get('status', 'Unknown')}")
+            if sync_status.get('duration_seconds'):
+                print(f"   ⏱️  Duration: {sync_status['duration_seconds']}s")
         else:
             print(f"   ❌ No sync record found - run a manual sync")
             

@@ -32,24 +32,31 @@ from app.services.matrix_cache import matrix_cache
 logger = logging.getLogger(__name__)
 
 # Define the entrance room ID
-ENTRANCE_ROOM_ID = "!bPROVgpotAcdXGxXUN:irregularchat.com"  # IrregularChat Actions/INDOC
+# Import Config to get entrance room ID from environment
+from app.utils.config import Config
 
 async def get_entrance_room_users() -> List[Dict[str, Any]]:
     """
-    Get all users from the entrance room using the database cache.
+    Get all users from the entrance room (welcome room) using the database cache.
     
     Returns:
         List[Dict[str, Any]]: List of user dictionaries with user_id and display_name
     """
     db = next(get_db())
     try:
+        # Get entrance room ID from config (using welcome room as entrance room)
+        entrance_room_id = Config.MATRIX_WELCOME_ROOM_ID
+        if not entrance_room_id:
+            logger.error("MATRIX_WELCOME_ROOM_ID not configured")
+            return []
+        
         # Query memberships for the entrance room
         memberships = db.query(MatrixRoomMembership).filter(
-            MatrixRoomMembership.room_id == ENTRANCE_ROOM_ID
+            MatrixRoomMembership.room_id == entrance_room_id
         ).all()
 
         if not memberships:
-            logger.info(f"No members found in entrance room ({ENTRANCE_ROOM_ID}) cache.")
+            logger.info(f"No members found in entrance room ({entrance_room_id}) cache.")
             return []
         
         user_ids_in_room = [m.user_id for m in memberships]
@@ -642,7 +649,8 @@ async def invite_user_to_recommended_rooms(user_id: str, interests: str) -> List
             continue
             
         # Skip the entrance room (users are already there)
-        if room_id == ENTRANCE_ROOM_ID:
+        entrance_room_id = Config.MATRIX_WELCOME_ROOM_ID
+        if room_id == entrance_room_id:
             continue
             
         success = await invite_to_matrix_room(room_id, user_id)
@@ -697,18 +705,25 @@ def invite_user_to_recommended_rooms_sync(user_id: str, interests: str) -> List[
 def get_entrance_room_users_sync() -> List[Dict[str, Any]]:
     """
     Synchronous wrapper for get_entrance_room_users.
+    Gets users from the entrance room (welcome room).
     """
     logger.debug("Running get_entrance_room_users_sync")
     try:
         # Since the async version now uses DB directly, we can also make this sync.
         db = next(get_db())
         try:
+            # Get entrance room ID from config (using welcome room as entrance room)
+            entrance_room_id = Config.MATRIX_WELCOME_ROOM_ID
+            if not entrance_room_id:
+                logger.error("MATRIX_WELCOME_ROOM_ID not configured (sync)")
+                return []
+                
             memberships = db.query(MatrixRoomMembership).filter(
-                MatrixRoomMembership.room_id == ENTRANCE_ROOM_ID
+                MatrixRoomMembership.room_id == entrance_room_id
             ).all()
 
             if not memberships:
-                logger.info(f"No members found in entrance room ({ENTRANCE_ROOM_ID}) cache (sync).")
+                logger.info(f"No members found in entrance room ({entrance_room_id}) cache (sync).")
                 return []
 
             user_ids_in_room = [m.user_id for m in memberships]

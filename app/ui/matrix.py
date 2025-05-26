@@ -1016,13 +1016,67 @@ async def render_matrix_messaging_page():
         template_message = template["message"]
         if selected_user_ids:
             if len(selected_user_ids) == 1:
-                # Single user - replace with specific username
-                username = selected_user_ids[0].split(":")[0].lstrip("@") if ":" in selected_user_ids[0] else selected_user_ids[0].lstrip("@")
-                template_message = template_message.replace("{username}", username)
+                # Single user - try to get display name from selected users
+                user_id = selected_user_ids[0]
+                display_name = None
+                
+                # Try to get display name from selected removal users first
+                if st.session_state.selected_removal_users:
+                    for user_option in st.session_state.selected_removal_users:
+                        option_user_id = user_option.split("(")[-1].rstrip(")")
+                        # Handle both full Matrix ID and UUID-only matching
+                        if option_user_id == user_id:
+                            display_name = user_option.split("(")[0].strip()
+                            # Remove emoji indicators like 📱 from display name
+                            display_name = display_name.replace(" 📱", "").strip()
+                            break
+                        # Also check if the UUID part matches (for cases where user_id is UUID-only)
+                        elif ":" in option_user_id and user_id in option_user_id:
+                            display_name = user_option.split("(")[0].strip()
+                            # Remove emoji indicators like 📱 from display name
+                            display_name = display_name.replace(" 📱", "").strip()
+                            break
+                        # Also check if the user_id is full Matrix ID and option is UUID-only
+                        elif ":" in user_id and option_user_id in user_id:
+                            display_name = user_option.split("(")[0].strip()
+                            # Remove emoji indicators like 📱 from display name
+                            display_name = display_name.replace(" 📱", "").strip()
+                            break
+                
+                # If still no display name, try to get from Matrix cache
+                if not display_name:
+                    try:
+                        db = next(get_db())
+                        try:
+                            cached_users = matrix_cache.get_cached_users(db)
+                            for cached_user in cached_users:
+                                cached_user_id = cached_user.get('user_id', '')
+                                # Try exact match first
+                                if cached_user_id == user_id:
+                                    display_name = cached_user.get('display_name', '')
+                                    break
+                                # Try UUID matching for partial IDs
+                                elif ":" in cached_user_id and user_id in cached_user_id:
+                                    display_name = cached_user.get('display_name', '')
+                                    break
+                                elif ":" in user_id and cached_user_id in user_id:
+                                    display_name = cached_user.get('display_name', '')
+                                    break
+                        finally:
+                            db.close()
+                    except Exception as e:
+                        logger.warning(f"Error getting display name from cache for template preview: {e}")
+                
+                # Final fallback to username
+                if not display_name:
+                    display_name = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                
+                template_message = template_message.replace("{username}", display_name)
+                logger.info(f"DEBUG: Template preview using display_name: '{display_name}' for user_id: '{user_id}'")
             else:
                 # Multiple users - show preview with placeholder (will be personalized during execution)
                 template_message = template_message.replace("{username}", "{username} (will be personalized for each user)")
-                st.info("💡 **Note**: The message will be personalized with each user's username when sent to rooms.")
+                st.info("💡 **Note**: The message will be personalized with each user's display name when sent to rooms.")
         
         removal_message = st.text_area(
             "Message to send to rooms (optional):",
@@ -1336,9 +1390,87 @@ async def render_matrix_messaging_page():
                             'successful_removals': []
                         }
                         
+                        # Create a mapping from user_id to display name for mention generation
+                        user_id_to_display_name = {}
+                        
+                        # Debug: Show what's in session state
+                        logger.info(f"DEBUG: selected_removal_users = {st.session_state.selected_removal_users}")
+                        logger.info(f"DEBUG: selected_user_ids = {selected_user_ids}")
+                        
+                        # First, try to get display names from selected users list
+                        for user_option in st.session_state.selected_removal_users:
+                            option_user_id = user_option.split("(")[-1].rstrip(")")
+                            display_name = user_option.split("(")[0].strip()
+                            # Remove emoji indicators like 📱 from display name
+                            display_name = display_name.replace(" 📱", "").strip()
+                            user_id_to_display_name[option_user_id] = display_name
+                            logger.info(f"DEBUG: Mapped user_id '{option_user_id}' -> display_name '{display_name}'")
+                            
+                            # Also map the UUID-only version (without domain) for robustness
+                            if ":" in option_user_id:
+                                uuid_only = option_user_id.split(":")[0].lstrip("@")
+                                user_id_to_display_name[uuid_only] = display_name
+                                logger.info(f"DEBUG: Also mapped UUID-only '{uuid_only}' -> display_name '{display_name}'")
+                        
+                        # For any user_ids not in the mapping (e.g., manually entered), try to get from Matrix cache
+                        for user_id in selected_user_ids:
+                            if user_id not in user_id_to_display_name:
+                                # Try to get display name from Matrix cache with flexible matching
+                                try:
+                                    db = next(get_db())
+                                    try:
+                                        cached_users = matrix_cache.get_cached_users(db)
+                                        found_display_name = None
+                                        
+                                        for cached_user in cached_users:
+                                            cached_user_id = cached_user.get('user_id', '')
+                                            # Try exact match first
+                                            if cached_user_id == user_id:
+                                                found_display_name = cached_user.get('display_name', '')
+                                                logger.info(f"DEBUG: Exact match in cache for '{user_id}': '{found_display_name}'")
+                                                break
+                                            # Try UUID matching for partial IDs
+                                            elif ":" in cached_user_id and user_id in cached_user_id:
+                                                found_display_name = cached_user.get('display_name', '')
+                                                logger.info(f"DEBUG: UUID match in cache for '{user_id}' (found in '{cached_user_id}'): '{found_display_name}'")
+                                                break
+                                            elif ":" in user_id and cached_user_id in user_id:
+                                                found_display_name = cached_user.get('display_name', '')
+                                                logger.info(f"DEBUG: Reverse UUID match in cache for '{user_id}' (matches '{cached_user_id}'): '{found_display_name}'")
+                                                break
+                                        
+                                        if found_display_name:
+                                            user_id_to_display_name[user_id] = found_display_name
+                                        else:
+                                            # Fallback to username if not found in cache
+                                            fallback_username = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                                            user_id_to_display_name[user_id] = fallback_username
+                                            logger.warning(f"DEBUG: No display name found in cache for '{user_id}', using fallback: '{fallback_username}'")
+                                    finally:
+                                        db.close()
+                                except Exception as e:
+                                    logger.warning(f"Error getting display name for {user_id}: {e}")
+                                    # Fallback to username
+                                    fallback_username = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                                    user_id_to_display_name[user_id] = fallback_username
+                                    logger.warning(f"DEBUG: Exception fallback for '{user_id}': '{fallback_username}'")
+                        
                         # Process each user
                         for user_idx, user_id in enumerate(selected_user_ids):
                             username = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                            
+                            # Get the display name for this user (fallback to username if not found)
+                            display_name = user_id_to_display_name.get(user_id, username)
+                            
+                            # If we didn't find a display name and the user_id doesn't have a domain,
+                            # try to construct the full Matrix ID and look it up
+                            if display_name == username and ":" not in user_id:
+                                # Try to construct full Matrix ID with irregularchat.com domain
+                                full_user_id = f"@{user_id}:irregularchat.com" if not user_id.startswith("@") else f"{user_id}:irregularchat.com"
+                                display_name = user_id_to_display_name.get(full_user_id, username)
+                                logger.info(f"DEBUG: Tried full Matrix ID '{full_user_id}' -> display_name '{display_name}'")
+                            
+                            logger.info(f"DEBUG: Processing user_id '{user_id}' -> username '{username}' -> display_name '{display_name}'")
                             
                             # First, get the rooms this user is actually in from Matrix directly
                             user_room_ids = []
@@ -1418,21 +1550,71 @@ async def render_matrix_messaging_page():
                                     try:
                                         from app.utils.matrix_actions import _send_room_message_with_content_async
                                         
-                                        # Create HTML mention link for the user
-                                        mention_html = f'<a href="https://matrix.to/#/{user_id}">{username}</a>'
+                                        # Create Matrix mention using the display name for better user experience
+                                        # Include @ in the mention HTML so we don't get double @ when replacing
+                                        mention_html = f'<a href="https://matrix.to/#/{user_id}" data-mention-type="user">@{display_name}</a>'
+                                        logger.info(f"DEBUG: Created mention_html: '{mention_html}'")
                                         
-                                        # Create personalized message with HTML mention
-                                        personalized_message = removal_message.replace("{username}", mention_html)
+                                        # The removal_message might already have a specific username from template preview
+                                        # We need to replace both {username} placeholder AND any existing username with the correct display name
+                                        personalized_message = removal_message
+                                        plain_text_body = removal_message
+                                        
+                                        # First, try to replace {username} placeholder if it exists
+                                        if "{username}" in personalized_message:
+                                            # For placeholder replacement, we need to replace @{username} with mention_html (which already contains @)
+                                            personalized_message = personalized_message.replace("@{username}", mention_html)
+                                            plain_text_body = plain_text_body.replace("@{username}", f"@{display_name}")
+                                            logger.info(f"DEBUG: Used placeholder replacement")
+                                        else:
+                                            # If no placeholder, the template preview already replaced it with a username
+                                            # We need to replace that username with the correct display name
+                                            username_fallback = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                                            
+                                            # Try multiple replacement strategies
+                                            replaced = False
+                                            
+                                            # Strategy 1: Replace username fallback if it's different from display name
+                                            if username_fallback in personalized_message and username_fallback != display_name:
+                                                personalized_message = personalized_message.replace(f"@{username_fallback}", mention_html)
+                                                plain_text_body = plain_text_body.replace(f"@{username_fallback}", f"@{display_name}")
+                                                logger.info(f"DEBUG: Replaced username_fallback '{username_fallback}' with display_name '{display_name}'")
+                                                replaced = True
+                                            
+                                            # Strategy 2: If the message already has the correct display name, just add HTML formatting
+                                            elif f"@{display_name}" in personalized_message:
+                                                personalized_message = personalized_message.replace(f"@{display_name}", mention_html)
+                                                logger.info(f"DEBUG: Added HTML formatting to existing display_name '{display_name}'")
+                                                replaced = True
+                                            
+                                            # Strategy 3: Handle UUID-only user IDs (without @)
+                                            elif not replaced and ":" not in user_id:
+                                                # For UUID-only IDs, try to replace the UUID directly
+                                                if user_id in personalized_message:
+                                                    personalized_message = personalized_message.replace(f"@{user_id}", mention_html)
+                                                    plain_text_body = plain_text_body.replace(f"@{user_id}", f"@{display_name}")
+                                                    logger.info(f"DEBUG: Replaced UUID-only '{user_id}' with display_name '{display_name}'")
+                                                    replaced = True
+                                            
+                                            # Strategy 4: If nothing was replaced, log a warning
+                                            if not replaced:
+                                                logger.warning(f"DEBUG: No replacement made for user_id '{user_id}', display_name '{display_name}', message: '{personalized_message}'")
+                                        
+                                        logger.info(f"DEBUG: Created personalized_message: '{personalized_message}'")
+                                        logger.info(f"DEBUG: Created plain_text_body: '{plain_text_body}'")
                                         
                                         # Add safety check to ensure message isn't empty after replacement
                                         if personalized_message.strip():
-                                            # Create message content with HTML formatting
                                             message_content = {
                                                 "msgtype": "m.text",
-                                                "body": removal_message.replace("{username}", username),  # Plain text fallback
+                                                "body": plain_text_body,  # Plain text with display name (@ already in template)
                                                 "format": "org.matrix.custom.html",
-                                                "formatted_body": personalized_message
+                                                "formatted_body": personalized_message,
+                                                "m.mentions": {
+                                                    "user_ids": [user_id]
+                                                }
                                             }
+                                            logger.info(f"DEBUG: Final message_content: {message_content}")
                                             
                                             # Use the async version with content
                                             message_success = await _send_room_message_with_content_async(room_id, message_content)
@@ -1593,8 +1775,12 @@ async def render_matrix_messaging_page():
         st.header("Entrance Room Users")
         st.subheader("Connect users from INDOC room with dashboard accounts")
         
-        # Get entrance room ID
-        entrance_room_id = "!bPROVgpotAcdXGxXUN:irregularchat.com"  # IrregularChat Entry/INDOC
+        # Get entrance room ID from config (using welcome room as entrance room)
+        entrance_room_id = Config.MATRIX_WELCOME_ROOM_ID
+        
+        if not entrance_room_id:
+            st.warning("⚠️ MATRIX_WELCOME_ROOM_ID not configured. Please set this in your .env file to use the entrance room features.")
+            return
         
         # Button to refresh user list
         if st.button("Refresh Entrance Room Users", key="refresh_entrance_users"):

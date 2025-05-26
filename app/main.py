@@ -16,7 +16,7 @@ from app.ui.help_resources import main as render_help_page
 from app.ui.prompts import main as render_prompts_page
 from app.ui.matrix import render_matrix_messaging_page
 from app.ui.admin import render_admin_dashboard
-from app.ui.notes import render_notes_page
+# from app.ui.notes import render_notes_page  # TODO: Create notes.py file
 
 from app.ui.signal_association import render_signal_association
 from app.utils.helpers import (
@@ -908,7 +908,8 @@ def render_main_content():
             render_admin_dashboard()
             
         elif current_page == "Notes":
-            render_notes_page()
+            st.info("Notes functionality is not yet implemented.")
+            # render_notes_page()  # TODO: Implement notes functionality
 
     except Exception as e:
         st.error(f"Error rendering content: {str(e)}")

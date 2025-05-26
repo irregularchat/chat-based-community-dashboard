@@ -49,3 +49,4 @@ test_env/etc/jupyter/nbconfig/notebook.d/pydeck.json
 .venv/bin/Activate.ps1
 .venv/bin/pip3
 .venv/*
+matrix_data_analysis.json

@@ -115,7 +115,6 @@ async def render_matrix_messaging_page():
                     with st.spinner("Loading Matrix users from cache..."):
                         try:
                             # Use cached Matrix users instead of slow API calls
-                            from app.db.session import get_db
                             from app.services.matrix_cache import matrix_cache
                             
                             db = next(get_db())
@@ -169,7 +168,6 @@ async def render_matrix_messaging_page():
             if st.button("🔄 Manual Sync", key="manual_sync_users", help="Force a full sync of Matrix data"):
                 with st.spinner("Running full Matrix sync..."):
                     try:
-                        from app.db.session import get_db
                         from app.services.matrix_cache import matrix_cache
                         
                         db = next(get_db())

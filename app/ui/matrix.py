@@ -10,6 +10,7 @@ import logging
 from datetime import datetime
 from typing import List, Dict, Any
 import os
+import json
 
 from app.utils.matrix_actions import (
     send_matrix_message,
@@ -35,6 +36,15 @@ from app.utils.recommendation import get_entrance_room_users, invite_user_to_rec
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def save_user_categories():
+    """Save user categories to JSON file for persistence."""
+    try:
+        categories_file = "user_categories.json"
+        with open(categories_file, 'w') as f:
+            json.dump(st.session_state.user_categories, f, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving user categories: {e}")
 
 async def render_matrix_messaging_page():
     """
@@ -123,11 +133,65 @@ async def render_matrix_messaging_page():
         # Matrix User Selection - Multiple Users with efficient selection
         selected_user_ids = []
         
-        # Initialize selected users in session state
+        # Initialize selected users and user categories in session state
         if 'selected_dm_users' not in st.session_state:
             st.session_state.selected_dm_users = []
+        if 'user_categories' not in st.session_state:
+            # Load categories from file if it exists
+            categories_file = "user_categories.json"
+            try:
+                if os.path.exists(categories_file):
+                    with open(categories_file, 'r') as f:
+                        st.session_state.user_categories = json.load(f)
+                else:
+                    st.session_state.user_categories = {}
+            except Exception as e:
+                logger.error(f"Error loading user categories: {e}")
+                st.session_state.user_categories = {}
         
         if st.session_state.matrix_users:
+            # User Categories Section
+            if st.session_state.user_categories:
+                st.write("**📁 Saved User Categories:**")
+                category_col1, category_col2 = st.columns([3, 1])
+                
+                with category_col1:
+                    category_options = [""] + list(st.session_state.user_categories.keys())
+                    selected_category = st.selectbox(
+                        "Load a saved category:",
+                        options=category_options,
+                        key="load_category_select",
+                        help="Select a saved user category to load all users from that group"
+                    )
+                
+                with category_col2:
+                    if st.button("📂 Load Category", disabled=not selected_category):
+                        if selected_category in st.session_state.user_categories:
+                            # Add all users from the category to selected users
+                            category_users = st.session_state.user_categories[selected_category]
+                            for user in category_users:
+                                if user not in st.session_state.selected_dm_users:
+                                    st.session_state.selected_dm_users.append(user)
+                            st.success(f"Loaded {len(category_users)} users from '{selected_category}' category")
+                            st.rerun()
+                
+                # Show existing categories with user counts
+                with st.expander("📋 View All Categories", expanded=False):
+                    for cat_name, cat_users in st.session_state.user_categories.items():
+                        col_cat, col_del = st.columns([4, 1])
+                        with col_cat:
+                            st.write(f"**{cat_name}** ({len(cat_users)} users)")
+                            for user in cat_users:
+                                display_name = user.split("(")[0].strip()
+                                st.write(f"  • {display_name}")
+                        with col_del:
+                            if st.button("🗑️", key=f"delete_cat_{cat_name}", help=f"Delete '{cat_name}' category"):
+                                del st.session_state.user_categories[cat_name]
+                                save_user_categories()  # Save to file
+                                st.rerun()
+                
+                st.markdown("---")
+            
             st.write("**Select Matrix Users:**")
             
             # Create two columns for better layout
@@ -192,6 +256,48 @@ async def render_matrix_messaging_page():
                 for user_option in st.session_state.selected_dm_users:
                     user_id = user_option.split("(")[-1].rstrip(")")
                     selected_user_ids.append(user_id)
+                
+                # Save as Category Section
+                if len(st.session_state.selected_dm_users) >= 2:  # Only show for 2+ users
+                    st.markdown("---")
+                    st.write("**💾 Save as Category:**")
+                    save_col1, save_col2 = st.columns([3, 1])
+                    
+                    with save_col1:
+                        category_name = st.text_input(
+                            "Category name:",
+                            key="new_category_name",
+                            placeholder="e.g., Signal Users, Team Alpha, VIP Members",
+                            help="Enter a name for this group of users"
+                        )
+                    
+                    with save_col2:
+                        # Check if category exists to show appropriate button text
+                        button_text = "💾 Save Category"
+                        if category_name and category_name in st.session_state.user_categories:
+                            button_text = "🔄 Update Category"
+                        
+                        if st.button(button_text, disabled=not category_name):
+                            if category_name.strip():
+                                # Check if category already exists
+                                if category_name in st.session_state.user_categories:
+                                    # Ask for confirmation to update
+                                    if st.button(f"⚠️ Confirm: Update '{category_name}' category?", key="confirm_update"):
+                                        st.session_state.user_categories[category_name] = st.session_state.selected_dm_users.copy()
+                                        save_user_categories()  # Save to file
+                                        st.success(f"✅ Updated '{category_name}' category with {len(st.session_state.selected_dm_users)} users")
+                                        st.session_state.new_category_name = ""
+                                        st.rerun()
+                                    else:
+                                        st.warning(f"Category '{category_name}' already exists. Click confirm to update it.")
+                                else:
+                                    # Save the current selection as a category
+                                    st.session_state.user_categories[category_name] = st.session_state.selected_dm_users.copy()
+                                    save_user_categories()  # Save to file
+                                    st.success(f"✅ Saved {len(st.session_state.selected_dm_users)} users as '{category_name}' category")
+                                    # Clear the input
+                                    st.session_state.new_category_name = ""
+                                    st.rerun()
         
         # Fallback: Manual input if no users loaded or user wants to enter manually
         if not st.session_state.matrix_users or st.checkbox("Enter Matrix User IDs manually", key="manual_user_input"):

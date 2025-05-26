@@ -22,13 +22,14 @@ from app.utils.matrix_actions import (
     get_all_accessible_rooms,
     get_joined_rooms,
     get_room_name,
-    remove_from_matrix_room,
+    remove_from_matrix_room_async,
     send_direct_message,
     send_room_message,
     get_direct_message_history_sync
 )
 from app.db.session import get_db
 from app.db.operations import User, AdminEvent, MatrixRoomMember, get_matrix_room_members
+from app.db.models import MatrixRoomMembership
 from app.utils.config import Config
 from app.utils.recommendation import get_entrance_room_users, invite_user_to_recommended_rooms
 from app.services.matrix_cache import matrix_cache
@@ -717,9 +718,258 @@ async def render_matrix_messaging_page():
                 st.warning("Please enter a user ID and select at least one room")
     
     with tab5:
-        st.header("Remove User from Rooms")
+        st.header("🚫 Enhanced User Removal")
+        st.subheader("Remove users from rooms with templated messages and audit logging")
         
-        user_id = st.text_input("Matrix User ID (e.g., @username:domain.com)", key="remove_user_id")
+        # Initialize session state for selected removal users
+        if 'selected_removal_users' not in st.session_state:
+            st.session_state.selected_removal_users = []
+        
+        # User selection section
+        st.subheader("👥 Select Users for Removal")
+        
+        # Load users from cache if not already loaded
+        if not st.session_state.matrix_users:
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("🔄 Load Matrix Users from Cache", key="load_users_for_removal"):
+                    on_load_users_click()
+            with col2:
+                if st.session_state.get('load_users_flag', False):
+                    with st.spinner("Loading Matrix users from cache..."):
+                        await process_load_users()
+        
+        # User selection interface (similar to direct message)
+        if st.session_state.matrix_users:
+            # Filter options
+            filter_col1, filter_col2 = st.columns(2)
+            
+            with filter_col1:
+                user_filter = st.selectbox(
+                    "Filter users:",
+                    ["All Users", "Signal Users Only", "Non-Signal Users"],
+                    key="removal_user_filter"
+                )
+            
+            with filter_col2:
+                search_term = st.text_input(
+                    "Search users:",
+                    placeholder="Type to search by name or ID...",
+                    key="removal_user_search"
+                )
+            
+            # Filter users based on selection
+            filtered_users = st.session_state.matrix_users.copy()
+            
+            if user_filter == "Signal Users Only":
+                filtered_users = [user for user in filtered_users if user.get('is_signal_user', False)]
+            elif user_filter == "Non-Signal Users":
+                filtered_users = [user for user in filtered_users if not user.get('is_signal_user', False)]
+            
+            # Apply search filter
+            if search_term:
+                search_lower = search_term.lower()
+                filtered_users = [
+                    user for user in filtered_users 
+                    if search_lower in user.get('display_name', '').lower() or 
+                       search_lower in user.get('user_id', '').lower()
+                ]
+            
+            # Create user options for multiselect
+            user_options = []
+            for user in filtered_users:
+                display_name = user.get('display_name', user.get('user_id', '').split(':')[0].lstrip('@'))
+                user_id = user.get('user_id', '')
+                signal_indicator = " 📱" if user.get('is_signal_user', False) else ""
+                user_options.append(f"{display_name}{signal_indicator} ({user_id})")
+            
+            # Multi-select for users
+            selected_users = st.multiselect(
+                f"Select users to remove ({len(filtered_users)} available):",
+                options=user_options,
+                default=st.session_state.selected_removal_users,
+                key="removal_user_multiselect",
+                help="Select one or more users to remove from rooms"
+            )
+            
+            # Update session state
+            st.session_state.selected_removal_users = selected_users
+            
+            # Display selected users with remove buttons
+            if st.session_state.selected_removal_users:
+                st.write(f"**Selected Users ({len(st.session_state.selected_removal_users)}):**")
+                
+                users_to_remove = []
+                
+                # Display users in a grid (2 per row)
+                for i in range(0, len(st.session_state.selected_removal_users), 2):
+                    cols = st.columns(4)  # User1, Remove1, User2, Remove2
+                    
+                    # First user in the row
+                    user_option1 = st.session_state.selected_removal_users[i]
+                    user_id1 = user_option1.split("(")[-1].rstrip(")")
+                    display_name1 = user_option1.split("(")[0].strip()
+                    
+                    with cols[0]:
+                        st.write(f"{i+1}. **{display_name1}**")
+                        st.caption(user_id1)
+                    with cols[1]:
+                        if st.button("❌", key=f"remove_removal_user_{i}", help=f"Remove {display_name1}"):
+                            users_to_remove.append(user_option1)
+                    
+                    # Second user in the row (if exists)
+                    if i + 1 < len(st.session_state.selected_removal_users):
+                        user_option2 = st.session_state.selected_removal_users[i + 1]
+                        user_id2 = user_option2.split("(")[-1].rstrip(")")
+                        display_name2 = user_option2.split("(")[0].strip()
+                        
+                        with cols[2]:
+                            st.write(f"{i+2}. **{display_name2}**")
+                            st.caption(user_id2)
+                        with cols[3]:
+                            if st.button("❌", key=f"remove_removal_user_{i+1}", help=f"Remove {display_name2}"):
+                                users_to_remove.append(user_option2)
+                
+                # Remove users (do this after the loop to avoid modifying list during iteration)
+                if users_to_remove:
+                    for user_to_remove in users_to_remove:
+                        st.session_state.selected_removal_users.remove(user_to_remove)
+                    st.rerun()
+                
+                # Extract user_ids for removal
+                selected_user_ids = []
+                for user_option in st.session_state.selected_removal_users:
+                    user_id = user_option.split("(")[-1].rstrip(")")
+                    selected_user_ids.append(user_id)
+                
+                # Display linked dashboard user info for selected users
+                if selected_user_ids:
+                    st.markdown("---")
+                    st.subheader("🔗 Linked Dashboard Users")
+                    
+                    try:
+                        db = next(get_db())
+                        try:
+                            for user_id in selected_user_ids:
+                                username = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                                
+                                # Look for linked dashboard user (fix the field name)
+                                dashboard_user = db.query(User).filter(
+                                    (User.matrix_username == username) | 
+                                    (User.username == username)
+                                ).first()
+                                
+                                if dashboard_user:
+                                    with st.expander(f"✅ {username} - Dashboard User Found"):
+                                        info_col1, info_col2 = st.columns(2)
+                                        with info_col1:
+                                            st.write(f"**Name:** {dashboard_user.first_name} {dashboard_user.last_name}")
+                                            st.write(f"**Email:** {dashboard_user.email or 'Not set'}")
+                                        with info_col2:
+                                            st.write(f"**Organization:** {getattr(dashboard_user, 'organization', 'Not set')}")
+                                            st.write(f"**Interests:** {getattr(dashboard_user, 'interests', 'Not set')}")
+                                else:
+                                    st.info(f"⚠️ {username} - No linked dashboard user found")
+                        finally:
+                            db.close()
+                    except Exception as e:
+                        st.error(f"Error checking dashboard users: {e}")
+        
+        # Fallback: Manual input if no users loaded or user wants to enter manually
+        if not st.session_state.matrix_users or st.checkbox("Enter Matrix User IDs manually", key="manual_removal_input"):
+            manual_user_ids = st.text_area(
+                "Matrix User IDs (one per line, e.g., @username:domain.com)", 
+                key="manual_removal_user_ids",
+                help="Enter Matrix User IDs manually, one per line, if not in the dropdown",
+                height=100
+            )
+            if manual_user_ids and manual_user_ids.strip():
+                # Parse multiple user IDs from text area
+                manual_ids = [uid.strip() for uid in manual_user_ids.strip().split('\n') if uid.strip()]
+                if manual_ids:
+                    selected_user_ids = manual_ids
+                    st.info(f"Added {len(manual_ids)} manual user IDs: {', '.join(manual_ids)}")
+                else:
+                    selected_user_ids = []
+            else:
+                selected_user_ids = []
+        elif st.session_state.selected_removal_users:
+            # Extract user_ids from selected users
+            selected_user_ids = []
+            for user_option in st.session_state.selected_removal_users:
+                user_id = user_option.split("(")[-1].rstrip(")")
+                selected_user_ids.append(user_id)
+        else:
+            selected_user_ids = []
+        
+        st.markdown("---")
+        
+        # Removal reason templates
+        st.subheader("📝 Removal Reason & Message")
+        
+        # Predefined reason templates
+        reason_templates = {
+            "Unverified": {
+                "reason": "User failed verification after safety number change",
+                "message": "@{username} is being removed for not verifying themselves after their safety number changed. This is done to maintain the integrity of the community. This could mean the number was assigned to a different person or their SIM was put into a different device.\n\nThey are welcome to request to join anytime but will need to be verified by knowing someone in the community and providing their name and organization."
+            },
+            "Inactive": {
+                "reason": "User inactive for extended period",
+                "message": "@{username} is being removed due to inactivity. They have not participated in community discussions for an extended period. They are welcome to rejoin at any time by requesting an invitation."
+            },
+            "Spam": {
+                "reason": "User engaged in spam or inappropriate behavior",
+                "message": "@{username} is being removed for violating community guidelines regarding spam or inappropriate content. Please review our community guidelines before requesting to rejoin."
+            },
+            "Safety Concern": {
+                "reason": "Safety or security concern reported",
+                "message": "@{username} is being removed due to safety concerns reported by community members. This action is taken to protect the community. They may appeal this decision by contacting moderators."
+            },
+            "Custom": {
+                "reason": "Custom reason",
+                "message": "Custom message for @{username}"
+            }
+        }
+        
+        selected_template = st.selectbox(
+            "Select removal reason template:",
+            options=list(reason_templates.keys()),
+            help="Choose a predefined template or select 'Custom' to write your own"
+        )
+        
+        # Get the selected template
+        template = reason_templates[selected_template]
+        
+        # Editable reason and message
+        removal_reason = st.text_input(
+            "Removal reason (for audit log):",
+            value=template["reason"],
+            help="This will be logged for audit purposes"
+        )
+        
+        # Replace {username} placeholder in message template
+        template_message = template["message"]
+        if selected_user_ids:
+            if len(selected_user_ids) == 1:
+                # Single user - replace with specific username
+                username = selected_user_ids[0].split(":")[0].lstrip("@") if ":" in selected_user_ids[0] else selected_user_ids[0].lstrip("@")
+                template_message = template_message.replace("{username}", username)
+            else:
+                # Multiple users - show preview with placeholder (will be personalized during execution)
+                template_message = template_message.replace("{username}", "{username} (will be personalized for each user)")
+                st.info("💡 **Note**: The message will be personalized with each user's username when sent to rooms.")
+        
+        removal_message = st.text_area(
+            "Message to send to rooms (optional):",
+            value=template_message,
+            height=150,
+            help="This message will be sent to each room before removing the user(s). Leave empty to skip messaging."
+        )
+        
+        st.markdown("---")
+        
+        # Room selection section
+        st.subheader("🏠 Select Rooms for Removal")
         
         # Create multiselect for category selection
         selected_categories = st.multiselect(
@@ -733,42 +983,411 @@ async def render_matrix_messaging_page():
         if not selected_categories:
             selected_categories = ["All"]
         
-        # Get rooms in the selected categories
-        rooms_in_categories = filter_rooms_by_category(matrix_rooms, selected_categories)
+        room_ids = []
         
-        # Display the number of rooms in the selected categories
-        category_names = ", ".join(f"'{cat}'" for cat in selected_categories)
-        st.info(f"Found {len(rooms_in_categories)} rooms in the selected categories: {category_names}")
-        
-        # Show the list of rooms that the user will be removed from
-        with st.expander("Show rooms that the user will be removed from"):
-            for room in rooms_in_categories:
-                room_name = room.get('name') or "Unnamed Room"
-                room_id = room.get('room_id')
-                
-                # Add a marker for unconfigured rooms
-                if not room.get('configured', True):
-                    room_name = f"{room_name} (Discovered)"
+        # If "All" is selected, use category-based filtering
+        if "All" in selected_categories:
+            # Get rooms in the selected categories
+            rooms_in_categories = filter_rooms_by_category(matrix_rooms, selected_categories)
+            
+            # Display the number of rooms in the selected categories
+            category_names = ", ".join(f"'{cat}'" for cat in selected_categories)
+            st.info(f"Found {len(rooms_in_categories)} rooms in the selected categories: {category_names}")
+            
+            # Show the list of rooms that the user will be removed from
+            with st.expander("Show rooms that the user will be removed from"):
+                for room in rooms_in_categories:
+                    room_name = room.get('name') or "Unnamed Room"
+                    room_id = room.get('room_id')
                     
-                st.write(f"• {room_name} - {room_id}")
-        
-        # Get the room IDs
-        room_ids = [room.get('room_id') for room in rooms_in_categories if room.get('room_id')]
-        
-        if st.button("Remove User from All Selected Rooms"):
-            if user_id and room_ids:
-                success_count = 0
-                for room_id in room_ids:
-                    success = await remove_from_matrix_room(room_id, user_id)
-                    if success:
-                        success_count += 1
+                    # Add a marker for unconfigured rooms
+                    if not room.get('configured', True):
+                        room_name = f"{room_name} (Discovered)"
+                        
+                    st.write(f"• {room_name} - {room_id}")
+            
+            # Get the room IDs
+            room_ids = [room.get('room_id') for room in rooms_in_categories if room.get('room_id')]
+            
+        else:
+            # "All" is not selected - show specific room selection
+            st.info("💡 **Specific Room Selection**: Since 'All' is not selected, choose specific rooms below.")
+            
+            # Get rooms that the selected users are actually in
+            if selected_user_ids:
+                # Get all rooms where at least one selected user is a member
+                user_rooms = set()
+                db = next(get_db())
+                try:
+                    for user_id in selected_user_ids:
+                        user_memberships = db.query(MatrixRoomMembership).filter(
+                            MatrixRoomMembership.user_id == user_id,
+                            MatrixRoomMembership.membership_status == 'join'
+                        ).all()
+                        for membership in user_memberships:
+                            user_rooms.add(membership.room_id)
+                finally:
+                    db.close()
                 
-                if success_count > 0:
-                    st.success(f"User removed from {success_count} out of {len(room_ids)} rooms")
+                # Get room details from cache for the rooms users are in
+                available_rooms = []
+                db = next(get_db())
+                try:
+                    from app.services.matrix_cache import matrix_cache
+                    cached_rooms = matrix_cache.get_cached_rooms(db)
+                    
+                    for room in cached_rooms:
+                        if room.get('room_id') in user_rooms:
+                            available_rooms.append(room)
+                finally:
+                    db.close()
+                
+                if available_rooms:
+                    # Create room options for multiselect
+                    room_options = {}
+                    for room in available_rooms:
+                        room_name = room.get('name', 'Unnamed Room')
+                        room_id = room.get('room_id')
+                        member_count = room.get('member_count', 0)
+                        
+                        # Show which users are in this room
+                        users_in_room = []
+                        db = next(get_db())
+                        try:
+                            for user_id in selected_user_ids:
+                                user_memberships = db.query(MatrixRoomMembership).filter(
+                                    MatrixRoomMembership.user_id == user_id,
+                                    MatrixRoomMembership.room_id == room_id,
+                                    MatrixRoomMembership.membership_status == 'join'
+                                ).first()
+                                if user_memberships:
+                                    username = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                                    users_in_room.append(username)
+                        finally:
+                            db.close()
+                        
+                        users_text = ", ".join(users_in_room) if users_in_room else "None"
+                        display_name = f"{room_name} ({member_count} members) - Users: {users_text}"
+                        room_options[display_name] = room_id
+                    
+                    # Multi-select for specific rooms
+                    selected_room_names = st.multiselect(
+                        f"Select specific rooms to remove users from ({len(available_rooms)} available):",
+                        options=list(room_options.keys()),
+                        key="specific_removal_rooms",
+                        help="Only rooms where at least one selected user is a member are shown"
+                    )
+                    
+                    # Get selected room IDs
+                    room_ids = [room_options[name] for name in selected_room_names]
+                    
+                    if selected_room_names:
+                        st.success(f"✅ Selected {len(room_ids)} specific rooms for removal")
+                        
+                        # Show selected rooms with user details
+                        with st.expander("📋 Selected Rooms and User Memberships"):
+                            for room_name in selected_room_names:
+                                room_id = room_options[room_name]
+                                st.write(f"**{room_name.split(' (')[0]}** (`{room_id}`)")
+                                
+                                # Show which selected users are in this room
+                                db = next(get_db())
+                                try:
+                                    for user_id in selected_user_ids:
+                                        user_memberships = db.query(MatrixRoomMembership).filter(
+                                            MatrixRoomMembership.user_id == user_id,
+                                            MatrixRoomMembership.room_id == room_id,
+                                            MatrixRoomMembership.membership_status == 'join'
+                                        ).first()
+                                        username = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                                        if user_memberships:
+                                            st.write(f"  ✅ {username} (will be removed)")
+                                        else:
+                                            st.write(f"  ❌ {username} (not in room)")
+                                finally:
+                                    db.close()
+                    else:
+                        st.warning("Please select at least one room for removal")
+                        
                 else:
-                    st.error("Failed to remove user from any rooms")
+                    st.warning("No rooms found where the selected users are members")
+                    
             else:
-                st.warning("Please enter a user ID and select at least one room")
+                st.warning("Please select users first to see available rooms")
+        
+        st.markdown("---")
+        
+        # Confirmation and execution
+        st.subheader("⚠️ Confirm Removal")
+        
+        if selected_user_ids and room_ids:
+            user_count = len(selected_user_ids)
+            room_count = len(room_ids)
+            
+            if user_count == 1:
+                username = selected_user_ids[0].split(":")[0].lstrip("@") if ":" in selected_user_ids[0] else selected_user_ids[0].lstrip("@")
+                st.warning(f"**You are about to remove {username} from {room_count} rooms.**")
+            else:
+                st.warning(f"**You are about to remove {user_count} users from {room_count} rooms each ({user_count * room_count} total removals).**")
+            
+            # Show what will happen
+            with st.expander("📋 Removal Process Summary"):
+                st.write("**The following actions will be performed:**")
+                
+                # Calculate actual operations based on room memberships
+                total_actual_removals = 0
+                for user_id in selected_user_ids:
+                    db = next(get_db())
+                    try:
+                        user_memberships = db.query(MatrixRoomMembership).filter(
+                            MatrixRoomMembership.user_id == user_id,
+                            MatrixRoomMembership.membership_status == 'join'
+                        ).all()
+                        user_room_ids = [membership.room_id for membership in user_memberships]
+                        relevant_room_count = len([room_id for room_id in room_ids if room_id in user_room_ids])
+                        total_actual_removals += relevant_room_count
+                    finally:
+                        db.close()
+                
+                if removal_message.strip():
+                    st.write(f"1. 📤 Send personalized removal message to rooms where users are members ({total_actual_removals} total messages)")
+                    st.write(f"2. 🚫 Remove users from rooms where they are actually members ({total_actual_removals} total removals)")
+                else:
+                    st.write(f"1. 🚫 Remove users from rooms where they are actually members ({total_actual_removals} total removals, no messages will be sent)")
+                st.write("3. 📝 Log action in audit trail for each user")
+                st.write("4. 📊 Display detailed results with success/failure breakdown")
+                
+                st.info(f"💡 **Smart Filtering**: Only processing rooms where users are actually members (not all {user_count * room_count} possible combinations)")
+                st.info("⏱️ **Rate Limiting**: Small delays are added between operations to prevent Matrix API rate limiting")
+                
+                # Show selected users
+                st.write("**Selected Users:**")
+                for user_id in selected_user_ids:
+                    username = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                    st.write(f"  • {username} ({user_id})")
+            
+            # Safety confirmation
+            if user_count == 1:
+                username = selected_user_ids[0].split(":")[0].lstrip("@") if ":" in selected_user_ids[0] else selected_user_ids[0].lstrip("@")
+                confirm_text = f"✅ I confirm I want to remove **{username}** from **{room_count} rooms**"
+            else:
+                confirm_text = f"✅ I confirm I want to remove **{user_count} users** from **{room_count} rooms each** ({user_count * room_count} total removals)"
+            
+            confirm_removal = st.checkbox(confirm_text, key="confirm_user_removal")
+            
+            if st.button("🚫 Execute Removal", disabled=not confirm_removal, type="primary"):
+                if confirm_removal:
+                    # Execute the removal process
+                    with st.spinner("Executing removal process..."):
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        
+                        # Calculate total operations dynamically based on actual room memberships
+                        total_operations = 0
+                        for user_id in selected_user_ids:
+                            db = next(get_db())
+                            try:
+                                user_memberships = db.query(MatrixRoomMembership).filter(
+                                    MatrixRoomMembership.user_id == user_id,
+                                    MatrixRoomMembership.membership_status == 'join'
+                                ).all()
+                                user_room_ids = [membership.room_id for membership in user_memberships]
+                                relevant_room_count = len([room_id for room_id in room_ids if room_id in user_room_ids])
+                                total_operations += relevant_room_count * (2 if removal_message.strip() else 1)
+                            finally:
+                                db.close()
+                        
+                        current_operation = 0
+                        
+                        # Results tracking
+                        results = {
+                            'messages_sent': 0,
+                            'users_removed': 0,
+                            'failed_operations': [],
+                            'successful_removals': []
+                        }
+                        
+                        # Process each user
+                        for user_idx, user_id in enumerate(selected_user_ids):
+                            username = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                            
+                            # First, get the rooms this user is actually in
+                            user_room_ids = []
+                            db = next(get_db())
+                            try:
+                                from app.services.matrix_cache import matrix_cache
+                                # Get all rooms for this user from cache
+                                user_memberships = db.query(MatrixRoomMembership).filter(
+                                    MatrixRoomMembership.user_id == user_id,
+                                    MatrixRoomMembership.membership_status == 'join'
+                                ).all()
+                                user_room_ids = [membership.room_id for membership in user_memberships]
+                                logger.info(f"User {username} is in {len(user_room_ids)} rooms: {user_room_ids}")
+                            finally:
+                                db.close()
+                            
+                            # Filter room_ids to only include rooms the user is actually in
+                            relevant_room_ids = [room_id for room_id in room_ids if room_id in user_room_ids]
+                            
+                            if not relevant_room_ids:
+                                logger.info(f"User {username} is not in any of the selected rooms, skipping")
+                                results['failed_operations'].append(f"User {username}: Not in any selected rooms")
+                                continue
+                            
+                            logger.info(f"Processing {username} for {len(relevant_room_ids)} relevant rooms out of {len(room_ids)} selected")
+                            
+                            # Add a longer delay between users to give Matrix server more breathing room
+                            if user_idx > 0:  # Don't delay before the first user
+                                status_text.text(f"Pausing briefly before processing {username}...")
+                                await asyncio.sleep(1.0)
+                            
+                            # Process each relevant room for this user
+                            for room_idx, room_id in enumerate(relevant_room_ids):
+                                room_name = next((r.get('name', 'Unknown Room') for r in rooms_in_categories if r.get('room_id') == room_id), 'Unknown Room')
+                                
+                                # Step 1: Send personalized message if provided (user is already confirmed to be in this room)
+                                if removal_message.strip():
+                                    status_text.text(f"Sending removal message for {username} to {room_name}...")
+                                    try:
+                                        from app.utils.matrix_actions import _send_room_message_async
+                                        
+                                        # Create personalized message for this specific user
+                                        personalized_message = removal_message.replace("{username}", username)
+                                        
+                                        # Add safety check to ensure message isn't empty after replacement
+                                        if personalized_message.strip():
+                                            # Use the async version of send_room_message
+                                            message_success = await _send_room_message_async(room_id, personalized_message)
+                                            if message_success:
+                                                results['messages_sent'] += 1
+                                                logger.info(f"Successfully sent removal message for {username} to {room_name}")
+                                            else:
+                                                results['failed_operations'].append(f"Message for {username} to {room_name}: Send failed")
+                                                logger.warning(f"Failed to send removal message for {username} to {room_name}")
+                                        else:
+                                            results['failed_operations'].append(f"Message for {username} to {room_name}: Empty message after personalization")
+                                            logger.warning(f"Empty message after personalization for {username}")
+                                            
+                                    except Exception as e:
+                                        logger.error(f"Error sending message for {user_id} to {room_id}: {e}")
+                                        results['failed_operations'].append(f"Message for {username} to {room_name}: {str(e)}")
+                                    
+                                    current_operation += 1
+                                    progress_bar.progress(min(current_operation / total_operations, 1.0))
+                                    
+                                    # Small delay after sending message to avoid rate limiting
+                                    await asyncio.sleep(0.5)
+                                
+                                # Step 2: Remove user from room
+                                status_text.text(f"Removing {username} from {room_name}...")
+                                try:
+                                    removal_success = await remove_from_matrix_room_async(room_id, user_id, removal_reason)
+                                    if removal_success:
+                                        results['users_removed'] += 1
+                                        results['successful_removals'].append(f"{username} from {room_name}")
+                                        logger.info(f"Successfully removed {username} from {room_name}")
+                                    else:
+                                        results['failed_operations'].append(f"Remove {username} from {room_name}: Removal failed (user may not be in room)")
+                                        logger.warning(f"Failed to remove {username} from {room_name} - user may not be in room")
+                                except Exception as e:
+                                    logger.error(f"Error removing {user_id} from {room_id}: {e}")
+                                    # Provide more specific error messages based on common Matrix errors
+                                    if "M_FORBIDDEN" in str(e):
+                                        if "not in the room" in str(e):
+                                            results['failed_operations'].append(f"Remove {username} from {room_name}: User not in room")
+                                        else:
+                                            results['failed_operations'].append(f"Remove {username} from {room_name}: Permission denied")
+                                    elif "M_NOT_FOUND" in str(e):
+                                        results['failed_operations'].append(f"Remove {username} from {room_name}: Room not found")
+                                    else:
+                                        results['failed_operations'].append(f"Remove {username} from {room_name}: {str(e)}")
+                                
+                                current_operation += 1
+                                progress_bar.progress(min(current_operation / total_operations, 1.0))
+                                
+                                # Small delay after removal to avoid rate limiting
+                                await asyncio.sleep(0.5)
+                                
+                        
+                        # Clear progress indicators
+                        progress_bar.empty()
+                        status_text.empty()
+                        
+                        # Log the action for audit trail
+                        try:
+                            db = next(get_db())
+                            try:
+                                for user_id in selected_user_ids:
+                                    username = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                                    admin_event = AdminEvent(
+                                        admin_username="dashboard_admin",  # You might want to get actual admin username
+                                        action="user_removal",
+                                        target_user=user_id,
+                                        details=f"Removed from {room_count} rooms. Reason: {removal_reason}",
+                                        timestamp=datetime.utcnow()
+                                    )
+                                    db.add(admin_event)
+                                db.commit()
+                            finally:
+                                db.close()
+                        except Exception as e:
+                            logger.error(f"Error logging admin event: {e}")
+                        
+                        # Display results
+                        st.markdown("---")
+                        st.subheader("📊 Removal Results")
+                        
+                        # Success summary
+                        if results['users_removed'] > 0:
+                            st.success(f"✅ **Successfully completed {results['users_removed']} user removals**")
+                        
+                        if removal_message.strip() and results['messages_sent'] > 0:
+                            st.info(f"📤 Removal message sent to {results['messages_sent']} rooms")
+                        
+                        # Show successful removals
+                        if results['successful_removals']:
+                            with st.expander(f"✅ Successful Removals ({len(results['successful_removals'])})"):
+                                for removal in results['successful_removals']:
+                                    st.write(f"  • {removal}")
+                        
+                        # Show failed operations
+                        if results['failed_operations']:
+                            st.error(f"❌ **{len(results['failed_operations'])} operations failed:**")
+                            with st.expander("Show Failed Operations"):
+                                for failure in results['failed_operations']:
+                                    st.write(f"  • {failure}")
+                        
+                        # Celebrate if everything succeeded
+                        # Calculate expected removals based on actual room memberships
+                        expected_removals = 0
+                        for user_id in selected_user_ids:
+                            db = next(get_db())
+                            try:
+                                user_memberships = db.query(MatrixRoomMembership).filter(
+                                    MatrixRoomMembership.user_id == user_id,
+                                    MatrixRoomMembership.membership_status == 'join'
+                                ).all()
+                                user_room_ids = [membership.room_id for membership in user_memberships]
+                                relevant_room_count = len([room_id for room_id in room_ids if room_id in user_room_ids])
+                                expected_removals += relevant_room_count
+                            finally:
+                                db.close()
+                        
+                        if results['users_removed'] == expected_removals and not results['failed_operations']:
+                            st.balloons()  # Celebrate complete success
+                            st.success("🎉 **All removals completed successfully!**")
+                        elif results['users_removed'] > 0:
+                            st.success(f"✅ **Completed {results['users_removed']} out of {expected_removals} expected removals**")
+                        
+                        # Reset form
+                        st.session_state.selected_removal_users = []
+                        st.session_state.confirm_user_removal = False
+                        
+        else:
+            if not selected_user_ids:
+                st.warning("Please select at least one Matrix user to remove")
+            elif not room_ids:
+                st.warning("No rooms found in selected categories")
     
     with tab6:
         st.header("Entrance Room Users")

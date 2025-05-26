@@ -424,11 +424,11 @@ class MatrixCacheService:
     def get_users_in_room(self, db: Session, room_id: str) -> List[Dict[str, str]]:
         """
         Get all users in a specific room from cache.
-        
+
         Args:
             db: Database session
             room_id: Matrix room ID
-            
+
         Returns:
             List of user dictionaries with user_id and display_name
         """

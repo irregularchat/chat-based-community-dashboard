@@ -25,7 +25,8 @@ from app.utils.matrix_actions import (
     remove_from_matrix_room_async,
     send_direct_message,
     send_room_message,
-    get_direct_message_history_sync
+    get_direct_message_history_sync,
+    _send_room_message_with_content_async
 )
 from app.db.session import get_db
 from app.db.operations import User, AdminEvent, MatrixRoomMember, get_matrix_room_members
@@ -1072,7 +1073,7 @@ async def render_matrix_messaging_page():
             
             # Get the room IDs
             room_ids = [room.get('room_id') for room in rooms_in_categories if room.get('room_id')]
-            
+        
         else:
             # "All" is not selected - show specific room selection
             st.info("💡 **Specific Room Selection**: Since 'All' is not selected, choose specific rooms below.")
@@ -1415,15 +1416,26 @@ async def render_matrix_messaging_page():
                                 if removal_message.strip():
                                     status_text.text(f"Sending removal message for {username} to {room_name}...")
                                     try:
-                                        from app.utils.matrix_actions import _send_room_message_async
+                                        from app.utils.matrix_actions import _send_room_message_with_content_async
                                         
-                                        # Create personalized message for this specific user
-                                        personalized_message = removal_message.replace("{username}", username)
+                                        # Create HTML mention link for the user
+                                        mention_html = f'<a href="https://matrix.to/#/{user_id}">{username}</a>'
+                                        
+                                        # Create personalized message with HTML mention
+                                        personalized_message = removal_message.replace("{username}", mention_html)
                                         
                                         # Add safety check to ensure message isn't empty after replacement
                                         if personalized_message.strip():
-                                            # Use the async version of send_room_message
-                                            message_success = await _send_room_message_async(room_id, personalized_message)
+                                            # Create message content with HTML formatting
+                                            message_content = {
+                                                "msgtype": "m.text",
+                                                "body": removal_message.replace("{username}", username),  # Plain text fallback
+                                                "format": "org.matrix.custom.html",
+                                                "formatted_body": personalized_message
+                                            }
+                                            
+                                            # Use the async version with content
+                                            message_success = await _send_room_message_with_content_async(room_id, message_content)
                                             if message_success:
                                                 results['messages_sent'] += 1
                                                 logger.info(f"Successfully sent removal message for {username} to {room_name}")

@@ -1450,15 +1450,34 @@ async def remove_from_room(client: AsyncClient, room_id: str, user_id: str, reas
     Returns:
         bool: True if the user was removed successfully or was not in the room, False for other errors
     """
+    # Enhanced logging for debugging Signal user removal
+    logger.info(f"🔍 REMOVE_FROM_ROOM DEBUG: Attempting to remove user_id='{user_id}' from room_id='{room_id}'")
+    logger.info(f"🔍 User ID validation: starts_with_@={user_id.startswith('@')}, has_domain={':' in user_id}, is_signal={user_id.startswith('@signal_')}")
+    
     # Method 1: Try standard kick
     try:
+        logger.info(f"🔄 Attempting room_kick for {user_id} from {room_id}")
         response = await client.room_kick(room_id, user_id, reason=reason)
         
-        if hasattr(response, 'event_id'):
-            logger.info(f"Successfully kicked {user_id} from room {room_id}")
+        # Enhanced logging for response analysis
+        logger.info(f"🔍 KICK RESPONSE DEBUG: response_type={type(response).__name__}, response={response}")
+        if hasattr(response, 'transport_response'):
+            logger.info(f"🔍 Transport response: status={response.transport_response.status if response.transport_response else 'None'}")
+        
+        # Check if the response indicates success
+        # For RoomKickResponse, success is indicated by HTTP 200 status in transport_response
+        if hasattr(response, 'transport_response') and response.transport_response:
+            if response.transport_response.status == 200:
+                logger.info(f"✅ Successfully kicked {user_id} from room {room_id} (HTTP 200)")
+                return True
+            else:
+                logger.warning(f"❌ Kick failed for {user_id} from room {room_id} with status {response.transport_response.status}: {response}")
+        elif hasattr(response, 'event_id'):
+            # Fallback for other response types that might have event_id
+            logger.info(f"✅ Successfully kicked {user_id} from room {room_id} (event_id present)")
             return True
         else:
-            logger.warning(f"Kick failed for {user_id} from room {room_id}: {response}")
+            logger.warning(f"❌ Kick failed for {user_id} from room {room_id}: {response}")
     except Exception as e:
         error_str = str(e)
         
@@ -1467,27 +1486,55 @@ async def remove_from_room(client: AsyncClient, room_id: str, user_id: str, reas
             logger.info(f"User {user_id} is not in room {room_id}, skipping removal")
             return True  # Consider this success since the user is already not in the room
         elif "M_FORBIDDEN" in error_str and "cannot kick user" in error_str.lower():
-            logger.warning(f"Permission denied kicking {user_id} from room {room_id}, trying ban+unban method")
+            logger.warning(f"⚠️ Permission denied kicking {user_id} from room {room_id}, trying ban+unban method")
             
             # Method 2: Try ban + unban (this sometimes works when kick doesn't)
             try:
-                logger.info(f"Attempting ban+unban method for {user_id} in room {room_id}")
+                logger.info(f"🔄 Attempting ban+unban method for {user_id} in room {room_id}")
                 
                 # First ban the user
+                logger.info(f"🔄 Step 1: Banning {user_id} from {room_id}")
                 ban_response = await client.room_ban(room_id, user_id, reason=reason)
-                if hasattr(ban_response, 'event_id'):
-                    logger.info(f"Successfully banned {user_id} from room {room_id}")
+                ban_success = False
+                
+                # Enhanced logging for ban response
+                logger.info(f"🔍 BAN RESPONSE DEBUG: response_type={type(ban_response).__name__}, response={ban_response}")
+                
+                # Check ban response success
+                if hasattr(ban_response, 'transport_response') and ban_response.transport_response:
+                    ban_success = ban_response.transport_response.status == 200
+                    logger.info(f"🔍 Ban transport response: status={ban_response.transport_response.status}")
+                elif hasattr(ban_response, 'event_id'):
+                    ban_success = True
+                    logger.info(f"🔍 Ban response has event_id: {ban_response.event_id}")
+                
+                if ban_success:
+                    logger.info(f"✅ Successfully banned {user_id} from room {room_id}")
                     
                     # Then unban them (this removes them from the room)
+                    logger.info(f"🔄 Step 2: Unbanning {user_id} from {room_id}")
                     unban_response = await client.room_unban(room_id, user_id)
-                    if hasattr(unban_response, 'event_id'):
-                        logger.info(f"Successfully unbanned {user_id} from room {room_id} - user removed via ban+unban")
+                    unban_success = False
+                    
+                    # Enhanced logging for unban response
+                    logger.info(f"🔍 UNBAN RESPONSE DEBUG: response_type={type(unban_response).__name__}, response={unban_response}")
+                    
+                    # Check unban response success
+                    if hasattr(unban_response, 'transport_response') and unban_response.transport_response:
+                        unban_success = unban_response.transport_response.status == 200
+                        logger.info(f"🔍 Unban transport response: status={unban_response.transport_response.status}")
+                    elif hasattr(unban_response, 'event_id'):
+                        unban_success = True
+                        logger.info(f"🔍 Unban response has event_id: {unban_response.event_id}")
+                    
+                    if unban_success:
+                        logger.info(f"✅ Successfully unbanned {user_id} from room {room_id} - user removed via ban+unban")
                         return True
                     else:
-                        logger.error(f"Failed to unban {user_id} from room {room_id}: {unban_response}")
+                        logger.error(f"❌ Failed to unban {user_id} from room {room_id}: {unban_response}")
                         return False
                 else:
-                    logger.error(f"Failed to ban {user_id} from room {room_id}: {ban_response}")
+                    logger.error(f"❌ Failed to ban {user_id} from room {room_id}: {ban_response}")
                     return False
                     
             except Exception as ban_error:
@@ -1990,14 +2037,61 @@ def send_room_message(room_id: str, message: str) -> bool:
         logger.error(f"Error sending message to room {room_id}: {e}")
         return False
 
-async def send_matrix_message_async(user_id: str, message: str) -> bool:
+async def _send_room_message_with_content_async(room_id: str, content: dict) -> bool:
     """
-    Send a message to a Matrix user asynchronously.
-    If a direct chat doesn't exist, creates one first.
+    Send a message with custom content to a Matrix room asynchronously.
     
     Args:
-        user_id: The Matrix ID of the user to send the message to
-        message: The message content
+        room_id (str): The Matrix room ID to send the message to
+        content (dict): The message content dictionary
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active. Cannot send room message.")
+        return False
+    
+    client = None
+    try:
+        # Create Matrix client
+        client = await get_matrix_client()
+        if not client:
+            logger.error("Failed to create Matrix client")
+            return False
+        
+        # Send the message with custom content
+        response = await client.room_send(
+            room_id=room_id,
+            message_type="m.room.message",
+            content=content
+        )
+        
+        if isinstance(response, RoomSendResponse):
+            logger.info(f"Message with custom content sent to room {room_id} successfully")
+            return True
+        else:
+            logger.error(f"Failed to send message to room: {response}")
+            return False
+    except Exception as e:
+        logger.error(f"Error sending room message with content: {e}")
+        return False
+    finally:
+        # Ensure client is closed
+        if client:
+            try:
+                await client.close()
+            except Exception as close_error:
+                logger.warning(f"Error closing Matrix client: {close_error}")
+
+async def send_matrix_message_async(target: str, message, is_formatted: bool = False) -> bool:
+    """
+    Send a message to a Matrix user or room asynchronously.
+    
+    Args:
+        target: The Matrix ID (user or room) to send the message to
+        message: The message content (str for simple text, dict for structured content)
+        is_formatted: Whether the message is structured content (dict) or simple text (str)
         
     Returns:
         bool: True if the message was sent successfully, False otherwise
@@ -2007,16 +2101,35 @@ async def send_matrix_message_async(user_id: str, message: str) -> bool:
         return False
         
     try:
-        # Create a direct chat with the user if needed
-        room_id = await create_matrix_direct_chat(user_id)
-        if not room_id:
-            logger.error(f"Failed to create direct chat with {user_id}")
+        # Determine if target is a room ID or user ID
+        if target.startswith('!'):
+            # It's a room ID - send directly to the room
+            room_id = target
+            logger.info(f"Sending message to room: {room_id}")
+        elif target.startswith('@'):
+            # It's a user ID, create a direct chat
+            logger.info(f"Creating direct chat with user: {target}")
+            room_id = await create_matrix_direct_chat(target)
+            if not room_id:
+                logger.error(f"Failed to create direct chat with {target}")
+                return False
+        else:
+            logger.error(f"Invalid target format: {target}. Must start with '!' (room) or '@' (user)")
             return False
+        
+        # Send the message based on format
+        if is_formatted and isinstance(message, dict):
+            # Send structured content (for intentional mentions)
+            logger.info(f"Sending structured message with intentional mentions to {room_id}")
+            return await _send_room_message_with_content_async(room_id, message)
+        else:
+            # Send simple text message
+            message_text = str(message)
+            logger.info(f"Sending text message to {room_id}: {message_text[:100]}...")
+            return await _send_room_message_async(room_id, message_text)
             
-        # Send the message using the correct async function
-        return await _send_room_message_async(room_id, message)
     except Exception as e:
-        logger.error(f"Error sending message to {user_id}: {e}")
+        logger.error(f"Error sending message to {target}: {e}")
         return False
 
 # Stub implementations for matrix room member functions

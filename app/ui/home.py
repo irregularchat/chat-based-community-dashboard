@@ -152,15 +152,11 @@ async def render_home_page():
                             success = sync_user_data_incremental(db, authentik_users, full_sync=True)
                             
                             if success:
-                                # Record sync event
-                                sync_event = AdminEvent(
-                                    timestamp=datetime.now(),
-                                    event_type='system_sync',
-                                    username='system',
-                                    description=f'Manual full sync of {len(authentik_users)} users from Authentik'
-                                )
-                                db.add(sync_event)
-                                db.commit()
+                                # Log sync for Docker logs only (no AdminEvent)
+                                logging.info(f'Manual full sync of {len(authentik_users)} users from Authentik completed successfully')
+                                
+                                # Update last sync timestamp in session state
+                                st.session_state['last_sync_timestamp'] = datetime.now()
                                 
                                 # Verify the sync worked
                                 local_count = db.query(User).count()
@@ -170,15 +166,10 @@ async def render_home_page():
                         else:
                             st.sidebar.error("No users fetched from Authentik API")
                     else:
-                        # Get the last sync timestamp
-                        last_sync = (
-                            db.query(AdminEvent)
-                              .filter(AdminEvent.event_type == 'system_sync')
-                              .order_by(AdminEvent.timestamp.desc())
-                              .first()
-                        )
+                        # Get the last sync timestamp from session state
+                        last_sync_time = st.session_state.get('last_sync_timestamp')
                         
-                        if not last_sync:
+                        if not last_sync_time:
                             st.sidebar.warning("No previous sync found. Performing full sync instead.")
                             # Get all users from Authentik
                             authentik_users = list_users(Config.AUTHENTIK_API_URL, headers)
@@ -189,15 +180,11 @@ async def render_home_page():
                                 success = sync_user_data_incremental(db, authentik_users, full_sync=True)
                                 
                                 if success:
-                                    # Record sync event
-                                    sync_event = AdminEvent(
-                                        timestamp=datetime.now(),
-                                        event_type='system_sync',
-                                        username='system',
-                                        description=f'Manual full sync of {len(authentik_users)} users from Authentik'
-                                    )
-                                    db.add(sync_event)
-                                    db.commit()
+                                    # Log sync for Docker logs only (no AdminEvent)
+                                    logging.info(f'Manual full sync of {len(authentik_users)} users from Authentik completed successfully')
+                                    
+                                    # Update last sync timestamp in session state
+                                    st.session_state['last_sync_timestamp'] = datetime.now()
                                     
                                     # Verify the sync worked
                                     local_count = db.query(User).count()
@@ -207,12 +194,12 @@ async def render_home_page():
                             else:
                                 st.sidebar.error("No users fetched from Authentik API")
                         else:
-                            st.sidebar.info(f"Getting users modified since {last_sync.timestamp}...")
+                            st.sidebar.info(f"Getting users modified since {last_sync_time}...")
                             # Get users modified since the last sync
                             modified_users = get_users_modified_since(
                                 Config.AUTHENTIK_API_URL, 
                                 headers, 
-                                last_sync.timestamp
+                                last_sync_time
                             )
                             
                             if modified_users:
@@ -221,15 +208,11 @@ async def render_home_page():
                                 success = sync_user_data_incremental(db, modified_users, full_sync=False)
                                 
                                 if success:
-                                    # Record sync event
-                                    sync_event = AdminEvent(
-                                        timestamp=datetime.now(),
-                                        event_type='system_sync',
-                                        username='system',
-                                        description=f'Manual incremental sync of {len(modified_users)} modified users from Authentik'
-                                    )
-                                    db.add(sync_event)
-                                    db.commit()
+                                    # Log sync for Docker logs only (no AdminEvent)
+                                    logging.info(f'Manual incremental sync of {len(modified_users)} modified users from Authentik completed successfully')
+                                    
+                                    # Update last sync timestamp in session state
+                                    st.session_state['last_sync_timestamp'] = datetime.now()
                                     
                                     # Verify the sync worked
                                     local_count = db.query(User).count()
@@ -238,15 +221,11 @@ async def render_home_page():
                                     st.sidebar.error("Sync failed. Check logs for details.")
                             else:
                                 st.sidebar.info("No modified users found since last sync.")
-                                # Still record a sync event to update the timestamp
-                                sync_event = AdminEvent(
-                                    timestamp=datetime.now(),
-                                    event_type='system_sync',
-                                    username='system',
-                                    description='Manual check - no modified users found since last sync'
-                                )
-                                db.add(sync_event)
-                                db.commit()
+                                # Log for Docker logs only (no AdminEvent)
+                                logging.info('Manual check - no modified users found since last sync')
+                                
+                                # Update last sync timestamp even if no changes found
+                                st.session_state['last_sync_timestamp'] = datetime.now()
                     
                     # Update the last change check time
                     st.session_state['last_change_check'] = datetime.now()

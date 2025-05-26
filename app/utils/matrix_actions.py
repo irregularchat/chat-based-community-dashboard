@@ -1437,20 +1437,21 @@ def merge_room_data() -> List[Dict]:
         # Fall back to configured rooms on error
         return Config.get_matrix_rooms()
 
-async def remove_from_room(client: AsyncClient, room_id: str, user_id: str) -> bool:
+async def remove_from_room(client: AsyncClient, room_id: str, user_id: str, reason: str = "Removed via dashboard") -> bool:
     """
-    Remove a user from a Matrix room.
+    Remove a user from a Matrix room with enhanced error handling.
     
     Args:
         client: The Matrix client
         room_id: The ID of the room
         user_id: The Matrix ID of the user to remove
+        reason: Reason for removal
         
     Returns:
-        bool: True if the user was removed successfully, False otherwise
+        bool: True if the user was removed successfully or was not in the room, False for other errors
     """
     try:
-        response = await client.room_kick(room_id, user_id, reason="Removed via dashboard")
+        response = await client.room_kick(room_id, user_id, reason=reason)
         
         if hasattr(response, 'event_id'):
             logger.info(f"Removed {user_id} from room {room_id}")
@@ -1459,19 +1460,65 @@ async def remove_from_room(client: AsyncClient, room_id: str, user_id: str) -> b
             logger.error(f"Failed to remove {user_id} from room {room_id}: {response}")
             return False
     except Exception as e:
-        logger.error(f"Error removing {user_id} from room {room_id}: {e}")
+        error_str = str(e)
+        
+        # Handle specific Matrix errors
+        if "M_FORBIDDEN" in error_str and "target user is not in the room" in error_str.lower():
+            logger.info(f"User {user_id} is not in room {room_id}, skipping removal")
+            return True  # Consider this success since the user is already not in the room
+        elif "M_FORBIDDEN" in error_str:
+            logger.warning(f"Permission denied removing {user_id} from room {room_id}: {e}")
+            return False
+        elif "M_NOT_FOUND" in error_str:
+            logger.warning(f"Room {room_id} not found when removing {user_id}: {e}")
+            return False
+        else:
+            logger.error(f"Error removing {user_id} from room {room_id}: {e}")
+            return False
+
+async def remove_from_matrix_room_async(room_id: str, user_id: str, reason: str = "Removed via dashboard") -> bool:
+    """
+    Asynchronous function for removing a user from a Matrix room.
+    
+    Args:
+        room_id: The ID of the room to remove the user from
+        user_id: The Matrix user ID to remove
+        reason: Reason for removal
+        
+    Returns:
+        bool: True if successful or user not in room, False for other errors
+    """
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active. Skipping remove_from_matrix_room_async.")
+        return False
+        
+    try:
+        client = await get_matrix_client()
+        if not client:
+            logger.error("Failed to get Matrix client")
+            return False
+            
+        try:
+            result = await remove_from_room(client, room_id, user_id, reason)
+            return result
+        finally:
+            await client.close()
+            
+    except Exception as e:
+        logger.error(f"Error in remove_from_matrix_room_async: {e}")
         return False
 
-def remove_from_matrix_room(room_id: str, user_id: str) -> bool:
+def remove_from_matrix_room(room_id: str, user_id: str, reason: str = "Removed via dashboard") -> bool:
     """
     Synchronous wrapper for removing a user from a Matrix room.
     
     Args:
         room_id: The ID of the room to remove the user from
         user_id: The Matrix user ID to remove
+        reason: Reason for removal
         
     Returns:
-        bool: True if successful, False otherwise
+        bool: True if successful or user not in room, False for other errors
     """
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping remove_from_matrix_room.")
@@ -1492,7 +1539,7 @@ def remove_from_matrix_room(room_id: str, user_id: str) -> bool:
             
         # Get the client and remove the user
         async_client = loop.run_until_complete(client._get_client())
-        result = loop.run_until_complete(remove_from_room(async_client, room_id, user_id))
+        result = loop.run_until_complete(remove_from_room(async_client, room_id, user_id, reason))
         
         # Close the client properly
         loop.run_until_complete(client.close())

@@ -421,32 +421,39 @@ class MatrixCacheService:
             logger.error(f"Error getting cached rooms: {str(e)}")
             return []
 
-    def get_users_in_room(self, db: Session, room_id: str) -> List[Dict]:
-        """Get all users belonging to a specific room from the cache.
-
+    def get_users_in_room(self, db: Session, room_id: str) -> List[Dict[str, str]]:
+        """
+        Get all users in a specific room from cache.
+        
         Args:
             db: Database session
-            room_id: The ID of the room
-
+            room_id: Matrix room ID
+            
         Returns:
-            List of user dictionaries (user_id, display_name)
+            List of user dictionaries with user_id and display_name
         """
         try:
-            memberships = db.query(
-                MatrixUserCache.user_id, 
-                MatrixUserCache.display_name
-            ).join(
-                MatrixRoomMembership, MatrixUserCache.user_id == MatrixRoomMembership.user_id
+            from app.db.models import MatrixRoomMembership, MatrixUser
+            
+            # Query users who are members of the specified room
+            users_in_room = db.query(MatrixUser).join(
+                MatrixRoomMembership, 
+                MatrixUser.user_id == MatrixRoomMembership.user_id
             ).filter(
-                MatrixRoomMembership.room_id == room_id
+                MatrixRoomMembership.room_id == room_id,
+                MatrixRoomMembership.membership_status == 'join'
             ).all()
             
             return [
-                {"user_id": user.user_id, "display_name": user.display_name}
-                for user in memberships
+                {
+                    'user_id': user.user_id,
+                    'display_name': user.display_name or user.user_id.split(':')[0].lstrip('@')
+                }
+                for user in users_in_room
             ]
+            
         except Exception as e:
-            logger.error(f"Error getting users for room {room_id}: {str(e)}")
+            logging.error(f"Error getting users in room {room_id}: {str(e)}")
             return []
 
     def get_sync_status(self, db: Session) -> Optional[Dict]:

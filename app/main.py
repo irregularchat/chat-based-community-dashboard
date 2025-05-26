@@ -11,7 +11,7 @@ from app.ui.forms import (
     render_invite_form,
     display_user_list
 )
-from app.ui.summary import main as render_summary_page
+from app.ui.summary import main as render_summary_page, display_event_history
 from app.ui.help_resources import main as render_help_page
 from app.ui.prompts import main as render_prompts_page
 from app.ui.matrix import render_matrix_messaging_page
@@ -111,6 +111,7 @@ def render_sidebar():
             db.close()
     
     # Define page options based on authentication, admin status, and moderator permissions
+    # Note: Community is handled separately as a sidebar button, not in the dropdown
     if is_authenticated:
         if is_admin:
             # Admin users get all pages
@@ -143,8 +144,6 @@ def render_sidebar():
                     "Signal Association"
                 ])
             
-
-            
             # If no specific permissions, give basic access
             if not page_options:
                 page_options = ["Create User", "List & Manage Users"]
@@ -159,7 +158,6 @@ def render_sidebar():
             ]
     else:
         # Non-authenticated users only see the Create User page
-        # Neither Settings nor Prompts Manager are available to non-authenticated users
         page_options = ["Create User"]
     
     # Default page is the first one in the available pages
@@ -192,6 +190,13 @@ def render_sidebar():
     else:
         # Fallback for empty page_options (shouldn't happen)
         selected_page = "Create User"
+    
+    # Add Community section as a separate sidebar button (available to ALL users, no authentication required)
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🏘️ Community Timeline", use_container_width=True, key="community_button"):
+        # Use query params to trigger Community page instead of modifying session state directly
+        st.query_params["page"] = "community"
+        st.rerun()
     
     # Show login/logout in sidebar
     st.sidebar.markdown("---")
@@ -850,8 +855,15 @@ def render_main_content():
         
         return
     
-    # Get the current page directly from the widget
-    current_page = st.session_state.get('current_page', 'Create User')
+    # Get the current page from session state or query params
+    query_page = st.query_params.get('page')
+    if query_page == 'community':
+        current_page = "Community"
+        # Clear the query param to avoid conflicts
+        clean_params = {k: v for k, v in st.query_params.items() if k != 'page'}
+        st.query_params.update(clean_params)
+    else:
+        current_page = st.session_state.get('current_page', 'Create User')
     is_admin = st.session_state.get('is_admin', False)
     is_authenticated = st.session_state.get('is_authenticated', False)
     
@@ -864,8 +876,8 @@ def render_main_content():
         display_login_button(location="main")
         return
     
-    # Global authentication check for most pages (except Create User)
-    if not is_authenticated and current_page != "Create User":
+    # Global authentication check for most pages (except Create User and Community)
+    if not is_authenticated and current_page not in ["Create User", "Community"]:
         # Show login page instead of the requested page
         from app.ui.common import display_login_button
         st.markdown("## Welcome to the Community Dashboard")
@@ -903,6 +915,22 @@ def render_main_content():
                 
         elif current_page == "Signal Association":
             render_signal_association()
+            
+        elif current_page == "Community":
+            # Community timeline - available to ALL users (no authentication required)
+            from app.ui.summary import display_event_history
+            from app.db.session import get_db
+            
+            st.header("🏘️ Community Timeline")
+            st.subheader("Recent community events and administrative actions")
+            st.info("📖 This page shows recent community events and is accessible to everyone.")
+            
+            # Get database session and display event history
+            db = next(get_db())
+            try:
+                display_event_history(db)
+            finally:
+                db.close()
             
         elif current_page == "Admin Panel":
             render_admin_dashboard()

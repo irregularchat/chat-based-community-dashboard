@@ -523,9 +523,11 @@ def render_matrix_rooms_settings():
 
 def render_room_management():
     """Render the room management section"""
-    # Initialize session state for rooms
-    if 'matrix_rooms' not in st.session_state:
+    # Initialize session state for rooms with caching
+    if 'matrix_rooms' not in st.session_state or st.session_state.get('matrix_rooms_cache_time', 0) < (time.time() - 300):  # Cache for 5 minutes
         st.session_state.matrix_rooms = merge_room_data()
+        st.session_state.matrix_rooms_cache_time = time.time()
+        logger.info(f"Refreshed matrix rooms cache in settings with {len(st.session_state.matrix_rooms)} rooms")
     
     # Display existing rooms
     st.subheader("Existing Rooms")
@@ -563,7 +565,13 @@ def render_room_management():
     
     # Option to select from accessible rooms
     st.write("Select from accessible rooms:")
-    accessible_rooms = get_all_accessible_rooms_sync()  # Use the sync version
+    # Use cached rooms instead of making a new API call
+    if 'accessible_rooms_cache' not in st.session_state or st.session_state.get('accessible_rooms_cache_time', 0) < (time.time() - 300):  # Cache for 5 minutes
+        st.session_state.accessible_rooms_cache = get_all_accessible_rooms_sync()  # Use the sync version
+        st.session_state.accessible_rooms_cache_time = time.time()
+        logger.info(f"Refreshed accessible rooms cache with {len(st.session_state.accessible_rooms_cache)} rooms")
+    
+    accessible_rooms = st.session_state.accessible_rooms_cache
     room_options = ["-- Select a room --"]
     for room in accessible_rooms:
         if room.get('name') and room.get('room_id'):
@@ -1770,9 +1778,12 @@ def render_moderator_management():
                                 sections = ["Onboarding", "Messaging", "User Reports", "Prompt Editor"]
                                 perm_value = st.selectbox("Select Section", sections, key="mod_section_select")
                             elif perm_type == "🏠 Room Access":
-                                # Get available rooms
-                                from app.utils.matrix_actions import merge_room_data
-                                rooms = merge_room_data()
+                                # Get available rooms using cached data
+                                if 'matrix_rooms' in st.session_state:
+                                    rooms = st.session_state.matrix_rooms
+                                else:
+                                    from app.utils.matrix_actions import merge_room_data
+                                    rooms = merge_room_data()
                                 if rooms:
                                     room_options = [f"{room.get('name', 'Unknown')} ({room.get('room_id', '')})" for room in rooms]
                                     selected_room = st.selectbox("Select Room", room_options, key="mod_room_select")

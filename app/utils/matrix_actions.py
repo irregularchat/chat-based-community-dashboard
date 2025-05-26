@@ -423,30 +423,36 @@ class MatrixClient:
 # Synchronous wrapper functions for easier integration with Streamlit
 
 async def get_matrix_client() -> Optional[AsyncClient]:
-    """Get Matrix client instance"""
+    """Get Matrix client instance (encryption disabled for simplicity)"""
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active")
         return None
 
     client = None
     try:
+        # Encryption is disabled for simplicity
+        # store_path = Config.MATRIX_STORE_PATH
+        # security_key = Config.MATRIX_SECURITY_KEY
+        # recovery_passphrase = Config.MATRIX_RECOVERY_PASSPHRASE
+        
         client_config = AsyncClientConfig(
             max_limit_exceeded=0,
             max_timeouts=0,
-            store_sync_tokens=False,
-            encryption_enabled=True,  # Enable encryption for Signal bridge compatibility
+            store_sync_tokens=False,  # Disable sync tokens (no encryption)
+            encryption_enabled=False,  # Disable encryption for simplicity
         )
 
+        # Create client without crypto store (encryption disabled)
         client = AsyncClient(
             homeserver=MATRIX_HOMESERVER_URL,
             config=client_config,
         )
+        
         client.access_token = MATRIX_ACCESS_TOKEN
         client.user_id = MATRIX_BOT_USERNAME
 
-        # Skip sync for initial connection - some servers have issues with the next_batch property
-        # Just return the client as it's authenticated with the access token
-        logger.info(f"Matrix client created with user_id: {MATRIX_BOT_USERNAME} (encryption enabled)")
+        logger.info(f"Matrix client created (encryption disabled for simplicity)")
+        
         return client
     except Exception as e:
         logger.error(f"Error creating Matrix client: {e}")
@@ -509,50 +515,22 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
     if user_id.startswith("@signal_"):
         logger.info(f"Detected Signal bridge user: {user_id}")
         
-        # For Signal bridge users, we need to use the Signal bridge bot to get/create the chat room
-        SIGNAL_BRIDGE_BOT_ROOM = Config.MATRIX_SIGNAL_BRIDGE_ROOM_ID
-        if not SIGNAL_BRIDGE_BOT_ROOM:
-            logger.error(f"MATRIX_SIGNAL_BRIDGE_ROOM_ID not configured for Signal bridge user {user_id}")
-            return None
-        
-        # Send start-chat command to Signal bridge bot to get the actual chat room
+        # For Signal bridge users, we need to find the existing Signal bridge chat room
+        # The Signal bridge bot manages these rooms and we need to find the correct one
         try:
             client = await get_matrix_client()
             if not client:
-                logger.error("Failed to create Matrix client for Signal bridge command")
+                logger.error("Failed to create Matrix client for Signal bridge user")
                 return None
             
-            # Extract the Signal UUID from the Matrix user ID
-            # Format: @signal_770b19f5-389e-444e-8976-551a52136cf6:irregularchat.com
-            # We need just: 770b19f5-389e-444e-8976-551a52136cf6
-            signal_uuid = user_id.split("@signal_")[1].split(":")[0]
+            # First, search for existing rooms with this Signal user
+            # Look for rooms that contain both the bot and the Signal user
+            logger.info(f"Searching for existing Signal chat room for {user_id}")
             
-            # Send start-chat command to the Signal bridge bot with just the UUID
-            start_chat_command = f"start-chat {signal_uuid}"
-            logger.info(f"Sending start-chat command to Signal bridge bot: {start_chat_command}")
-            logger.info(f"Extracted Signal UUID: {signal_uuid} from Matrix ID: {user_id}")
-            
-            await client.room_send(
-                room_id=SIGNAL_BRIDGE_BOT_ROOM,
-                message_type="m.room.message",
-                content={
-                    "msgtype": "m.text",
-                    "body": start_chat_command
-                }
-            )
-            
-            # Wait a moment for the bot to process the command and create the room
-            await asyncio.sleep(3)
-            
-            # Since the Signal bridge bot room is encrypted, we can't read the response
-            # Instead, let's look for the Signal chat room that contains both the bot and the Signal user
-            logger.info(f"Looking for Signal chat room for {user_id}")
-            logger.info(f"Will prioritize small rooms and exclude community rooms like INDOC")
-            
-            # Get all joined rooms to find the Signal chat room
             joined_rooms = await client.joined_rooms()
             if isinstance(joined_rooms, JoinedRoomsResponse) and joined_rooms.rooms:
-                logger.info(f"Searching through {len(joined_rooms.rooms)} joined rooms for Signal chat")
+                logger.info(f"Searching through {len(joined_rooms.rooms)} joined rooms for existing Signal chat")
+                
                 # Look for rooms that contain the Signal user
                 for room_id in joined_rooms.rooms:
                     try:
@@ -569,59 +547,41 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
                             
                             # Check if this room contains the Signal user and the bot
                             if user_id in members and MATRIX_BOT_USERNAME in members:
-                                # Additional checks to ensure this is the right room:
-                                # 1. Not the Signal bridge bot command room
-                                # 2. Should be a very small room (direct chat has 2-3 members)
-                                # 3. Exclude community rooms and group chats
-                                if room_id != SIGNAL_BRIDGE_BOT_ROOM:
-                                    
-                                    # Get room name and topic to help identify the room type
-                                    room_name = ""
-                                    room_topic = ""
-                                    try:
-                                        for event in members_response.events:
-                                            if event.get("type") == "m.room.name":
-                                                room_name = event.get("content", {}).get("name", "")
-                                            elif event.get("type") == "m.room.topic":
-                                                room_topic = event.get("content", {}).get("topic", "")
-                                    except Exception:
-                                        pass
-                                    
-                                    # Priority 1: Very small rooms (2-3 members) - likely direct chats
-                                    if len(members) <= 3:
-                                        # Skip rooms with community-like names
-                                        if not any(keyword in room_name.lower() for keyword in 
-                                                 ["entry", "indoc", "welcome", "general", "main", "community", "alabama", "chat"]):
-                                            logger.info(f"Found Signal direct chat for {user_id}: {room_id} (members: {len(members)}, name: '{room_name}')")
-                                            await client.close()
-                                            return room_id
-                                        else:
-                                            logger.debug(f"Skipping small community room {room_id} with name '{room_name}'")
-                                    
-                                    # Priority 2: Rooms with Signal-specific topics or names
-                                    elif (len(members) <= 6 and 
-                                          ("signal" in room_topic.lower() or 
-                                           "private chat" in room_topic.lower() or
-                                           room_name == "" or  # Unnamed rooms are often direct chats
-                                           user_id.split("@signal_")[1].split(":")[0] in room_name)):  # Room name contains Signal UUID
-                                        logger.info(f"Found Signal bridge room for {user_id}: {room_id} (members: {len(members)}, name: '{room_name}', topic: '{room_topic}')")
-                                        await client.close()
-                                        return room_id
-                                    else:
-                                        logger.debug(f"Skipping larger room {room_id} with {len(members)} members, name: '{room_name}'")
+                                # Get room name and topic to help identify the room type
+                                room_name = ""
+                                room_topic = ""
+                                try:
+                                    for event in members_response.events:
+                                        if event.get("type") == "m.room.name":
+                                            room_name = event.get("content", {}).get("name", "")
+                                        elif event.get("type") == "m.room.topic":
+                                            room_topic = event.get("content", {}).get("topic", "")
+                                except Exception:
+                                    pass
+                                
+                                # Look for Signal bridge rooms specifically
+                                # These often have "Signal private chat" in the topic or are small rooms
+                                if ("signal" in room_topic.lower() and "private" in room_topic.lower()) or \
+                                   (len(members) == 2) or \
+                                   ("signal" in room_name.lower() and "chat" in room_name.lower()):
+                                    logger.info(f"Found existing Signal chat room for {user_id}: {room_id} (members: {len(members)}, name: '{room_name}', topic: '{room_topic}')")
+                                    await client.close()
+                                    return room_id
+                                else:
+                                    logger.debug(f"Skipping room {room_id} - not a Signal bridge room (members: {len(members)}, name: '{room_name}', topic: '{room_topic}')")
                                     
                     except Exception as room_err:
                         logger.warning(f"Error checking room {room_id}: {str(room_err)}")
                         continue
             
-            # If we couldn't find the new room, fall back to a known working room
-            # This should work for existing Signal users
-            logger.warning(f"Could not find newly created Signal chat room, using fallback room")
+            # If no existing room found, the Signal bridge will create one when we send a message
+            # Return None to indicate we should use the fallback approach
+            logger.info(f"No existing Signal chat room found for {user_id}")
             await client.close()
-            return "!ryJpNjSUUdvGfwcSXn:irregularchat.com"  # Fallback to known working room
-            
+            return None
+                
         except Exception as e:
-            logger.error(f"Error getting Signal chat room for {user_id}: {e}")
+            logger.error(f"Error searching for Signal chat room for {user_id}: {e}")
             return None
         
     # For non-Signal users, use the original Matrix direct chat logic
@@ -2323,6 +2283,7 @@ async def verify_direct_message_delivery(room_id: str, event_id: str) -> bool:
 async def get_direct_message_history(user_id: str, limit: int = 20) -> List[Dict]:
     """
     Get the message history for a direct message conversation with a user.
+    Enhanced with encryption support for Signal bridge messages.
     
     Args:
         user_id: The Matrix user ID to get conversation history with
@@ -2343,48 +2304,134 @@ async def get_direct_message_history(user_id: str, limit: int = 20) -> List[Dict
             logger.warning(f"Could not find or create direct chat room with {user_id}")
             return []
         
-        # Create Matrix client
+        # Create Matrix client with encryption support
         client = await get_matrix_client()
         if not client:
             logger.error("Failed to create Matrix client")
             return []
         
         try:
+            # Perform initial sync to get encryption keys if needed
+            logger.debug("Performing initial sync for encryption keys...")
+            sync_response = await client.sync(timeout=10000, full_state=True)
+            logger.debug(f"Sync completed: {type(sync_response).__name__}")
+            
             # Get the room messages
             response = await client.room_messages(room_id, limit=limit)
             
             messages = []
             if hasattr(response, 'chunk'):
+                logger.info(f"Processing {len(response.chunk)} events from room {room_id}")
+                
                 # Process messages in reverse order (oldest first)
                 for event in reversed(response.chunk):
                     try:
-                        # Only process text messages
-                        if hasattr(event, 'msgtype') and event.msgtype == 'm.text':
+                        # Get event type from source data if available, otherwise use class name
+                        event_type = 'Unknown'
+                        if hasattr(event, 'source') and isinstance(event.source, dict):
+                            event_type = event.source.get('type', 'Unknown')
+                        
+                        sender = getattr(event, 'sender', 'Unknown')
+                        event_id = getattr(event, 'event_id', 'Unknown')
+                        timestamp = getattr(event, 'server_timestamp', 0)
+                        
+                        # Format timestamp
+                        formatted_time = ''
+                        if timestamp:
+                            import datetime
+                            dt = datetime.datetime.fromtimestamp(timestamp / 1000)
+                            formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
+                        
+                        message_content = None
+                        decryption_status = "unknown"
+                        
+                        # Handle different event types based on class name and event type
+                        event_class = type(event).__name__
+                        
+                        if event_class == 'RoomMessageText' or event_type == 'm.room.message':
+                            # Already decrypted message
+                            if hasattr(event, 'body'):
+                                message_content = event.body
+                                decryption_status = "plaintext"
+                                logger.debug(f"Plaintext message from {sender}: {message_content[:50]}...")
+                        
+                        elif event_class == 'MegolmEvent' or event_type == 'm.room.encrypted':
+                            # Encrypted message - attempt decryption
+                            logger.debug(f"Encrypted message from {sender}, attempting decryption...")
+                            
+                            # Method 1: Check if already decrypted by client
+                            if hasattr(event, 'decrypted') and event.decrypted:
+                                if hasattr(event.decrypted, 'body'):
+                                    message_content = event.decrypted.body
+                                    decryption_status = "auto_decrypted"
+                                    logger.debug(f"Auto-decrypted message: {message_content[:50]}...")
+                            
+                            # Method 2: Try manual decryption
+                            elif hasattr(client, 'decrypt_event'):
+                                try:
+                                    decrypted_event = await client.decrypt_event(event)
+                                    if decrypted_event and hasattr(decrypted_event, 'body'):
+                                        message_content = decrypted_event.body
+                                        decryption_status = "manual_decrypted"
+                                        logger.debug(f"Manual-decrypted message: {message_content[:50]}...")
+                                except Exception as decrypt_error:
+                                    logger.debug(f"Manual decryption failed: {decrypt_error}")
+                                    decryption_status = "decryption_failed"
+                            
+                            # If still no content, mark as encrypted with helpful context
+                            if not message_content:
+                                # Provide specific guidance based on sender type
+                                if sender.startswith("@signal_"):
+                                    message_content = "[🔐 Historical Signal message - sent before bot joined conversation]"
+                                    decryption_status = "encrypted_historical_signal"
+                                else:
+                                    message_content = "[🔐 Historical encrypted message - sent before bot joined conversation]"
+                                    decryption_status = "encrypted_historical"
+                                logger.debug(f"Unable to decrypt historical message from {sender}")
+                        
+                        # Include all events that have timestamps (both decrypted and encrypted)
+                        if timestamp > 0:  # Only include events with valid timestamps
+                            # If no message content, check if it's an encrypted event we should show
+                            if not message_content:
+                                if event_class == 'MegolmEvent' or event_type == 'm.room.encrypted':
+                                    message_content = "[🔐 Encrypted message - decryption pending]"
+                                    decryption_status = "encrypted_pending"
+                                else:
+                                    # Skip non-message events like reactions, etc.
+                                    continue
+                            
                             message_data = {
-                                'event_id': getattr(event, 'event_id', ''),
-                                'sender': getattr(event, 'sender', ''),
-                                'content': getattr(event, 'body', ''),
-                                'timestamp': getattr(event, 'server_timestamp', 0),
-                                'formatted_time': '',
-                                'is_bot_message': False
+                                'event_id': event_id,
+                                'sender': sender,
+                                'content': message_content,
+                                'timestamp': timestamp,
+                                'formatted_time': formatted_time,
+                                'is_bot_message': sender == MATRIX_BOT_USERNAME,
+                                'event_type': event_type,
+                                'decryption_status': decryption_status
                             }
-                            
-                            # Format timestamp
-                            if message_data['timestamp']:
-                                import datetime
-                                dt = datetime.datetime.fromtimestamp(message_data['timestamp'] / 1000)
-                                message_data['formatted_time'] = dt.strftime('%Y-%m-%d %H:%M:%S')
-                            
-                            # Check if message is from the bot
-                            message_data['is_bot_message'] = message_data['sender'] == MATRIX_BOT_USERNAME
                             
                             messages.append(message_data)
                             
+                            # Log if this is from the target user and looks like a 4-digit number
+                            if sender == user_id and message_content.strip().isdigit() and len(message_content.strip()) == 4:
+                                logger.info(f"🎯 Found 4-digit number from {user_id}: {message_content}")
+                            
                     except Exception as e:
-                        logger.warning(f"Error processing message event: {e}")
+                        logger.warning(f"Error processing message event {event_id}: {e}")
                         continue
             
             logger.info(f"Retrieved {len(messages)} messages from room {room_id}")
+            
+            # Log decryption statistics
+            decryption_stats = {}
+            for msg in messages:
+                status = msg.get('decryption_status', 'unknown')
+                decryption_stats[status] = decryption_stats.get(status, 0) + 1
+            
+            if decryption_stats:
+                logger.info(f"Decryption statistics: {decryption_stats}")
+            
             return messages
             
         finally:

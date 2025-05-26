@@ -147,6 +147,11 @@ class Config:
     MATRIX_SIGNAL_BRIDGE_ROOM_ID = os.getenv("MATRIX_SIGNAL_BRIDGE_ROOM_ID")
     MATRIX_ROOM_IDS_NAME_CATEGORY = os.getenv("MATRIX_ROOM_IDS_NAME_CATEGORY")
     
+    # Matrix Encryption and Security Keys (DISABLED)
+    # MATRIX_SECURITY_KEY = os.getenv("MATRIX_SECURITY_KEY")
+    # MATRIX_RECOVERY_PASSPHRASE = os.getenv("MATRIX_RECOVERY_PASSPHRASE")
+    # MATRIX_STORE_PATH = os.getenv("MATRIX_STORE_PATH", "/app/matrix_store")
+    
     # Authentik OIDC configuration
     OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID")
     OIDC_CLIENT_SECRET = os.getenv("OIDC_CLIENT_SECRET")

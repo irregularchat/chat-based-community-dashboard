@@ -112,58 +112,58 @@ async def render_matrix_messaging_page():
         col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
                 if st.button("🔄 Load Users", key="load_matrix_users"):
-                with st.spinner("Loading Matrix users from cache..."):
-                    try:
-                        # Use cached Matrix users instead of slow API calls
-                        from app.db.session import get_db
-                        from app.services.matrix_cache import matrix_cache
-                        
-                        db = next(get_db())
+                    with st.spinner("Loading Matrix users from cache..."):
                         try:
-                            # Check if cache is fresh, if not trigger background sync
-                            if not matrix_cache.is_cache_fresh(db, max_age_minutes=30):
-                                st.info("🔄 Cache is stale, triggering background sync...")
-                                # Trigger background sync but don't wait for it
-                                try:
-                                    # Create task for background sync
-                                    loop = asyncio.get_event_loop()
-                                    loop.create_task(matrix_cache.background_sync(max_age_minutes=30))
-                                except RuntimeError:
-                                    # If no event loop, start background sync in thread
-                                    import threading
-                                    def bg_sync():
-                                        loop = asyncio.new_event_loop()
-                                        asyncio.set_event_loop(loop)
-                                        try:
-                                            loop.run_until_complete(matrix_cache.background_sync(max_age_minutes=30))
-                                        finally:
-                                            loop.close()
-                                    threading.Thread(target=bg_sync, daemon=True).start()
+                            # Use cached Matrix users instead of slow API calls
+                            from app.db.session import get_db
+                            from app.services.matrix_cache import matrix_cache
                             
-                            # Get cached users (fast)
-                            cached_users = matrix_cache.get_cached_users(db)
+                            db = next(get_db())
+                            try:
+                                # Check if cache is fresh, if not trigger background sync
+                                if not matrix_cache.is_cache_fresh(db, max_age_minutes=30):
+                                    st.info("🔄 Cache is stale, triggering background sync...")
+                                    # Trigger background sync but don't wait for it
+                                    try:
+                                        # Create task for background sync
+                                        loop = asyncio.get_event_loop()
+                                        loop.create_task(matrix_cache.background_sync(max_age_minutes=30))
+                                    except RuntimeError:
+                                        # If no event loop, start background sync in thread
+                                        import threading
+                                        def bg_sync():
+                                            loop = asyncio.new_event_loop()
+                                            asyncio.set_event_loop(loop)
+                                            try:
+                                                loop.run_until_complete(matrix_cache.background_sync(max_age_minutes=30))
+                                            finally:
+                                                loop.close()
+                                        threading.Thread(target=bg_sync, daemon=True).start()
+                                
+                                # Get cached users (fast)
+                                cached_users = matrix_cache.get_cached_users(db)
+                                
+                                # Convert to the expected format
+                                st.session_state.matrix_users = [
+                                    {
+                                        'user_id': user['user_id'],
+                                        'display_name': user['display_name']
+                                    }
+                                    for user in cached_users
+                                ]
+                                
+                                if cached_users:
+                                    st.success(f"✅ Loaded {len(cached_users)} Matrix users from cache (instant!)")
+                                    st.info("💡 Users loaded from database cache - no Matrix API calls needed!")
+                                else:
+                                    st.warning("No Matrix users found in cache. Try running a manual sync first.")
+                            finally:
+                                            db.close()
                             
-                            # Convert to the expected format
-                            st.session_state.matrix_users = [
-                                {
-                                    'user_id': user['user_id'],
-                                    'display_name': user['display_name']
-                                }
-                                for user in cached_users
-                            ]
-                            
-                            if cached_users:
-                                st.success(f"✅ Loaded {len(cached_users)} Matrix users from cache (instant!)")
-                                st.info("💡 Users loaded from database cache - no Matrix API calls needed!")
-                            else:
-                                st.warning("No Matrix users found in cache. Try running a manual sync first.")
-                        finally:
-                            db.close()
-                            
-                    except Exception as e:
-                        st.error(f"Error loading Matrix users: {str(e)}")
-                        logging.error(f"Error loading Matrix users: {str(e)}")
-                        st.session_state.matrix_users = []
+                        except Exception as e:
+                            st.error(f"Error loading Matrix users: {str(e)}")
+                            logging.error(f"Error loading Matrix users: {str(e)}")
+                            st.session_state.matrix_users = []
         
         with col2:
             if st.button("🔄 Manual Sync", key="manual_sync_users", help="Force a full sync of Matrix data"):

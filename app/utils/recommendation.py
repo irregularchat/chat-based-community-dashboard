@@ -18,7 +18,6 @@ import time
 from typing import List, Dict, Any, Tuple, Optional, Union
 
 from app.utils.matrix_actions import (
-    get_room_members_async,
     get_matrix_client,
     invite_to_matrix_room,
     get_all_accessible_rooms
@@ -26,7 +25,8 @@ from app.utils.matrix_actions import (
 from app.utils.config import Config
 from app.utils.gpt_call import gpt_call, gpt_check_api
 from app.db.session import get_db
-from app.db.operations import get_matrix_room_members, update_matrix_room_members
+from app.db.models import MatrixUser, MatrixRoomMembership
+from app.services.matrix_cache import matrix_cache
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -36,55 +36,56 @@ ENTRANCE_ROOM_ID = "!bPROVgpotAcdXGxXUN:irregularchat.com"  # IrregularChat Acti
 
 async def get_entrance_room_users() -> List[Dict[str, Any]]:
     """
-    Get all users from the entrance room.
+    Get all users from the entrance room using the database cache.
     
     Returns:
         List[Dict[str, Any]]: List of user dictionaries with user_id and display_name
     """
+    db = next(get_db())
     try:
-        # Get Matrix client
-        client = await get_matrix_client()
-        if not client:
-            logger.error("Failed to get Matrix client")
+        # Query memberships for the entrance room
+        memberships = db.query(MatrixRoomMembership).filter(
+            MatrixRoomMembership.room_id == ENTRANCE_ROOM_ID
+        ).all()
+
+        if not memberships:
+            logger.info(f"No members found in entrance room ({ENTRANCE_ROOM_ID}) cache.")
             return []
         
-        try:
-            # Get room members
-            members_dict = await get_room_members_async(client, ENTRANCE_ROOM_ID)
-            
-            # Get all users, but mark admins accordingly
+        user_ids_in_room = [m.user_id for m in memberships]
+        
+        # Fetch user details for these users from MatrixUser table
+        users_in_room_details = db.query(MatrixUser).filter(
+            MatrixUser.user_id.in_(user_ids_in_room)
+        ).all()
+
             bot_user_id = Config.MATRIX_BOT_USERNAME
-            admin_usernames = Config.ADMIN_USERNAMES
+        admin_usernames_config = Config.ADMIN_USERNAMES
+        admin_localparts = [name.split(':')[0].lstrip('@') for name in admin_usernames_config if isinstance(name, str)]
             
-            # Process all users
+
             room_users = []
-            for user_id, details in members_dict.items():
+        for user_detail in users_in_room_details:
                 # Skip the bot itself
-                if user_id == bot_user_id:
+            if user_detail.user_id == bot_user_id:
                     continue
                 
-                # Get the display name or use localpart as fallback
-                localpart = user_id.split(":")[0].lstrip("@")
-                display_name = details.get('display_name', localpart)
+            localpart = user_detail.user_id.split(":")[0].lstrip("@")
+            is_admin = localpart in admin_localparts
                 
-                # Check if user is an admin
-                is_admin = localpart in admin_usernames
-                
-                # Add user to the list
                 room_users.append({
-                    "user_id": user_id,
-                    "display_name": display_name,
+                "user_id": user_detail.user_id,
+                "display_name": user_detail.display_name or localpart,
                     "is_admin": is_admin
                 })
             
-            logger.info(f"Found {len(room_users)} users in entrance room")
+        logger.info(f"Found {len(room_users)} users in entrance room from cache")
             return room_users
-        finally:
-            # Close the client
-            await client.close()
     except Exception as e:
-        logger.error(f"Error getting entrance room users: {e}")
+        logger.error(f"Error getting entrance room users from cache: {e}\\n{traceback.format_exc()}")
         return []
+    finally:
+        db.close()
 
 async def get_room_categories() -> List[str]:
     """
@@ -110,68 +111,122 @@ async def get_room_categories() -> List[str]:
 async def get_all_accessible_rooms_with_details() -> List[Dict[str, Any]]:
     """
     Get all accessible rooms with details including categories.
-    
-    Returns:
-        List[Dict[str, Any]]: List of room dictionaries with details
+    Prioritizes the main database cache, then config, then live API calls.
+    Uses a short-term in-memory cache (_room_cache) for immediate repeat calls.
     """
-    # Use a global cache to avoid repeated fetches within a short time
     global _room_cache, _room_cache_time
     
-    # Initialize cache if it doesn't exist
-    if not globals().get('_room_cache'):
-        globals()['_room_cache'] = None
-        globals()['_room_cache_time'] = 0
-    
-    # Check if we have a recent cache (less than 60 seconds old)
     current_time = time.time()
-    if _room_cache is not None and current_time - _room_cache_time < 60:
-        logger.debug(f"Using cached room list ({len(_room_cache)} rooms)")
+    if globals().get('_room_cache') is not None and current_time - globals().get('_room_cache_time', 0) < 60: # 60s short-term cache
+        logger.debug(f"Using short-term in-memory cached room list ({len(_room_cache)} rooms) for recommendations.")
         return _room_cache
     
+    db = next(get_db())
     try:
-        # First try to get rooms from configuration as it's faster
-        matrix_rooms = Config.get_all_matrix_rooms()
-        
-        # If the function returned empty, use get_matrix_rooms as fallback
-        if not matrix_rooms:
-            logger.info("No rooms from Config.get_all_matrix_rooms(), using fallback")
-            matrix_rooms = Config.get_matrix_rooms()
-        
-        # If we got rooms, update the cache
-        if matrix_rooms:
-            globals()['_room_cache'] = matrix_rooms
+        # 1. Try main persistent DB cache via MatrixCacheService
+        # Check if the main cache is reasonably fresh (e.g., last successful sync within ~10-15 mins)
+        # We use a slightly longer tolerance here than the UI's direct "is_cache_fresh" for triggering a new sync,
+        # as this function is about providing *any* reasonable list for recommendations.
+        if matrix_cache.is_cache_fresh(db, max_age_minutes=15):
+            cached_db_rooms = matrix_cache.get_cached_rooms(db) # This is synchronous
+            if cached_db_rooms:
+                logger.info(f"Using main DB cache ({len(cached_db_rooms)} rooms) for get_all_accessible_rooms_with_details.")
+                
+                # Augment with category info from config
+                configured_rooms_map = {
+                    room_conf.get('room_id'): room_conf 
+                    for room_conf in Config.get_all_matrix_rooms() # Reads from .env
+                }
+                
+                detailed_rooms = []
+                for room_from_db_cache in cached_db_rooms:
+                    room_id = room_from_db_cache.get('room_id')
+                    details = room_from_db_cache.copy() # Start with DB cache data (name, topic, member_count etc)
+                    
+                    config_data = configured_rooms_map.get(room_id)
+                    if config_data:
+                        details['categories'] = config_data.get('categories')
+                        details['category'] = config_data.get('category') # Support old field
+                        details['configured'] = True
+                        # Potentially overwrite name/topic from config if desired, though DB cache should be more up-to-date for those.
+                        # For now, let's assume DB cache name/topic are preferred if they exist.
+                        if not details.get('name') and config_data.get('name'):
+                            details['name'] = config_data.get('name')
+                        if not details.get('display_name') and config_data.get('name'): # Ensure display_name if name from config
+                             details['display_name'] = config_data.get('name')
+                    else:
+                        details['categories'] = []
+                        details['category'] = None
+                        details['configured'] = False
+                    detailed_rooms.append(details)
+                
+                globals()['_room_cache'] = detailed_rooms
             globals()['_room_cache_time'] = current_time
-            logger.debug(f"Updated room cache with {len(matrix_rooms)} rooms from config")
-            return matrix_rooms
-            
-        # If we still don't have rooms, try to get them from the Matrix API
-        logger.info("No rooms from config, trying Matrix API")
-        try:
-            # Get rooms from Matrix API with timeout protection
-            from app.utils.matrix_actions import get_all_accessible_rooms
-            
-            # Create a future for the API call with a timeout
-            api_future = asyncio.ensure_future(get_all_accessible_rooms())
-            matrix_rooms = await asyncio.wait_for(api_future, timeout=4.0)
-            
-            # Update cache and return
-            if matrix_rooms:
-                globals()['_room_cache'] = matrix_rooms
-                globals()['_room_cache_time'] = current_time
-                logger.info(f"Updated room cache with {len(matrix_rooms)} rooms from Matrix API")
-                return matrix_rooms
-        except asyncio.TimeoutError:
-            logger.error("Timeout getting rooms from Matrix API")
-        except Exception as e:
-            logger.error(f"Error getting rooms from Matrix API: {e}")
+                return detailed_rooms
+            else:
+                logger.info("Main DB cache (MatrixRoom table) is fresh but returned no rooms. Proceeding to fallback.")
+        else:
+            logger.info("Main DB cache is stale or not fresh enough (max_age_minutes=15). Proceeding to fallback for recommendations list.")
+
+        # 2. Fallback: Original logic (Config files, then live Matrix API)
+        logger.debug("Falling back to config/API for get_all_accessible_rooms_with_details.")
+        matrix_rooms_from_config = Config.get_all_matrix_rooms()
+        if not matrix_rooms_from_config:
+            logger.info("No rooms from Config.get_all_matrix_rooms() in fallback, using get_matrix_rooms().")
+            matrix_rooms_from_config = Config.get_matrix_rooms()
         
-        # Return empty list as last resort
-        logger.warning("Could not get rooms from any source, returning empty list")
+        if matrix_rooms_from_config:
+            logger.debug(f"Using {len(matrix_rooms_from_config)} rooms from config for recommendations as part of fallback.")
+            globals()['_room_cache'] = matrix_rooms_from_config
+            globals()['_room_cache_time'] = current_time
+            return matrix_rooms_from_config
+            
+        logger.info("No rooms found in config files during fallback, trying live Matrix API for recommendations list.")
+        try:
+            from app.utils.matrix_actions import get_all_accessible_rooms # This is the API call
+            
+            api_future = asyncio.ensure_future(get_all_accessible_rooms()) # This calls matrix_actions version
+            matrix_rooms_from_api = await asyncio.wait_for(api_future, timeout=10.0) # Increased timeout slightly
+            
+            if matrix_rooms_from_api:
+                logger.info(f"Fetched {len(matrix_rooms_from_api)} rooms from live Matrix API for recommendations list.")
+                # Note: These rooms from API already have details like name, topic, member_count
+                # We might still want to augment with categories if they match configured rooms.
+                configured_rooms_map = {
+                    room_conf.get('room_id'): room_conf 
+                    for room_conf in Config.get_all_matrix_rooms()
+                }
+                api_rooms_detailed = []
+                for room_from_api in matrix_rooms_from_api:
+                    details = room_from_api.copy()
+                    config_data = configured_rooms_map.get(details.get('room_id'))
+                    if config_data:
+                        details['categories'] = config_data.get('categories')
+                        details['category'] = config_data.get('category')
+                        details['configured'] = True
+                    else:
+                        details['categories'] = []
+                        details['category'] = None
+                        details['configured'] = False
+                    api_rooms_detailed.append(details)
+
+                globals()['_room_cache'] = api_rooms_detailed
+                globals()['_room_cache_time'] = current_time
+                return api_rooms_detailed
+        except asyncio.TimeoutError:
+            logger.error("Timeout getting rooms from live Matrix API during fallback for recommendations list.")
+        except Exception as e_api:
+            logger.error(f"Error getting rooms from live Matrix API during fallback for recommendations list: {e_api}")
+        
+        logger.warning("Could not get rooms from any source for recommendations list, returning empty list.")
+        globals()['_room_cache'] = []
+        globals()['_room_cache_time'] = current_time
         return []
-    except Exception as e:
-        logger.error(f"Error in get_all_accessible_rooms_with_details: {e}")
-        logger.error(traceback.format_exc())
+    except Exception as e_main:
+        logger.error(f"Major error in get_all_accessible_rooms_with_details: {e_main}", exc_info=True)
         return []
+    finally:
+        db.close()
 
 async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[Dict[str, Any]]:
     """
@@ -642,41 +697,56 @@ def invite_user_to_recommended_rooms_sync(user_id: str, interests: str) -> List[
 # Add a more robust synchronous wrapper for get_entrance_room_users
 def get_entrance_room_users_sync() -> List[Dict[str, Any]]:
     """
-    Robust synchronous wrapper for getting entrance room users.
-    Uses nest_asyncio to handle event loop conflicts with Streamlit.
-    
-    Returns:
-        List[Dict[str, Any]]: List of user dictionaries with user_id and display_name
+    Synchronous wrapper for get_entrance_room_users.
     """
-    import nest_asyncio
-    
+    logger.debug("Running get_entrance_room_users_sync")
     try:
-        # Apply nest_asyncio to patch the current event loop
-        nest_asyncio.apply()
-        
-        # Get or create event loop
+        # Since the async version now uses DB directly, we can also make this sync.
+        db = next(get_db())
         try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            # If there's no event loop, create a new one
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        
-        # Handle the case when the loop is already running
-        if loop.is_running():
-            # Create a future in the existing loop
-            future = asyncio.ensure_future(get_entrance_room_users(), loop=loop)
-            # Wait for it to complete
-            while not future.done():
-                loop._run_once()
-            # Get the result
-            return future.result()
-        else:
-            # Standard approach if loop is not running
-            return loop.run_until_complete(get_entrance_room_users())
+            memberships = db.query(MatrixRoomMembership).filter(
+                MatrixRoomMembership.room_id == ENTRANCE_ROOM_ID
+            ).all()
+
+            if not memberships:
+                logger.info(f"No members found in entrance room ({ENTRANCE_ROOM_ID}) cache (sync).")
+                return []
+
+            user_ids_in_room = [m.user_id for m in memberships]
+            
+            users_in_room_details = db.query(MatrixUser).filter(
+                MatrixUser.user_id.in_(user_ids_in_room)
+            ).all()
+
+            bot_user_id = Config.MATRIX_BOT_USERNAME
+            admin_usernames_config = Config.ADMIN_USERNAMES
+            admin_localparts = [name.split(':')[0].lstrip('@') for name in admin_usernames_config if isinstance(name, str)]
+
+
+            room_users = []
+            for user_detail in users_in_room_details:
+                if user_detail.user_id == bot_user_id:
+                    continue
+                
+                localpart = user_detail.user_id.split(":")[0].lstrip("@")
+                is_admin = localpart in admin_localparts
+                
+                room_users.append({
+                    "user_id": user_detail.user_id,
+                    "display_name": user_detail.display_name or localpart,
+                    "is_admin": is_admin
+                })
+                
+            logger.info(f"Found {len(room_users)} users in entrance room from cache (sync)")
+            return room_users
     except Exception as e:
-        logger.error(f"Error fetching Matrix users (sync wrapper): {str(e)}")
-        logger.error(traceback.format_exc())
+            logger.error(f"Error getting entrance room users from cache (sync): {e}\\n{traceback.format_exc()}")
+            return []
+        finally:
+            db.close()
+    except Exception as e:
+        # This outer try-except is to catch potential issues with get_db() itself
+        logger.error(f"Critical error in get_entrance_room_users_sync: {e}\\n{traceback.format_exc()}")
         return [] 
 
 def get_room_recommendations_sync(user_id: str, interests: str) -> List[Dict[str, Any]]:

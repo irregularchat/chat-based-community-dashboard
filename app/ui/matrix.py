@@ -101,6 +101,13 @@ async def process_load_users():
                 st.session_state.load_users_processing = False # Reset flag
                 # No st.rerun() here, let Streamlit handle it naturally after callback
 
+# New callback for the user selection multiselect
+def on_user_multiselect_change():
+    logger.info("'User Multiselect' (on_change) triggered.")
+    # The multiselect's state (dm_users_to_add) becomes the new selected_dm_users list
+    st.session_state.selected_dm_users = st.session_state.dm_users_to_add
+    logger.info(f"Updated selected_dm_users to {len(st.session_state.selected_dm_users)} users based on multiselect.")
+
 async def render_matrix_messaging_page():
     """
     Render the Matrix messaging page in the Streamlit UI.
@@ -267,41 +274,81 @@ async def render_matrix_messaging_page():
                 
                 st.markdown("---")
             
-            st.write("**Select Matrix Users:**")
+            # --- New Section: Add Users by Room --- #
+            st.write("**🏠 Add Users by Room Membership:**")
+            room_select_col1, room_select_col2 = st.columns([3, 1])
+            
+            with room_select_col1:
+                db = next(get_db())
+                try:
+                    all_cached_rooms = matrix_cache.get_cached_rooms(db)
+                    eligible_rooms = [
+                        room for room in all_cached_rooms 
+                        if room.get('member_count', 0) >= Config.MATRIX_MIN_ROOM_MEMBERS
+                    ]
+                    room_options = {
+                        f"{room.get('name', 'Unnamed Room')} ({room.get('room_id')}) - {room.get('member_count', 0)} members": room.get('room_id') 
+                        for room in eligible_rooms
+                    }
+                    selected_room_display_names = st.multiselect(
+                        "Select room(s) to add users from:",
+                        options=list(room_options.keys()),
+                        key="dm_rooms_to_add_users_from",
+                        help=f"Rooms with at least {Config.MATRIX_MIN_ROOM_MEMBERS} members. Users will be added to recipients."
+                    )
+                finally:
+                    db.close()
+
+            with room_select_col2:
+                if st.button("➕ Add Users from Selected Rooms", disabled=not selected_room_display_names, key="add_users_from_rooms_btn"):
+                    if selected_room_display_names:
+                        selected_room_ids_to_add = [room_options[name] for name in selected_room_display_names]
+                        db = next(get_db())
+                        added_count = 0
+                        total_users_from_rooms = 0
+                        try:
+                            for room_id_to_add in selected_room_ids_to_add:
+                                users_in_room = matrix_cache.get_users_in_room(db, room_id_to_add) # Needs this method in MatrixCacheService
+                                total_users_from_rooms += len(users_in_room)
+                                for user_detail in users_in_room:
+                                    user_option = f"{user_detail['display_name']} ({user_detail['user_id']})"
+                                    if user_option not in st.session_state.selected_dm_users:
+                                        st.session_state.selected_dm_users.append(user_option)
+                                        added_count += 1
+                            if added_count > 0:
+                                st.success(f"✅ Added {added_count} unique users from {len(selected_room_ids_to_add)} selected room(s) (total {total_users_from_rooms} users considered).")
+                            else:
+                                st.info("No new users added. They might already be in the recipient list or rooms were empty/had no new users.")
+                            st.rerun() # To update the main user multiselect and recipient list display
+                        finally:
+                            db.close()
+            st.markdown("---")
+            # --- End New Section --- #
+
+            st.write("**Select Matrix Users (Recipients):**")
             
             # Create two columns for better layout
             col1, col2 = st.columns([2, 1])
             
             with col1:
-                # Multi-select for adding multiple users at once from cached data
+                # Multi-select for adding/removing users directly to/from recipient list
                 matrix_user_options = [f"{user['display_name']} ({user['user_id']})" for user in st.session_state.matrix_users]
                 
-                # Filter out already selected users from the options
-                available_options = [opt for opt in matrix_user_options if opt not in st.session_state.selected_dm_users]
-                
-                selected_users_to_add = st.multiselect(
-                    f"Select users to add ({len(available_options)} available):",
-                    options=available_options,
-                    key="dm_users_to_add",
-                    help="Select one or more users to add to your message list (uses cached data - no network calls)"
+                st.multiselect(
+                    f"Select recipients ({len(matrix_user_options)} available):",
+                    options=matrix_user_options,
+                    key="dm_users_to_add", # This key holds the multiselect's current state
+                    default=st.session_state.selected_dm_users, # Initialize with current recipients
+                    on_change=on_user_multiselect_change,
+                    help="Select/deselect users. The recipient list updates automatically."
                 )
                 
-                # Show current selection count
+                # Show current recipient count (derived from selected_dm_users)
                 if st.session_state.selected_dm_users:
-                    st.info(f"📋 Currently selected: {len(st.session_state.selected_dm_users)} users")
+                    st.info(f"📋 Recipients: {len(st.session_state.selected_dm_users)} users")
                 
-                # Add users button
-                if st.button("➕ Add Selected Users", disabled=not selected_users_to_add):
-                    added_count = 0
-                    for user in selected_users_to_add:
-                        if user not in st.session_state.selected_dm_users:
-                            st.session_state.selected_dm_users.append(user)
-                            added_count += 1
-                    
-                    if added_count > 0:
-                        st.success(f"✅ Added {added_count} users to selection")
-                        # Clear the multiselect by rerunning
-                        st.rerun()
+                # The "Add Selected Users" button is now removed.
+                # Logic previously here is handled by on_user_multiselect_change.
             
             with col2:
                 # Quick add all Signal users button (from cached data)
@@ -460,7 +507,7 @@ async def render_matrix_messaging_page():
         if st.button(send_button_text, disabled=not confirm_send):
             if selected_user_ids and message:
                 # Add no-reply footer to direct messages
-                message_with_footer = f"{message}\n\n__NOREPLY: This message was sent from the admin dashboard__"
+                message_with_footer = f"{message}\\n\\n__NOREPLY: This message was sent from the admin dashboard__"
                 
                 # Show progress
                 progress_bar = st.progress(0)
@@ -475,14 +522,14 @@ async def render_matrix_messaging_page():
                     progress_bar.progress((i + 1) / len(selected_user_ids))
                     
                     try:
-                room_id = await create_matrix_direct_chat(user_id)
-                if room_id:
+                        room_id = await create_matrix_direct_chat(user_id)
+                        if room_id:
                             success = await send_matrix_message(room_id, message_with_footer)
-                    if success:
+                            if success:
                                 success_count += 1
-                    else:
+                            else:
                                 failed_users.append(user_id)
-                else:
+                        else:
                             failed_users.append(user_id)
                     except Exception as e:
                         failed_users.append(user_id)

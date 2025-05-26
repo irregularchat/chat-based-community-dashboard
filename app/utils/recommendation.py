@@ -152,7 +152,7 @@ async def get_all_accessible_rooms_with_details() -> List[Dict[str, Any]]:
                         if not details.get('name') and config_data.get('name'):
                             details['name'] = config_data.get('name')
                         if not details.get('display_name') and config_data.get('name'): # Ensure display_name if name from config
-                             details['display_name'] = config_data.get('name')
+                            details['display_name'] = config_data.get('name')
                     else:
                         details['categories'] = []
                         details['category'] = None

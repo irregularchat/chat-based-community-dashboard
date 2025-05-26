@@ -547,7 +547,7 @@ def create_user(
 
 
 # List Users Function is needed and works better than the new methos session.get(f"{auth_api_url}/users/", headers=headers, timeout=10)
- # auth/api.py
+# auth/api.py
 
 def list_users(auth_api_url, headers, search_term=None):
     """List users, optionally filtering by a search term, handling pagination to fetch all users."""
@@ -1332,7 +1332,7 @@ async def handle_webhook(request) -> dict:
         # Get request body
         body = await request.get_data() if hasattr(request.get_data, '__await__') else request.get_data()
         if isinstance(body, str):
-                body = body.encode('utf-8')
+            body = body.encode('utf-8')
             
         # Validate signature
         if not validate_webhook_signature(signature, body):
@@ -1343,7 +1343,7 @@ async def handle_webhook(request) -> dict:
             
         # Parse webhook data
         try:
-                webhook_data = json.loads(body.decode('utf-8'))
+            webhook_data = json.loads(body.decode('utf-8'))
         except json.JSONDecodeError as e:
             logger.error(f"Error parsing webhook data: {e}")
             return {

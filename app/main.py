@@ -15,6 +15,8 @@ from app.ui.summary import main as render_summary_page
 from app.ui.help_resources import main as render_help_page
 from app.ui.prompts import main as render_prompts_page
 from app.ui.matrix import render_matrix_messaging_page
+from app.ui.admin import render_admin_page
+from app.ui.notes import render_notes_page
 
 from app.ui.signal_association import render_signal_association
 from app.utils.helpers import (
@@ -34,6 +36,8 @@ import traceback
 import requests
 import os
 import time
+import asyncio
+from app.auth.session import check_authentication
 
 # Initialize logging first
 setup_logging()
@@ -900,12 +904,70 @@ def render_main_content():
         elif current_page == "Signal Association":
             render_signal_association()
             
+        elif current_page == "Admin Panel":
+            render_admin_page()
+            
+        elif current_page == "Notes":
+            render_notes_page()
 
     except Exception as e:
         st.error(f"Error rendering content: {str(e)}")
         logging.error(f"Error in render_main_content: {str(e)}", exc_info=True)
 
-
+# Auto-sync Matrix cache at startup
+@st.cache_resource
+def initialize_matrix_cache():
+    """Initialize Matrix cache at startup with smart syncing."""
+    try:
+        if not Config.MATRIX_ACTIVE:
+            logging.info("Matrix integration disabled, skipping cache initialization")
+            return {"status": "skipped", "reason": "matrix_disabled"}
+        
+        from app.db.session import get_db
+        from app.services.matrix_cache import matrix_cache
+        
+        db = next(get_db())
+        try:
+            # Run startup sync in a separate thread to avoid blocking UI
+            import threading
+            import time
+            
+            def startup_sync_thread():
+                try:
+                    # Create new event loop for this thread
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
+                    # Run startup sync
+                    result = loop.run_until_complete(matrix_cache.startup_sync(db))
+                    logging.info(f"Startup Matrix sync completed: {result}")
+                    
+                    # Store result in session state for UI feedback
+                    st.session_state['startup_sync_result'] = result
+                    st.session_state['startup_sync_completed'] = True
+                    
+                except Exception as e:
+                    logging.error(f"Error in startup sync thread: {str(e)}")
+                    st.session_state['startup_sync_result'] = {"status": "error", "error": str(e)}
+                    st.session_state['startup_sync_completed'] = True
+                finally:
+                    loop.close()
+            
+            # Start sync in background thread
+            sync_thread = threading.Thread(target=startup_sync_thread, daemon=True)
+            sync_thread.start()
+            
+            # Mark that sync has been initiated
+            st.session_state['startup_sync_initiated'] = True
+            
+            return {"status": "initiated", "message": "Background sync started"}
+            
+        finally:
+            db.close()
+            
+    except Exception as e:
+        logging.error(f"Error initializing Matrix cache: {str(e)}")
+        return {"status": "error", "error": str(e)}
 
 def main():
     """Main application entry point"""
@@ -1028,6 +1090,28 @@ def main():
             logging.info("✅ Discourse integration is fully configured")
         else:
             logging.warning("⚠️ Discourse integration is not fully configured")
+        
+        # Initialize Matrix cache at startup
+        if 'startup_sync_initiated' not in st.session_state:
+            cache_init_result = initialize_matrix_cache()
+            logging.info(f"Matrix cache initialization: {cache_init_result}")
+        
+        # Show startup sync status in sidebar if in progress
+        if st.session_state.get('startup_sync_initiated') and not st.session_state.get('startup_sync_completed'):
+            with st.sidebar:
+                st.info("🔄 Initializing Matrix cache in background...")
+        elif st.session_state.get('startup_sync_completed'):
+            result = st.session_state.get('startup_sync_result', {})
+            if result.get('status') == 'completed':
+                with st.sidebar:
+                    st.success(f"✅ Matrix cache ready! Synced {result.get('users_synced', 0)} users")
+            elif result.get('status') == 'skipped':
+                with st.sidebar:
+                    st.info("💾 Matrix cache is fresh")
+        
+        # Check authentication
+        if not check_authentication():
+            st.stop()
         
         # Render the sidebar and get selected page
         # The selectbox widget will automatically update st.session_state.current_page

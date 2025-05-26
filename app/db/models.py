@@ -251,6 +251,7 @@ class MatrixRoom(Base):
     room_type = Column(String(50), nullable=True)  # direct, public, private, etc.
     is_direct = Column(Boolean, default=False, index=True)
     is_encrypted = Column(Boolean, default=False)
+    last_synced = Column(DateTime, nullable=True)  # Track when room was last synced
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     

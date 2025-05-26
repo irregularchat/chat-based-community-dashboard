@@ -71,8 +71,7 @@ class MatrixCacheService:
                 # Start sync operation
                 sync_status = MatrixSyncStatus(
                     sync_type="full",
-                    started_at=now,
-                    status="in_progress"
+                    status="running"
                 )
                 db.add(sync_status)
                 db.commit()
@@ -111,7 +110,6 @@ class MatrixCacheService:
                 if 'sync_status' in locals():
                     sync_status.status = "failed"
                     sync_status.error_message = str(e)
-                    sync_status.completed_at = datetime.utcnow()
                     db.commit()
             except:
                 pass
@@ -132,7 +130,7 @@ class MatrixCacheService:
             Dict with sync results
         """
         try:
-            from app.utils.matrix_actions import get_joined_rooms_async
+            from app.utils.matrix_actions import get_joined_rooms_async, get_room_details_async
             
             # Get joined rooms from Matrix
             room_ids = await get_joined_rooms_async(client)
@@ -149,14 +147,15 @@ class MatrixCacheService:
                         MatrixRoom.room_id == room_id
                     ).first()
                     
-                    # Get room details from Matrix
-                    from app.utils.matrix_actions import get_room_details_async
+                    # Get room details from Matrix (this includes member_count)
                     room_details = await get_room_details_async(client, room_id)
+                    current_member_count = room_details.get("member_count", 0)
                     
-                    # Get member count from Matrix
-                    from app.utils.matrix_actions import get_room_members_async
-                    members_data = await get_room_members_async(client, room_id)
-                    current_member_count = len(members_data.get("members", []))
+                    # Skip rooms with fewer than minimum members
+                    if current_member_count <= Config.MATRIX_MIN_ROOM_MEMBERS:
+                        logger.info(f"Skipping room {room_id} - only {current_member_count} members (minimum: {Config.MATRIX_MIN_ROOM_MEMBERS})")
+                        rooms_skipped += 1
+                        continue
                     
                     # Smart sync logic: skip if member count hasn't changed (unless rapid manual sync)
                     if existing_room and not is_rapid_manual_sync:
@@ -177,7 +176,7 @@ class MatrixCacheService:
                             name=room_details.get("name", ""),
                             topic=room_details.get("topic", ""),
                             member_count=current_member_count,
-                            last_synced=datetime.utcnow()
+                            last_synced = datetime.utcnow()
                         )
                         db.add(new_room)
                     
@@ -225,6 +224,12 @@ class MatrixCacheService:
             
             for room in rooms:
                 try:
+                    # Skip rooms with fewer than minimum members
+                    if room.member_count <= Config.MATRIX_MIN_ROOM_MEMBERS:
+                        logger.info(f"Skipping membership sync for {room.room_id} - only {room.member_count} members (minimum: {Config.MATRIX_MIN_ROOM_MEMBERS})")
+                        rooms_skipped += 1
+                        continue
+                    
                     # Get current membership count from database
                     current_db_count = db.query(MatrixRoomMembership).filter(
                         MatrixRoomMembership.room_id == room.room_id
@@ -239,7 +244,15 @@ class MatrixCacheService:
                     # Get room members from Matrix
                     from app.utils.matrix_actions import get_room_members_async
                     members_data = await get_room_members_async(client, room.room_id)
-                    members = members_data.get("members", [])
+                    # Convert members dict to list of member objects
+                    members = []
+                    if members_data:
+                        for user_id, details in members_data.items():
+                            members.append({
+                                "user_id": user_id,
+                                "display_name": details.get("display_name", ""),
+                                "avatar_url": details.get("avatar_url", "")
+                            })
                     
                     # Clear existing memberships for this room
                     db.query(MatrixRoomMembership).filter(
@@ -252,7 +265,7 @@ class MatrixCacheService:
                         if not user_id:
                             continue
                         
-                        # Update or create user
+                        # Update or create user using merge to avoid duplicates
                         existing_user = db.query(MatrixUser).filter(
                             MatrixUser.user_id == user_id
                         ).first()
@@ -261,19 +274,21 @@ class MatrixCacheService:
                             existing_user.display_name = member.get("display_name", "")
                             existing_user.last_seen = datetime.utcnow()
                         else:
+                            # Check if user was already added in this transaction
                             new_user = MatrixUser(
                                 user_id=user_id,
                                 display_name=member.get("display_name", ""),
                                 last_seen=datetime.utcnow()
                             )
-                            db.add(new_user)
+                            # Use merge to handle potential duplicates gracefully
+                            db.merge(new_user)
                             users_synced += 1
                         
                         # Create membership record
                         membership = MatrixRoomMembership(
                             room_id=room.room_id,
                             user_id=user_id,
-                            membership_state="join",
+                            membership_status="join",
                             joined_at=datetime.utcnow()
                         )
                         db.add(membership)
@@ -283,9 +298,8 @@ class MatrixCacheService:
                     room.member_count = len(members)
                     room.last_synced = datetime.utcnow()
                     
-                    # Commit every 5 rooms to avoid large transactions
-                    if (memberships_synced // 100) % 5 == 0:
-                        db.commit()
+                    # Commit after each room to avoid transaction conflicts
+                    db.commit()
                         
                 except Exception as e:
                     logger.error(f"Error syncing memberships for room {room.room_id}: {str(e)}")
@@ -315,7 +329,7 @@ class MatrixCacheService:
                 MatrixUser.user_id,
                 MatrixUser.display_name,
                 func.count(MatrixRoomMembership.room_id).label('room_count'),
-                func.group_concat(MatrixRoom.name).label('room_names')
+                func.string_agg(MatrixRoom.name, ', ').label('room_names')
             ).outerjoin(
                 MatrixRoomMembership, MatrixUser.user_id == MatrixRoomMembership.user_id
             ).outerjoin(
@@ -330,9 +344,7 @@ class MatrixCacheService:
                     user_id=user_data.user_id,
                     display_name=user_data.display_name or "",
                     room_count=user_data.room_count or 0,
-                    room_names=user_data.room_names or "",
-                    is_signal_user=user_data.user_id.startswith("@signal_"),
-                    last_updated=datetime.utcnow()
+                    is_signal_user=user_data.user_id.startswith("@signal_")
                 )
                 db.add(cache_entry)
                 cache_updated += 1
@@ -451,24 +463,31 @@ class MatrixCacheService:
             logger.error(f"Error checking cache freshness: {str(e)}")
             return False
 
-    async def background_sync(self, max_age_minutes: int = 30):
+    async def background_sync(self, db_session: Optional[Session] = None, max_age_minutes: int = 30):
         """Run background sync if cache is stale."""
+        db = None
         try:
-            from app.db.session import get_db
-            
-            db = next(get_db())
-            try:
-                if not self.is_cache_fresh(db, max_age_minutes):
-                    logger.info("Cache is stale, starting background sync")
-                    result = await self.full_sync(db, force=False)
-                    logger.info(f"Background sync completed: {result}")
-                else:
-                    logger.debug("Cache is fresh, skipping background sync")
-            finally:
-                db.close()
-                
+            if db_session:
+                db = db_session
+                logger.debug("Using provided db_session for background_sync.")
+            else:
+                from app.db.session import get_db
+                db = next(get_db())
+                logger.debug("Created new db_session for background_sync.")
+
+            if not self.is_cache_fresh(db, max_age_minutes):
+                logger.info("Cache is stale, starting background sync")
+                result = await self.full_sync(db, force=False)
+                logger.info(f"Background sync completed: {result}")
+            else:
+                logger.debug("Cache is fresh, skipping background sync")
         except Exception as e:
-            logger.error(f"Error in background sync: {str(e)}")
+            logger.error(f"Error in background sync: {str(e)}", exc_info=True)
+        finally:
+            # Only close the session if we created it in this function
+            if not db_session and db:
+                db.close()
+                logger.debug("Closed new db_session in background_sync.")
 
     async def startup_sync(self, db: Session) -> Dict:
         """

@@ -718,9 +718,9 @@ async def render_create_user_form():
                                 for user in cached_users
                             ]
                             
-                            st.session_state['indoc_users'] = fetched_users or []
-                            st.session_state.matrix_users = fetched_users or []
-                            st.session_state['fetch_indoc_users_complete'] = True
+                        st.session_state['indoc_users'] = fetched_users or []
+                        st.session_state.matrix_users = fetched_users or []
+                        st.session_state['fetch_indoc_users_complete'] = True
                             logging.info(f"Background user fetch completed from cache. Found {len(fetched_users) if fetched_users else 0} users.")
                         finally:
                             db.close()

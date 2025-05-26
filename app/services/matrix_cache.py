@@ -87,11 +87,9 @@ class MatrixCacheService:
                 cache_result = await self._update_user_cache(db)
                 
                 # Update sync status
-                sync_status.completed_at = datetime.utcnow()
+                sync_status.last_sync = datetime.utcnow()
                 sync_status.status = "completed"
-                sync_status.users_synced = user_result.get("users_synced", 0)
-                sync_status.rooms_synced = room_result.get("rooms_synced", 0)
-                sync_status.memberships_synced = user_result.get("memberships_synced", 0)
+                sync_status.processed_items = user_result.get("users_synced", 0) + room_result.get("rooms_synced", 0)
                 db.commit()
                 
                 return {
@@ -381,25 +379,53 @@ class MatrixCacheService:
             logger.error(f"Error getting cached users: {str(e)}")
             return []
 
+    def get_cached_rooms(self, db: Session) -> List[Dict]:
+        """
+        Get cached Matrix rooms with fast database query.
+        
+        Args:
+            db: Database session
+            
+        Returns:
+            List of room dictionaries
+        """
+        try:
+            rooms = db.query(MatrixRoom).order_by(MatrixRoom.member_count.desc()).all()
+            
+            return [
+                {
+                    "room_id": room.room_id,
+                    "name": room.name,
+                    "display_name": room.display_name,
+                    "topic": room.topic,
+                    "member_count": room.member_count,
+                    "is_direct": room.is_direct,
+                    "room_type": room.room_type
+                }
+                for room in rooms
+            ]
+            
+        except Exception as e:
+            logger.error(f"Error getting cached rooms: {str(e)}")
+            return []
+
     def get_sync_status(self, db: Session) -> Optional[Dict]:
         """Get the latest sync status."""
         try:
             latest_sync = db.query(MatrixSyncStatus).order_by(
-                MatrixSyncStatus.started_at.desc()
+                MatrixSyncStatus.created_at.desc()
             ).first()
             
             if not latest_sync:
                 return None
             
             return {
-                "id": latest_sync.id,
-                "sync_type": latest_sync.sync_type,
                 "status": latest_sync.status,
-                "started_at": latest_sync.started_at,
-                "completed_at": latest_sync.completed_at,
-                "users_synced": latest_sync.users_synced,
-                "rooms_synced": latest_sync.rooms_synced,
-                "memberships_synced": latest_sync.memberships_synced,
+                "last_sync": latest_sync.last_sync,
+                "progress": latest_sync.progress_percentage,
+                "total_items": latest_sync.total_items,
+                "processed_items": latest_sync.processed_items,
+                "duration_seconds": latest_sync.sync_duration_seconds,
                 "error_message": latest_sync.error_message
             }
             
@@ -415,7 +441,7 @@ class MatrixCacheService:
             recent_sync = db.query(MatrixSyncStatus).filter(
                 and_(
                     MatrixSyncStatus.status == "completed",
-                    MatrixSyncStatus.completed_at >= cutoff_time
+                    MatrixSyncStatus.last_sync >= cutoff_time
                 )
             ).first()
             

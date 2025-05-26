@@ -421,6 +421,34 @@ class MatrixCacheService:
             logger.error(f"Error getting cached rooms: {str(e)}")
             return []
 
+    def get_users_in_room(self, db: Session, room_id: str) -> List[Dict]:
+        """Get all users belonging to a specific room from the cache.
+
+        Args:
+            db: Database session
+            room_id: The ID of the room
+
+        Returns:
+            List of user dictionaries (user_id, display_name)
+        """
+        try:
+            memberships = db.query(
+                MatrixUserCache.user_id, 
+                MatrixUserCache.display_name
+            ).join(
+                MatrixRoomMembership, MatrixUserCache.user_id == MatrixRoomMembership.user_id
+            ).filter(
+                MatrixRoomMembership.room_id == room_id
+            ).all()
+            
+            return [
+                {"user_id": user.user_id, "display_name": user.display_name}
+                for user in memberships
+            ]
+        except Exception as e:
+            logger.error(f"Error getting users for room {room_id}: {str(e)}")
+            return []
+
     def get_sync_status(self, db: Session) -> Optional[Dict]:
         """Get the latest sync status."""
         try:

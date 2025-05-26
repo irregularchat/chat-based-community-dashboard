@@ -15,7 +15,7 @@ from app.ui.summary import main as render_summary_page
 from app.ui.help_resources import main as render_help_page
 from app.ui.prompts import main as render_prompts_page
 from app.ui.matrix import render_matrix_messaging_page
-from app.ui.admin import render_admin_page
+from app.ui.admin import render_admin_dashboard
 from app.ui.notes import render_notes_page
 
 from app.ui.signal_association import render_signal_association
@@ -905,7 +905,7 @@ def render_main_content():
             render_signal_association()
             
         elif current_page == "Admin Panel":
-            render_admin_page()
+            render_admin_dashboard()
             
         elif current_page == "Notes":
             render_notes_page()

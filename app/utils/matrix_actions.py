@@ -510,7 +510,7 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping create_direct_chat.")
         return None
-    
+        
     # Check if this is a Signal bridge user
     if user_id.startswith("@signal_"):
         logger.info(f"Detected Signal bridge user: {user_id}")
@@ -713,7 +713,7 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
                     return room_id
                 else:
                     logger.warning(f"Direct chat creation failed, response: {response}")
-                    
+                        
             except Exception as direct_error:
                 logger.warning(f"Failed to create direct chat room with {user_id}: {str(direct_error)}")
                 
@@ -734,30 +734,30 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
                                         content = event.get("content", {})
                                         if content.get("membership") == "join":
                                             members.append(member_id)
+                            
+                            # If this room contains both bot and user (regardless of room size)
+                            if user_id in members and MATRIX_BOT_USERNAME in members:
+                                logger.info(f"Found existing room with {user_id}: {joined_room}")
                                 
-                                # If this room contains both bot and user (regardless of room size)
-                                if user_id in members and MATRIX_BOT_USERNAME in members:
-                                    logger.info(f"Found existing room with {user_id}: {joined_room}")
+                                # Try to leave and rejoin this room
+                                try:
+                                    await client.room_leave(joined_room)
+                                    await asyncio.sleep(1)
+                                    await client.join_room(joined_room)
+                                    logger.info(f"Successfully refreshed connection to room {joined_room}")
+                                    return joined_room
+                                except Exception as refresh_error:
+                                    logger.warning(f"Failed to refresh room {joined_room}: {str(refresh_error)}")
+                                    # Still return the room ID even if refresh failed
+                                    return joined_room
                                     
-                                    # Try to leave and rejoin this room
-                                    try:
-                                        await client.room_leave(joined_room)
-                                        await asyncio.sleep(1)
-                                        await client.join_room(joined_room)
-                                        logger.info(f"Successfully refreshed connection to room {joined_room}")
-                                        return joined_room
-                                    except Exception as refresh_error:
-                                        logger.warning(f"Failed to refresh room {joined_room}: {str(refresh_error)}")
-                                        # Still return the room ID even if refresh failed
-                                        return joined_room
-                                        
                         except Exception as search_error:
                             logger.warning(f"Error searching room {joined_room}: {str(search_error)}")
                             continue
                             
                 except Exception as search_error:
                     logger.error(f"Error searching for existing rooms with {user_id}: {str(search_error)}")
-                
+                    
                 return None
         
         return room_id

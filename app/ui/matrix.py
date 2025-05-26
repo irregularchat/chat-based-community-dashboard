@@ -23,7 +23,6 @@ from app.utils.matrix_actions import (
     get_joined_rooms,
     get_room_name,
     remove_from_matrix_room,
-    get_all_accessible_users,
     send_direct_message,
     send_room_message,
     get_direct_message_history_sync
@@ -110,29 +109,96 @@ async def render_matrix_messaging_page():
             st.session_state.matrix_users = []
         
         # Button to fetch Matrix users from entrance room
-        col1, col2 = st.columns([1, 3])
+        col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
-            if st.button("🔄 Load Users", key="load_matrix_users"):
-                with st.spinner("Loading Matrix users from all accessible rooms..."):
+                if st.button("🔄 Load Users", key="load_matrix_users"):
+                with st.spinner("Loading Matrix users from cache..."):
                     try:
-                        # Import the function to get users from all accessible rooms
-                        fetched_users = await get_all_accessible_users()
-                        st.session_state.matrix_users = fetched_users or []
-                        if fetched_users:
-                            st.success(f"✅ Loaded {len(fetched_users)} Matrix users from all rooms")
-                            st.info("💡 Users are now cached - adding users will be instant!")
-                        else:
-                            st.warning("No Matrix users found in accessible rooms")
+                        # Use cached Matrix users instead of slow API calls
+                        from app.db.session import get_db
+                        from app.services.matrix_cache import matrix_cache
+                        
+                        db = next(get_db())
+                        try:
+                            # Check if cache is fresh, if not trigger background sync
+                            if not matrix_cache.is_cache_fresh(db, max_age_minutes=30):
+                                st.info("🔄 Cache is stale, triggering background sync...")
+                                # Trigger background sync but don't wait for it
+                                try:
+                                    # Create task for background sync
+                                    loop = asyncio.get_event_loop()
+                                    loop.create_task(matrix_cache.background_sync(max_age_minutes=30))
+                                except RuntimeError:
+                                    # If no event loop, start background sync in thread
+                                    import threading
+                                    def bg_sync():
+                                        loop = asyncio.new_event_loop()
+                                        asyncio.set_event_loop(loop)
+                                        try:
+                                            loop.run_until_complete(matrix_cache.background_sync(max_age_minutes=30))
+                                        finally:
+                                            loop.close()
+                                    threading.Thread(target=bg_sync, daemon=True).start()
+                            
+                            # Get cached users (fast)
+                            cached_users = matrix_cache.get_cached_users(db)
+                            
+                            # Convert to the expected format
+                            st.session_state.matrix_users = [
+                                {
+                                    'user_id': user['user_id'],
+                                    'display_name': user['display_name']
+                                }
+                                for user in cached_users
+                            ]
+                            
+                            if cached_users:
+                                st.success(f"✅ Loaded {len(cached_users)} Matrix users from cache (instant!)")
+                                st.info("💡 Users loaded from database cache - no Matrix API calls needed!")
+                            else:
+                                st.warning("No Matrix users found in cache. Try running a manual sync first.")
+                        finally:
+                            db.close()
+                            
                     except Exception as e:
                         st.error(f"Error loading Matrix users: {str(e)}")
                         logging.error(f"Error loading Matrix users: {str(e)}")
                         st.session_state.matrix_users = []
         
         with col2:
+            if st.button("🔄 Manual Sync", key="manual_sync_users", help="Force a full sync of Matrix data"):
+                with st.spinner("Running full Matrix sync..."):
+                    try:
+                        from app.db.session import get_db
+                        from app.services.matrix_cache import matrix_cache
+                        
+                        db = next(get_db())
+                        try:
+                            sync_result = await matrix_cache.full_sync(db, force=True)
+                            if sync_result["status"] == "completed":
+                                st.success(f"✅ Sync completed! Users: {sync_result['users_synced']}, Rooms: {sync_result['rooms_synced']}")
+                                # Reload users after sync
+                                cached_users = matrix_cache.get_cached_users(db)
+                                st.session_state.matrix_users = [
+                                    {
+                                        'user_id': user['user_id'],
+                                        'display_name': user['display_name']
+                                    }
+                                    for user in cached_users
+                                ]
+                            else:
+                                st.error(f"Sync failed: {sync_result.get('error', 'Unknown error')}")
+                        finally:
+                            db.close()
+                    except Exception as e:
+                        st.error(f"Error during manual sync: {str(e)}")
+                        logging.error(f"Error during manual sync: {str(e)}")
+        
+        with col3:
             if st.session_state.matrix_users:
                 st.write(f"✅ **{len(st.session_state.matrix_users)} users loaded** - Ready for fast selection!")
             else:
-                st.write("*Click 'Load Users' to fetch available Matrix users from all accessible rooms*")
+                st.write("*Click 'Load Users' to fetch from cache or 'Manual Sync' to sync from Matrix*")
         
         # Matrix User Selection - Multiple Users with efficient selection
         selected_user_ids = []

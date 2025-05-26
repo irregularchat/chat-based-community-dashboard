@@ -1,6 +1,7 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON, ForeignKey, Table, Text, Index
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON, ForeignKey, Table, Text, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.sql import func
 from app.db.database import Base
 from datetime import datetime
 
@@ -211,3 +212,147 @@ class ModeratorPermission(Base):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'created_by': self.created_by
         }
+
+# Matrix Cache Models for improved performance
+class MatrixUser(Base):
+    """
+    Model for caching Matrix users.
+    Stores user information from all accessible rooms.
+    """
+    __tablename__ = "matrix_users"
+    
+    user_id = Column(String(255), primary_key=True, index=True)  # @username:domain.com
+    display_name = Column(String(255), nullable=True)
+    avatar_url = Column(String(500), nullable=True)  # mxc:// URLs can be long
+    is_signal_user = Column(Boolean, default=False, index=True)  # For quick Signal user filtering
+    last_seen = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    
+    # Relationships
+    memberships = relationship("MatrixRoomMembership", back_populates="user", cascade="all, delete-orphan")
+    
+    def __repr__(self):
+        return f"<MatrixUser(user_id='{self.user_id}', display_name='{self.display_name}')>"
+
+class MatrixRoom(Base):
+    """
+    Model for caching Matrix rooms.
+    Stores room information and metadata.
+    """
+    __tablename__ = "matrix_rooms"
+    
+    room_id = Column(String(255), primary_key=True, index=True)  # !roomid:domain.com
+    name = Column(String(500), nullable=True)
+    display_name = Column(String(500), nullable=True)
+    topic = Column(Text, nullable=True)
+    canonical_alias = Column(String(255), nullable=True)
+    member_count = Column(Integer, default=0, index=True)  # For sorting by size
+    room_type = Column(String(50), nullable=True)  # direct, public, private, etc.
+    is_direct = Column(Boolean, default=False, index=True)
+    is_encrypted = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    
+    # Relationships
+    memberships = relationship("MatrixRoomMembership", back_populates="room", cascade="all, delete-orphan")
+    
+    # Indexes for performance
+    __table_args__ = (
+        Index('idx_room_member_count', 'member_count'),
+        Index('idx_room_type', 'room_type'),
+        Index('idx_room_updated', 'updated_at'),
+    )
+    
+    def __repr__(self):
+        return f"<MatrixRoom(room_id='{self.room_id}', name='{self.name}', members={self.member_count})>"
+
+class MatrixRoomMembership(Base):
+    """
+    Model for caching Matrix room memberships.
+    Links users to rooms with membership status.
+    """
+    __tablename__ = "matrix_cache_memberships"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    room_id = Column(String(255), ForeignKey('matrix_rooms.room_id', ondelete='CASCADE'), nullable=False)
+    user_id = Column(String(255), ForeignKey('matrix_users.user_id', ondelete='CASCADE'), nullable=False)
+    membership_status = Column(String(20), default='join')  # join, leave, invite, ban
+    joined_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    
+    # Relationships
+    user = relationship("MatrixUser", back_populates="memberships")
+    room = relationship("MatrixRoom", back_populates="memberships")
+    
+    # Constraints and indexes
+    __table_args__ = (
+        UniqueConstraint('room_id', 'user_id', name='uq_cache_room_user_membership'),
+        Index('idx_cache_membership_room', 'room_id'),
+        Index('idx_cache_membership_user', 'user_id'),
+        Index('idx_cache_membership_status', 'membership_status'),
+        Index('idx_cache_membership_updated', 'updated_at'),
+    )
+    
+    def __repr__(self):
+        return f"<MatrixRoomMembership(room='{self.room_id}', user='{self.user_id}', status='{self.membership_status}')>"
+
+class MatrixSyncStatus(Base):
+    """
+    Model for tracking Matrix sync operations.
+    Helps manage background sync processes and cache freshness.
+    """
+    __tablename__ = "matrix_sync_status"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sync_type = Column(String(50), nullable=False, index=True)  # 'users', 'rooms', 'memberships', 'full'
+    status = Column(String(20), default='pending')  # pending, running, completed, failed
+    last_sync = Column(DateTime, nullable=True)
+    total_items = Column(Integer, default=0)
+    processed_items = Column(Integer, default=0)
+    error_message = Column(Text, nullable=True)
+    sync_duration_seconds = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    
+    # Indexes for performance
+    __table_args__ = (
+        Index('idx_sync_type_status', 'sync_type', 'status'),
+        Index('idx_sync_last_sync', 'last_sync'),
+    )
+    
+    @property
+    def progress_percentage(self):
+        """Calculate sync progress percentage."""
+        if self.total_items == 0:
+            return 0
+        return min(100, (self.processed_items / self.total_items) * 100)
+    
+    def __repr__(self):
+        return f"<MatrixSyncStatus(type='{self.sync_type}', status='{self.status}', progress={self.progress_percentage:.1f}%)>"
+
+class MatrixUserCache(Base):
+    """
+    Model for caching aggregated user data for quick access.
+    This is a denormalized table for fast user lookups in the UI.
+    """
+    __tablename__ = "matrix_user_cache"
+    
+    user_id = Column(String(255), primary_key=True, index=True)
+    display_name = Column(String(255), nullable=True)
+    avatar_url = Column(String(500), nullable=True)
+    is_signal_user = Column(Boolean, default=False, index=True)
+    room_count = Column(Integer, default=0)  # Number of rooms user is in
+    last_activity = Column(DateTime, nullable=True)
+    cache_updated = Column(DateTime, default=func.now(), onupdate=func.now())
+    
+    # Indexes for fast filtering and sorting
+    __table_args__ = (
+        Index('idx_user_cache_signal', 'is_signal_user'),
+        Index('idx_user_cache_display_name', 'display_name'),
+        Index('idx_user_cache_updated', 'cache_updated'),
+    )
+    
+    def __repr__(self):
+        return f"<MatrixUserCache(user_id='{self.user_id}', display_name='{self.display_name}', rooms={self.room_count})>"

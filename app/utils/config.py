@@ -147,6 +147,9 @@ class Config:
     MATRIX_SIGNAL_BRIDGE_ROOM_ID = os.getenv("MATRIX_SIGNAL_BRIDGE_ROOM_ID")
     MATRIX_ROOM_IDS_NAME_CATEGORY = os.getenv("MATRIX_ROOM_IDS_NAME_CATEGORY")
     
+    # Matrix cache configuration
+    MATRIX_MIN_ROOM_MEMBERS = int(os.getenv("MATRIX_MIN_ROOM_MEMBERS", "5"))
+    
     # Matrix Encryption and Security Keys (DISABLED)
     # MATRIX_SECURITY_KEY = os.getenv("MATRIX_SECURITY_KEY")
     # MATRIX_RECOVERY_PASSPHRASE = os.getenv("MATRIX_RECOVERY_PASSPHRASE")

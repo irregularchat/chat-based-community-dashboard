@@ -23,7 +23,6 @@ from app.utils.matrix_actions import (
     get_joined_rooms,
     get_room_name,
     remove_from_matrix_room,
-    get_all_accessible_users,
     send_direct_message,
     send_room_message,
     get_direct_message_history_sync
@@ -45,6 +44,62 @@ def save_user_categories():
             json.dump(st.session_state.user_categories, f, indent=2)
     except Exception as e:
         logger.error(f"Error saving user categories: {e}")
+
+# Callback function for the 'Load Users' button
+def on_load_users_click():
+    logger.info("'Load Users' (on_click) triggered. Attempting to load from cache.")
+    st.session_state.load_users_processing = True # Flag to show spinner
+
+async def process_load_users():
+    # This function will run after the on_click sets the flag
+    if st.session_state.get('load_users_processing', False):
+        with st.spinner("Loading Matrix users from cache..."):
+            try:
+                from app.services.matrix_cache import matrix_cache
+                db = next(get_db())
+                try:
+                    logger.info("Calling matrix_cache.get_cached_users() inside process_load_users...")
+                    cached_users = matrix_cache.get_cached_users(db)
+                    logger.info(f"Retrieved {len(cached_users) if cached_users else 0} users from MatrixUserCache.")
+                    
+                    if cached_users:
+                        logger.info(f"First 3 cached users (process_load_users): {cached_users[:3]}")
+                    
+                    formatted_users = [
+                        {'user_id': user['user_id'], 'display_name': user['display_name']}
+                        for user in cached_users
+                    ] if cached_users else []
+                    
+                    st.session_state.matrix_users = formatted_users
+                    logger.info(f"Set st.session_state.matrix_users with {len(formatted_users)} users (process_load_users).")
+
+                    if formatted_users:
+                        st.success(f"✅ Loaded {len(formatted_users)} Matrix users from cache")
+                        st.info("💡 Users are now cached - adding users will be instant!")
+                    else:
+                        st.warning("No Matrix users found in cache. Please run a manual sync if needed.")
+                        logger.warning("No users found in MatrixUserCache via process_load_users.")
+                        
+                    if not matrix_cache.is_cache_fresh(db, max_age_minutes=30):
+                        logger.info("Cache is stale (process_load_users), triggering background_sync.")
+                        # Simplified async call for background sync
+                        asyncio.create_task(matrix_cache.background_sync(db_session=db, max_age_minutes=30))
+                        st.toast("🔄 Cache is stale, background sync triggered.", icon="ℹ️")
+                    else:
+                        logger.info("Cache is fresh (process_load_users), no background sync triggered.")
+                        
+                except Exception as e_load:
+                    st.error(f"Error loading users from cache (process_load_users): {str(e_load)}")
+                    logger.error(f"Error loading users from cache (process_load_users): {str(e_load)}", exc_info=True)
+                finally:
+                    db.close()
+                    logger.info("Database session closed after process_load_users.")
+            except Exception as e_main:
+                st.error(f"Error in process_load_users logic: {str(e_main)}")
+                logger.error(f"Error in process_load_users logic: {str(e_main)}", exc_info=True)
+            finally:
+                st.session_state.load_users_processing = False # Reset flag
+                # No st.rerun() here, let Streamlit handle it naturally after callback
 
 async def render_matrix_messaging_page():
     """
@@ -99,40 +154,56 @@ async def render_matrix_messaging_page():
     # Sort categories
     sorted_categories = sorted(all_categories)
     
+    # Call the processing function if the flag is set
+    # This needs to be called early in the render, before the button itself typically
+    await process_load_users()
+    
     # Create tabs for different messaging options
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Direct Message", "Room Message", "Bulk Message", "Invite to Rooms", "Remove from Rooms", "Entrance Room Users"])
     
     with tab1:
         st.header("Send Direct Message")
         
-        # Initialize Matrix users in session state if not already done
         if 'matrix_users' not in st.session_state:
             st.session_state.matrix_users = []
         
-        # Button to fetch Matrix users from entrance room
-        col1, col2 = st.columns([1, 3])
+        col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
-            if st.button("🔄 Load Users", key="load_matrix_users"):
-                with st.spinner("Loading Matrix users from all accessible rooms..."):
-                    try:
-                        # Import the function to get users from all accessible rooms
-                        fetched_users = await get_all_accessible_users()
-                        st.session_state.matrix_users = fetched_users or []
-                        if fetched_users:
-                            st.success(f"✅ Loaded {len(fetched_users)} Matrix users from all rooms")
-                            st.info("💡 Users are now cached - adding users will be instant!")
-                        else:
-                            st.warning("No Matrix users found in accessible rooms")
-                    except Exception as e:
-                        st.error(f"Error loading Matrix users: {str(e)}")
-                        logging.error(f"Error loading Matrix users: {str(e)}")
-                        st.session_state.matrix_users = []
+            st.button("🔄 Load Users", key="load_matrix_users_btn", on_click=on_load_users_click)
         
         with col2:
+            if st.button("🔄 Manual Sync", key="manual_sync_users", help="Force a full sync of Matrix data"):
+                with st.spinner("Running full Matrix sync..."):
+                    try:
+                        from app.services.matrix_cache import matrix_cache
+                        
+                        db = next(get_db())
+                        try:
+                            sync_result = await matrix_cache.full_sync(db, force=True)
+                            if sync_result["status"] == "completed":
+                                st.success(f"✅ Sync completed! Users: {sync_result['users_synced']}, Rooms: {sync_result['rooms_synced']}")
+                                # Reload users after sync
+                                cached_users = matrix_cache.get_cached_users(db)
+                                st.session_state.matrix_users = [
+                                    {
+                                        'user_id': user['user_id'],
+                                        'display_name': user['display_name']
+                                    }
+                                    for user in cached_users
+                                ]
+                            else:
+                                st.error(f"Sync failed: {sync_result.get('error', 'Unknown error')}")
+                        finally:
+                            db.close()
+                    except Exception as e:
+                        st.error(f"Error during manual sync: {str(e)}")
+                        logging.error(f"Error during manual sync: {str(e)}")
+        
+        with col3:
             if st.session_state.matrix_users:
                 st.write(f"✅ **{len(st.session_state.matrix_users)} users loaded** - Ready for fast selection!")
             else:
-                st.write("*Click 'Load Users' to fetch available Matrix users from all accessible rooms*")
+                st.write("*Click 'Load Users' to fetch from cache or 'Manual Sync' to sync from Matrix*")
         
         # Matrix User Selection - Multiple Users with efficient selection
         selected_user_ids = []
@@ -404,14 +475,14 @@ async def render_matrix_messaging_page():
                     progress_bar.progress((i + 1) / len(selected_user_ids))
                     
                     try:
-                        room_id = await create_matrix_direct_chat(user_id)
-                        if room_id:
+                room_id = await create_matrix_direct_chat(user_id)
+                if room_id:
                             success = await send_matrix_message(room_id, message_with_footer)
-                            if success:
+                    if success:
                                 success_count += 1
-                            else:
+                    else:
                                 failed_users.append(user_id)
-                        else:
+                else:
                             failed_users.append(user_id)
                     except Exception as e:
                         failed_users.append(user_id)

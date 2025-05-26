@@ -18,7 +18,6 @@ from app.db.models import User
 from app.utils.recommendation import get_entrance_room_users_sync, get_room_recommendations_sync
 from app.utils.matrix_actions import (
     invite_to_matrix_room, 
-    get_all_accessible_users,
     invite_to_matrix_room_sync,
     send_matrix_message,
     create_matrix_direct_chat_sync,
@@ -680,17 +679,54 @@ async def render_create_user_form():
                 
                 def fetch_indoc_users_thread():
                     try:
-                        # Import the needed function
-                        from app.utils.recommendation import get_entrance_room_users_sync
+                        # Use cached Matrix users instead of slow API calls
+                        from app.db.session import get_db
+                        from app.services.matrix_cache import matrix_cache
                         
-                        # Get the users using sync function (which handles its own event loop)
-                        fetched_users = get_entrance_room_users_sync()
+                        db = next(get_db())
+                        try:
+                            # Check if cache is fresh, if not trigger background sync
+                            if not matrix_cache.is_cache_fresh(db, max_age_minutes=30):
+                                # Trigger background sync but don't wait for it
+                                import asyncio
+                                try:
+                                    # Create task for background sync
+                                    loop = asyncio.get_event_loop()
+                                    loop.create_task(matrix_cache.background_sync(max_age_minutes=30))
+                                except RuntimeError:
+                                    # If no event loop, start background sync in thread
+                                    import threading
+                                    def bg_sync():
+                                        loop = asyncio.new_event_loop()
+                                        asyncio.set_event_loop(loop)
+                                        try:
+                                            loop.run_until_complete(matrix_cache.background_sync(max_age_minutes=30))
+                                        finally:
+                                            loop.close()
+                                    threading.Thread(target=bg_sync, daemon=True).start()
+                            
+                            # Get cached users (fast)
+                            cached_users = matrix_cache.get_cached_users(db)
+                            
+                            # Convert to the expected format
+                            fetched_users = [
+                                {
+                                    'user_id': user['user_id'],
+                                    'display_name': user['display_name'],
+                                    'is_admin': False  # We can determine this from user_id if needed
+                                }
+                                for user in cached_users
+                            ]
+                            
                         st.session_state['indoc_users'] = fetched_users or []
                         st.session_state.matrix_users = fetched_users or []
                         st.session_state['fetch_indoc_users_complete'] = True
-                        logging.info(f"Background INDOC user fetch completed. Found {len(fetched_users) if fetched_users else 0} users.")
+                            logging.info(f"Background user fetch completed from cache. Found {len(fetched_users) if fetched_users else 0} users.")
+                        finally:
+                            db.close()
+                            
                     except Exception as e:
-                        logging.error(f"Error in background INDOC user fetch thread: {str(e)}")
+                        logging.error(f"Error in background user fetch thread: {str(e)}")
                         st.session_state['fetch_indoc_users_error'] = str(e)
                         # Set empty list as fallback
                         st.session_state['indoc_users'] = []
@@ -1241,8 +1277,44 @@ async def render_create_user_form():
                 import nest_asyncio
                 nest_asyncio.apply()
                 
-                # Fetch Matrix users from INDOC room
-                st.session_state.matrix_users = await get_all_accessible_users()
+                # Use cached Matrix users instead of slow API calls
+                from app.db.session import get_db
+                from app.services.matrix_cache import matrix_cache
+                
+                db = next(get_db())
+                try:
+                    # Check if cache is fresh, if not trigger background sync
+                    if not matrix_cache.is_cache_fresh(db, max_age_minutes=30):
+                        # Trigger background sync but don't wait for it
+                        try:
+                            # Create task for background sync
+                            loop = asyncio.get_event_loop()
+                            loop.create_task(matrix_cache.background_sync(max_age_minutes=30))
+                        except RuntimeError:
+                            # If no event loop, start background sync in thread
+                            import threading
+                            def bg_sync():
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                try:
+                                    loop.run_until_complete(matrix_cache.background_sync(max_age_minutes=30))
+                                finally:
+                                    loop.close()
+                            threading.Thread(target=bg_sync, daemon=True).start()
+                    
+                    # Get cached users (fast)
+                    cached_users = matrix_cache.get_cached_users(db)
+                    
+                    # Convert to the expected format
+                    st.session_state.matrix_users = [
+                        {
+                            'user_id': user['user_id'],
+                            'display_name': user['display_name']
+                        }
+                        for user in cached_users
+                    ]
+                finally:
+                    db.close()
                 
                 # Close the loop
                 loop.close()

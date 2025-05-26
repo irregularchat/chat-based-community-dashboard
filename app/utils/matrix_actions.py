@@ -515,73 +515,117 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
     if user_id.startswith("@signal_"):
         logger.info(f"Detected Signal bridge user: {user_id}")
         
-        # For Signal bridge users, we need to find the existing Signal bridge chat room
-        # The Signal bridge bot manages these rooms and we need to find the correct one
+        # For Signal bridge users, use the Signal bridge bot command flow
         try:
             client = await get_matrix_client()
             if not client:
                 logger.error("Failed to create Matrix client for Signal bridge user")
                 return None
             
-            # First, search for existing rooms with this Signal user
-            # Look for rooms that contain both the bot and the Signal user
-            logger.info(f"Searching for existing Signal chat room for {user_id}")
+            # Get the Signal bridge bot room ID from config
+            signal_bridge_room_id = Config.MATRIX_SIGNAL_BRIDGE_ROOM_ID
+            if not signal_bridge_room_id:
+                logger.error("MATRIX_SIGNAL_BRIDGE_ROOM_ID not configured")
+                await client.close()
+                return None
             
-            joined_rooms = await client.joined_rooms()
-            if isinstance(joined_rooms, JoinedRoomsResponse) and joined_rooms.rooms:
-                logger.info(f"Searching through {len(joined_rooms.rooms)} joined rooms for existing Signal chat")
+            # Extract Signal UUID from the Matrix user ID
+            # Format: @signal_<uuid>:domain.com -> <uuid>
+            try:
+                signal_uuid = user_id.split("_")[1].split(":")[0]
+                logger.info(f"Extracted Signal UUID: {signal_uuid}")
+            except Exception as e:
+                logger.error(f"Failed to extract Signal UUID from {user_id}: {e}")
+                await client.close()
+                return None
+            
+            # Send start-chat command to Signal bridge bot
+            start_chat_command = f"start-chat {signal_uuid}"
+            logger.info(f"Sending Signal bridge command: {start_chat_command}")
+            
+            try:
+                # Send the command to the Signal bridge bot room
+                response = await client.room_send(
+                    room_id=signal_bridge_room_id,
+                    message_type="m.room.message",
+                    content={
+                        "msgtype": "m.text",
+                        "body": start_chat_command
+                    }
+                )
                 
-                # Look for rooms that contain the Signal user
-                for room_id in joined_rooms.rooms:
-                    try:
-                        # Get room members
-                        members_response = await client.room_get_state(room_id)
-                        if isinstance(members_response, RoomGetStateResponse):
-                            members = []
-                            for event in members_response.events:
-                                if event.get("type") == "m.room.member" and event.get("state_key"):
-                                    member_id = event.get("state_key")
-                                    content = event.get("content", {})
-                                    if content.get("membership") == "join":
-                                        members.append(member_id)
-                            
-                            # Check if this room contains the Signal user and the bot
-                            if user_id in members and MATRIX_BOT_USERNAME in members:
-                                # Get room name and topic to help identify the room type
-                                room_name = ""
-                                room_topic = ""
-                                try:
+                if isinstance(response, RoomSendResponse):
+                    logger.info(f"Signal bridge command sent successfully: {response.event_id}")
+                    
+                    # Wait a moment for the Signal bridge bot to process the command
+                    await asyncio.sleep(2)
+                    
+                    # Now search for the Signal chat room that the bot should have created/found
+                    logger.info(f"Searching for Signal chat room after bot command")
+                    
+                    joined_rooms = await client.joined_rooms()
+                    if isinstance(joined_rooms, JoinedRoomsResponse) and joined_rooms.rooms:
+                        logger.info(f"Searching through {len(joined_rooms.rooms)} joined rooms for Signal chat")
+                        
+                        # Look for rooms that contain the Signal user
+                        for room_id in joined_rooms.rooms:
+                            try:
+                                # Get room members
+                                members_response = await client.room_get_state(room_id)
+                                if isinstance(members_response, RoomGetStateResponse):
+                                    members = []
                                     for event in members_response.events:
-                                        if event.get("type") == "m.room.name":
-                                            room_name = event.get("content", {}).get("name", "")
-                                        elif event.get("type") == "m.room.topic":
-                                            room_topic = event.get("content", {}).get("topic", "")
-                                except Exception:
-                                    pass
-                                
-                                # Look for Signal bridge rooms specifically
-                                # These often have "Signal private chat" in the topic or are small rooms
-                                if ("signal" in room_topic.lower() and "private" in room_topic.lower()) or \
-                                   (len(members) == 2) or \
-                                   ("signal" in room_name.lower() and "chat" in room_name.lower()):
-                                    logger.info(f"Found existing Signal chat room for {user_id}: {room_id} (members: {len(members)}, name: '{room_name}', topic: '{room_topic}')")
-                                    await client.close()
-                                    return room_id
-                                else:
-                                    logger.debug(f"Skipping room {room_id} - not a Signal bridge room (members: {len(members)}, name: '{room_name}', topic: '{room_topic}')")
+                                        if event.get("type") == "m.room.member" and event.get("state_key"):
+                                            member_id = event.get("state_key")
+                                            content = event.get("content", {})
+                                            if content.get("membership") == "join":
+                                                members.append(member_id)
                                     
-                    except Exception as room_err:
-                        logger.warning(f"Error checking room {room_id}: {str(room_err)}")
-                        continue
-            
-            # If no existing room found, the Signal bridge will create one when we send a message
-            # Return None to indicate we should use the fallback approach
-            logger.info(f"No existing Signal chat room found for {user_id}")
-            await client.close()
-            return None
+                                    # Check if this room contains the Signal user and the bot
+                                    if user_id in members and MATRIX_BOT_USERNAME in members:
+                                        # Get room name and topic to help identify the room type
+                                        room_name = ""
+                                        room_topic = ""
+                                        try:
+                                            for event in members_response.events:
+                                                if event.get("type") == "m.room.name":
+                                                    room_name = event.get("content", {}).get("name", "")
+                                                elif event.get("type") == "m.room.topic":
+                                                    room_topic = event.get("content", {}).get("topic", "")
+                                        except Exception:
+                                            pass
+                                        
+                                        # Look for Signal bridge rooms specifically
+                                        # These often have "Signal private chat" in the topic or are small rooms
+                                        if ("signal" in room_topic.lower() and "private" in room_topic.lower()) or \
+                                           (len(members) == 2) or \
+                                           ("signal" in room_name.lower() and "chat" in room_name.lower()):
+                                            logger.info(f"Found Signal chat room for {user_id}: {room_id} (members: {len(members)}, name: '{room_name}', topic: '{room_topic}')")
+                                            await client.close()
+                                            return room_id
+                                        else:
+                                            logger.debug(f"Skipping room {room_id} - not a Signal bridge room (members: {len(members)}, name: '{room_name}', topic: '{room_topic}')")
+                                            
+                            except Exception as room_err:
+                                logger.warning(f"Error checking room {room_id}: {str(room_err)}")
+                                continue
+                    
+                    logger.warning(f"No Signal chat room found after bot command for {user_id}")
+                    await client.close()
+                    return None
+                    
+                else:
+                    logger.error(f"Failed to send Signal bridge command: {response}")
+                    await client.close()
+                    return None
+                    
+            except Exception as cmd_error:
+                logger.error(f"Error sending Signal bridge command: {cmd_error}")
+                await client.close()
+                return None
                 
         except Exception as e:
-            logger.error(f"Error searching for Signal chat room for {user_id}: {e}")
+            logger.error(f"Error in Signal bridge bot command flow for {user_id}: {e}")
             return None
         
     # For non-Signal users, use the original Matrix direct chat logic

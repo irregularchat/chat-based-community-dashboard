@@ -389,7 +389,7 @@ async def render_matrix_messaging_page():
         if st.button(send_button_text, disabled=not confirm_send):
             if selected_user_ids and message:
                 # Add no-reply footer to direct messages
-                message_with_footer = f"{message}\n\n_NOREPLY: This message was sent from the admin dashboard_"
+                message_with_footer = f"{message}\n\n__NOREPLY: This message was sent from the admin dashboard__"
                 
                 # Show progress
                 progress_bar = st.progress(0)

@@ -31,6 +31,7 @@ from app.db.session import get_db
 from app.db.operations import User, AdminEvent, MatrixRoomMember, get_matrix_room_members
 from app.utils.config import Config
 from app.utils.recommendation import get_entrance_room_users, invite_user_to_recommended_rooms
+from app.services.matrix_cache import matrix_cache
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -55,7 +56,6 @@ async def process_load_users():
     if st.session_state.get('load_users_processing', False):
         with st.spinner("Loading Matrix users from cache..."):
             try:
-                from app.services.matrix_cache import matrix_cache
                 db = next(get_db())
                 try:
                     logger.info("Calling matrix_cache.get_cached_users() inside process_load_users...")
@@ -182,8 +182,6 @@ async def render_matrix_messaging_page():
             if st.button("🔄 Manual Sync", key="manual_sync_users", help="Force a full sync of Matrix data"):
                 with st.spinner("Running full Matrix sync..."):
                     try:
-                        from app.services.matrix_cache import matrix_cache
-                        
                         db = next(get_db())
                         try:
                             sync_result = await matrix_cache.full_sync(db, force=True)

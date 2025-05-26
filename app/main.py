@@ -863,7 +863,7 @@ def render_main_content():
         clean_params = {k: v for k, v in st.query_params.items() if k != 'page'}
         st.query_params.update(clean_params)
     else:
-        current_page = st.session_state.get('current_page', 'Create User')
+    current_page = st.session_state.get('current_page', 'Create User')
     is_admin = st.session_state.get('is_admin', False)
     is_authenticated = st.session_state.get('is_authenticated', False)
     

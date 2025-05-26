@@ -148,67 +148,21 @@ async def render_matrix_messaging_page():
             if manual_user_id and manual_user_id.strip():
                 user_id = manual_user_id.strip()
         
-        # Display message history if user ID is provided
+        # Message history is disabled for simplicity (encryption was removed)
         if user_id and user_id.strip():
-            st.subheader("💬 Conversation History")
-            
-            # Create a button to load/refresh message history
-            col1, col2 = st.columns([1, 4])
-            with col1:
-                if st.button("🔄 Load History", key=f"load_matrix_history_{user_id.strip()}"):
-                    st.session_state[f'loading_matrix_history_{user_id.strip()}'] = True
-                    st.session_state[f'matrix_message_history_{user_id.strip()}'] = None  # Reset to ensure fresh data
-                    st.rerun()
-            
-            with col2:
-                st.write("*Click 'Load History' to view recent messages*")
-            
-            # Handle loading message history
-            if st.session_state.get(f'loading_matrix_history_{user_id.strip()}', False):
-                if f'matrix_message_history_{user_id.strip()}' not in st.session_state or st.session_state[f'matrix_message_history_{user_id.strip()}'] is None:
-                    try:
-                        with st.spinner("Loading conversation history, please wait..."):
-                            # Use the sync wrapper function
-                            messages = get_direct_message_history_sync(user_id.strip(), limit=20)
-                            st.session_state[f'matrix_message_history_{user_id.strip()}'] = messages
-                            st.session_state[f'loading_matrix_history_{user_id.strip()}'] = False
-                            st.rerun()
-                        
-                    except Exception as e:
-                        st.session_state[f'matrix_history_error_{user_id.strip()}'] = str(e)
-                        logging.error(f"Error loading message history: {str(e)}", exc_info=True)
-                        st.session_state[f'loading_matrix_history_{user_id.strip()}'] = False
-                
-                # Check if we have history or an error
-                if f'matrix_history_error_{user_id.strip()}' in st.session_state:
-                    st.error(f"Error loading message history: {st.session_state[f'matrix_history_error_{user_id.strip()}']}")
-                    del st.session_state[f'matrix_history_error_{user_id.strip()}']
-                    st.session_state[f'loading_matrix_history_{user_id.strip()}'] = False
-                
-                if f'matrix_message_history_{user_id.strip()}' in st.session_state:
-                    st.session_state[f'loading_matrix_history_{user_id.strip()}'] = False
-                    display_matrix_chat_messages(st.session_state[f'matrix_message_history_{user_id.strip()}'])
-                else:
-                    st.info("Loading conversation history...")
-            else:
-                # Display cached history if available
-                if f'matrix_message_history_{user_id.strip()}' in st.session_state and st.session_state[f'matrix_message_history_{user_id.strip()}'] is not None:
-                    display_matrix_chat_messages(st.session_state[f'matrix_message_history_{user_id.strip()}'])
-                else:
-                    st.info("Click 'Load History' to view recent messages with this user")
+            st.info("💬 **Message History Disabled**: Message history requires encryption which has been disabled for simplicity. You can still send messages below.")
         
         # Message input and send button
         message = st.text_area("Message", height=150, key="direct_message")
         if st.button("Send Direct Message"):
             if user_id and message:
+                # Add no-reply footer to direct messages
+                message_with_footer = f"{message}\n\n_NOREPLY: This message was sent from the admin dashboard_"
                 room_id = await create_matrix_direct_chat(user_id)
                 if room_id:
-                    success = await send_matrix_message(room_id, message)
+                    success = await send_matrix_message(room_id, message_with_footer)
                     if success:
                         st.success(f"Message sent to {user_id}")
-                        # Clear cached message history to force refresh
-                        if f'matrix_message_history_{user_id.strip()}' in st.session_state:
-                            del st.session_state[f'matrix_message_history_{user_id.strip()}']
                     else:
                         st.error(f"Failed to send message to {user_id}")
                 else:
@@ -635,6 +589,52 @@ def display_matrix_chat_messages(messages):
     if not messages:
         st.info("No message history found. This could be a new conversation or the room may not exist yet.")
         return
+    
+    # Check if we have encrypted messages and provide helpful guidance
+    encrypted_counts = {}
+    for msg in messages:
+        status = msg.get('decryption_status', 'unknown')
+        if 'encrypted' in status:
+            encrypted_counts[status] = encrypted_counts.get(status, 0) + 1
+    
+    total_encrypted = sum(encrypted_counts.values())
+    if total_encrypted > 0:
+        st.info(f"🔐 **Message History Found**: {len(messages)} messages total, {total_encrypted} are encrypted")
+        
+        # Show specific guidance for different encryption statuses
+        if encrypted_counts.get('encrypted_historical_signal', 0) > 0:
+            st.warning(f"📱 **Signal Bridge Messages**: {encrypted_counts['encrypted_historical_signal']} encrypted Signal messages detected. "
+                     f"These were sent before the bot had access to encryption keys. "
+                     f"New messages will be readable in real-time.")
+        
+        if encrypted_counts.get('encrypted_historical', 0) > 0:
+            st.warning(f"🔐 **Historical Encrypted Messages**: {encrypted_counts['encrypted_historical']} encrypted Matrix messages detected. "
+                     f"These were sent before the bot joined the conversation. "
+                     f"New messages will be readable in real-time.")
+        
+        # Show success for any decrypted messages
+        decrypted_count = sum(1 for msg in messages if msg.get('decryption_status') in ['plaintext', 'auto_decrypted', 'manual_decrypted'])
+        if decrypted_count > 0:
+            st.success(f"✅ **Readable Messages**: {decrypted_count} messages are readable")
+        
+        # Add helpful note about manual key backup
+        with st.expander("🔑 About Message Encryption"):
+            st.markdown("""
+            **Why are some messages encrypted?**
+            - Matrix uses end-to-end encryption for secure messaging
+            - Historical messages require the original encryption keys to decrypt
+            - The bot can only decrypt messages sent after it joined the conversation
+            
+            **For Signal Bridge Messages:**
+            - Signal messages are always encrypted for security
+            - Historical Signal messages cannot be decrypted without the original keys
+            - New Signal messages will be readable as they arrive
+            
+            **Key Recovery Options:**
+            - Manual key backup/restore through Matrix client
+            - Cross-signing device verification
+            - Security key recovery (if configured)
+            """)
     
     st.write(f"**Showing {len(messages)} recent messages:**")
     

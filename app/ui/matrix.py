@@ -154,7 +154,7 @@ async def render_matrix_messaging_page():
                 st.warning("⚠️ Cache stale")
             else:
                 st.success("✅ Cache fresh")
-
+    
     with st.expander("Room Configuration Help", expanded=False):
         st.markdown("""
         ### Matrix Room Configuration
@@ -1180,8 +1180,73 @@ async def render_matrix_messaging_page():
         
         st.markdown("---")
         
+        # Show actual room memberships for verification
+        if selected_user_ids:
+            st.markdown("---")
+            st.subheader("🔍 Verify User Room Memberships")
+            
+            if st.button("🔍 Check Actual Room Memberships", help="Verify which rooms the selected users are actually in"):
+                with st.spinner("Checking actual room memberships from Matrix..."):
+                    try:
+                        from app.utils.matrix_actions import get_matrix_client, get_joined_rooms_async, get_room_members_async
+                        client = await get_matrix_client()
+                        if client:
+                            try:
+                                all_bot_rooms = await get_joined_rooms_async(client)
+                                
+                                for user_id in selected_user_ids:
+                                    username = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                                    user_actual_rooms = []
+                                    
+                                    for room_id in all_bot_rooms:
+                                        try:
+                                            room_members = await get_room_members_async(client, room_id)
+                                            if user_id in room_members:
+                                                # Get room name
+                                                room_name = next((r.get('name', 'Unknown Room') for r in matrix_rooms if r.get('room_id') == room_id), 'Unknown Room')
+                                                user_actual_rooms.append((room_id, room_name))
+                                        except Exception as room_error:
+                                            continue
+                                    
+                                    with st.expander(f"👤 {username} - Actually in {len(user_actual_rooms)} rooms"):
+                                        if user_actual_rooms:
+                                            for room_id, room_name in user_actual_rooms:
+                                                is_selected = room_id in room_ids
+                                                status_icon = "✅" if is_selected else "⚪"
+                                                st.write(f"{status_icon} **{room_name}** (`{room_id}`)")
+                                                if not is_selected:
+                                                    st.caption("   ↳ Not selected for removal")
+                                        else:
+                                            st.info("User is not in any rooms that the bot can see")
+                            finally:
+                                await client.close()
+                        else:
+                            st.error("Failed to get Matrix client for verification")
+                    except Exception as e:
+                        st.error(f"Error checking room memberships: {e}")
+        
         # Confirmation and execution
         st.subheader("⚠️ Confirm Removal")
+        
+        # Add helpful note about bot permissions
+        with st.expander("ℹ️ About Bot Permissions and Room Removal"):
+            st.markdown("""
+            **Bot Admin Status Requirements:**
+            - The bot must have admin/moderator privileges in a room to remove users
+            - If removal fails with "Permission denied", the bot may not be an admin in that room
+            - You can check and update bot permissions in the Matrix client or room settings
+            
+            **How User Removal Works:**
+            1. **Live Verification**: The system now checks actual room memberships from Matrix (not just local cache)
+            2. **Smart Filtering**: Only attempts removal from rooms where the user is actually a member
+            3. **Detailed Reporting**: Shows specific reasons for any failed operations
+            4. **Cache Refresh**: Automatically updates local cache after successful removals
+            
+            **Common Failure Reasons:**
+            - `Permission denied`: Bot is not admin in the room
+            - `User not in room`: User was already removed or never joined
+            - `Room not found`: Room may have been deleted or bot lost access
+            """)
         
         if selected_user_ids and room_ids:
             user_count = len(selected_user_ids)
@@ -1274,19 +1339,58 @@ async def render_matrix_messaging_page():
                         for user_idx, user_id in enumerate(selected_user_ids):
                             username = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
                             
-                            # First, get the rooms this user is actually in
+                            # First, get the rooms this user is actually in from Matrix directly
                             user_room_ids = []
-                            db = next(get_db())
                             try:
-                                # Get all rooms for this user from cache
-                                user_memberships = db.query(MatrixRoomMembership).filter(
-                                    MatrixRoomMembership.user_id == user_id,
-                                    MatrixRoomMembership.membership_status == 'join'
-                                ).all()
-                                user_room_ids = [membership.room_id for membership in user_memberships]
-                                logger.info(f"User {username} is in {len(user_room_ids)} rooms: {user_room_ids}")
-                            finally:
-                                db.close()
+                                # Get user's actual room memberships from Matrix API
+                                from app.utils.matrix_actions import get_matrix_client, get_joined_rooms_async
+                                client = await get_matrix_client()
+                                if client:
+                                    try:
+                                        # Get all rooms the bot can see
+                                        all_bot_rooms = await get_joined_rooms_async(client)
+                                        
+                                        # For each room, check if the user is actually a member
+                                        for room_id in all_bot_rooms:
+                                            try:
+                                                # Get room members to check if user is in this room
+                                                from app.utils.matrix_actions import get_room_members_async
+                                                room_members = await get_room_members_async(client, room_id)
+                                                if user_id in room_members:
+                                                    user_room_ids.append(room_id)
+                                            except Exception as room_error:
+                                                logger.warning(f"Error checking membership for {user_id} in room {room_id}: {room_error}")
+                                                continue
+                                        
+                                        logger.info(f"User {username} is actually in {len(user_room_ids)} rooms (verified from Matrix): {user_room_ids}")
+                                    finally:
+                                        await client.close()
+                                else:
+                                    logger.error("Failed to get Matrix client for membership verification")
+                                    # Fallback to database cache if Matrix client fails
+                                    db = next(get_db())
+                                    try:
+                                        user_memberships = db.query(MatrixRoomMembership).filter(
+                                            MatrixRoomMembership.user_id == user_id,
+                                            MatrixRoomMembership.membership_status == 'join'
+                                        ).all()
+                                        user_room_ids = [membership.room_id for membership in user_memberships]
+                                        logger.warning(f"Using database fallback: User {username} is in {len(user_room_ids)} rooms from cache")
+                                    finally:
+                                        db.close()
+                            except Exception as membership_error:
+                                logger.error(f"Error getting actual room memberships for {user_id}: {membership_error}")
+                                # Fallback to database cache
+                                db = next(get_db())
+                                try:
+                                    user_memberships = db.query(MatrixRoomMembership).filter(
+                                        MatrixRoomMembership.user_id == user_id,
+                                        MatrixRoomMembership.membership_status == 'join'
+                                    ).all()
+                                    user_room_ids = [membership.room_id for membership in user_memberships]
+                                    logger.warning(f"Using database fallback after error: User {username} is in {len(user_room_ids)} rooms from cache")
+                                finally:
+                                    db.close()
                             
                             # Filter room_ids to only include rooms the user is actually in
                             relevant_room_ids = [room_id for room_id in room_ids if room_id in user_room_ids]
@@ -1445,9 +1549,27 @@ async def render_matrix_messaging_page():
                         elif results['users_removed'] > 0:
                             st.success(f"✅ **Completed {results['users_removed']} out of {expected_removals} expected removals**")
                         
+                        # Force refresh Matrix cache to reflect the removals
+                        if results['users_removed'] > 0:
+                            try:
+                                st.info("🔄 Refreshing Matrix cache to reflect the changes...")
+                                db = next(get_db())
+                                try:
+                                    # Trigger a background sync to update the cache
+                                    sync_result = await matrix_cache.background_sync(db_session=db, max_age_minutes=0)  # Force immediate sync
+                                    if sync_result:
+                                        st.success("✅ Matrix cache refreshed successfully")
+                                    else:
+                                        st.warning("⚠️ Cache refresh completed with some issues")
+                                finally:
+                                    db.close()
+                            except Exception as cache_error:
+                                st.warning(f"⚠️ Could not refresh cache: {cache_error}")
+                                logger.warning(f"Error refreshing cache after user removal: {cache_error}")
+                        
                         # Reset form
                         st.session_state.selected_removal_users = []
-                        st.session_state.confirm_user_removal = False
+                        # Note: confirm_user_removal checkbox will reset automatically on next page load
                         
         else:
             if not selected_user_ids:

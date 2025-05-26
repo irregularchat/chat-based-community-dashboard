@@ -30,11 +30,17 @@ logger = logging.getLogger(__name__)
 # Import get_db conditionally to avoid import errors
 try:
     from app.db.session import get_db
+    from app.db.models import MatrixRoom, MatrixRoomMembership
 except ImportError:
-    logger.warning("Could not import get_db - DB caching for matrix room members will not be available")
+    logger.warning("Could not import get_db or models - DB caching for matrix room members will not be available")
     # Create a dummy function to avoid errors
     def get_db():
         yield None
+    # Create dummy classes to avoid errors
+    class MatrixRoom:
+        pass
+    class MatrixRoomMembership:
+        pass
 
 # Check if Matrix integration is active
 MATRIX_ACTIVE = Config.MATRIX_ACTIVE
@@ -547,7 +553,9 @@ async def create_matrix_direct_chat(user_id: str) -> Optional[str]:
                     return None
 
                 logger.info(f"Signal bridge command sent. Event ID: {response.event_id}. Waiting for bot...")
-                await asyncio.sleep(Config.SIGNAL_BRIDGE_BOT_RESPONSE_DELAY) # Use configurable delay
+                # Use a default delay of 2 seconds if not configured
+                delay = getattr(Config, 'SIGNAL_BRIDGE_BOT_RESPONSE_DELAY', 2.0)
+                await asyncio.sleep(delay)
 
                 logger.info(f"Searching for Signal chat room with {user_id} after bot command.")
                 joined_rooms_resp = await client_signal.joined_rooms()
@@ -756,12 +764,13 @@ async def invite_to_matrix_room(room_id: str, user_id: str) -> bool:
             await client.room_invite(room_id, user_id)
             logger.info(f"Invited {user_id} to room {room_id}")
             return True
-        except MatrixRequestError as e:
+        except Exception as e:
             # Check if the error is because the user is already in the room
-            if e.code == 403 and "is already in the room" in str(e):
+            error_str = str(e)
+            if "403" in error_str and "is already in the room" in error_str:
                 logger.info(f"User {user_id} is already in room {room_id}")
                 return True  # Consider this success
-            elif e.code == 403 and "not in room" in str(e):
+            elif "403" in error_str and "not in room" in error_str:
                 # Bot is not in room, try to join first
                 logger.info(f"Bot is not in room {room_id}, trying to join first")
                 try:

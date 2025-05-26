@@ -59,28 +59,27 @@ async def get_entrance_room_users() -> List[Dict[str, Any]]:
             MatrixUser.user_id.in_(user_ids_in_room)
         ).all()
 
-            bot_user_id = Config.MATRIX_BOT_USERNAME
+        bot_user_id = Config.MATRIX_BOT_USERNAME
         admin_usernames_config = Config.ADMIN_USERNAMES
         admin_localparts = [name.split(':')[0].lstrip('@') for name in admin_usernames_config if isinstance(name, str)]
             
-
-            room_users = []
+        room_users = []
         for user_detail in users_in_room_details:
-                # Skip the bot itself
+            # Skip the bot itself
             if user_detail.user_id == bot_user_id:
-                    continue
+                continue
                 
             localpart = user_detail.user_id.split(":")[0].lstrip("@")
             is_admin = localpart in admin_localparts
                 
-                room_users.append({
+            room_users.append({
                 "user_id": user_detail.user_id,
                 "display_name": user_detail.display_name or localpart,
-                    "is_admin": is_admin
-                })
+                "is_admin": is_admin
+            })
             
         logger.info(f"Found {len(room_users)} users in entrance room from cache")
-            return room_users
+        return room_users
     except Exception as e:
         logger.error(f"Error getting entrance room users from cache: {e}\\n{traceback.format_exc()}")
         return []
@@ -161,7 +160,7 @@ async def get_all_accessible_rooms_with_details() -> List[Dict[str, Any]]:
                     detailed_rooms.append(details)
                 
                 globals()['_room_cache'] = detailed_rooms
-            globals()['_room_cache_time'] = current_time
+                globals()['_room_cache_time'] = current_time
                 return detailed_rooms
             else:
                 logger.info("Main DB cache (MatrixRoom table) is fresh but returned no rooms. Proceeding to fallback.")
@@ -722,7 +721,6 @@ def get_entrance_room_users_sync() -> List[Dict[str, Any]]:
             admin_usernames_config = Config.ADMIN_USERNAMES
             admin_localparts = [name.split(':')[0].lstrip('@') for name in admin_usernames_config if isinstance(name, str)]
 
-
             room_users = []
             for user_detail in users_in_room_details:
                 if user_detail.user_id == bot_user_id:
@@ -739,15 +737,16 @@ def get_entrance_room_users_sync() -> List[Dict[str, Any]]:
                 
             logger.info(f"Found {len(room_users)} users in entrance room from cache (sync)")
             return room_users
-    except Exception as e:
+        except Exception as e:
             logger.error(f"Error getting entrance room users from cache (sync): {e}\\n{traceback.format_exc()}")
             return []
-        finally:
-            db.close()
     except Exception as e:
         # This outer try-except is to catch potential issues with get_db() itself
         logger.error(f"Critical error in get_entrance_room_users_sync: {e}\\n{traceback.format_exc()}")
-        return [] 
+        return []
+    finally:
+        if 'db' in locals() and db: # Ensure db is defined and not None
+            db.close()
 
 def get_room_recommendations_sync(user_id: str, interests: str) -> List[Dict[str, Any]]:
     """

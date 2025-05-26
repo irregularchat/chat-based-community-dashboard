@@ -718,10 +718,12 @@ async def render_create_user_form():
                                 for user in cached_users
                             ]
                             
-                        st.session_state['indoc_users'] = fetched_users or []
-                        st.session_state.matrix_users = fetched_users or []
-                        st.session_state['fetch_indoc_users_complete'] = True
+                            # These lines should be INSIDE the try block
+                            st.session_state['indoc_users'] = fetched_users or []
+                            st.session_state.matrix_users = fetched_users or []
+                            st.session_state['fetch_indoc_users_complete'] = True
                             logging.info(f"Background user fetch completed from cache. Found {len(fetched_users) if fetched_users else 0} users.")
+                        # This finally belongs to the inner try (line 689)
                         finally:
                             db.close()
                             
@@ -731,7 +733,7 @@ async def render_create_user_form():
                         # Set empty list as fallback
                         st.session_state['indoc_users'] = []
                         st.session_state.matrix_users = []
-                    finally:
+                    finally: # This finally corresponds to the try at line 682
                         st.session_state['fetch_indoc_users_finished'] = True
                 
                 # Launch thread in daemon mode to avoid blocking
@@ -1264,6 +1266,31 @@ async def render_create_user_form():
     # Add a section to connect with Matrix user from INDOC
     st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
     st.subheader("Connect with Matrix User")
+    
+    # Manual Sync Button for Matrix Cache
+    if st.button("🔄 Sync Matrix User Cache", key="manual_sync_matrix_cache_in_form"):
+        with st.spinner("Running full Matrix cache sync..."):
+            try:
+                from app.services.matrix_cache import matrix_cache
+                db_sync = next(get_db()) # Use a different variable name for this db session
+                try:
+                    sync_result = await matrix_cache.full_sync(db_sync, force=True)
+                    if sync_result["status"] == "completed":
+                        st.success(f"✅ Matrix cache sync completed! Users: {sync_result.get('users_synced',0)}, Rooms: {sync_result.get('rooms_synced',0)}")
+                        # Reload matrix_users for the dropdown
+                        cached_users_after_sync = matrix_cache.get_cached_users(db_sync)
+                        st.session_state.matrix_users = [
+                            {'user_id': u['user_id'], 'display_name': u['display_name']}
+                            for u in cached_users_after_sync
+                        ]
+                        st.rerun() # Rerun to refresh the user list in the selectbox
+                    else:
+                        st.error(f"Matrix cache sync failed: {sync_result.get('error', 'Unknown error')}")
+                finally:
+                    db_sync.close()
+            except Exception as e_sync:
+                st.error(f"Error during manual Matrix cache sync: {str(e_sync)}")
+                logging.error(f"Error during manual Matrix cache sync: {str(e_sync)}", exc_info=True)
     
     # Load Matrix users from INDOC room if not already loaded
     if not st.session_state.matrix_users:

@@ -207,6 +207,10 @@ async def render_matrix_messaging_page():
                     help="Select a user to add to your message list"
                 )
                 
+                # Show current selection count
+                if st.session_state.selected_dm_users:
+                    st.info(f"📋 Currently selected: {len(st.session_state.selected_dm_users)} users")
+                
                 # Add user button
                 if st.button("➕ Add User", disabled=not selected_user):
                     if selected_user and selected_user not in st.session_state.selected_dm_users:
@@ -229,21 +233,44 @@ async def render_matrix_messaging_page():
                         st.session_state.selected_dm_users = []
                         st.rerun()
             
-            # Display selected users with remove buttons
+            # Display selected users with remove buttons in a more compact format
             if st.session_state.selected_dm_users:
-                st.write(f"**Selected Users ({len(st.session_state.selected_dm_users)}):**")
+                st.markdown("---")
+                st.write(f"**📋 Selected Users ({len(st.session_state.selected_dm_users)}):**")
                 
-                # Create a container for the selected users
-                users_to_remove = []
-                for i, user_option in enumerate(st.session_state.selected_dm_users):
-                    col_user, col_remove = st.columns([4, 1])
-                    with col_user:
+                # Create a scrollable container for many users
+                with st.container():
+                    # Show users in a more compact format
+                    users_to_remove = []
+                    
+                    # Group users in rows of 2 for better space utilization
+                    for i in range(0, len(st.session_state.selected_dm_users), 2):
+                        cols = st.columns([2, 0.3, 2, 0.3])
+                        
+                        # First user in the row
+                        user_option = st.session_state.selected_dm_users[i]
                         user_id = user_option.split("(")[-1].rstrip(")")
                         display_name = user_option.split("(")[0].strip()
-                        st.write(f"{i+1}. {display_name} ({user_id})")
-                    with col_remove:
-                        if st.button("❌", key=f"remove_user_{i}", help=f"Remove {display_name}"):
-                            users_to_remove.append(user_option)
+                        
+                        with cols[0]:
+                            st.write(f"{i+1}. **{display_name}**")
+                            st.caption(user_id)
+                        with cols[1]:
+                            if st.button("❌", key=f"remove_user_{i}", help=f"Remove {display_name}"):
+                                users_to_remove.append(user_option)
+                        
+                        # Second user in the row (if exists)
+                        if i + 1 < len(st.session_state.selected_dm_users):
+                            user_option2 = st.session_state.selected_dm_users[i + 1]
+                            user_id2 = user_option2.split("(")[-1].rstrip(")")
+                            display_name2 = user_option2.split("(")[0].strip()
+                            
+                            with cols[2]:
+                                st.write(f"{i+2}. **{display_name2}**")
+                                st.caption(user_id2)
+                            with cols[3]:
+                                if st.button("❌", key=f"remove_user_{i+1}", help=f"Remove {display_name2}"):
+                                    users_to_remove.append(user_option2)
                 
                 # Remove users (do this after the loop to avoid modifying list during iteration)
                 if users_to_remove:

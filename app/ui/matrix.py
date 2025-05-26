@@ -119,7 +119,8 @@ async def render_matrix_messaging_page():
                         fetched_users = await get_all_accessible_users()
                         st.session_state.matrix_users = fetched_users or []
                         if fetched_users:
-                            st.success(f"Loaded {len(fetched_users)} Matrix users from all rooms")
+                            st.success(f"✅ Loaded {len(fetched_users)} Matrix users from all rooms")
+                            st.info("💡 Users are now cached - adding users will be instant!")
                         else:
                             st.warning("No Matrix users found in accessible rooms")
                     except Exception as e:
@@ -128,7 +129,10 @@ async def render_matrix_messaging_page():
                         st.session_state.matrix_users = []
         
         with col2:
-            st.write("*Click 'Load Users' to fetch available Matrix users from all accessible rooms*")
+            if st.session_state.matrix_users:
+                st.write(f"✅ **{len(st.session_state.matrix_users)} users loaded** - Ready for fast selection!")
+            else:
+                st.write("*Click 'Load Users' to fetch available Matrix users from all accessible rooms*")
         
         # Matrix User Selection - Multiple Users with efficient selection
         selected_user_ids = []
@@ -198,39 +202,57 @@ async def render_matrix_messaging_page():
             col1, col2 = st.columns([2, 1])
             
             with col1:
-                # Single user dropdown for adding users one by one
-                matrix_user_options = [""] + [f"{user['display_name']} ({user['user_id']})" for user in st.session_state.matrix_users]
-                selected_user = st.selectbox(
-                    "Add a user:",
-                    options=matrix_user_options,
-                    key="dm_user_to_add",
-                    help="Select a user to add to your message list"
+                # Multi-select for adding multiple users at once from cached data
+                matrix_user_options = [f"{user['display_name']} ({user['user_id']})" for user in st.session_state.matrix_users]
+                
+                # Filter out already selected users from the options
+                available_options = [opt for opt in matrix_user_options if opt not in st.session_state.selected_dm_users]
+                
+                selected_users_to_add = st.multiselect(
+                    f"Select users to add ({len(available_options)} available):",
+                    options=available_options,
+                    key="dm_users_to_add",
+                    help="Select one or more users to add to your message list (uses cached data - no network calls)"
                 )
                 
                 # Show current selection count
                 if st.session_state.selected_dm_users:
                     st.info(f"📋 Currently selected: {len(st.session_state.selected_dm_users)} users")
                 
-                # Add user button
-                if st.button("➕ Add User", disabled=not selected_user):
-                    if selected_user and selected_user not in st.session_state.selected_dm_users:
-                        st.session_state.selected_dm_users.append(selected_user)
+                # Add users button
+                if st.button("➕ Add Selected Users", disabled=not selected_users_to_add):
+                    added_count = 0
+                    for user in selected_users_to_add:
+                        if user not in st.session_state.selected_dm_users:
+                            st.session_state.selected_dm_users.append(user)
+                            added_count += 1
+                    
+                    if added_count > 0:
+                        st.success(f"✅ Added {added_count} users to selection")
+                        # Clear the multiselect by rerunning
                         st.rerun()
             
             with col2:
-                # Quick add all Signal users button
+                # Quick add all Signal users button (from cached data)
                 signal_users = [f"{user['display_name']} ({user['user_id']})" for user in st.session_state.matrix_users if user['user_id'].startswith('@signal_')]
-                if signal_users:
-                    if st.button(f"📱 Add All Signal Users ({len(signal_users)})"):
-                        for signal_user in signal_users:
-                            if signal_user not in st.session_state.selected_dm_users:
-                                st.session_state.selected_dm_users.append(signal_user)
+                available_signal_users = [user for user in signal_users if user not in st.session_state.selected_dm_users]
+                
+                if available_signal_users:
+                    if st.button(f"📱 Add All Signal Users ({len(available_signal_users)})"):
+                        added_count = 0
+                        for signal_user in available_signal_users:
+                            st.session_state.selected_dm_users.append(signal_user)
+                            added_count += 1
+                        st.success(f"✅ Added {added_count} Signal users")
                         st.rerun()
+                elif signal_users:
+                    st.info("📱 All Signal users already selected")
                 
                 # Clear all button
                 if st.session_state.selected_dm_users:
                     if st.button("🗑️ Clear All"):
                         st.session_state.selected_dm_users = []
+                        st.success("🗑️ Cleared all selected users")
                         st.rerun()
             
             # Display selected users with remove buttons in a more compact format

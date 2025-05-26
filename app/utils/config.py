@@ -146,6 +146,9 @@ class Config:
     MATRIX_WELCOME_ROOM_ID = os.getenv("MATRIX_WELCOME_ROOM_ID")
     MATRIX_SIGNAL_BRIDGE_ROOM_ID = os.getenv("MATRIX_SIGNAL_BRIDGE_ROOM_ID")
     MATRIX_ROOM_IDS_NAME_CATEGORY = os.getenv("MATRIX_ROOM_IDS_NAME_CATEGORY")
+    
+    # INDOC room removal configuration
+    AUTO_REMOVE_FROM_INDOC = os.getenv("AUTO_REMOVE_FROM_INDOC", "True").lower() == "true"
 
     
     # Matrix cache configuration

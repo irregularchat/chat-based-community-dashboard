@@ -23,7 +23,9 @@ from app.utils.matrix_actions import (
     create_matrix_direct_chat_sync,
     invite_user_to_recommended_rooms_sync,
     send_direct_message,
-    verify_direct_message_delivery_sync
+    verify_direct_message_delivery_sync,
+    _send_room_message_with_content_async,
+    remove_from_matrix_room_async
 )
 from app.db.session import get_groups_from_db
 from app.utils.config import Config
@@ -1258,6 +1260,16 @@ async def render_create_user_form():
             key="add_to_recommended_rooms",
             help="Automatically add the user to Matrix rooms that you select in the recommendations below"
         )
+        
+        # INDOC room removal option
+        auto_remove_from_indoc = getattr(Config, 'AUTO_REMOVE_FROM_INDOC', True)
+        if auto_remove_from_indoc:
+            skip_indoc_removal = st.checkbox(
+                "Skip INDOC room removal",
+                value=False,
+                key="skip_indoc_removal",
+                help="Check this to skip automatic removal from INDOC room after user creation and room invitations"
+            )
     
     # Data parsing section
     st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
@@ -2415,6 +2427,93 @@ If you have any questions, feel free to reach out to the community admins.
                                                         st.success(f"Added to {len(invited_rooms)} selected rooms!")
                                                         for room_id, room_name in invited_rooms:
                                                             st.info(f"✅ Added to {room_name}")
+                                                        
+                                                        # INDOC Room Removal Process
+                                                        # Check if auto-removal is enabled (default: True)
+                                                        auto_remove_from_indoc = getattr(Config, 'AUTO_REMOVE_FROM_INDOC', True)
+                                                        skip_indoc_removal = st.session_state.get('skip_indoc_removal', False)
+                                                        
+                                                        if auto_remove_from_indoc and not skip_indoc_removal:
+                                                            entrance_room_id = Config.MATRIX_WELCOME_ROOM_ID
+                                                            if entrance_room_id and matrix_user_id:
+                                                                try:
+                                                                    # Get display name for the user
+                                                                    display_name = matrix_user_id.split(":")[0].lstrip("@") if ":" in matrix_user_id else matrix_user_id.lstrip("@")
+                                                                    
+                                                                    # Try to get actual display name from Matrix cache
+                                                                    try:
+                                                                        from app.services.matrix_cache import matrix_cache
+                                                                        db = next(get_db())
+                                                                        try:
+                                                                            cached_users = matrix_cache.get_cached_users(db)
+                                                                            for cached_user in cached_users:
+                                                                                if cached_user.get('user_id') == matrix_user_id:
+                                                                                    display_name = cached_user.get('display_name', display_name)
+                                                                                    break
+                                                                        finally:
+                                                                            db.close()
+                                                                    except Exception as e:
+                                                                        logging.warning(f"Could not get display name from cache: {e}")
+                                                                    
+                                                                    # Define farewell message template
+                                                                    farewell_template = """@USER Good to go. Thanks for verifying. This is how we keep the community safe.
+1. Please leave this chat
+2. You'll receive a direct message with your IrregularChat Login and a Link to all the chats.
+3. Join all the Chats that interest you when you get your login
+4. Until then, Learn about the community https://irregularpedia.org/index.php/Main_Page
+
+See you out there!"""
+                                                                    
+                                                                    # Create HTML mention link for the user
+                                                                    mention_html = f'<a href="https://matrix.to/#/{matrix_user_id}" data-mention-type="user">@{display_name}</a>'
+                                                                    
+                                                                    # Create personalized message with HTML mention
+                                                                    personalized_message = farewell_template.replace("@USER", mention_html)
+                                                                    plain_text_body = farewell_template.replace("@USER", f"@{display_name}")
+                                                                    
+                                                                    # Create message content with HTML formatting
+                                                                    message_content = {
+                                                                        "msgtype": "m.text",
+                                                                        "body": plain_text_body,  # Plain text fallback
+                                                                        "format": "org.matrix.custom.html",
+                                                                        "formatted_body": personalized_message
+                                                                    }
+                                                                    
+                                                                    with st.spinner("Sending farewell message to INDOC room..."):
+                                                                        # Send farewell message to INDOC room
+                                                                        message_success = run_async_safely(_send_room_message_with_content_async, entrance_room_id, message_content)
+                                                                        
+                                                                        if message_success:
+                                                                            st.info(f"📤 Farewell message sent to INDOC room for {display_name}")
+                                                                            logging.info(f"Farewell message sent to INDOC room for user {matrix_user_id}")
+                                                                        else:
+                                                                            st.warning(f"⚠️ Failed to send farewell message to INDOC room for {display_name}")
+                                                                            logging.warning(f"Failed to send farewell message to INDOC room for user {matrix_user_id}")
+                                                                    
+                                                                    with st.spinner("Removing user from INDOC room..."):
+                                                                        # Remove user from INDOC room
+                                                                        removal_success = run_async_safely(remove_from_matrix_room_async, entrance_room_id, matrix_user_id, "User graduated from verification to full community access")
+                                                                        
+                                                                        if removal_success:
+                                                                            st.success(f"🎓 {display_name} successfully graduated from INDOC room!")
+                                                                            logging.info(f"Successfully removed user {matrix_user_id} from INDOC room {entrance_room_id}")
+                                                                        else:
+                                                                            st.warning(f"⚠️ Failed to remove {display_name} from INDOC room. They may need to leave manually.")
+                                                                            logging.warning(f"Failed to remove user {matrix_user_id} from INDOC room {entrance_room_id}")
+                                                                    
+                                                                except Exception as indoc_error:
+                                                                    logging.error(f"Error during INDOC room removal process: {indoc_error}")
+                                                                    st.warning(f"⚠️ Error during INDOC graduation process: {str(indoc_error)}")
+                                                            else:
+                                                                if not entrance_room_id:
+                                                                    logging.warning("MATRIX_WELCOME_ROOM_ID not configured, skipping INDOC removal")
+                                                                if not matrix_user_id:
+                                                                    logging.warning("No Matrix user ID available, skipping INDOC removal")
+                                                        else:
+                                                            if not auto_remove_from_indoc:
+                                                                st.info("ℹ️ INDOC room removal disabled by configuration")
+                                                            if skip_indoc_removal:
+                                                                st.info("ℹ️ INDOC room removal skipped by admin choice")
                                                     
                                                     if failed_rooms:
                                                         st.warning(f"Failed to add to {len(failed_rooms)} rooms. You may need to try again later.")

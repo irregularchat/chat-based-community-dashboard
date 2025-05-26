@@ -120,6 +120,41 @@ async def render_matrix_messaging_page():
         st.warning("Matrix integration is not active. Set MATRIX_ACTIVE=True in your .env file to enable Matrix functionality.")
         return
     
+    # Get all rooms, including both configured and accessible
+    # Cache rooms in session state to avoid fetching on every page load
+    if 'cached_matrix_rooms' not in st.session_state or st.session_state.get('matrix_rooms_cache_time', 0) < (datetime.now().timestamp() - 300):  # Cache for 5 minutes
+        st.session_state.cached_matrix_rooms = Config.get_all_matrix_rooms()
+        st.session_state.matrix_rooms_cache_time = datetime.now().timestamp()
+        logger.info(f"Refreshed matrix rooms cache with {len(st.session_state.cached_matrix_rooms)} rooms")
+    
+    matrix_rooms = st.session_state.cached_matrix_rooms
+    
+    # Add room cache info and refresh button
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col1:
+        if 'matrix_rooms_cache_time' in st.session_state:
+            cache_age = datetime.now().timestamp() - st.session_state.matrix_rooms_cache_time
+            cache_age_str = f"{int(cache_age // 60)}m {int(cache_age % 60)}s ago"
+            st.info(f"📋 **{len(matrix_rooms)} rooms cached** (refreshed {cache_age_str})")
+        else:
+            st.info(f"📋 **{len(matrix_rooms)} rooms loaded**")
+    
+    with col2:
+        if st.button("🔄 Refresh Rooms", help="Force refresh room list from Matrix"):
+            st.session_state.cached_matrix_rooms = Config.get_all_matrix_rooms()
+            st.session_state.matrix_rooms_cache_time = datetime.now().timestamp()
+            st.success("✅ Room list refreshed!")
+            st.rerun()
+    
+    with col3:
+        # Show cache status
+        if 'matrix_rooms_cache_time' in st.session_state:
+            cache_age = datetime.now().timestamp() - st.session_state.matrix_rooms_cache_time
+            if cache_age > 300:  # 5 minutes
+                st.warning("⚠️ Cache stale")
+            else:
+                st.success("✅ Cache fresh")
+
     with st.expander("Room Configuration Help", expanded=False):
         st.markdown("""
         ### Matrix Room Configuration
@@ -142,10 +177,9 @@ async def render_matrix_messaging_page():
         
         **Note**: The system will also discover rooms that the bot has access to but aren't explicitly configured.
         These will be labeled as "Uncategorized".
+        
+        **Performance**: Room data is cached for 5 minutes to improve page load speed. Use the "Refresh Rooms" button to force an update.
         """)
-    
-    # Get all rooms, including both configured and accessible
-    matrix_rooms = Config.get_all_matrix_rooms()
     
     # Extract all unique categories
     all_categories = set()
@@ -1063,7 +1097,6 @@ async def render_matrix_messaging_page():
                 available_rooms = []
                 db = next(get_db())
                 try:
-                    from app.services.matrix_cache import matrix_cache
                     cached_rooms = matrix_cache.get_cached_rooms(db)
                     
                     for room in cached_rooms:
@@ -1245,7 +1278,6 @@ async def render_matrix_messaging_page():
                             user_room_ids = []
                             db = next(get_db())
                             try:
-                                from app.services.matrix_cache import matrix_cache
                                 # Get all rooms for this user from cache
                                 user_memberships = db.query(MatrixRoomMembership).filter(
                                     MatrixRoomMembership.user_id == user_id,

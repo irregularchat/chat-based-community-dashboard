@@ -540,6 +540,36 @@ async def render_matrix_messaging_page():
                 
                 if success_count > 0:
                     st.success(f"✅ Message sent successfully to {success_count} out of {len(selected_user_ids)} users")
+                    
+                    # Log the direct messaging action for audit trail
+                    try:
+                        db = next(get_db())
+                        try:
+                            # Get actual admin username from session state if available
+                            admin_username = st.session_state.get('username', 'dashboard_admin')
+                            
+                            # Create a single log entry for the bulk direct message action
+                            if success_count == 1:
+                                # Single user - include display name
+                                successful_user_id = [uid for uid in selected_user_ids if uid not in failed_users][0]
+                                display_name = successful_user_id.split(":")[0].lstrip("@") if ":" in successful_user_id else successful_user_id.lstrip("@")
+                                details = f"Direct messaged {display_name}"
+                            else:
+                                # Multiple users - just count
+                                details = f"Direct messaged {success_count} users"
+                            
+                            admin_event = AdminEvent(
+                                event_type="direct_message",
+                                username=admin_username,
+                                details=details,
+                                timestamp=datetime.utcnow()
+                            )
+                            db.add(admin_event)
+                            db.commit()
+                        finally:
+                            db.close()
+                    except Exception as e:
+                        logger.error(f"Error logging direct message admin event: {e}")
                 
                 if failed_users:
                     st.error(f"❌ Failed to send message to {len(failed_users)} users:")
@@ -1318,12 +1348,16 @@ async def render_matrix_messaging_page():
                             db = next(get_db())
                             try:
                                 for user_id in selected_user_ids:
-                                    username = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                                    # Extract display name from Matrix ID
+                                    display_name = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                                    
+                                    # Get actual admin username from session state if available
+                                    admin_username = st.session_state.get('username', 'dashboard_admin')
+                                    
                                     admin_event = AdminEvent(
-                                        admin_username="dashboard_admin",  # You might want to get actual admin username
-                                        action="user_removal",
-                                        target_user=user_id,
-                                        details=f"Removed from {room_count} rooms. Reason: {removal_reason}",
+                                        event_type="user_removal",
+                                        username=admin_username,
+                                        details=f"Removed {display_name} from rooms. Reason: {removal_reason}",
                                         timestamp=datetime.utcnow()
                                     )
                                     db.add(admin_event)

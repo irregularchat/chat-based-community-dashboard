@@ -120,29 +120,78 @@ async def render_matrix_messaging_page():
         with col2:
             st.write("*Click 'Load Users' to fetch available Matrix users from all accessible rooms*")
         
-        # Matrix User Selection - Multiple Users
+        # Matrix User Selection - Multiple Users with efficient selection
         selected_user_ids = []
+        
+        # Initialize selected users in session state
+        if 'selected_dm_users' not in st.session_state:
+            st.session_state.selected_dm_users = []
+        
         if st.session_state.matrix_users:
-            # Create dropdown options
-            matrix_user_options = [f"{user['display_name']} ({user['user_id']})" for user in st.session_state.matrix_users]
-            selected_users = st.multiselect(
-                "Select Matrix Users",
-                options=matrix_user_options,
-                key="dm_matrix_user_multiselect",
-                help="Select one or more Matrix users to send a direct message to"
-            )
+            st.write("**Select Matrix Users:**")
             
-            if selected_users:
-                # Extract user_ids from the selected options
-                selected_user_ids = []
-                selected_display_names = []
-                for selected_user in selected_users:
-                    user_id = selected_user.split("(")[-1].rstrip(")")
-                    display_name = selected_user.split("(")[0].strip()
-                    selected_user_ids.append(user_id)
-                    selected_display_names.append(display_name)
+            # Create two columns for better layout
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                # Single user dropdown for adding users one by one
+                matrix_user_options = [""] + [f"{user['display_name']} ({user['user_id']})" for user in st.session_state.matrix_users]
+                selected_user = st.selectbox(
+                    "Add a user:",
+                    options=matrix_user_options,
+                    key="dm_user_to_add",
+                    help="Select a user to add to your message list"
+                )
                 
-                st.info(f"Selected {len(selected_users)} users: {', '.join(selected_display_names)}")
+                # Add user button
+                if st.button("➕ Add User", disabled=not selected_user):
+                    if selected_user and selected_user not in st.session_state.selected_dm_users:
+                        st.session_state.selected_dm_users.append(selected_user)
+                        st.rerun()
+            
+            with col2:
+                # Quick add all Signal users button
+                signal_users = [f"{user['display_name']} ({user['user_id']})" for user in st.session_state.matrix_users if user['user_id'].startswith('@signal_')]
+                if signal_users:
+                    if st.button(f"📱 Add All Signal Users ({len(signal_users)})"):
+                        for signal_user in signal_users:
+                            if signal_user not in st.session_state.selected_dm_users:
+                                st.session_state.selected_dm_users.append(signal_user)
+                        st.rerun()
+                
+                # Clear all button
+                if st.session_state.selected_dm_users:
+                    if st.button("🗑️ Clear All"):
+                        st.session_state.selected_dm_users = []
+                        st.rerun()
+            
+            # Display selected users with remove buttons
+            if st.session_state.selected_dm_users:
+                st.write(f"**Selected Users ({len(st.session_state.selected_dm_users)}):**")
+                
+                # Create a container for the selected users
+                users_to_remove = []
+                for i, user_option in enumerate(st.session_state.selected_dm_users):
+                    col_user, col_remove = st.columns([4, 1])
+                    with col_user:
+                        user_id = user_option.split("(")[-1].rstrip(")")
+                        display_name = user_option.split("(")[0].strip()
+                        st.write(f"{i+1}. {display_name} ({user_id})")
+                    with col_remove:
+                        if st.button("❌", key=f"remove_user_{i}", help=f"Remove {display_name}"):
+                            users_to_remove.append(user_option)
+                
+                # Remove users (do this after the loop to avoid modifying list during iteration)
+                if users_to_remove:
+                    for user_to_remove in users_to_remove:
+                        st.session_state.selected_dm_users.remove(user_to_remove)
+                    st.rerun()
+                
+                # Extract user_ids for sending
+                selected_user_ids = []
+                for user_option in st.session_state.selected_dm_users:
+                    user_id = user_option.split("(")[-1].rstrip(")")
+                    selected_user_ids.append(user_id)
         
         # Fallback: Manual input if no users loaded or user wants to enter manually
         if not st.session_state.matrix_users or st.checkbox("Enter Matrix User IDs manually", key="manual_user_input"):
@@ -163,12 +212,7 @@ async def render_matrix_messaging_page():
         if selected_user_ids:
             st.info("💬 **Message History Disabled**: Message history requires encryption which has been disabled for simplicity. You can still send messages below.")
         
-        # Show summary of selected users
-        if selected_user_ids:
-            with st.expander(f"📋 Selected Users ({len(selected_user_ids)})", expanded=False):
-                for i, user_id in enumerate(selected_user_ids, 1):
-                    st.write(f"{i}. {user_id}")
-        
+
         # Message input and send button
         message = st.text_area("Message", height=150, key="direct_message")
         
@@ -232,6 +276,8 @@ async def render_matrix_messaging_page():
                 
                 if success_count == len(selected_user_ids):
                     st.balloons()  # Celebrate if all messages sent successfully!
+                    # Clear the selection after successful send
+                    st.session_state.selected_dm_users = []
                     
             else:
                 st.warning("Please select at least one user and enter a message")

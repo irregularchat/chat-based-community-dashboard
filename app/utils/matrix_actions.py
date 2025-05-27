@@ -1565,21 +1565,42 @@ async def remove_from_matrix_room_async(room_id: str, user_id: str, reason: str 
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping remove_from_matrix_room_async.")
         return False
+    
+    # Enhanced logging for INDOC user removal
+    logger.info(f"=== REMOVING USER FROM MATRIX ROOM ===")
+    logger.info(f"Room ID: {room_id}")
+    logger.info(f"User ID: {user_id}")
+    logger.info(f"Reason: {reason}")
         
     try:
+        logger.info(f"Creating Matrix client for user removal...")
         client = await get_matrix_client()
         if not client:
-            logger.error("Failed to get Matrix client")
+            logger.error("❌ Failed to get Matrix client for user removal")
             return False
+        
+        logger.info(f"✅ Matrix client created successfully for removal")
             
         try:
+            logger.info(f"Calling remove_from_room function...")
             result = await remove_from_room(client, room_id, user_id, reason)
+            
+            if result:
+                logger.info(f"✅ SUCCESS: User {user_id} removed from room {room_id}")
+            else:
+                logger.error(f"❌ FAILED: Could not remove user {user_id} from room {room_id}")
+            
             return result
         finally:
+            logger.info(f"Closing Matrix client after removal attempt...")
             await client.close()
+            logger.info(f"✅ Matrix client closed after removal")
             
     except Exception as e:
-        logger.error(f"Error in remove_from_matrix_room_async: {e}")
+        logger.error(f"❌ EXCEPTION: Error in remove_from_matrix_room_async: {e}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return False
 
 def remove_from_matrix_room(room_id: str, user_id: str, reason: str = "Removed via dashboard") -> bool:
@@ -2052,37 +2073,58 @@ async def _send_room_message_with_content_async(room_id: str, content: dict) -> 
         logger.warning("Matrix integration is not active. Cannot send room message.")
         return False
     
+    # Enhanced logging for INDOC message sending
+    logger.info(f"=== SENDING ROOM MESSAGE WITH CONTENT ===")
+    logger.info(f"Target room: {room_id}")
+    logger.info(f"Message content keys: {list(content.keys())}")
+    logger.info(f"Message type: {content.get('msgtype', 'unknown')}")
+    logger.info(f"Plain text body: {content.get('body', 'N/A')}")
+    logger.info(f"HTML formatted body: {content.get('formatted_body', 'N/A')}")
+    
     client = None
     try:
         # Create Matrix client
+        logger.info(f"Creating Matrix client for room message...")
         client = await get_matrix_client()
         if not client:
-            logger.error("Failed to create Matrix client")
+            logger.error("❌ Failed to create Matrix client for room message")
             return False
         
+        logger.info(f"✅ Matrix client created successfully")
+        
         # Send the message with custom content
+        logger.info(f"Sending message to room {room_id}...")
         response = await client.room_send(
             room_id=room_id,
             message_type="m.room.message",
             content=content
         )
         
+        logger.info(f"Room send response type: {type(response).__name__}")
+        logger.info(f"Room send response: {response}")
+        
         if isinstance(response, RoomSendResponse):
-            logger.info(f"Message with custom content sent to room {room_id} successfully")
+            logger.info(f"✅ SUCCESS: Message with custom content sent to room {room_id}")
+            logger.info(f"Event ID: {response.event_id}")
             return True
         else:
-            logger.error(f"Failed to send message to room: {response}")
+            logger.error(f"❌ FAILED: Unexpected response type when sending to room {room_id}: {response}")
             return False
     except Exception as e:
-        logger.error(f"Error sending room message with content: {e}")
+        logger.error(f"❌ EXCEPTION: Error sending room message with content to {room_id}: {e}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return False
     finally:
         # Ensure client is closed
         if client:
             try:
+                logger.info(f"Closing Matrix client...")
                 await client.close()
+                logger.info(f"✅ Matrix client closed successfully")
             except Exception as close_error:
-                logger.warning(f"Error closing Matrix client: {close_error}")
+                logger.warning(f"⚠️ Error closing Matrix client: {close_error}")
 
 async def send_matrix_message_async(target: str, message, is_formatted: bool = False) -> bool:
     """

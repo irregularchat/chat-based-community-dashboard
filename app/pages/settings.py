@@ -572,10 +572,19 @@ def render_room_management():
         logger.info(f"Refreshed accessible rooms cache with {len(st.session_state.accessible_rooms_cache)} rooms")
     
     accessible_rooms = st.session_state.accessible_rooms_cache
+    
+    # Filter rooms by minimum member count
+    from app.utils.config import Config
+    filtered_accessible_rooms = [
+        room for room in accessible_rooms 
+        if room.get('member_count', 0) > Config.MATRIX_MIN_ROOM_MEMBERS
+    ]
+    
     room_options = ["-- Select a room --"]
-    for room in accessible_rooms:
+    for room in filtered_accessible_rooms:
         if room.get('name') and room.get('room_id'):
-            room_options.append(f"{room.get('name')} - {room.get('room_id')}")
+            member_count = room.get('member_count', 0)
+            room_options.append(f"{room.get('name')} ({member_count} members) - {room.get('room_id')}")
     
     selected_room = st.selectbox("Select Room", room_options, key="matrix_room_select")
     
@@ -1159,11 +1168,18 @@ def render_prompts_settings():
                 if not matrix_rooms:
                     st.info("No Matrix rooms found. Configure Matrix rooms first.")
                 else:
-                    # Create room selection
+                    # Create room selection with member count filtering
+                    from app.utils.config import Config
+                    filtered_matrix_rooms = [
+                        room for room in matrix_rooms 
+                        if room.get('member_count', 0) > Config.MATRIX_MIN_ROOM_MEMBERS
+                    ]
+                    
                     room_options = ["-- Select a room --"]
-                    for room in matrix_rooms:
+                    for room in filtered_matrix_rooms:
                         if room.get('name') and room.get('room_id'):
-                            room_options.append(f"{room.get('name')} - {room.get('room_id')}")
+                            member_count = room.get('member_count', 0)
+                            room_options.append(f"{room.get('name')} ({member_count} members) - {room.get('room_id')}")
                     
                     selected_room = st.selectbox("Select Room", room_options, key="associate_room_select")
                     
@@ -1785,11 +1801,17 @@ def render_moderator_management():
                                     from app.utils.matrix_actions import merge_room_data
                                     rooms = merge_room_data()
                                 if rooms:
-                                    room_options = [f"{room.get('name', 'Unknown')} ({room.get('room_id', '')})" for room in rooms]
+                                    # Filter rooms by minimum member count
+                                    from app.utils.config import Config
+                                    filtered_rooms = [
+                                        room for room in rooms 
+                                        if room.get('member_count', 0) > Config.MATRIX_MIN_ROOM_MEMBERS
+                                    ]
+                                    room_options = [f"{room.get('name', 'Unknown')} ({room.get('member_count', 0)} members) - {room.get('room_id', '')}" for room in filtered_rooms]
                                     selected_room = st.selectbox("Select Room", room_options, key="mod_room_select")
                                     # Extract room ID
                                     if selected_room:
-                                        perm_value = selected_room.split('(')[-1].rstrip(')')
+                                        perm_value = selected_room.split(' - ')[-1]
                         
                         # Matrix sync option
                         sync_matrix = st.checkbox(

@@ -146,6 +146,7 @@ class Config:
     MATRIX_WELCOME_ROOM_ID = os.getenv("MATRIX_WELCOME_ROOM_ID")
     MATRIX_SIGNAL_BRIDGE_ROOM_ID = os.getenv("MATRIX_SIGNAL_BRIDGE_ROOM_ID")
     MATRIX_ROOM_IDS_NAME_CATEGORY = os.getenv("MATRIX_ROOM_IDS_NAME_CATEGORY")
+    MATRIX_MESSAGE_NOTICE = os.getenv("MATRIX_MESSAGE_NOTICE", "__NOREPLY: This message was sent from the admin dashboard__")
     
     # INDOC room removal configuration
     AUTO_REMOVE_FROM_INDOC = os.getenv("AUTO_REMOVE_FROM_INDOC", "True").lower() == "true"

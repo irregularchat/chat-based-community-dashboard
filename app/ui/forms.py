@@ -2853,14 +2853,8 @@ async def render_invite_form():
                             # Display the invite link
                             st.code(invite_link, language=None)
                             
-                            # Copy button
-                            if st.button("Copy Invite Link"):
-                                st.markdown(f"""
-                                <script>
-                                    navigator.clipboard.writeText('{invite_link}');
-                                    alert('Invite link copied to clipboard!');
-                                </script>
-                                """, unsafe_allow_html=True)
+                            # Store the invite link in session state for copying outside the form
+                            st.session_state['created_invite_link'] = invite_link
                         else:
                             st.error(f"Failed to create invite: {result.get('error', 'Unknown error')}")
                     
@@ -2868,6 +2862,25 @@ async def render_invite_form():
                         logging.error(f"Error creating invite: {e}")
                         logging.error(traceback.format_exc())
                         st.error(f"An error occurred: {str(e)}")
+        
+        # Copy button outside the form
+        if 'created_invite_link' in st.session_state and st.session_state['created_invite_link']:
+            st.markdown("### Copy Invite Link")
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.code(st.session_state['created_invite_link'], language=None)
+            with col2:
+                if st.button("📋 Copy", key="copy_invite_link_btn"):
+                    try:
+                        import pyperclip
+                        pyperclip.copy(st.session_state['created_invite_link'])
+                        st.success("Copied!")
+                        # Clear the session state after copying
+                        del st.session_state['created_invite_link']
+                    except ImportError:
+                        st.warning("Could not copy to clipboard. Please manually copy the link above.")
+                    except Exception as e:
+                        st.error(f"Error copying to clipboard: {str(e)}")
     
     with send_tab:
         with st.form("send_invite_form"):
@@ -2971,6 +2984,8 @@ async def render_invite_form():
                                     st.warning(f"Invite created, but failed to send email. Check SMTP settings.")
                                     # Display the invite link in case email sending failed
                                     st.code(invite_link, language=None)
+                                    # Store for copying outside the form
+                                    st.session_state['created_invite_link'] = invite_link
                             except Exception as e:
                                 logging.error(f"Error sending invitation email: {e}")
                                 logging.error(traceback.format_exc())
@@ -2978,6 +2993,8 @@ async def render_invite_form():
                                 
                                 # Display the invite link in case email sending failed
                                 st.code(invite_link, language=None)
+                                # Store for copying outside the form
+                                st.session_state['created_invite_link'] = invite_link
                         else:
                             st.error(f"Failed to create invite: {result.get('error', 'Unknown error')}")
                     

@@ -72,6 +72,15 @@ async def main_function():
 st.session_state.confirm_user_removal = False  # After widget creation
 ```
 
+**Problem**: Using regular buttons inside forms
+```python
+# ❌ This causes StreamlitAPIException
+with st.form("my_form"):
+    # ... form inputs ...
+    if st.button("Copy Link"):  # Error: can't use st.button() in st.form()
+        # ... copy logic ...
+```
+
 **Problem**: Not handling session state persistence properly across reruns
 
 ### ✅ What Worked
@@ -89,6 +98,23 @@ def on_user_selection_change():
 st.multiselect("Users", options=users, on_change=on_user_selection_change, key="user_multiselect")
 ```
 
+**Solution**: Move buttons outside forms or use session state to pass data
+```python
+# ✅ Store data in session state inside form, button outside
+with st.form("my_form"):
+    # ... form inputs ...
+    if submit_button:
+        if result.get('success'):
+            invite_link = result.get('invite_link')
+            st.session_state['created_invite_link'] = invite_link
+
+# ✅ Button outside the form
+if 'created_invite_link' in st.session_state:
+    if st.button("📋 Copy", key="copy_btn"):
+        pyperclip.copy(st.session_state['created_invite_link'])
+        del st.session_state['created_invite_link']
+```
+
 ### 🔧 Standard Operating Procedure
 
 1. **Initialize session state variables early** in the function
@@ -96,6 +122,8 @@ st.multiselect("Users", options=users, on_change=on_user_selection_change, key="
 3. **Use callbacks** for complex state management instead of direct modification
 4. **Test widget interactions** thoroughly, especially with multiple selections
 5. **Cache expensive operations** using `@st.cache_data` or session state
+6. **Only use `st.form_submit_button()`** inside forms - regular `st.button()` will cause errors
+7. **Move interactive buttons outside forms** or use session state to pass data between form and buttons
 
 ---
 
@@ -376,13 +404,14 @@ if Config.MATRIX_DISABLE_SSL_VERIFICATION:
 
 1. **Python import scoping** can cause subtle bugs - always import at module level
 2. **Streamlit session state** requires careful management - use callbacks and proper initialization
-3. **Matrix API operations** need live verification and comprehensive error handling
-4. **Database sessions** must be properly managed to avoid connection leaks
-5. **Error handling** should be specific and informative, not generic
-6. **Code organization** matters - break large functions into focused, testable units
-7. **Network operations** need retry logic and proper SSL configuration
-8. **Testing** should cover both happy path and error conditions
-9. **Logging** is crucial for debugging complex async operations
-10. **Configuration** should be externalized and validated at startup
+3. **Streamlit forms** have restrictions - only `st.form_submit_button()` allowed inside, move other buttons outside
+4. **Matrix API operations** need live verification and comprehensive error handling
+5. **Database sessions** must be properly managed to avoid connection leaks
+6. **Error handling** should be specific and informative, not generic
+7. **Code organization** matters - break large functions into focused, testable units
+8. **Network operations** need retry logic and proper SSL configuration
+9. **Testing** should cover both happy path and error conditions
+10. **Logging** is crucial for debugging complex async operations
+11. **Configuration** should be externalized and validated at startup
 
 This document should be updated as new lessons are learned during continued development of the project. 

@@ -56,7 +56,6 @@ def on_load_users_click():
 async def process_load_users():
     # This function will run after the on_click sets the flag
     if st.session_state.get('load_users_processing', False):
-        with st.spinner("Loading Matrix users from cache..."):
             try:
                 db = next(get_db())
                 try:
@@ -124,9 +123,15 @@ async def render_matrix_messaging_page():
     # Get all rooms, including both configured and accessible
     # Cache rooms in session state to avoid fetching on every page load
     if 'cached_matrix_rooms' not in st.session_state or st.session_state.get('matrix_rooms_cache_time', 0) < (datetime.now().timestamp() - 300):  # Cache for 5 minutes
-        st.session_state.cached_matrix_rooms = Config.get_all_matrix_rooms()
-        st.session_state.matrix_rooms_cache_time = datetime.now().timestamp()
-        logger.info(f"Refreshed matrix rooms cache with {len(st.session_state.cached_matrix_rooms)} rooms")
+        try:
+            st.session_state.cached_matrix_rooms = Config.get_all_matrix_rooms()
+            st.session_state.matrix_rooms_cache_time = datetime.now().timestamp()
+            logger.info(f"Refreshed matrix rooms cache with {len(st.session_state.cached_matrix_rooms)} rooms")
+        except Exception as e:
+            logger.error(f"Error loading matrix rooms: {e}")
+            st.error(f"Error loading matrix rooms: {e}")
+            st.session_state.cached_matrix_rooms = []
+            st.session_state.matrix_rooms_cache_time = datetime.now().timestamp()
     
     matrix_rooms = st.session_state.cached_matrix_rooms
     
@@ -142,10 +147,14 @@ async def render_matrix_messaging_page():
     
     with col2:
         if st.button("🔄 Refresh Rooms", help="Force refresh room list from Matrix"):
-            st.session_state.cached_matrix_rooms = Config.get_all_matrix_rooms()
-            st.session_state.matrix_rooms_cache_time = datetime.now().timestamp()
-            st.success("✅ Room list refreshed!")
-            st.rerun()
+            try:
+                st.session_state.cached_matrix_rooms = Config.get_all_matrix_rooms()
+                st.session_state.matrix_rooms_cache_time = datetime.now().timestamp()
+                st.success("✅ Room list refreshed!")
+                st.rerun()
+            except Exception as e:
+                logger.error(f"Error refreshing rooms: {e}")
+                st.error(f"Error refreshing rooms: {e}")
     
     with col3:
         # Show cache status
@@ -179,7 +188,7 @@ async def render_matrix_messaging_page():
         **Note**: The system will also discover rooms that the bot has access to but aren't explicitly configured.
         These will be labeled as "Uncategorized".
         
-        **Performance**: Room data is cached for 5 minutes to improve page load speed. Use the "Refresh Rooms" button to force an update.
+                **Performance**: Room data is cached for 5 minutes to improve page load speed. Use the "Refresh Rooms" button to force an update.
         """)
     
     # Extract all unique categories
@@ -199,10 +208,14 @@ async def render_matrix_messaging_page():
     
     # Call the processing function if the flag is set
     # This needs to be called early in the render, before the button itself typically
-    await process_load_users()
+    try:
+        await process_load_users()
+    except Exception as e:
+        logger.error(f"Error in process_load_users: {e}")
+        # Continue rendering even if this fails
     
     # Create tabs for different messaging options
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Direct Message", "Room Message", "Bulk Message", "Invite to Rooms", "Remove from Rooms", "Entrance Room Users"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Direct Message", "Room Messaging", "Invite to Rooms", "Remove from Rooms", "Entrance Room Users"])
     
     with tab1:
         st.header("Send Direct Message")
@@ -234,6 +247,9 @@ async def render_matrix_messaging_page():
                                 ]
                             else:
                                 st.error(f"Sync failed: {sync_result.get('error', 'Unknown error')}")
+                        except Exception as sync_error:
+                            logger.error(f"Error during manual sync: {sync_error}")
+                            st.error(f"Error during manual sync: {sync_error}")
                         finally:
                             db.close()
                     except Exception as e:
@@ -540,10 +556,7 @@ async def render_matrix_messaging_page():
         
         if st.button(send_button_text, disabled=not confirm_send):
             if selected_user_ids and message:
-                # Add no-reply footer to direct messages
-                message_with_footer = f"{message}\\n\\n__NOREPLY: This message was sent from the admin dashboard__"
-                
-                # Show progress
+                                # Show progress
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
@@ -556,13 +569,10 @@ async def render_matrix_messaging_page():
                     progress_bar.progress((i + 1) / len(selected_user_ids))
                     
                     try:
-                        room_id = await create_matrix_direct_chat(user_id)
-                        if room_id:
-                            success = await send_matrix_message(room_id, message_with_footer)
-                            if success:
-                                success_count += 1
-                            else:
-                                failed_users.append(user_id)
+                        # Use send_direct_message for direct messages (no notice footer)
+                        success, room_id, event_id = send_direct_message(user_id, message)
+                        if success:
+                            success_count += 1
                         else:
                             failed_users.append(user_id)
                     except Exception as e:
@@ -620,103 +630,277 @@ async def render_matrix_messaging_page():
                 st.warning("Please select at least one user and enter a message")
     
     with tab2:
-        st.header("Send Room Message")
+        st.header("🏠 Unified Room Messaging")
+        st.markdown("Send messages to individual rooms, multiple rooms, or entire categories with automatic admin notice footer.")
         
-        # Create a dropdown for category selection
-        selected_category = st.selectbox("Filter by Category", ["All", *sorted_categories, "None"], key="room_category")
-        
-        # Filter rooms based on selected category
-        filtered_rooms = filter_rooms_by_category(matrix_rooms, [selected_category])
-        
-        # Create a dropdown with filtered room names and IDs
-        room_options = []
-        for room in filtered_rooms:
-            room_name = room.get('name') or "Unnamed Room"
-            room_id = room.get('room_id')
-            category = room.get('category', 'Uncategorized')
-            
-            # Add a marker for unconfigured rooms
-            if not room.get('configured', True):
-                room_name = f"{room_name} (Discovered)"
-                
-            room_options.append(f"{room_name} - {room_id}")
-        
-        selected_room = st.selectbox("Select Room", room_options, key="room_select")
-        
-        # Extract room ID from selection
-        if selected_room:
-            room_id = selected_room.split(" - ")[-1]
-            message = st.text_area("Message", height=150, key="room_message")
-            if st.button("Send Room Message"):
-                if message:
-                    success = await send_matrix_message(room_id, message)
-                    if success:
-                        st.success(f"Message sent to room {room_id}")
-                    else:
-                        st.error(f"Failed to send message to room {room_id}")
-                else:
-                    st.warning("Please enter a message to send")
-    
-    with tab3:
-        st.header("Send Bulk Message")
-        
-        # Create multiselect for category selection
-        selected_categories = st.multiselect(
-            "Select Categories for Bulk Message", 
-            ["All", *sorted_categories, "None"], 
-            default=["All"],
-            key="bulk_categories"
+        # Room Selection Mode
+        st.subheader("📋 Room Selection")
+        selection_mode = st.radio(
+            "Choose how to select rooms:",
+            ["🎯 Individual Rooms", "🏷️ By Categories", "🔀 Mixed Selection"],
+            key="room_selection_mode",
+            help="Select your preferred method for choosing which rooms will receive the message"
         )
         
-        # If no categories are selected, default to "All"
-        if not selected_categories:
-            selected_categories = ["All"]
+        selected_room_ids = []
+        selected_room_details = []
         
-        # Get rooms in the selected categories
-        rooms_in_categories = filter_rooms_by_category(matrix_rooms, selected_categories)
+        if selection_mode == "🎯 Individual Rooms":
+            # Individual room selection with search
+            st.write("**Select specific rooms:**")
+            
+            # Search functionality
+            search_col1, search_col2 = st.columns([3, 1])
+            with search_col1:
+                search_term = st.text_input(
+                    "🔍 Search rooms by name or ID:",
+                    key="room_search_term",
+                    placeholder="Type to filter rooms..."
+                )
+            with search_col2:
+                category_filter = st.selectbox(
+                    "Filter by category:",
+                    ["All Categories"] + sorted_categories,
+                    key="individual_room_category_filter"
+                )
+            
+            # Filter rooms based on search and category
+            filtered_rooms = matrix_rooms
+            if category_filter != "All Categories":
+                filtered_rooms = filter_rooms_by_category(filtered_rooms, [category_filter])
+            if search_term:
+                filtered_rooms = filter_rooms_by_search(filtered_rooms, search_term)
+            
+            # Create detailed room options
+            room_options_map = create_detailed_room_options_map(filtered_rooms)
+            
+            # Multi-select for individual rooms
+            selected_room_displays = st.multiselect(
+                f"Select rooms ({len(filtered_rooms)} available):",
+                options=list(room_options_map.keys()),
+                key="individual_selected_rooms",
+                help="Select one or more specific rooms to send the message to"
+            )
+            
+            # Get room IDs and details from selections
+            for display_name in selected_room_displays:
+                room_id = room_options_map[display_name]
+                room_detail = next((r for r in filtered_rooms if r.get('room_id') == room_id), None)
+                if room_detail:
+                    selected_room_ids.append(room_id)
+                    selected_room_details.append(room_detail)
         
-        # Display the number of rooms in the selected categories
-        category_names = ", ".join(f"'{cat}'" for cat in selected_categories)
-        st.info(f"Found {len(rooms_in_categories)} rooms in the selected categories: {category_names}")
+        elif selection_mode == "🏷️ By Categories":
+            # Category-based selection
+            st.write("**Select room categories:**")
+            
+            selected_categories = st.multiselect(
+                "Choose categories:",
+                ["All"] + sorted_categories + ["None"],
+                default=["All"],
+                key="category_selected_categories",
+                help="Select categories to include all rooms from those categories"
+            )
+            
+            # If no categories are selected, default to "All"
+            if not selected_categories:
+                selected_categories = ["All"]
+            
+            # Get rooms in the selected categories
+            rooms_in_categories = filter_rooms_by_category(matrix_rooms, selected_categories)
+            selected_room_ids = [room.get('room_id') for room in rooms_in_categories if room.get('room_id')]
+            selected_room_details = rooms_in_categories
         
-        # Show the list of rooms that will receive the message
-        with st.expander("Show rooms that will receive the message"):
-            for room in rooms_in_categories:
-                room_name = room.get('name') or "Unnamed Room"
-                room_id = room.get('room_id')
+        elif selection_mode == "🔀 Mixed Selection":
+            # Mixed selection: both individual rooms and categories
+            st.write("**Combine individual rooms and categories:**")
+            
+            # Category selection
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("**Categories:**")
+                selected_categories = st.multiselect(
+                    "Select categories:",
+                    sorted_categories + ["None"],
+                    key="mixed_selected_categories",
+                    help="Select categories to include all their rooms"
+                )
+            
+            with col2:
+                st.write("**Individual Rooms:**")
+                # Search for individual rooms
+                search_term = st.text_input(
+                    "🔍 Search rooms:",
+                    key="mixed_room_search",
+                    placeholder="Filter rooms..."
+                )
                 
-                # Add a marker for unconfigured rooms
-                if not room.get('configured', True):
-                    room_name = f"{room_name} (Discovered)"
+                # Filter rooms for individual selection
+                filtered_rooms = matrix_rooms
+                if search_term:
+                    filtered_rooms = filter_rooms_by_search(filtered_rooms, search_term)
+                
+                room_options_map = create_detailed_room_options_map(filtered_rooms)
+                selected_individual_displays = st.multiselect(
+                    f"Select specific rooms ({len(filtered_rooms)} available):",
+                    options=list(room_options_map.keys()),
+                    key="mixed_individual_rooms",
+                    help="Select additional individual rooms"
+                )
+            
+            # Combine selections
+            combined_room_ids = set()
+            combined_room_details = []
+            
+            # Add rooms from categories
+            if selected_categories:
+                rooms_from_categories = filter_rooms_by_category(matrix_rooms, selected_categories)
+                for room in rooms_from_categories:
+                    room_id = room.get('room_id')
+                    if room_id and room_id not in combined_room_ids:
+                        combined_room_ids.add(room_id)
+                        combined_room_details.append(room)
+            
+            # Add individual rooms
+            for display_name in selected_individual_displays:
+                room_id = room_options_map[display_name]
+                if room_id not in combined_room_ids:
+                    combined_room_ids.add(room_id)
+                    room_detail = next((r for r in filtered_rooms if r.get('room_id') == room_id), None)
+                    if room_detail:
+                        combined_room_details.append(room_detail)
+            
+            selected_room_ids = list(combined_room_ids)
+            selected_room_details = combined_room_details
+        
+        # Preview Section
+        st.markdown("---")
+        st.subheader("📋 Message Preview")
+        
+        if selected_room_ids:
+            # Show selected rooms count and details
+            st.success(f"✅ **{len(selected_room_ids)} rooms selected**")
+            
+            # Show room details in an expander
+            with st.expander(f"📋 View selected rooms ({len(selected_room_ids)})", expanded=False):
+                for i, room in enumerate(selected_room_details, 1):
+                    room_name = room.get('name') or "Unnamed Room"
+                    room_id = room.get('room_id')
+                    category = room.get('category', 'Uncategorized')
+                
+                    # Add marker for discovered rooms
+                    if not room.get('configured', True):
+                        room_name = f"{room_name} (Discovered)"
                     
-                st.write(f"• {room_name} - {room_id}")
+                    st.write(f"{i}. **{room_name}** `{room_id}`")
+                    st.caption(f"Category: {category}")
+        else:
+            st.warning("⚠️ No rooms selected. Please select rooms using the options above.")
         
-        # Get the room IDs
-        room_ids = [room.get('room_id') for room in rooms_in_categories if room.get('room_id')]
+        # Message Input Section
+        st.subheader("✍️ Message Content")
         
-        message = st.text_area("Message", height=150, key="bulk_message")
-        if st.button("Send to All Selected Rooms"):
-            if room_ids and message:
-                results = await send_matrix_message_to_multiple_rooms(room_ids, message)
+        # Show the notice that will be automatically appended
+        notice = Config.MATRIX_MESSAGE_NOTICE
+        if notice:
+            st.info(f"ℹ️ **Auto-appended notice:** {notice}")
+        
+        message = st.text_area(
+            "Enter your message:",
+            height=150,
+            key="unified_room_message",
+            placeholder="Type your message here...\n\nThe admin notice will be automatically appended to the end.",
+            help="Enter the message content. The admin notice footer will be automatically added."
+        )
+        
+        # Message preview
+        if message:
+            with st.expander("👁️ Message Preview", expanded=False):
+                preview_message = f"{message}\n\n{notice}" if notice and not message.endswith(notice) else message
+                st.code(preview_message, language="")
+        
+        # Send Button and Results
+        st.markdown("---")
+        st.subheader("🚀 Send Message")
+        
+        # Send button with validation
+        send_col1, send_col2, send_col3 = st.columns([1, 2, 1])
+        with send_col2:
+            send_button = st.button(
+                f"📤 Send to {len(selected_room_ids)} Room{'s' if len(selected_room_ids) != 1 else ''}",
+                disabled=not (selected_room_ids and message),
+                key="send_unified_message",
+                help="Send the message to all selected rooms with automatic admin notice"
+            )
+        
+        # Handle message sending
+        if send_button:
+            if selected_room_ids and message:
+                with st.spinner(f"Sending message to {len(selected_room_ids)} rooms..."):
+                    # Create progress bar
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    # Send messages
+                    try:
+                        results = await send_matrix_message_to_multiple_rooms(selected_room_ids, message)
+                    except Exception as e:
+                        logger.error(f"Error sending messages: {e}")
+                        st.error(f"Error sending messages: {e}")
+                        results = {room_id: False for room_id in selected_room_ids}
+                    
+                    # Update progress
+                    progress_bar.progress(1.0)
+                    status_text.text("Message sending completed!")
                 
                 # Display results
                 success_count = sum(1 for success in results.values() if success)
-                st.success(f"Message sent to {success_count} out of {len(room_ids)} rooms in the selected categories")
+                failed_count = len(selected_room_ids) - success_count
                 
-                # Show details for failed rooms
-                failed_rooms = [room_id for room_id, success in results.items() if not success]
-                if failed_rooms:
-                    st.error(f"Failed to send message to {len(failed_rooms)} rooms")
-                    with st.expander("Show failed rooms"):
-                        for room_id in failed_rooms:
-                            st.write(room_id)
-            else:
-                if not room_ids:
-                    st.warning(f"No rooms found in the selected categories")
+                if success_count == len(selected_room_ids):
+                    st.success(f"🎉 Message sent successfully to all {success_count} rooms!")
+                    st.balloons()
+                elif success_count > 0:
+                    st.warning(f"⚠️ Message sent to {success_count} out of {len(selected_room_ids)} rooms. {failed_count} failed.")
                 else:
-                    st.warning("Please enter a message to send")
+                    st.error(f"❌ Failed to send message to any rooms.")
+                    # Check if this might be an SSL issue
+                    if failed_count == len(selected_room_ids):
+                        st.error("🔒 **SSL/TLS Connection Issue Detected**")
+                        st.error("This appears to be a connection issue with the Matrix server. This could be due to:")
+                        st.error("• SSL/TLS version compatibility issues")
+                        st.error("• Network connectivity problems")
+                        st.error("• Matrix server configuration issues")
+                        st.info("💡 **Troubleshooting Steps:**")
+                        st.info("1. Check the application logs for detailed error messages")
+                        st.info("2. Verify Matrix server is accessible")
+                        st.info("3. Contact system administrator if the issue persists")
+                
+                # Show detailed results
+                if failed_count > 0:
+                    with st.expander(f"❌ Failed Rooms ({failed_count})", expanded=True):
+                        failed_rooms = [room_id for room_id, success in results.items() if not success]
+                        for room_id in failed_rooms:
+                            # Find room name for better display
+                            room_detail = next((r for r in selected_room_details if r.get('room_id') == room_id), None)
+                            room_name = room_detail.get('name', 'Unknown Room') if room_detail else 'Unknown Room'
+                            st.write(f"• **{room_name}** `{room_id}`")
+                
+                if success_count > 0:
+                    with st.expander(f"✅ Successful Rooms ({success_count})", expanded=False):
+                        successful_rooms = [room_id for room_id, success in results.items() if success]
+                        for room_id in successful_rooms:
+                            # Find room name for better display
+                            room_detail = next((r for r in selected_room_details if r.get('room_id') == room_id), None)
+                            room_name = room_detail.get('name', 'Unknown Room') if room_detail else 'Unknown Room'
+                            st.write(f"• **{room_name}** `{room_id}`")
+            else:
+                if not selected_room_ids:
+                    st.error("❌ Please select at least one room.")
+                if not message:
+                    st.error("❌ Please enter a message to send.")
     
-    with tab4:
+    with tab3:
         st.header("Invite User to Rooms")
         
         user_id = st.text_input("Matrix User ID (e.g., @username:domain.com)", key="invite_user_id")
@@ -765,9 +949,13 @@ async def render_matrix_messaging_page():
             if user_id and room_ids:
                 success_count = 0
                 for room_id in room_ids:
-                    success = await invite_to_matrix_room(room_id, user_id)
-                    if success:
-                        success_count += 1
+                    try:
+                        success = await invite_to_matrix_room(room_id, user_id)
+                        if success:
+                            success_count += 1
+                    except Exception as e:
+                        logger.error(f"Error inviting user to room {room_id}: {e}")
+                        # Continue with next room
                 
                 if success_count > 0:
                     st.success(f"User invited to {success_count} out of {len(room_ids)} rooms")
@@ -776,13 +964,17 @@ async def render_matrix_messaging_page():
                         # Send welcome message to each room
                         welcome_message = f"Welcome {username} to the room! 👋"
                         for room_id in room_ids:
-                            await send_matrix_message(room_id, welcome_message)
+                            try:
+                                await send_matrix_message(room_id, welcome_message)
+                            except Exception as e:
+                                logger.error(f"Error sending welcome message to room {room_id}: {e}")
+                                # Continue with next room
                 else:
                     st.error("Failed to invite user to any rooms")
             else:
                 st.warning("Please enter a user ID and select at least one room")
     
-    with tab5:
+    with tab4:
         st.header("🚫 Enhanced User Removal")
         st.subheader("Remove users from rooms with templated messages and audit logging")
         
@@ -1151,7 +1343,7 @@ async def render_matrix_messaging_page():
             selected_categories = st.multiselect(
                 "Select Categories for Removal", 
                 ["All", *sorted_categories, "None"], 
-                default=["All"], 
+                default=["All"],
                 key="remove_categories_by_category_mode" 
             )
             
@@ -1161,7 +1353,7 @@ async def render_matrix_messaging_page():
             rooms_in_categories = filter_rooms_by_category(matrix_rooms, selected_categories)
             category_names = ", ".join(f"'{cat}'" for cat in selected_categories)
             st.info(f"Found {len(rooms_in_categories)} rooms in the selected categories: {category_names}")
-
+            
             if rooms_in_categories:
                 with st.expander("Show rooms that will be targeted based on categories"):
                     for room in rooms_in_categories:
@@ -1245,11 +1437,11 @@ async def render_matrix_messaging_page():
                                     if members_in_room_text:
                                         st.write(f"  Users in room: {', '.join(members_in_room_text)}")
                                     if non_members_in_room_text:
-                                         st.write(f"  Users NOT in room: {', '.join(non_members_in_room_text)}")
+                                        st.write(f"  Users NOT in room: {', '.join(non_members_in_room_text)}")
                                 else:
                                     st.caption("  (Select users to see their membership status in this room)")
                 else:
-                     st.info("No individual rooms selected. Use the search and multiselect above.")
+                    st.info("No individual rooms selected. Use the search and multiselect above.")
             finally:
                 db.close()
 
@@ -1286,8 +1478,14 @@ async def render_matrix_messaging_page():
                     db.close()
 
                 if available_rooms_for_membership_mode:
+                    # Filter rooms by minimum member count
+                    filtered_membership_rooms = [
+                        room for room in available_rooms_for_membership_mode 
+                        if room.get('member_count', 0) > Config.MATRIX_MIN_ROOM_MEMBERS
+                    ]
+                    
                     membership_room_options_map = {} # Maps display name to room_id
-                    for room in available_rooms_for_membership_mode:
+                    for room in filtered_membership_rooms:
                         room_name = room.get('name', 'Unnamed Room')
                         r_id = room.get('room_id')
                         member_count = room.get('member_count', 0)
@@ -1316,11 +1514,11 @@ async def render_matrix_messaging_page():
                         st.session_state.membership_selected_room_displays = []
                     
                     selected_membership_room_displays = st.multiselect(
-                        f"Select rooms for removal ({len(available_rooms_for_membership_mode)} available):",
+                        f"Select rooms for removal ({len(filtered_membership_rooms)} available):",
                         options=list(membership_room_options_map.keys()),
                         default=st.session_state.membership_selected_room_displays,
                         key="membership_room_multiselect", 
-                        help="Only rooms where at least one selected user is a member are shown."
+                        help=f"Only rooms where at least one selected user is a member and with more than {Config.MATRIX_MIN_ROOM_MEMBERS} members are shown."
                     )
                     st.session_state.membership_selected_room_displays = selected_membership_room_displays
                     
@@ -1888,7 +2086,7 @@ async def render_matrix_messaging_page():
             elif not room_ids:
                 st.warning("No rooms found in selected categories")
     
-    with tab6:
+    with tab5:
         st.header("Entrance Room Users")
         st.subheader("Connect users from INDOC room with dashboard accounts")
         
@@ -2182,21 +2380,28 @@ def display_matrix_chat_messages(messages):
 
 def filter_rooms_by_category(rooms, selected_categories):
     """
-    Filter rooms based on the selected categories.
+    Filter rooms based on the selected categories and minimum member count.
     
     Args:
         rooms: List of room dictionaries
         selected_categories: List of categories to filter by
         
     Returns:
-        List[Dict]: Filtered list of rooms
+        List[Dict]: Filtered list of rooms with sufficient members
     """
-    # If "All" is selected, return all rooms
+    
+    # First filter by minimum member count
+    rooms_with_sufficient_members = [
+        room for room in rooms 
+        if room.get('member_count', 0) > Config.MATRIX_MIN_ROOM_MEMBERS
+    ]
+    
+    # If "All" is selected, return all rooms with sufficient members
     if "All" in selected_categories:
-        return rooms
+        return rooms_with_sufficient_members
     
     filtered_rooms = []
-    for room in rooms:
+    for room in rooms_with_sufficient_members:
         # Handle "None" category
         if "None" in selected_categories:
             has_category = False
@@ -2229,26 +2434,34 @@ def filter_rooms_by_category(rooms, selected_categories):
     return filtered_rooms 
 
 def filter_rooms_by_search(rooms: List[Dict[str, Any]], search_term: str) -> List[Dict[str, Any]]:
-    """Filter rooms based on search term in name, ID, or categories.
+    """Filter rooms based on search term in name, ID, or categories, and minimum member count.
     
     Used in the "Individual Rooms" selection mode of the user removal tab.
     The search is case-insensitive and checks against room name, room ID, and
-    a comma-separated string of its categories.
+    a comma-separated string of its categories. Also filters out rooms with
+    insufficient members.
 
     Args:
         rooms: A list of room dictionaries from `matrix_cache.get_cached_rooms()`.
         search_term: The string to search for.
 
     Returns:
-        A list of room dictionaries that match the search term.
+        A list of room dictionaries that match the search term and have sufficient members.
     """
+    
+    # First filter by minimum member count
+    rooms_with_sufficient_members = [
+        room for room in rooms 
+        if room.get('member_count', 0) > Config.MATRIX_MIN_ROOM_MEMBERS
+    ]
+    
     if not search_term:
-        return rooms
+        return rooms_with_sufficient_members
     
     search_lower = search_term.lower()
     filtered = []
     
-    for room in rooms:
+    for room in rooms_with_sufficient_members:
         room_name = room.get('name', '').lower()
         room_id_val = room.get('room_id', '').lower()
         
@@ -2270,13 +2483,14 @@ def filter_rooms_by_search(rooms: List[Dict[str, Any]], search_term: str) -> Lis
     return filtered
 
 def create_detailed_room_options_map(rooms: List[Dict[str, Any]]) -> Dict[str, str]:
-    """Create a mapping of detailed room display strings to room_ids.
+    """Create a mapping of detailed room display strings to room_ids with member count filtering.
 
     This function generates user-friendly display strings for rooms, including name,
     categories, member count, and room ID. These display strings are used as options
     in a Streamlit multiselect widget for the "Individual Rooms" selection mode.
     The map allows easy retrieval of the `room_id` from the selected display string.
     The room ID is included in the display string to ensure uniqueness if room names clash.
+    Only includes rooms with more than the minimum required members.
 
     Args:
         rooms: A list of room dictionaries (typically filtered by search).
@@ -2286,11 +2500,16 @@ def create_detailed_room_options_map(rooms: List[Dict[str, Any]]) -> Dict[str, s
         "Room Name (Categories: Cat1, Cat2) - X members [!room_id:domain.com]")
         and values are the corresponding room_ids.
     """
+    
     options_map = {}
     for room in rooms:
+        # Skip rooms with insufficient members
+        member_count = room.get('member_count', 0)
+        if member_count <= Config.MATRIX_MIN_ROOM_MEMBERS:
+            continue
+            
         room_name = room.get('name', 'Unnamed Room')
         room_id_val = room.get('room_id', '')
-        member_count = room.get('member_count', 0)
         
         raw_categories = room.get('categories', [])
         category_list = []

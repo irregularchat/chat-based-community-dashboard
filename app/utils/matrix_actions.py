@@ -436,10 +436,18 @@ async def get_matrix_client() -> Optional[AsyncClient]:
 
     client = None
     try:
-        # Encryption is disabled for simplicity
-        # store_path = Config.MATRIX_STORE_PATH
-        # security_key = Config.MATRIX_SECURITY_KEY
-        # recovery_passphrase = Config.MATRIX_RECOVERY_PASSPHRASE
+        import ssl
+        import aiohttp
+        
+        # Create SSL context with TLS 1.2 for compatibility with older LibreSSL
+        ssl_context = ssl.create_default_context()
+        ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        ssl_context.maximum_version = ssl.TLSVersion.TLSv1_2
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        
+        # Create aiohttp connector with TLS 1.2
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
         
         client_config = AsyncClientConfig(
             max_limit_exceeded=0,
@@ -448,16 +456,21 @@ async def get_matrix_client() -> Optional[AsyncClient]:
             encryption_enabled=False,  # Disable encryption for simplicity
         )
 
-        # Create client without crypto store (encryption disabled)
+        # Create client with TLS 1.2 SSL handling
         client = AsyncClient(
             homeserver=MATRIX_HOMESERVER_URL,
             config=client_config,
         )
         
+        # Set the connector for TLS 1.2 handling
+        if hasattr(client, '_http_client') and client._http_client:
+            await client._http_client.close()
+        client._http_client = aiohttp.ClientSession(connector=connector)
+        
         client.access_token = MATRIX_ACCESS_TOKEN
         client.user_id = MATRIX_BOT_USERNAME
 
-        logger.info(f"Matrix client created (encryption disabled for simplicity)")
+        logger.info(f"Matrix client created with TLS 1.2 (encryption disabled for simplicity)")
         
         return client
     except Exception as e:
@@ -836,7 +849,7 @@ def invite_to_matrix_room_sync(room_id: str, user_id: str) -> bool:
 
 async def send_matrix_message_to_multiple_rooms(room_ids: List[str], message: str) -> Dict[str, bool]:
     """
-    Send a message to multiple Matrix rooms.
+    Send a message to multiple Matrix rooms with automatic notice footer.
     
     Args:
         room_ids: List of room IDs to send the message to
@@ -848,27 +861,67 @@ async def send_matrix_message_to_multiple_rooms(room_ids: List[str], message: st
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Skipping send_message_to_multiple_rooms.")
         return {room_id: False for room_id in room_ids}
+
+    logger.info(f"Attempting to send message to {len(room_ids)} rooms: {room_ids}")
+
+    # Automatically append the MATRIX_MESSAGE_NOTICE to the message
+    from app.utils.config import Config
+    notice = Config.MATRIX_MESSAGE_NOTICE
+    if notice and not message.endswith(notice):
+        message_with_notice = f"{message}\n\n{notice}"
+    else:
+        message_with_notice = message
+        
+    logger.info(f"Message with notice: {message_with_notice[:100]}...")
         
     results = {}
     client = await get_matrix_client()
     
+    if not client:
+        logger.error("Failed to get Matrix client")
+        return {room_id: False for room_id in room_ids}
+    
+    logger.info(f"Matrix client created successfully. Bot user: {client.user_id}")
+    
     try:
         for room_id in room_ids:
+            logger.info(f"Sending message to room: {room_id}")
             try:
                 response = await client.room_send(
                     room_id=room_id,
                     message_type="m.room.message",
                     content={
                         "msgtype": "m.text",
-                        "body": message
+                        "body": message_with_notice
                     }
                 )
-                results[room_id] = isinstance(response, RoomSendResponse) and response.event_id is not None
+                success = isinstance(response, RoomSendResponse) and response.event_id is not None
+                logger.info(f"Room {room_id} - Response type: {type(response)}, Success: {success}")
+                if success:
+                    logger.info(f"Message sent successfully to {room_id}, event_id: {response.event_id}")
+                else:
+                    logger.error(f"Failed to send message to {room_id} - Invalid response: {response}")
+                results[room_id] = success
             except Exception as e:
-                logger.error(f"Error sending message to room {room_id}: {e}")
+                # Check for SSL/TLS errors and provide helpful error messages
+                if "tlsv1 alert protocol version" in str(e).lower() or "ssl" in str(e).lower():
+                    logger.error(f"SSL/TLS connection error for room {room_id}: {e}")
+                    logger.error("This is likely due to SSL/TLS compatibility issues between the client and Matrix server.")
+                    logger.error("Consider updating Python SSL libraries or checking Matrix server SSL configuration.")
+                else:
+                    logger.error(f"Error sending message to room {room_id}: {e}")
+                    logger.error(f"Exception type: {type(e)}, Details: {str(e)}")
                 results[room_id] = False
     finally:
         await client.close()
+        logger.info("Matrix client closed")
+    
+    logger.info(f"Final results: {results}")
+    
+    # Check if all failed due to SSL issues and log a helpful message
+    if all(not success for success in results.values()) and len(results) > 0:
+        logger.error("All message sends failed. This may be due to SSL/TLS compatibility issues.")
+        logger.error("The Matrix server may require newer TLS versions than what's available in the current environment.")
     
     return results
 
@@ -1966,7 +2019,7 @@ def send_direct_message(user_id: str, message: str) -> Tuple[bool, Optional[str]
 
 async def _send_room_message_async(room_id: str, message: str) -> bool:
     """
-    Send a message to a Matrix room asynchronously.
+    Send a message to a Matrix room asynchronously with automatic notice footer.
     
     Args:
         room_id (str): The Matrix room ID to send the message to
@@ -1978,6 +2031,14 @@ async def _send_room_message_async(room_id: str, message: str) -> bool:
     if not MATRIX_ACTIVE:
         logger.warning("Matrix integration is not active. Cannot send room message.")
         return False
+    
+    # Automatically append the MATRIX_MESSAGE_NOTICE to the message
+    from app.utils.config import Config
+    notice = Config.MATRIX_MESSAGE_NOTICE
+    if notice and not message.endswith(notice):
+        message_with_notice = f"{message}\n\n{notice}"
+    else:
+        message_with_notice = message
     
     client = None
     try:
@@ -1993,7 +2054,7 @@ async def _send_room_message_async(room_id: str, message: str) -> bool:
             message_type="m.room.message",
             content={
                 "msgtype": "m.text",
-                "body": message
+                "body": message_with_notice
             }
         )
         

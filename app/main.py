@@ -54,12 +54,34 @@ def initialize_session_state():
         st.session_state['user_count'] = 0
     if 'active_users' not in st.session_state:
         st.session_state['active_users'] = 0
+    
+    # Authentication state - preserve existing state if permanent flags exist
+    # This prevents losing login state on page refresh
     if 'is_authenticated' not in st.session_state:
-        st.session_state['is_authenticated'] = False
+        # Check if we have permanent auth flags that indicate we should be authenticated
+        if st.session_state.get('permanent_auth', False):
+            st.session_state['is_authenticated'] = True
+            logging.info("Restored authentication state from permanent_auth flag during initialization")
+        else:
+            st.session_state['is_authenticated'] = False
+    
     if 'is_admin' not in st.session_state:
-        st.session_state['is_admin'] = False
+        # Check if we have permanent admin flags
+        if st.session_state.get('permanent_admin', False):
+            st.session_state['is_admin'] = True
+            logging.info("Restored admin state from permanent_admin flag during initialization")
+        else:
+            st.session_state['is_admin'] = False
+    
     if 'is_moderator' not in st.session_state:
-        st.session_state['is_moderator'] = False
+        # Check if we have permanent moderator flags
+        if st.session_state.get('permanent_moderator', False):
+            st.session_state['is_moderator'] = True
+            logging.info("Restored moderator state from permanent_moderator flag during initialization")
+        else:
+            st.session_state['is_moderator'] = False
+    
+    # Other session state variables
     if 'matrix_users' not in st.session_state:
         st.session_state['matrix_users'] = []
     if 'matrix_user_selected' not in st.session_state:
@@ -72,6 +94,12 @@ def initialize_session_state():
     # Log that session state has been initialized
     logging.info("Session state variables initialized successfully")
     logging.debug(f"Session state keys: {list(st.session_state.keys())}")
+    
+    # Log authentication state for debugging
+    if st.session_state.get('is_authenticated', False):
+        username = st.session_state.get('username', 'Unknown')
+        auth_method = st.session_state.get('auth_method', 'Unknown')
+        logging.info(f"Session initialized with authenticated user: {username} (method: {auth_method})")
 
 def setup_page_config():
     """Set up the Streamlit page configuration"""
@@ -191,6 +219,74 @@ def render_sidebar():
         # Fallback for empty page_options (shouldn't happen)
         selected_page = "Create User"
     
+    # Add expanded login forms when not authenticated
+    if not is_authenticated:
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### Authentication")
+        
+        # SSO Login Section
+        st.sidebar.markdown("**SSO Login**")
+        from app.auth.authentication import get_login_url
+        login_url = get_login_url()
+        
+        # Create a prominent SSO login button
+        st.sidebar.markdown(f"""
+        <div style="margin-bottom: 15px;">
+            <a href="{login_url}" 
+               style="display: block; 
+                      text-align: center; 
+                      background-color: #4285f4; 
+                      color: white; 
+                      padding: 10px 15px; 
+                      border-radius: 5px; 
+                      text-decoration: none; 
+                      font-weight: bold;
+                      margin: 5px 0;">
+                🔐 Login with Authentik
+            </a>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Visual separator
+        st.sidebar.markdown("---")
+        
+        # Local Admin Login Section
+        st.sidebar.markdown("**Local Admin Login**")
+        
+        # Always visible local admin login form
+        with st.sidebar.form("sidebar_local_login_form", clear_on_submit=True):
+            username_input = st.text_input(
+                "Username", 
+                placeholder="Enter admin username",
+                key="sidebar_username"
+            )
+            password_input = st.text_input(
+                "Password", 
+                type="password", 
+                placeholder="Enter admin password",
+                key="sidebar_password"
+            )
+            
+            # Login button
+            login_submitted = st.form_submit_button(
+                "🔑 Login", 
+                use_container_width=True
+            )
+            
+            if login_submitted:
+                if username_input and password_input:
+                    from app.auth.local_auth import handle_local_login
+                    if handle_local_login(username_input, password_input):
+                        st.success("✅ Login successful!")
+                        # Add timestamp for recent auth detection
+                        st.session_state['auth_timestamp'] = time.time()
+                        # Trigger rerun to update sidebar
+                        st.rerun()
+                    else:
+                        st.error("❌ Invalid username or password")
+                else:
+                    st.warning("⚠️ Please enter both username and password")
+    
     # Add Community section as a separate sidebar button (available to ALL users, no authentication required)
     st.sidebar.markdown("---")
     if st.sidebar.button("🏘️ Community Timeline", use_container_width=True, key="community_button"):
@@ -198,9 +294,9 @@ def render_sidebar():
         st.query_params["page"] = "community"
         st.rerun()
     
-    # Show login/logout in sidebar
-    st.sidebar.markdown("---")
+    # Show user info and logout when authenticated
     if is_authenticated:
+        st.sidebar.markdown("---")
         username = st.session_state.get('username', '')
         st.sidebar.write(f"Logged in as: **{username}**")
         if is_admin:
@@ -221,10 +317,6 @@ def render_sidebar():
             st.session_state['is_admin'] = False
             st.session_state['is_moderator'] = False
             st.rerun()
-    else:
-        # Display login button for non-authenticated users
-        from app.ui.common import display_login_button
-        display_login_button(location="sidebar")
     
     # If we just completed authentication and it's still recent, don't rerun again
     # This helps prevent the logout loop after login
@@ -1066,13 +1158,38 @@ def main():
             logging.info("Restoring authentication state from permanent flag")
             st.session_state['is_authenticated'] = True
             
+            # Restore username if available
+            if 'username' not in st.session_state and st.session_state.get('permanent_username'):
+                st.session_state['username'] = st.session_state['permanent_username']
+            
+            # Restore auth method if available
+            if 'auth_method' not in st.session_state and st.session_state.get('permanent_auth_method'):
+                st.session_state['auth_method'] = st.session_state['permanent_auth_method']
+            
             # Also restore admin status if it was set
             if st.session_state.get('permanent_admin', False):
                 logging.info("Restoring admin status from permanent flag")
                 st.session_state['is_admin'] = True
+            
+            # Also restore moderator status if it was set
+            if st.session_state.get('permanent_moderator', False):
+                logging.info("Restoring moderator status from permanent flag")
+                st.session_state['is_moderator'] = True
+            
+            # Restore user_info if we have the basic information
+            if 'user_info' not in st.session_state:
+                username = st.session_state.get('username', 'User')
+                auth_method = st.session_state.get('auth_method', 'unknown')
+                st.session_state['user_info'] = {
+                    'preferred_username': username,
+                    'name': username,
+                    'email': '',
+                    'is_local_admin': auth_method == 'local'
+                }
+                logging.info(f"Restored basic user_info for {username}")
                 
             # Log detailed session restoration for debugging
-            logging.info(f"Session state after restoration: auth={st.session_state.get('is_authenticated')}, admin={st.session_state.get('is_admin')}")
+            logging.info(f"Session state after restoration: auth={st.session_state.get('is_authenticated')}, admin={st.session_state.get('is_admin')}, user={st.session_state.get('username')}")
         
         # Initialize database
         init_db()

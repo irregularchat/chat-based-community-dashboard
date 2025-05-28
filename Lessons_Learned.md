@@ -1192,12 +1192,17 @@ if details and len(details) > 0 and ord(details[0]) > 127:  # Unicode emoji rang
     return details  # Already formatted, return as-is
 ```
 
-#### 5. Retroactive Database Update
-Created `update_admin_events.py` script to improve existing events:
+#### 5. Integration with Existing Code
+- **Updated `app/ui/matrix.py`**: Changed from direct `AdminEvent` creation to `create_admin_event()` function
+- **Updated `app/force_sync.py`**: Added logic to skip logging when no users modified, improved sync event descriptions
+- **Backward Compatibility**: All existing code continues to work with enhanced formatting
+
+#### 6. Retroactive Database Update
+Created and applied `update_admin_events.py` script to improve existing events:
 - **Preview Mode**: `--preview` to see changes before applying
 - **Apply Mode**: `--apply` to update database
-- **Batch Processing**: Updates all historical events with new formatting
-- **Noise Removal**: Deletes spam events from timeline
+- **Batch Processing**: Updated all historical events with new formatting
+- **Noise Removal**: Deleted spam events from timeline
 
 ### Results Achieved
 

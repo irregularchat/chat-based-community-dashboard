@@ -22,6 +22,14 @@ This document captures key lessons learned during the development and debugging 
 
 **Root Cause**: Having multiple `from app.utils.config import Config` statements within the same file - one at the top level and others inside functions. Python treats variables as local if they're assigned anywhere in the function scope, even if the assignment comes after the reference.
 
+**Problem**: `UnboundLocalError: cannot access local variable 'get_db' where it is not associated with a value`
+
+**Root Cause**: Same issue as above but with different imports. Having multiple `from app.db.session import get_db` statements - one at the top level and others inside functions causes Python to treat `get_db` as a local variable.
+
+**Problem**: `Cannot close a running event loop`
+
+**Root Cause**: Attempting to close an event loop that is still running or trying to manage event loops incorrectly in Streamlit context. This often happens when mixing `asyncio.get_event_loop()`, `asyncio.new_event_loop()`, and `loop.close()` calls.
+
 ```python
 # At top of file
 from app.utils.config import Config
@@ -43,22 +51,53 @@ async def main_function():
 ```python
 # At top of file
 from app.utils.config import Config
+from app.db.session import get_db
 
 async def main_function():
     if not Config.MATRIX_ACTIVE:  # ✅ Works correctly
         return
     
+    db = next(get_db())  # ✅ Works correctly
+    
     def helper_function():
-        # ✅ Use the top-level import, no local import needed
+        # ✅ Use the top-level imports, no local imports needed
         return Config.SOME_VALUE
+```
+
+**Solution**: Simplify event loop management and avoid closing loops that may still be running.
+
+```python
+# ❌ Problematic event loop management
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+# ... some async operations ...
+loop.close()  # Error: Cannot close a running event loop
+
+# ✅ Simplified approach - let threading handle loop lifecycle
+def bg_sync():
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(async_function())
+        finally:
+            loop.close()  # Safe to close here after run_until_complete
+    except Exception as e:
+        logging.error(f"Background sync error: {e}")
+
+threading.Thread(target=bg_sync, daemon=True).start()
 ```
 
 ### 🔧 Standard Operating Procedure
 
 1. **Always import modules at the top level** of the file
 2. **Avoid redundant imports** within functions unless absolutely necessary
-3. **Use grep to check for duplicate imports**: `grep -n "from.*import Config" filename.py`
+3. **Use grep to check for duplicate imports**: `grep -n "from.*import" filename.py`
 4. **Test imports in isolation** when debugging import issues
+5. **Check for all common imports** like `Config`, `get_db`, `User` model, etc.
+6. **Simplify event loop management** - avoid manual loop creation/closing in Streamlit
+7. **Use threading for background async tasks** instead of trying to manage loops directly
+8. **Always wrap event loop operations in try/except** with proper cleanup
 
 ---
 
@@ -405,13 +444,14 @@ if Config.MATRIX_DISABLE_SSL_VERIFICATION:
 1. **Python import scoping** can cause subtle bugs - always import at module level
 2. **Streamlit session state** requires careful management - use callbacks and proper initialization
 3. **Streamlit forms** have restrictions - only `st.form_submit_button()` allowed inside, move other buttons outside
-4. **Matrix API operations** need live verification and comprehensive error handling
-5. **Database sessions** must be properly managed to avoid connection leaks
-6. **Error handling** should be specific and informative, not generic
-7. **Code organization** matters - break large functions into focused, testable units
-8. **Network operations** need retry logic and proper SSL configuration
-9. **Testing** should cover both happy path and error conditions
-10. **Logging** is crucial for debugging complex async operations
-11. **Configuration** should be externalized and validated at startup
+4. **Asyncio event loop management** in Streamlit requires careful handling - avoid manual loop closing
+5. **Matrix API operations** need live verification and comprehensive error handling
+6. **Database sessions** must be properly managed to avoid connection leaks
+7. **Error handling** should be specific and informative, not generic
+8. **Code organization** matters - break large functions into focused, testable units
+9. **Network operations** need retry logic and proper SSL configuration
+10. **Testing** should cover both happy path and error conditions
+11. **Logging** is crucial for debugging complex async operations
+12. **Configuration** should be externalized and validated at startup
 
 This document should be updated as new lessons are learned during continued development of the project. 

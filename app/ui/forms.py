@@ -682,7 +682,6 @@ async def render_create_user_form():
                 def fetch_indoc_users_thread():
                     try:
                         # Use cached Matrix users instead of slow API calls
-                        from app.db.session import get_db
                         from app.services.matrix_cache import matrix_cache
                         
                         db = next(get_db())
@@ -1308,16 +1307,7 @@ async def render_create_user_form():
     if not st.session_state.matrix_users:
         with st.spinner("Loading Matrix users from INDOC room..."):
             try:
-                # Create a new event loop for the background thread
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
-                # Apply nest_asyncio to allow nested event loops
-                import nest_asyncio
-                nest_asyncio.apply()
-                
                 # Use cached Matrix users instead of slow API calls
-                from app.db.session import get_db
                 from app.services.matrix_cache import matrix_cache
                 
                 db = next(get_db())
@@ -1325,21 +1315,18 @@ async def render_create_user_form():
                     # Check if cache is fresh, if not trigger background sync
                     if not matrix_cache.is_cache_fresh(db, max_age_minutes=30):
                         # Trigger background sync but don't wait for it
-                        try:
-                            # Create task for background sync
-                            loop = asyncio.get_event_loop()
-                            loop.create_task(matrix_cache.background_sync(max_age_minutes=30))
-                        except RuntimeError:
-                            # If no event loop, start background sync in thread
-                            import threading
-                            def bg_sync():
+                        import threading
+                        def bg_sync():
+                            try:
                                 loop = asyncio.new_event_loop()
                                 asyncio.set_event_loop(loop)
                                 try:
                                     loop.run_until_complete(matrix_cache.background_sync(max_age_minutes=30))
                                 finally:
                                     loop.close()
-                            threading.Thread(target=bg_sync, daemon=True).start()
+                            except Exception as e:
+                                logging.error(f"Background sync error: {e}")
+                        threading.Thread(target=bg_sync, daemon=True).start()
                     
                     # Get cached users (fast)
                     cached_users = matrix_cache.get_cached_users(db)
@@ -1354,9 +1341,6 @@ async def render_create_user_form():
                     ]
                 finally:
                     db.close()
-                
-                # Close the loop
-                loop.close()
                 
                 if not st.session_state.matrix_users:
                     st.warning("No Matrix users found in INDOC room. Please try again later.")
@@ -1447,7 +1431,6 @@ async def render_create_user_form():
             # Store the Matrix username in the database
             try:
                 # Import models and database connection at the function level to avoid scope issues
-                from app.db.session import get_db
                 from app.db.models import User  # Ensure User model is imported here
                 
                 # Ensure email is defined and valid before querying

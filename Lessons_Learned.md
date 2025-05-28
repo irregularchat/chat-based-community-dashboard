@@ -26,6 +26,10 @@ This document captures key lessons learned during the development and debugging 
 
 **Root Cause**: Same issue as above but with different imports. Having multiple `from app.db.session import get_db` statements - one at the top level and others inside functions causes Python to treat `get_db` as a local variable.
 
+**Problem**: `UnboundLocalError: cannot access local variable 'send_welcome_message_with_encryption_delay_sync' where it is not associated with a value`
+
+**Root Cause**: Same import scoping issue with the new encryption delay function. Having multiple import statements - one at the top level and others inside functions causes Python to treat the function as a local variable.
+
 **Problem**: `Cannot close a running event loop`
 
 **Root Cause**: Attempting to close an event loop that is still running or trying to manage event loops incorrectly in Streamlit context. This often happens when mixing `asyncio.get_event_loop()`, `asyncio.new_event_loop()`, and `loop.close()` calls.
@@ -176,6 +180,16 @@ if 'created_invite_link' in st.session_state:
 
 **Problem**: Relying on stale local cache for room memberships
 
+**Problem**: Direct messages sent immediately after creating a room are encrypted but unreadable
+- When creating a new direct chat room and immediately sending a message, the encryption keys haven't been established yet
+- The recipient receives an encrypted message they can't decrypt
+- This commonly happens with welcome messages to new users
+
+**Problem**: INDOC room removal not being triggered
+- INDOC removal logic was nested inside room invitation success block
+- If no rooms were selected or room invitations failed, INDOC removal would never execute
+- Users would remain in INDOC room even after successful account creation and Matrix user connection
+
 ### ✅ What Worked
 
 **Solution**: Multi-layered approach to user removal
@@ -199,6 +213,42 @@ except Exception as e:
     logger.warning(f"Using database fallback: {e}")
 ```
 
+**Solution**: Welcome messages with encryption establishment delay
+1. **Send initial hello message** to establish encryption keys
+2. **Wait for encryption setup** (3-5 seconds)
+3. **Send actual welcome message** that will be readable
+
+```python
+# ✅ Welcome message with encryption delay
+async def send_welcome_message_with_encryption_delay(user_id: str, welcome_message: str, delay_seconds: int = 5):
+    # Step 1: Send hello message to establish encryption
+    hello_message = "👋 Hello! Setting up our secure chat..."
+    hello_success, room_id, hello_event_id = await _send_direct_message_async(user_id, hello_message)
+    
+    if not hello_success:
+        return False, None, None
+    
+    # Step 2: Wait for encryption keys to be established
+    await asyncio.sleep(delay_seconds)
+    
+    # Step 3: Send the actual welcome message
+    welcome_success, _, welcome_event_id = await _send_direct_message_async(user_id, welcome_message)
+    
+    return welcome_success, room_id, welcome_event_id
+```
+
+**Solution**: Move INDOC removal logic outside room invitation flow
+1. **Separate concerns** - INDOC removal should be independent of room invitations
+2. **Check Matrix user connection** - trigger INDOC removal whenever a Matrix user is connected
+3. **Maintain configuration controls** - still respect AUTO_REMOVE_FROM_INDOC and skip_indoc_removal settings
+
+```python
+# ✅ Fixed independent logic  
+if matrix_user_id:  # Runs whenever Matrix user is connected
+    if auto_remove_from_indoc and not skip_indoc_removal:
+        # INDOC removal logic here
+```
+
 ### 🔧 Standard Operating Procedure
 
 1. **Always verify bot permissions** before attempting administrative actions
@@ -206,6 +256,11 @@ except Exception as e:
 3. **Implement comprehensive error handling** with specific error types
 4. **Log all Matrix operations** for audit trails
 5. **Test with actual Matrix rooms** in development environment
+6. **Use encryption delay for welcome messages** to ensure readability
+7. **Send hello message first** when creating new direct chats
+8. **Wait 3-5 seconds** between hello and welcome messages for encryption setup
+9. **Separate INDOC removal logic** from room invitation logic to ensure it always runs when appropriate
+10. **Test INDOC removal** with and without room selections to ensure it works in all scenarios
 
 ---
 
@@ -441,17 +496,20 @@ if Config.MATRIX_DISABLE_SSL_VERIFICATION:
 
 ## Key Takeaways
 
-1. **Python import scoping** can cause subtle bugs - always import at module level
+1. **Python import scoping** can cause subtle bugs - always import at module level, even for new functions like `send_welcome_message_with_encryption_delay_sync`
 2. **Streamlit session state** requires careful management - use callbacks and proper initialization
 3. **Streamlit forms** have restrictions - only `st.form_submit_button()` allowed inside, move other buttons outside
 4. **Asyncio event loop management** in Streamlit requires careful handling - avoid manual loop closing
 5. **Matrix API operations** need live verification and comprehensive error handling
-6. **Database sessions** must be properly managed to avoid connection leaks
-7. **Error handling** should be specific and informative, not generic
-8. **Code organization** matters - break large functions into focused, testable units
-9. **Network operations** need retry logic and proper SSL configuration
-10. **Testing** should cover both happy path and error conditions
-11. **Logging** is crucial for debugging complex async operations
-12. **Configuration** should be externalized and validated at startup
+6. **Matrix encryption timing** matters - send hello message first, wait for encryption setup, then send welcome message
+7. **Database sessions** must be properly managed to avoid connection leaks
+8. **Error handling** should be specific and informative, not generic
+9. **Code organization** matters - break large functions into focused, testable units
+10. **Network operations** need retry logic and proper SSL configuration
+11. **Testing** should cover both happy path and error conditions
+12. **Logging** is crucial for debugging complex async operations
+13. **Configuration** should be externalized and validated at startup
+14. **Import scoping issues** can occur with any function - always check for redundant imports when adding new functionality
+15. **Logic flow dependencies** can create unexpected bugs - ensure critical operations like INDOC removal are independent of optional features like room invitations
 
 This document should be updated as new lessons are learned during continued development of the project. 

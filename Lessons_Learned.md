@@ -13,6 +13,7 @@ This document captures key lessons learned during the development and debugging 
 8. [Standard Operating Procedures](#standard-operating-procedures)
 9. [Session Persistence Improvements](#session-persistence-improvements)
 10. [Expanded Login Forms Implementation](#expanded-login-forms-implementation)
+11. [Database Session Race Condition in Threading](#database-session-race-condition-in-threading)
 
 ---
 
@@ -604,3 +605,85 @@ This improvement resolves the critical UX issue where users lost their login sta
 
 ### Problem
 // ... existing code ... 
+
+---
+
+## Database Session Race Condition in Threading (2025-05-28)
+
+### Problem
+Matrix cache initialization was failing with SQLAlchemy error:
+```
+Method 'close()' can't be called here; method '_connection_for_bind()' is already in progress and this would cause an unexpected state change to <SessionTransactionState.CLOSED: 5>
+```
+
+### Root Cause
+The `initialize_matrix_cache()` function had a race condition in database session management:
+
+1. **Main Thread**: Created database session with `db = next(get_db())`
+2. **Main Thread**: Passed session to background thread via `matrix_cache.startup_sync(db)`
+3. **Main Thread**: Immediately closed session with `db.close()` in `finally` block
+4. **Background Thread**: Still trying to use the closed session for Matrix operations
+
+This created a race condition where the session was closed while still being used by another thread.
+
+### Solution
+**Thread-Local Session Management**: Create database sessions within each thread that needs them.
+
+**Key Changes Made:**
+
+1. **Remove Session Passing**: Don't pass database session from main thread to background thread
+2. **Thread-Local Session Creation**: Create new session within background thread
+3. **Proper Cleanup**: Close session within the same thread that created it
+
+```python
+# ❌ Before (problematic)
+def initialize_matrix_cache():
+    db = next(get_db())
+    try:
+        def startup_sync_thread():
+            # Uses db from main thread
+            result = loop.run_until_complete(matrix_cache.startup_sync(db))
+        sync_thread = threading.Thread(target=startup_sync_thread, daemon=True)
+        sync_thread.start()
+    finally:
+        db.close()  # ❌ Closes session while background thread may still be using it
+
+# ✅ After (fixed)
+def initialize_matrix_cache():
+    def startup_sync_thread():
+        db = None
+        try:
+            # Create session within this thread
+            db = next(get_db())
+            result = loop.run_until_complete(matrix_cache.startup_sync(db))
+        finally:
+            # Close session within same thread
+            if db:
+                db.close()
+```
+
+### Technical Details
+- **SQLAlchemy Session State**: Sessions have internal state that can't be safely shared across threads
+- **Connection Binding**: The `_connection_for_bind()` method was in progress when `close()` was called
+- **Thread Safety**: Database sessions should be created and closed within the same thread
+- **Async Context**: Background threads need their own event loops and database sessions
+
+### Testing Results
+- ✅ Matrix cache initialization now works without errors
+- ✅ Background sync completes successfully
+- ✅ No more SQLAlchemy session state errors
+- ✅ Proper resource cleanup in all threads
+
+### Key Learnings
+1. **Never share database sessions across threads** - each thread should create its own session
+2. **Session lifecycle management** - create and close sessions within the same thread
+3. **Background thread patterns** - always create new resources (sessions, event loops) within background threads
+4. **Error handling in threads** - wrap session operations in try/finally blocks for proper cleanup
+5. **SQLAlchemy threading** - sessions are not thread-safe and should not be passed between threads
+
+### Files Modified
+- `app/main.py`: Fixed `initialize_matrix_cache()` function to use thread-local session management
+
+This fix resolves the critical startup error and ensures reliable Matrix cache initialization across all deployment scenarios.
+
+--- 

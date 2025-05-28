@@ -295,6 +295,10 @@ def handle_auth_callback(code, state):
                 st.session_state['permanent_moderator'] = True
                 logging.info("Set permanent moderator flag")
             
+            # Store additional permanent session variables for restoration
+            st.session_state['permanent_username'] = username
+            st.session_state['permanent_auth_method'] = 'sso'
+            
             return True
         except Exception as e:
             logging.error(f"Error fetching or processing user info: {str(e)}")
@@ -339,11 +343,16 @@ def logout():
         'auth_redirect_path',
         'session_start_time',
         'is_admin',
+        'is_moderator',
         'auth_method',  # Add auth_method to the list of keys to clear
         'permanent_auth',  # Clear permanent auth flag
         'permanent_admin',  # Clear permanent admin flag
+        'permanent_moderator',  # Clear permanent moderator flag
+        'permanent_username',  # Clear permanent username
+        'permanent_auth_method',  # Clear permanent auth method
         'auth_timestamp',   # Clear auth timestamp
-        'auth_processed'    # Clear auth processed flag
+        'auth_processed',    # Clear auth processed flag
+        'username'  # Clear username
     ]
     
     for key in auth_keys:

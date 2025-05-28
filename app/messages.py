@@ -12,6 +12,7 @@ from pytz import timezone
 
 from app.auth import generate_secure_passphrase
 from app.auth.api import generate_recovery_link
+from app.utils.matrix_actions import send_welcome_message_with_encryption_delay_sync, create_matrix_direct_chat_sync
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -150,25 +151,24 @@ def create_user_message(new_username, temp_password=None, discourse_post_url=Non
             matrix_user = st.session_state.get('matrix_user_display_name')
             if st.button(f"Send Welcome Message to {matrix_user}"):
                 try:
-                    from app.utils.matrix_actions import send_matrix_message, create_matrix_direct_chat_sync
-                    
                     # Log the attempt for debugging
-                    logger.info(f"Attempting to send welcome message to {matrix_user} ({st.session_state.get('matrix_user_selected')})")
+                    logging.info(f"Attempting to send welcome message to {matrix_user} ({st.session_state.get('matrix_user_selected')})")
                     
-                    # Create a direct chat with the user first
-                    room_id = create_matrix_direct_chat_sync(st.session_state.get('matrix_user_selected'))
-                    if room_id:
-                        # Try sending again to the newly created room
-                        success = send_matrix_message(room_id, welcome_message)
-                        if success:
-                            st.success(f"Created direct chat and sent welcome message to {matrix_user}!")
-                        else:
-                            st.error(f"Created direct chat but failed to send message to {matrix_user}")
+                    # Send the message with encryption delay to ensure readability
+                    success, room_id, event_id = send_welcome_message_with_encryption_delay_sync(
+                        st.session_state.get('matrix_user_selected'),
+                        welcome_message,
+                        delay_seconds=5  # Standard delay for welcome messages
+                    )
+                    
+                    if success:
+                        st.success(f"Welcome message sent to {matrix_user}!")
                     else:
-                        st.error(f"Could not create direct chat with {matrix_user}")
-                except Exception as direct_chat_error:
-                    logger.error(f"Error creating direct chat: {str(direct_chat_error)}")
-                    st.error(f"Error creating direct chat: {str(direct_chat_error)}")
+                        st.error(f"Failed to send welcome message to {matrix_user}")
+                except Exception as e:
+                    logging.error(f"Error sending welcome message: {str(e)}")
+                    logging.error(traceback.format_exc())
+                    st.error(f"Error sending welcome message: {str(e)}")
         
     return welcome_message
 
@@ -322,27 +322,20 @@ def display_welcome_message_ui(welcome_message, forum_post_url=None):
                 matrix_user = st.session_state.get('matrix_user_display_name')
                 if st.button(f"Send Welcome Message to {matrix_user}", key="send_welcome_btn"):
                     try:
-                        from app.utils.matrix_actions import send_direct_message, create_matrix_direct_chat_sync
-                        
                         # Log the attempt for debugging
                         logging.info(f"Attempting to send welcome message to {matrix_user} ({st.session_state.get('matrix_user_selected')})")
                         
-                        # First create a direct chat with the user
-                        room_id = create_matrix_direct_chat_sync(st.session_state.get('matrix_user_selected'))
+                        # Send the message with encryption delay to ensure readability
+                        success, room_id, event_id = send_welcome_message_with_encryption_delay_sync(
+                            st.session_state.get('matrix_user_selected'),
+                            welcome_message,
+                            delay_seconds=5  # Standard delay for welcome messages
+                        )
                         
-                        if room_id:
-                            # Send the message to the direct chat
-                            success = send_direct_message(
-                                st.session_state.get('matrix_user_selected'),
-                                welcome_message
-                            )
-                            
-                            if success:
-                                st.success(f"Welcome message sent to {matrix_user}!")
-                            else:
-                                st.error(f"Failed to send welcome message to {matrix_user}")
+                        if success:
+                            st.success(f"Welcome message sent to {matrix_user}!")
                         else:
-                            st.error(f"Failed to create direct chat with {matrix_user}")
+                            st.error(f"Failed to send welcome message to {matrix_user}")
                     except Exception as e:
                         logging.error(f"Error sending welcome message: {str(e)}")
                         logging.error(traceback.format_exc())

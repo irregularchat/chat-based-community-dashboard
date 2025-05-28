@@ -185,7 +185,7 @@ def add_admin_event(db: Session, event_type: str, username: str, details: str, t
 
 def create_admin_event(db: Session, event_type: str, username: str, details: str = None, description: str = None) -> AdminEvent:
     """
-    Create a new admin event in the database.
+    Create a new admin event in the database with enhanced formatting and emoji support.
     Alias for add_admin_event for backward compatibility.
     
     Args:
@@ -196,11 +196,158 @@ def create_admin_event(db: Session, event_type: str, username: str, details: str
         description (str, optional): Alternative to details parameter for backward compatibility
         
     Returns:
-        AdminEvent: The created admin event
+        AdminEvent: The created admin event, or None if event should be skipped
     """
     # Use details if provided, otherwise use description, or empty string as fallback
     event_details = details if details is not None else (description or "")
-    return add_admin_event(db, event_type, username, event_details, datetime.now())
+    
+    # Enhanced formatting with emojis and display name resolution
+    formatted_details = _format_admin_event_details(db, event_type, event_details)
+    
+    # If formatting returns None, skip this event
+    if formatted_details is None:
+        return None
+    
+    return add_admin_event(db, event_type, username, formatted_details, datetime.now())
+
+def _format_admin_event_details(db: Session, event_type: str, details: str) -> str:
+    """
+    Format admin event details with emojis and improved readability.
+    
+    Args:
+        db (Session): Database session for display name lookups
+        event_type (str): Type of admin event
+        details (str): Original event details
+        
+    Returns:
+        str: Formatted details with emojis and display names
+    """
+    # Event type to emoji mapping
+    event_emojis = {
+        'user_removal': '🚫',
+        'direct_message': '💬',
+        'system_sync': '🔄',
+        'admin_granted': '👑',
+        'admin_promoted': '⬆️',
+        'admin_demoted': '⬇️',
+        'moderator_promoted': '🛡️',
+        'moderator_demoted': '📉',
+        'user_created': '👤',
+        'user_updated': '✏️',
+        'signal_identity_updated': '📱',
+        'matrix_user_connected': '🔗',
+        'room_invitation': '📨',
+        'room_creation': '🏠',
+        'permission_granted': '✅',
+        'permission_revoked': '❌',
+        'login': '🔐',
+        'logout': '🚪',
+        'password_changed': '🔑',
+        'email_verified': '📧',
+        'account_activated': '🟢',
+        'account_deactivated': '🔴',
+        'bulk_operation': '📦',
+        'data_export': '📤',
+        'data_import': '📥',
+        'backup_created': '💾',
+        'system_maintenance': '🔧',
+        'security_alert': '🚨',
+        'configuration_changed': '⚙️'
+    }
+    
+    # Get emoji for event type
+    emoji = event_emojis.get(event_type, '📝')
+    
+    # Skip formatting for certain event types that should be filtered out
+    if event_type == 'system_sync' and 'Incremental sync of' in details and 'users from Authentik' in details:
+        return None  # Signal to skip this event
+    
+    # Check if formatting has already been applied (starts with an emoji)
+    if details and len(details) > 0 and ord(details[0]) > 127:  # Unicode emoji range
+        return details  # Already formatted, return as-is
+    
+    # Resolve signal UUIDs to display names
+    formatted_details = _resolve_signal_display_names(db, details)
+    
+    # Add emoji prefix
+    formatted_details = f"{emoji} {formatted_details}"
+    
+    # Apply specific formatting rules based on event type
+    if event_type == 'user_removal':
+        # Extract reason if present
+        if 'Reason:' in formatted_details:
+            parts = formatted_details.split('Reason:')
+            if len(parts) == 2:
+                action_part = parts[0].strip()
+                reason_part = parts[1].strip()
+                formatted_details = f"{action_part} • Reason: {reason_part}"
+    
+    elif event_type == 'direct_message':
+        # Make direct message events more readable
+        if 'Direct messaged' in formatted_details:
+            formatted_details = formatted_details.replace('Direct messaged', 'Sent direct message to')
+    
+    elif event_type == 'system_sync':
+        # Improve system sync messages
+        if 'Full sync' in formatted_details:
+            formatted_details = formatted_details.replace('Full sync', 'Complete user synchronization')
+        elif 'Incremental sync' in formatted_details:
+            formatted_details = formatted_details.replace('Incremental sync', 'User data update')
+    
+    return formatted_details
+
+def _resolve_signal_display_names(db: Session, details: str) -> str:
+    """
+    Resolve signal UUIDs in event details to display names.
+    
+    Args:
+        db (Session): Database session
+        details (str): Event details that may contain signal UUIDs
+        
+    Returns:
+        str: Details with UUIDs replaced by display names where possible
+    """
+    import re
+    
+    # Pattern to match signal UUIDs (with or without @ prefix and domain)
+    uuid_pattern = r'@?signal_([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})(?::[a-zA-Z0-9.-]+)?'
+    
+    def replace_uuid_with_display_name(match):
+        full_match = match.group(0)
+        uuid_part = match.group(1)
+        
+        try:
+            # Try to find display name in Matrix cache
+            from app.db.models import MatrixUser
+            
+            # Try exact match first
+            matrix_user = db.query(MatrixUser).filter(
+                MatrixUser.user_id.like(f'%signal_{uuid_part}%')
+            ).first()
+            
+            if matrix_user and matrix_user.display_name:
+                return matrix_user.display_name
+            
+            # Fallback: try to find in MatrixUserCache
+            from app.db.models import MatrixUserCache
+            cached_user = db.query(MatrixUserCache).filter(
+                MatrixUserCache.user_id.like(f'%signal_{uuid_part}%')
+            ).first()
+            
+            if cached_user and cached_user.display_name:
+                return cached_user.display_name
+            
+            # If no display name found, return a cleaner format
+            return f"signal_{uuid_part[:8]}..."  # Show first 8 chars of UUID
+            
+        except Exception as e:
+            # If any error occurs, return the original match
+            return full_match
+    
+    # Replace all UUID matches with display names
+    formatted_details = re.sub(uuid_pattern, replace_uuid_with_display_name, details)
+    
+    return formatted_details
 
 def sync_user_data_incremental(db: Session, authentik_users: List[Dict[str, Any]], full_sync=False):
     """

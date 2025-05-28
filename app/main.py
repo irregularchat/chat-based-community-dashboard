@@ -1049,44 +1049,55 @@ def initialize_matrix_cache():
         from app.db.session import get_db
         from app.services.matrix_cache import matrix_cache
         
-        db = next(get_db())
-        try:
-            # Run startup sync in a separate thread to avoid blocking UI
-            import threading
-            import time
-            
-            def startup_sync_thread():
+        # Run startup sync in a separate thread to avoid blocking UI
+        import threading
+        import time
+        
+        def startup_sync_thread():
+            db = None
+            try:
+                # Create new event loop for this thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                # Create a new database session within this thread
+                db = next(get_db())
+                
+                # Run startup sync
+                result = loop.run_until_complete(matrix_cache.startup_sync(db))
+                logging.info(f"Startup Matrix sync completed: {result}")
+                
+                # Store result in session state for UI feedback
+                st.session_state['startup_sync_result'] = result
+                st.session_state['startup_sync_completed'] = True
+                
+            except Exception as e:
+                logging.error(f"Error in startup sync thread: {str(e)}")
+                st.session_state['startup_sync_result'] = {"status": "error", "error": str(e)}
+                st.session_state['startup_sync_completed'] = True
+            finally:
+                # Close the database session created in this thread
+                if db:
+                    try:
+                        db.close()
+                        logging.debug("Closed database session in startup sync thread")
+                    except Exception as e:
+                        logging.error(f"Error closing database session in startup sync thread: {e}")
+                
+                # Close the event loop
                 try:
-                    # Create new event loop for this thread
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    
-                    # Run startup sync
-                    result = loop.run_until_complete(matrix_cache.startup_sync(db))
-                    logging.info(f"Startup Matrix sync completed: {result}")
-                    
-                    # Store result in session state for UI feedback
-                    st.session_state['startup_sync_result'] = result
-                    st.session_state['startup_sync_completed'] = True
-                    
-                except Exception as e:
-                    logging.error(f"Error in startup sync thread: {str(e)}")
-                    st.session_state['startup_sync_result'] = {"status": "error", "error": str(e)}
-                    st.session_state['startup_sync_completed'] = True
-                finally:
                     loop.close()
-            
-            # Start sync in background thread
-            sync_thread = threading.Thread(target=startup_sync_thread, daemon=True)
-            sync_thread.start()
-            
-            # Mark that sync has been initiated
-            st.session_state['startup_sync_initiated'] = True
-            
-            return {"status": "initiated", "message": "Background sync started"}
-            
-        finally:
-            db.close()
+                except Exception as e:
+                    logging.error(f"Error closing event loop in startup sync thread: {e}")
+        
+        # Start sync in background thread
+        sync_thread = threading.Thread(target=startup_sync_thread, daemon=True)
+        sync_thread.start()
+        
+        # Mark that sync has been initiated
+        st.session_state['startup_sync_initiated'] = True
+        
+        return {"status": "initiated", "message": "Background sync started"}
             
     except Exception as e:
         logging.error(f"Error initializing Matrix cache: {str(e)}")

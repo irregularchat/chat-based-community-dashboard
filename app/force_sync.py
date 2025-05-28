@@ -71,15 +71,7 @@ def force_sync(incremental=False):
                 
                 if not authentik_users:
                     logging.info("No modified users found since last sync.")
-                    # Still record a sync event to update the timestamp
-                    sync_event = AdminEvent(
-                        timestamp=datetime.now(),
-                        event_type='system_sync',
-                        username='system',
-                        details='No modified users found since last sync'
-                    )
-                    db.add(sync_event)
-                    db.commit()
+                    # Don't record a sync event for no changes to avoid timeline noise
                     return
         
         # If not incremental or no last sync found, get all users
@@ -98,15 +90,30 @@ def force_sync(incremental=False):
         success = sync_user_data_incremental(db, authentik_users, full_sync=not incremental)
         
         if success:
-            # Record sync event
-            sync_event = AdminEvent(
-                timestamp=datetime.now(),
-                event_type='system_sync',
-                username='system',
-                details=f'{"Incremental" if incremental else "Full"} sync completed successfully'
-            )
-            db.add(sync_event)
-            db.commit()
+            # Record sync event with better formatting
+            if incremental:
+                # Only log incremental sync if there were actual changes
+                final_count = db.query(User).count()
+                changes = final_count - initial_count
+                if changes > 0:
+                    sync_event = AdminEvent(
+                        timestamp=datetime.now(),
+                        event_type='system_sync',
+                        username='system',
+                        details=f'User data update completed: {changes} users modified'
+                    )
+                    db.add(sync_event)
+                    db.commit()
+            else:
+                # Always log full sync
+                sync_event = AdminEvent(
+                    timestamp=datetime.now(),
+                    event_type='system_sync',
+                    username='system',
+                    details=f'Complete user synchronization: {total_users} users processed'
+                )
+                db.add(sync_event)
+                db.commit()
             
             # Verify the sync worked
             final_count = db.query(User).count()

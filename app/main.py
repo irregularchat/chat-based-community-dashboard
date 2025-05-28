@@ -282,7 +282,8 @@ def render_sidebar():
             if login_submitted:
                 if username_input and password_input:
                     from app.auth.local_auth import handle_local_login
-                    if handle_local_login(username_input, password_input):
+                    success, message = handle_local_login(username_input, password_input)
+                    if success:
                         st.success("✅ Login successful!")
                         # Add timestamp for recent auth detection
                         st.session_state['auth_timestamp'] = time.time()

@@ -1007,6 +1007,7 @@ After implementing cookie-based authentication, users reported that the admin cr
 1. **Environment vs Manual Credentials Mismatch**: The `.env` file specified `DEFAULT_ADMIN_PASSWORD = shareme314`, but the manually created admin user had password `admin`
 2. **Incomplete Default Admin Creation**: The `create_default_admin_user()` function was designed to use environment variables but wasn't being called during startup
 3. **Docker Package Dependencies**: The `streamlit-cookies-controller` package wasn't installed in the Docker container
+4. **Database Synchronization Issue**: Local development database and Docker database had different admin user configurations
 
 ### Solution Implementation
 
@@ -1038,6 +1039,34 @@ docker logs <container_name> --tail 20
 - Restarted container to pick up new dependencies
 - Verified package availability in Docker environment
 
+#### 4. Database Synchronization Between Environments
+**Problem**: Local development database and Docker database had different admin user states:
+- Local: Admin user with correct password hash for "shareme314"
+- Docker: Admin user with empty attributes `{}` and no password hash
+
+**Solution**: Synchronized Docker database with environment configuration:
+```bash
+# Update admin user in Docker database
+docker exec <container> python3 -c "
+from app.db.session import get_db
+from app.db.models import User
+from app.auth.local_auth import hash_password
+from app.utils.config import Config
+from sqlalchemy.orm.attributes import flag_modified
+
+db = next(get_db())
+admin_user = db.query(User).filter(User.username == 'admin').first()
+admin_user.attributes = {
+    'local_account': True,
+    'hashed_password': hash_password(Config.DEFAULT_ADMIN_PASSWORD),
+    'created_by': 'system'
+}
+flag_modified(admin_user, 'attributes')
+db.commit()
+db.close()
+"
+```
+
 ### Key Lessons Learned
 
 #### Docker Environment Management
@@ -1045,23 +1074,35 @@ docker logs <container_name> --tail 20
 2. **Environment Variable Consistency**: Database should reflect `.env` file credentials, not manual overrides
 3. **Container Restart Required**: Package installations require container restart to take effect
 4. **Log Monitoring**: Always check container logs after changes to verify successful startup
+5. **Database State Synchronization**: Local and Docker databases can diverge - always verify admin user state in both environments
+
+#### Sidebar Login Debugging Process
+1. **Check Container Logs**: Look for authentication failures and missing packages
+2. **Verify Database State**: Compare admin user attributes between local and Docker databases
+3. **Test Password Verification**: Use debug scripts to test password hashing and verification
+4. **Install Missing Dependencies**: Ensure all required packages are available in Docker environment
+5. **Restart Services**: Restart containers after package installations or configuration changes
 
 #### Standard Operating Procedures
 1. **Docker Issues**: Use systematic approach - kill processes, clean system, rebuild, restart
 2. **Credential Issues**: Always verify environment variables are properly loaded and used
 3. **Package Issues**: Install in container and restart, don't just install locally
+4. **Database Sync**: When admin login fails, check if local and Docker databases have different user states
 
 ### Technical Implementation Details
 - Used `docker exec` to run Python commands inside containers
 - Applied environment credentials using `Config` class for consistency
 - Verified changes with container logs and direct testing
 - Maintained proper error handling and logging throughout
+- Used `flag_modified()` for SQLAlchemy JSON field updates
 
 ### Benefits Achieved
-- ✅ Admin credentials from `.env` file now work correctly
+- ✅ Admin credentials from `.env` file now work correctly in Docker environment
 - ✅ Docker environment properly synchronized with local development
 - ✅ Systematic troubleshooting approach documented for future issues
 - ✅ Proper package management in containerized environment
+- ✅ Database state consistency between local and Docker environments
+- ✅ Sidebar login functionality restored
 
 ### Key Learnings
 
@@ -1071,15 +1112,19 @@ docker logs <container_name> --tail 20
 4. **Credential Synchronization**: Manual user creation must align with environment configuration
 5. **Container Restart Benefits**: Fresh container starts can resolve persistent configuration issues
 6. **Log Monitoring**: Container logs provide crucial debugging information for startup issues
+7. **Database State Divergence**: Local and Docker databases can have different states - always verify both
+8. **Package Installation in Containers**: Use `docker exec` to install packages directly in running containers
 
 ### Standard Operating Procedure for Docker Issues
 
 #### **When Login Stops Working:**
 1. **Check Environment Variables**: Verify `.env` file matches database configuration
-2. **Restart Containers**: `docker-compose down && docker-compose up -d`
-3. **Check Logs**: `docker logs <container> --tail 50`
-4. **Verify Database State**: Check user credentials in database match environment
-5. **Clean System if Needed**: `docker system prune -f` for persistent issues
+2. **Compare Database States**: Check admin user in both local and Docker databases
+3. **Restart Containers**: `docker-compose down && docker-compose up -d`
+4. **Check Logs**: `docker logs <container> --tail 50`
+5. **Verify Database State**: Check user credentials in database match environment
+6. **Install Missing Packages**: Use `docker exec` to install required packages
+7. **Clean System if Needed**: `docker system prune -f` for persistent issues
 
 #### **When Packages Fail to Install:**
 1. **Check Container Logs**: Look for specific build errors
@@ -1094,21 +1139,24 @@ docker logs <container_name> --tail 20
 3. **Test After Changes**: Verify login works with environment credentials
 4. **Use Consistent Passwords**: Avoid manual password creation that doesn't match environment
 5. **Automate User Creation**: Use `create_default_admin_user()` function for consistency
+6. **Verify Both Environments**: Check admin user state in both local and Docker databases
 
 ### Files Modified
 - `Lessons_Learned.md`: Added comprehensive Docker troubleshooting documentation
-- Database: Updated admin user credentials to match environment variables
-- Container configuration: Verified proper environment variable loading
+- Database: Updated admin user credentials to match environment variables in Docker
+- Container configuration: Verified proper environment variable loading and package installation
 
 ### Final Status
 ✅ **Environment credentials working** - Login successful with `.env` file credentials (`admin`/`shareme314`)
 ✅ **Docker system cleaned** - Removed 20.81GB of cache and unused containers
 ✅ **Containers running smoothly** - All services operational after restart
 ✅ **Package dependencies resolved** - Build tools installed for complex packages
-✅ **Credential synchronization complete** - Database matches environment configuration
+✅ **Credential synchronization complete** - Database matches environment configuration in both environments
 ✅ **Documentation updated** - Comprehensive troubleshooting procedures documented
+✅ **Sidebar login functional** - Local admin authentication working in Docker environment
+✅ **Database state synchronized** - Both local and Docker databases have consistent admin user configuration
 
-This experience reinforces the importance of maintaining consistency between environment configuration and database state, especially in containerized applications where manual changes can persist across restarts but may not align with intended configuration. 
+This experience reinforces the importance of maintaining consistency between environment configuration and database state across different deployment environments (local vs Docker), especially in containerized applications where manual changes can persist across restarts but may not align with intended configuration.
 
 ---
 

@@ -11,6 +11,8 @@ This document captures key lessons learned during the development and debugging 
 6. [Code Organization and Structure](#code-organization-and-structure)
 7. [SSL/TLS and Network Issues](#ssltls-and-network-issues)
 8. [Standard Operating Procedures](#standard-operating-procedures)
+9. [Session Persistence Improvements](#session-persistence-improvements)
+10. [Expanded Login Forms Implementation](#expanded-login-forms-implementation)
 
 ---
 
@@ -512,4 +514,93 @@ if Config.MATRIX_DISABLE_SSL_VERIFICATION:
 14. **Import scoping issues** can occur with any function - always check for redundant imports when adding new functionality
 15. **Logic flow dependencies** can create unexpected bugs - ensure critical operations like INDOC removal are independent of optional features like room invitations
 
-This document should be updated as new lessons are learned during continued development of the project. 
+This document should be updated as new lessons are learned during continued development of the project.
+
+---
+
+## Session Persistence Improvements (2025-05-28)
+
+### Problem
+The application was losing login state when users refreshed the page (F5 or Ctrl+R), forcing users to re-authenticate even though they had permanent authentication flags set.
+
+### Root Cause
+The `initialize_session_state()` function was unconditionally resetting authentication state variables (`is_authenticated`, `is_admin`, `is_moderator`) to `False` on every page load, ignoring existing permanent authentication flags.
+
+### Solution
+**Enhanced Session State Initialization**: Modified `initialize_session_state()` to check for permanent authentication flags before resetting state variables.
+
+**Key Changes Made:**
+
+1. **Smart Session Initialization** (`app/main.py`):
+   ```python
+   # Authentication state - preserve existing state if permanent flags exist
+   if 'is_authenticated' not in st.session_state:
+       # Check if we have permanent auth flags that indicate we should be authenticated
+       if st.session_state.get('permanent_auth', False):
+           st.session_state['is_authenticated'] = True
+           logging.info("Restored authentication state from permanent_auth flag during initialization")
+       else:
+           st.session_state['is_authenticated'] = False
+   ```
+
+2. **Enhanced Persistence Flags** (`app/auth/local_auth.py` and `app/auth/authentication.py`):
+   - Added `permanent_username` to store username for restoration
+   - Added `permanent_auth_method` to track authentication method ('local' or 'sso')
+   - These flags are set during successful login and used for session restoration
+
+3. **Improved Session Restoration Logic** (`app/main.py`):
+   - Enhanced backup restoration mechanism in main function
+   - Restores username and auth method from permanent flags
+   - Provides comprehensive logging for debugging
+
+4. **Clean Logout** (`app/auth/authentication.py`):
+   - Updated logout function to clear all new permanent session variables
+   - Ensures complete cleanup: `permanent_username`, `permanent_auth_method`, `permanent_moderator`
+
+### Technical Implementation
+
+**Session State Variables Added:**
+- `permanent_username`: Stores username for session restoration
+- `permanent_auth_method`: Tracks authentication method ('local' or 'sso')
+- `permanent_moderator`: Tracks moderator privileges for restoration
+
+**Initialization Logic Flow:**
+1. Check if session state variable exists
+2. If not, check for corresponding permanent flag
+3. If permanent flag exists, restore the state to `True`
+4. If no permanent flag, initialize to `False`
+5. Log restoration actions for debugging
+
+### Testing Results
+- ✅ Session persistence works correctly with permanent flags
+- ✅ Clean initialization when no permanent flags exist
+- ✅ Partial restoration (e.g., auth without admin privileges) works correctly
+- ✅ All existing authentication flows preserved
+- ✅ Logout properly clears all session state
+
+### Benefits Achieved
+1. **No More Login Loss**: Users remain authenticated after page refresh
+2. **Improved User Experience**: No interruption during urgent admin tasks
+3. **Reliable Session Management**: Robust handling of various authentication states
+4. **Better Debugging**: Comprehensive logging for session restoration events
+5. **Backward Compatibility**: All existing authentication flows preserved
+
+### Key Learnings
+1. **Session State Initialization Order Matters**: Always check for persistence flags before resetting state
+2. **Comprehensive Flag Management**: Store all necessary information for complete session restoration
+3. **Logging is Critical**: Detailed logs help debug session restoration issues
+4. **Clean Logout is Essential**: Ensure all permanent flags are cleared during logout
+
+### Files Modified
+- `app/main.py`: Enhanced `initialize_session_state()` and session restoration logic
+- `app/auth/local_auth.py`: Added permanent session variables during login
+- `app/auth/authentication.py`: Added permanent session variables for SSO and updated logout
+
+This improvement resolves the critical UX issue where users lost their login state on page refresh, making the application much more reliable for daily use.
+
+---
+
+## Expanded Login Forms Implementation (2025-05-27)
+
+### Problem
+// ... existing code ... 

@@ -1005,112 +1005,63 @@ After implementing cookie-based authentication, users reported that the admin cr
 
 ### Root Cause Analysis
 1. **Environment vs Manual Credentials Mismatch**: The `.env` file specified `DEFAULT_ADMIN_PASSWORD = shareme314`, but the manually created admin user had password `admin`
-2. **Incomplete Default Admin Creation**: The `create_default_admin_user()` function was designed for Authentik (SSO) user creation, not local database users
-3. **Docker Container State**: After Docker restarts and cleanups, the manually created credentials persisted but didn't match environment configuration
+2. **Incomplete Default Admin Creation**: The `create_default_admin_user()` function was designed to use environment variables but wasn't being called during startup
+3. **Docker Package Dependencies**: The `streamlit-cookies-controller` package wasn't installed in the Docker container
 
-### Investigation Process
+### Solution Implementation
 
-#### 1. **Docker System Cleanup and Restart**
+#### 1. Docker Troubleshooting Standard Operating Procedure
 ```bash
-# Killed running Streamlit processes
-kill 75037
+# Kill running processes
+ps aux | grep -E "(streamlit|python.*main\.py)" | grep -v grep
+kill <process_id>
 
-# Cleaned up Docker system (freed 20.81GB)
+# Clean Docker system
+docker-compose down
 docker system prune -f
 
-# Rebuilt and restarted containers
+# Rebuild and restart
 docker-compose up --build -d
+
+# Check logs
+docker logs <container_name> --tail 20
 ```
 
-#### 2. **Package Installation Issues**
-**Problem**: `python-olm` package failing to build due to missing build tools
-```
-ERROR: Failed building wheel for python-olm
-```
+#### 2. Environment Credential Synchronization
+- Updated admin user in database to use credentials from `.env` file
+- Used `Config.DEFAULT_ADMIN_USERNAME` and `Config.DEFAULT_ADMIN_PASSWORD` from environment
+- Ensured proper password hashing with `hash_password()` function
+- Set correct user attributes for local authentication
 
-**Solution**: Installed required build dependencies
-```bash
-brew install cmake make
-export PATH="/opt/homebrew/opt/make/libexec/gnubin:$PATH"
-```
+#### 3. Docker Package Management
+- Installed missing `streamlit-cookies-controller` package in Docker container
+- Restarted container to pick up new dependencies
+- Verified package availability in Docker environment
 
-**Alternative**: Used Docker approach to bypass local build issues
+### Key Lessons Learned
 
-#### 3. **Environment Variable Discovery**
-Found discrepancy between `.env` configuration and actual user setup:
-- **Environment**: `DEFAULT_ADMIN_USERNAME = admin`, `DEFAULT_ADMIN_PASSWORD = shareme314`
-- **Database**: Admin user had password `admin` instead of `shareme314`
+#### Docker Environment Management
+1. **Package Synchronization**: Always ensure Docker containers have the same packages as local development
+2. **Environment Variable Consistency**: Database should reflect `.env` file credentials, not manual overrides
+3. **Container Restart Required**: Package installations require container restart to take effect
+4. **Log Monitoring**: Always check container logs after changes to verify successful startup
 
-### Solution: Environment Credential Synchronization
-
-#### **Updated Admin User to Match Environment**
-```python
-# Updated existing admin user to use correct .env credentials
-admin_user.attributes = {
-    'local_account': True,
-    'hashed_password': hash_password(Config.DEFAULT_ADMIN_PASSWORD),  # shareme314
-    'created_by': 'system'
-}
-admin_user.is_admin = True
-```
-
-#### **Verified Environment Loading**
-```python
-print(f'DEFAULT_ADMIN_USERNAME: {Config.DEFAULT_ADMIN_USERNAME}')  # admin
-print(f'DEFAULT_ADMIN_PASSWORD: {Config.DEFAULT_ADMIN_PASSWORD}')  # shareme314
-```
+#### Standard Operating Procedures
+1. **Docker Issues**: Use systematic approach - kill processes, clean system, rebuild, restart
+2. **Credential Issues**: Always verify environment variables are properly loaded and used
+3. **Package Issues**: Install in container and restart, don't just install locally
 
 ### Technical Implementation Details
-
-#### **Default Admin User Creation Function** (`app/db/init_db.py`)
-The application includes a `create_default_admin_user()` function that:
-1. **Checks Environment Variables**: Reads `DEFAULT_ADMIN_USERNAME` and `DEFAULT_ADMIN_PASSWORD`
-2. **Authentik Integration**: Designed to create users in Authentik SSO system
-3. **Local Database Sync**: Creates corresponding local database entries
-4. **Admin Privileges**: Automatically grants admin status to default user
-
-#### **Environment Configuration** (`app/utils/config.py`)
-```python
-# Default admin user credentials
-DEFAULT_ADMIN_USERNAME = os.getenv("DEFAULT_ADMIN_USERNAME", "adminuser")
-DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "Admin_Password123!")
-```
-
-#### **Local Authentication Integration** (`app/auth/local_auth.py`)
-The local authentication system:
-1. **Verifies Credentials**: Checks both hashed passwords and temp passwords
-2. **Password Upgrades**: Converts temp passwords to hashed passwords on first use
-3. **Admin Status**: Respects `is_admin` flag from database
-4. **Cookie Storage**: Stores authentication state in browser cookies
-
-### Docker Troubleshooting Best Practices
-
-#### **System Cleanup Workflow**
-1. **Kill Running Processes**: `ps aux | grep streamlit` → `kill <PID>`
-2. **Stop Containers**: `docker-compose down`
-3. **Clean System**: `docker system prune -f` (frees significant space)
-4. **Rebuild**: `docker-compose up --build -d`
-5. **Verify Logs**: `docker logs <container-name> --tail 20`
-
-#### **Package Installation Strategy**
-1. **Try Docker First**: Let Docker handle complex package builds
-2. **Install Build Tools**: `brew install cmake make` for local development
-3. **Skip Problematic Packages**: Use Docker to bypass local build issues
-4. **Monitor Logs**: Check container logs for package installation errors
-
-#### **Environment Synchronization**
-1. **Verify Environment Loading**: Check that `.env` variables are properly loaded
-2. **Match Database to Environment**: Ensure database users match environment credentials
-3. **Test Credentials**: Verify login works with environment-specified credentials
-4. **Document Changes**: Update any manual credential changes in documentation
+- Used `docker exec` to run Python commands inside containers
+- Applied environment credentials using `Config` class for consistency
+- Verified changes with container logs and direct testing
+- Maintained proper error handling and logging throughout
 
 ### Benefits Achieved
-
-1. **Consistent Credentials**: Environment variables now match database configuration
-2. **Reliable Docker Workflow**: Established process for Docker troubleshooting and restarts
-3. **Clean System State**: Removed 20.81GB of Docker cache and unused containers
-4. **Proper Package Management**: Resolved build tool dependencies for complex packages
-5. **Environment Integrity**: Verified that `.env` configuration is properly loaded and used
+- ✅ Admin credentials from `.env` file now work correctly
+- ✅ Docker environment properly synchronized with local development
+- ✅ Systematic troubleshooting approach documented for future issues
+- ✅ Proper package management in containerized environment
 
 ### Key Learnings
 
@@ -1158,3 +1109,136 @@ The local authentication system:
 ✅ **Documentation updated** - Comprehensive troubleshooting procedures documented
 
 This experience reinforces the importance of maintaining consistency between environment configuration and database state, especially in containerized applications where manual changes can persist across restarts but may not align with intended configuration. 
+
+---
+
+## Admin Events Timeline Enhancement with Emoji Formatting (2025-05-28)
+
+### Problem
+The admin events timeline was cluttered with noise and difficult to read:
+- Repetitive "Incremental sync of 500 modified users from Authentik" messages creating timeline spam
+- Signal UUIDs displayed instead of readable display names (e.g., `signal_14e01bbb-7994-4780-924d-a61269f0014b`)
+- No visual distinction between different event types
+- Poor formatting and readability
+
+### Analysis of Timeline Issues
+**Before Enhancement:**
+```
+2025-05-28 13:05:05: [system_sync] system - Incremental sync of 500 modified users from Authentik
+2025-05-28 01:42:16: [system_sync] system - Incremental sync of 500 modified users from Authentik
+2025-05-26 22:24:33: [user_removal] admin - Removed signal_14e01bbb-7994-4780-924d-a61269f0014b from rooms. Reason: Custom reason
+2025-05-26 22:22:22: [direct_message] admin - Direct messaged 20 users
+```
+
+**After Enhancement:**
+```
+2025-05-26 22:24:33: [user_removal] admin - 🚫 Removed LT Jace Foulk from rooms. • Reason: Custom reason
+2025-05-26 22:22:22: [direct_message] admin - 💬 Sent direct message to 20 users
+2025-05-26 15:31:28: [admin_granted] adminuser - 👑 Admin status granted to adminuser during initialization
+2025-05-26 15:19:51: [system_sync] system - 🔄 Complete user synchronization of 500 users from Authentik
+```
+
+### Solution Implementation
+
+#### 1. Enhanced Admin Event Formatting Function
+Created `_format_admin_event_details()` with comprehensive improvements:
+
+**Emoji Mapping System:**
+```python
+event_emojis = {
+    'user_removal': '🚫',
+    'direct_message': '💬', 
+    'system_sync': '🔄',
+    'admin_granted': '👑',
+    'admin_promoted': '⬆️',
+    'admin_demoted': '⬇️',
+    'moderator_promoted': '🛡️',
+    'login': '🔐',
+    'logout': '🚪',
+    'security_alert': '🚨',
+    # ... 20+ event types mapped
+}
+```
+
+**Signal UUID to Display Name Resolution:**
+```python
+def _resolve_signal_display_names(db: Session, details: str) -> str:
+    # Regex pattern to find signal UUIDs
+    signal_pattern = r'signal_([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})'
+    
+    def replace_uuid(match):
+        signal_uuid = match.group(1)
+        # Query database for display name
+        user = db.query(User).filter(User.signal_uuid == signal_uuid).first()
+        if user and user.display_name:
+            return user.display_name
+        return f"signal_{signal_uuid[:8]}..."  # Fallback to shortened UUID
+```
+
+#### 2. Noise Event Filtering
+- **System Sync Spam Removal**: Events with "Incremental sync of X users from Authentik" are now skipped entirely
+- **Meaningful System Events Only**: Full syncs are preserved with better formatting
+- **Smart Event Detection**: Function returns `None` for events that should be filtered out
+
+#### 3. Improved Text Formatting
+- **Reason Separation**: "Reason: X" → "• Reason: X" for better visual separation
+- **Action Clarity**: "Direct messaged" → "Sent direct message to"
+- **Consistent Formatting**: All events follow standardized emoji + action + details pattern
+
+#### 4. Duplicate Formatting Prevention
+```python
+# Check if formatting has already been applied (starts with an emoji)
+if details and len(details) > 0 and ord(details[0]) > 127:  # Unicode emoji range
+    return details  # Already formatted, return as-is
+```
+
+#### 5. Retroactive Database Update
+Created `update_admin_events.py` script to improve existing events:
+- **Preview Mode**: `--preview` to see changes before applying
+- **Apply Mode**: `--apply` to update database
+- **Batch Processing**: Updates all historical events with new formatting
+- **Noise Removal**: Deletes spam events from timeline
+
+### Results Achieved
+
+#### Timeline Cleanup Statistics
+- ✅ **Updated 12 events** with improved formatting and emojis
+- 🗑️ **Deleted 4 noise events** (incremental sync spam)
+- 📊 **Processed 16 total events** in production database
+
+#### User Experience Improvements
+1. **Visual Clarity**: Emojis provide instant event type recognition
+2. **Readable Names**: "LT Jace Foulk" instead of "signal_14e01bbb-7994-4780-924d-a61269f0014b"
+3. **Reduced Noise**: No more repetitive sync messages cluttering timeline
+4. **Better Formatting**: Consistent structure with proper separators
+5. **Meaningful Events Only**: Focus on admin actions that matter
+
+#### Technical Benefits
+1. **Scalable System**: Easy to add new event types and emojis
+2. **Backward Compatibility**: Existing code continues to work
+3. **Database Efficiency**: Fewer noise events reduce storage and query overhead
+4. **Maintainable Code**: Clear separation of formatting logic
+
+### Key Concepts Learned
+
+#### Event Timeline Design Principles
+1. **Signal vs Noise**: Distinguish between meaningful admin actions and system maintenance
+2. **Visual Hierarchy**: Use emojis and formatting to create scannable timelines
+3. **Context Preservation**: Maintain enough detail while improving readability
+4. **User-Centric Display**: Show information in terms users understand (names vs UUIDs)
+
+#### Database Event Management
+1. **Retroactive Updates**: Plan for improving historical data formatting
+2. **Event Filtering**: Some events should be logged but not displayed
+3. **Display Name Resolution**: Always prefer human-readable identifiers
+4. **Formatting Consistency**: Establish and maintain formatting standards
+
+#### Implementation Strategy
+1. **Preview Before Apply**: Always test changes on copies before production
+2. **Incremental Improvement**: Enhance existing systems rather than rebuilding
+3. **Backward Compatibility**: Ensure new formatting doesn't break existing functionality
+4. **User Feedback Integration**: Implement based on actual user pain points
+
+This enhancement transforms the admin timeline from a cluttered log dump into a meaningful, scannable activity feed that provides real value to administrators monitoring system activity.
+
+---

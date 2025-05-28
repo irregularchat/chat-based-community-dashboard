@@ -2814,3 +2814,105 @@ async def send_signal_bridge_message(user_id: str, message: str) -> bool:
     except Exception as e:
         logger.error(f"Error sending Signal bridge message: {e}")
         return False
+
+async def send_welcome_message_with_encryption_delay(user_id: str, welcome_message: str, delay_seconds: int = 5) -> Tuple[bool, Optional[str], Optional[str]]:
+    """
+    Send a welcome message to a Matrix user with encryption establishment delay.
+    
+    This function addresses the common issue where messages sent immediately after
+    creating a direct chat room are encrypted but can't be decrypted by the recipient
+    because encryption keys haven't been established yet.
+    
+    The solution:
+    1. Create/find the direct chat room
+    2. Send a simple "hello" message to establish encryption
+    3. Wait for encryption keys to be exchanged
+    4. Send the actual welcome message
+    
+    Args:
+        user_id (str): The Matrix user ID to send the message to
+        welcome_message (str): The actual welcome message content
+        delay_seconds (int): Seconds to wait between hello and welcome message (default: 5)
+        
+    Returns:
+        Tuple[bool, Optional[str], Optional[str]]: Tuple containing:
+            - Success status (bool)
+            - Room ID where message was sent (str or None)
+            - Event ID of the welcome message (str or None)
+    """
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active. Cannot send welcome message.")
+        return False, None, None
+    
+    try:
+        logger.info(f"Starting welcome message sequence for {user_id} with {delay_seconds}s encryption delay")
+        
+        # Step 1: Send a simple hello message to establish encryption
+        hello_message = "👋 Hello! Setting up our secure chat..."
+        hello_success, room_id, hello_event_id = await _send_direct_message_async(user_id, hello_message)
+        
+        if not hello_success or not room_id:
+            logger.error(f"Failed to send initial hello message to {user_id}")
+            return False, None, None
+        
+        logger.info(f"✅ Hello message sent to {user_id} in room {room_id}, waiting {delay_seconds}s for encryption...")
+        
+        # Step 2: Wait for encryption keys to be established
+        await asyncio.sleep(delay_seconds)
+        
+        # Step 3: Send the actual welcome message
+        logger.info(f"Sending welcome message to {user_id} after encryption delay")
+        welcome_success, _, welcome_event_id = await _send_direct_message_async(user_id, welcome_message)
+        
+        if welcome_success:
+            logger.info(f"✅ Welcome message sequence completed for {user_id}")
+            return True, room_id, welcome_event_id
+        else:
+            logger.warning(f"⚠️ Hello message sent but welcome message failed for {user_id}")
+            return False, room_id, hello_event_id
+            
+    except Exception as e:
+        logger.error(f"Error in welcome message sequence for {user_id}: {str(e)}")
+        return False, None, None
+
+def send_welcome_message_with_encryption_delay_sync(user_id: str, welcome_message: str, delay_seconds: int = 5) -> Tuple[bool, Optional[str], Optional[str]]:
+    """
+    Synchronous wrapper for sending welcome messages with encryption delay.
+    
+    Args:
+        user_id (str): The Matrix user ID to send the message to
+        welcome_message (str): The actual welcome message content
+        delay_seconds (int): Seconds to wait between hello and welcome message (default: 5)
+        
+    Returns:
+        Tuple[bool, Optional[str], Optional[str]]: Tuple containing:
+            - Success status (bool)
+            - Room ID where message was sent (str or None)
+            - Event ID of the welcome message (str or None)
+    """
+    if not MATRIX_ACTIVE:
+        logger.warning("Matrix integration is not active. Skipping welcome message.")
+        return False, None, None
+    
+    try:
+        # Create a new event loop for this operation
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            result = loop.run_until_complete(
+                send_welcome_message_with_encryption_delay(user_id, welcome_message, delay_seconds)
+            )
+            
+            if result[0]:
+                logger.info(f"✅ Welcome message sequence completed for {user_id}")
+            else:
+                logger.warning(f"❌ Welcome message sequence failed for {user_id}")
+            
+            return result
+        finally:
+            loop.close()
+            
+    except Exception as e:
+        logger.error(f"Error in welcome message sequence: {str(e)}")
+        return False, None, None

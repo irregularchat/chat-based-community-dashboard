@@ -1109,6 +1109,13 @@ def main():
         # Initialize the application
         initialize_session_state()
         
+        # Check browser localStorage for auth state FIRST (before session state checks)
+        from app.auth.browser_storage import check_and_restore_browser_auth
+        browser_auth_restored = check_and_restore_browser_auth()
+        
+        if browser_auth_restored:
+            logging.info("Authentication state restored from browser localStorage")
+        
         # Verify critical session state variables are initialized
         critical_state_vars = [
             'matrix_user_selected', 
@@ -1154,6 +1161,11 @@ def main():
                 'email': '',
                 'is_local_admin': auth_method == 'local'
             }
+            
+            # Store auth state in browser localStorage for persistence
+            from app.auth.browser_storage import store_auth_state_in_browser
+            is_moderator = st.session_state.get('is_moderator', False)
+            store_auth_state_in_browser(username, is_admin, is_moderator, auth_method)
             
             # Clear the URL to avoid repeating the login on refresh
             logging.info(f"Auth state restored from query params: user={username}, admin={is_admin}")

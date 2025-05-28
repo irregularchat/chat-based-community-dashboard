@@ -14,6 +14,7 @@ import streamlit as st
 from app.utils.config import Config
 from app.db.session import get_db
 from app.db.operations import is_moderator, get_user_by_username
+from app.auth.browser_storage import store_auth_state_in_browser
 
 
 def hash_password(password: str) -> str:
@@ -198,6 +199,9 @@ def handle_local_login(username, password):
         st.session_state['permanent_username'] = username
         st.session_state['permanent_auth_method'] = 'local'
         
+        # Store auth state in browser localStorage for persistence across page refreshes
+        store_auth_state_in_browser(username, True, st.session_state['is_moderator'], 'local')
+        
         # Log successful login with persistence
         logging.info("Local admin login successful with persistence flags set")
         
@@ -234,6 +238,9 @@ def handle_local_login(username, password):
         # Store additional permanent session variables for restoration
         st.session_state['permanent_username'] = user.username
         st.session_state['permanent_auth_method'] = 'local'
+        
+        # Store auth state in browser localStorage for persistence across page refreshes
+        store_auth_state_in_browser(user.username, user.is_admin, user.is_moderator, 'local')
         
         # Update last login time
         try:

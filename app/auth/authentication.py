@@ -11,6 +11,7 @@ import time
 from requests.auth import HTTPBasicAuth
 from app.db.session import get_db
 from app.db.operations import is_moderator
+from app.auth.browser_storage import store_auth_state_in_browser, clear_auth_state_from_browser
 
 def get_login_url(redirect_path=None):
     """
@@ -299,6 +300,9 @@ def handle_auth_callback(code, state):
             st.session_state['permanent_username'] = username
             st.session_state['permanent_auth_method'] = 'sso'
             
+            # Store auth state in browser localStorage for persistence across page refreshes
+            store_auth_state_in_browser(username, is_admin, st.session_state['is_moderator'], 'sso')
+            
             return True
         except Exception as e:
             logging.error(f"Error fetching or processing user info: {str(e)}")
@@ -358,6 +362,9 @@ def logout():
     for key in auth_keys:
         if key in st.session_state:
             del st.session_state[key]
+    
+    # Clear auth state from browser localStorage
+    clear_auth_state_from_browser()
 
 def require_authentication(page_path=None):
     """

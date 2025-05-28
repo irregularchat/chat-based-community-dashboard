@@ -16,6 +16,9 @@ This document captures key lessons learned during the development and debugging 
 11. [Database Session Race Condition in Threading](#database-session-race-condition-in-threading)
 12. [Browser localStorage Session Persistence](#browser-localstorage-session-persistence)
 13. [Cookie-Based Authentication Implementation](#cookie-based-authentication-implementation)
+14. [Docker Troubleshooting and Environment Credential Management](#docker-troubleshooting-and-environment-credential-management)
+15. [Admin Events Timeline Enhancement with Emoji Formatting](#admin-events-timeline-enhancement-with-emoji-formatting)
+16. [Page Navigation Conflict Resolution](#page-navigation-conflict-resolution)
 
 ---
 
@@ -1293,5 +1296,91 @@ Created and applied `update_admin_events.py` script to improve existing events:
 4. **User Feedback Integration**: Implement based on actual user pain points
 
 This enhancement transforms the admin timeline from a cluttered log dump into a meaningful, scannable activity feed that provides real value to administrators monitoring system activity.
+
+---
+
+## Page Navigation Conflict Resolution (2025-05-28)
+
+### Problem
+After successful login, users were stuck on the Community Timeline page and couldn't navigate to other pages using the dropdown menu. The dropdown selections were being ignored, and the application remained on the Community page regardless of what was selected.
+
+### Root Cause Analysis
+1. **Query Parameter Priority**: The Community button set a `?page=community` query parameter that took precedence over dropdown selections
+2. **Session State Conflict**: The `current_page` session state from dropdown selections was being overridden by the community query parameter
+3. **Navigation Logic Flaw**: The page navigation logic always prioritized query parameters over session state, even when users were actively using the dropdown
+
+### Technical Details
+**Before Fix:**
+```python
+# Always used query param if present, ignoring dropdown selection
+if query_page == 'community':
+    current_page = "Community"
+else:
+    current_page = st.session_state.get('current_page', 'Create User')
+```
+
+**After Fix:**
+```python
+# Only use community query param if no dropdown selection exists
+if query_page == 'community' and 'current_page' not in st.session_state:
+    current_page = "Community"
+else:
+    # Use dropdown selection, clear conflicting query params
+    current_page = st.session_state.get('current_page', 'Create User')
+    if query_page == 'community' and 'current_page' in st.session_state:
+        clean_params = {k: v for k, v in st.query_params.items() if k != 'page'}
+        st.query_params.update(clean_params)
+```
+
+### Solution Implementation
+
+#### 1. **Smart Query Parameter Handling**
+- Only use `?page=community` when no dropdown selection exists in session state
+- Clear community query parameters when dropdown navigation is active
+- Prioritize user's active dropdown selections over stale query parameters
+
+#### 2. **Community Button State Management**
+- Clear `current_page` session state when Community button is clicked
+- This allows the community query parameter to take effect
+- Ensures clean transition between navigation modes
+
+#### 3. **Navigation Priority Logic**
+1. **Dropdown Selection**: Takes highest priority when user actively selects from dropdown
+2. **Community Button**: Works when no dropdown selection is active
+3. **Default Page**: Falls back to "Create User" when no other navigation is active
+
+### Benefits Achieved
+- ✅ **Dropdown Navigation Works**: Users can select any page from dropdown after login
+- ✅ **Community Button Works**: Community Timeline button still functions correctly
+- ✅ **No Navigation Conflicts**: Clean separation between navigation methods
+- ✅ **Intuitive User Experience**: Navigation behaves as users expect
+- ✅ **State Management**: Proper handling of session state vs query parameters
+
+### Key Learnings
+
+#### Navigation State Management
+1. **Session State vs Query Parameters**: Session state should take priority for active user interactions
+2. **State Cleanup**: Clear conflicting state when switching navigation modes
+3. **User Intent Priority**: Active user selections should override passive query parameters
+4. **Navigation Modes**: Different navigation methods (dropdown vs buttons) need separate handling
+
+#### Streamlit Navigation Patterns
+1. **Query Parameter Persistence**: Query parameters persist across page reloads and can cause conflicts
+2. **Session State Priority**: Use session state for active user interactions
+3. **State Synchronization**: Keep query parameters and session state synchronized
+4. **Clean Transitions**: Clear conflicting state when switching between navigation modes
+
+### Files Modified
+- `app/main.py`: Updated page navigation logic and Community button behavior
+
+### Testing Results
+- ✅ Login with sidebar form works correctly
+- ✅ After login, dropdown navigation functions properly
+- ✅ Can navigate to "List & Manage Users", "Create Invite", etc.
+- ✅ Community Timeline button still works when clicked
+- ✅ No conflicts between navigation methods
+- ✅ Clean URL state management
+
+This fix resolves the critical UX issue where users were trapped on the Community Timeline after login and couldn't access other dashboard features through the dropdown navigation.
 
 ---

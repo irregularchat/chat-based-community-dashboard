@@ -39,6 +39,12 @@ import time
 import asyncio
 # from app.auth.session import check_authentication  # TODO: Implement session module
 
+from app.auth.authentication import handle_auth_callback, get_login_url, logout
+from app.auth.local_auth import handle_local_login
+from app.auth.cookie_auth import restore_session_from_cookies, check_and_refresh_cookies, hide_cookie_component
+from app.ui.common import display_useful_links
+from app.services.matrix_cache import matrix_cache
+
 # Initialize logging first
 setup_logging()
 
@@ -964,19 +970,17 @@ def render_main_content():
     # Handle unauthenticated users
     if current_page in ["Prompts Manager", "Settings"] and not is_authenticated:
         # Require authentication for sensitive pages
-        from app.ui.common import display_login_button
         st.markdown("## Authentication Required")
         st.markdown("You must login to access this page.")
-        display_login_button(location="main")
+        st.markdown("Please use the login forms in the sidebar to authenticate.")
         return
     
     # Global authentication check for most pages (except Create User and Community)
     if not is_authenticated and current_page not in ["Create User", "Community"]:
         # Show login page instead of the requested page
-        from app.ui.common import display_login_button
         st.markdown("## Welcome to the Community Dashboard")
         st.markdown("Please log in to access all features.")
-        display_login_button(location="main")
+        st.markdown("👈 **Use the login forms in the sidebar** to authenticate with either SSO or local admin credentials.")
         return
     
     # Display welcome message for authenticated users
@@ -1106,15 +1110,31 @@ def initialize_matrix_cache():
 def main():
     """Main application entry point"""
     try:
+        # Hide the cookie controller component
+        hide_cookie_component()
+        
         # Initialize the application
         initialize_session_state()
         
-        # Check browser localStorage for auth state FIRST (before session state checks)
-        from app.auth.browser_storage import check_and_restore_browser_auth
-        browser_auth_restored = check_and_restore_browser_auth()
+        # Check browser cookies for auth state FIRST (before session state checks)
+        cookie_auth_restored = False
+        try:
+            cookie_auth_restored = restore_session_from_cookies()
+            if cookie_auth_restored:
+                logging.info("Authentication state restored from browser cookies")
+        except Exception as cookie_error:
+            logging.warning(f"Could not restore from cookies: {cookie_error}")
+            # Reset cookie controller to try to recover from widget errors
+            from app.auth.cookie_auth import reset_cookie_controller
+            reset_cookie_controller()
         
-        if browser_auth_restored:
-            logging.info("Authentication state restored from browser localStorage")
+        # Check and refresh cookies for authenticated users (with error handling)
+        if st.session_state.get('is_authenticated', False):
+            try:
+                check_and_refresh_cookies()
+            except Exception as refresh_error:
+                logging.warning(f"Could not refresh cookies: {refresh_error}")
+                # Don't fail the entire app if cookie refresh fails
         
         # Verify critical session state variables are initialized
         critical_state_vars = [
@@ -1162,10 +1182,10 @@ def main():
                 'is_local_admin': auth_method == 'local'
             }
             
-            # Store auth state in browser localStorage for persistence
-            from app.auth.browser_storage import store_auth_state_in_browser
+            # Store auth state in browser cookies for persistence
+            from app.auth.cookie_auth import store_auth_in_cookies
             is_moderator = st.session_state.get('is_moderator', False)
-            store_auth_state_in_browser(username, is_admin, is_moderator, auth_method)
+            store_auth_in_cookies(username, is_admin, is_moderator, auth_method)
             
             # Clear the URL to avoid repeating the login on refresh
             logging.info(f"Auth state restored from query params: user={username}, admin={is_admin}")

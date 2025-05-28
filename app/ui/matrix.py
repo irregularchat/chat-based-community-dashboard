@@ -29,7 +29,7 @@ from app.utils.matrix_actions import (
     _send_room_message_with_content_async
 )
 from app.db.session import get_db
-from app.db.operations import User, AdminEvent, MatrixRoomMember, get_matrix_room_members
+from app.db.operations import User, AdminEvent, MatrixRoomMember, get_matrix_room_members, create_admin_event
 from app.db.models import MatrixRoomMembership
 from app.utils.config import Config
 from app.utils.recommendation import get_entrance_room_users, invite_user_to_recommended_rooms
@@ -1996,13 +1996,13 @@ async def render_matrix_messaging_page():
                                     # Get actual admin username from session state if available
                                     admin_username = st.session_state.get('username', 'dashboard_admin')
                                     
-                                    admin_event = AdminEvent(
-                                        event_type="user_removal",
-                                        username=admin_username,
-                                        details=f"Removed {display_name} from rooms. Reason: {removal_reason}",
-                                        timestamp=datetime.utcnow()
+                                    # Use the improved create_admin_event function
+                                    create_admin_event(
+                                        db,
+                                        "user_removal",
+                                        admin_username,
+                                        f"Removed {display_name} from rooms. Reason: {removal_reason}"
                                     )
-                                    db.add(admin_event)
                                 db.commit()
                             finally:
                                 db.close()

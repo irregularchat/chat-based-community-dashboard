@@ -297,7 +297,10 @@ def render_sidebar():
     # Add Community section as a separate sidebar button (available to ALL users, no authentication required)
     st.sidebar.markdown("---")
     if st.sidebar.button("🏘️ Community Timeline", use_container_width=True, key="community_button"):
-        # Use query params to trigger Community page instead of modifying session state directly
+        # Clear the current_page session state to allow Community page to take precedence
+        if 'current_page' in st.session_state:
+            del st.session_state['current_page']
+        # Use query params to trigger Community page
         st.query_params["page"] = "community"
         st.rerun()
     
@@ -956,13 +959,22 @@ def render_main_content():
     
     # Get the current page from session state or query params
     query_page = st.query_params.get('page')
-    if query_page == 'community':
+    
+    # Only use the community query param if we don't have a current_page selection from dropdown
+    # This prevents the Community page from overriding dropdown selections
+    if query_page == 'community' and 'current_page' not in st.session_state:
         current_page = "Community"
         # Clear the query param to avoid conflicts
         clean_params = {k: v for k, v in st.query_params.items() if k != 'page'}
         st.query_params.update(clean_params)
     else:
+        # Use the dropdown selection from session state, defaulting to Create User
         current_page = st.session_state.get('current_page', 'Create User')
+        
+        # Clear any community query param if we're using dropdown navigation
+        if query_page == 'community' and 'current_page' in st.session_state:
+            clean_params = {k: v for k, v in st.query_params.items() if k != 'page'}
+            st.query_params.update(clean_params)
     
     # Get authentication status - these need to be outside the conditional block
     is_admin = st.session_state.get('is_admin', False)

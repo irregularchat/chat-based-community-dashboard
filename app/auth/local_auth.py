@@ -194,6 +194,10 @@ def handle_local_login(username, password):
         st.session_state['auth_timestamp'] = datetime.timestamp(datetime.now())
         st.session_state['username'] = username
         
+        # Store additional permanent session variables for restoration
+        st.session_state['permanent_username'] = username
+        st.session_state['permanent_auth_method'] = 'local'
+        
         # Log successful login with persistence
         logging.info("Local admin login successful with persistence flags set")
         
@@ -226,6 +230,10 @@ def handle_local_login(username, password):
         st.session_state['permanent_admin'] = user.is_admin
         st.session_state['permanent_moderator'] = user.is_moderator
         st.session_state['auth_timestamp'] = datetime.timestamp(datetime.now())
+        
+        # Store additional permanent session variables for restoration
+        st.session_state['permanent_username'] = user.username
+        st.session_state['permanent_auth_method'] = 'local'
         
         # Update last login time
         try:

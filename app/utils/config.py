@@ -181,6 +181,11 @@ class Config:
     DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
     SECRET_KEY = os.getenv('SECRET_KEY', 'your-secret-key-here')
     
+    # Enhanced User Management configuration
+    API_SECRET_KEY = os.getenv('API_SECRET_KEY', 'default-docker-api-key')
+    API_BASE_URL = os.getenv('API_BASE_URL', 'http://localhost:5001')
+    USE_REACT_FRONTEND = os.getenv('USE_REACT_FRONTEND', 'False').lower() == 'true'
+    
     # Logging configuration
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
     LOG_FILE = os.getenv('LOG_FILE', 'app.log')
@@ -304,6 +309,20 @@ class Config:
         if not username:
             return False
         return username in cls.ADMIN_USERNAMES
+    
+    @classmethod
+    def get(cls, key: str, default=None):
+        """
+        Get a configuration value by key.
+        
+        Args:
+            key (str): The configuration key
+            default: Default value if key not found
+            
+        Returns:
+            The configuration value or default
+        """
+        return getattr(cls, key, default)
     
     @classmethod
     def get_required_vars(cls) -> List[str]:

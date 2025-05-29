@@ -24,3 +24,7 @@ streamlit-extras
 streamlit-option-menu
 pytest-asyncio
 bcrypt
+
+# Enhanced User Management API dependencies
+flask>=2.3.0
+flask-cors>=4.0.0

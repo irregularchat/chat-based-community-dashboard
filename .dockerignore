@@ -1,0 +1,47 @@
+# Git files
+.git
+.gitignore
+
+# Node modules (will be installed during build)
+node_modules/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+app/static/components/build/
+*.log
+
+# Documentation
+README.md
+README_*.md
+docs/
+
+# Test files
+tests/
+test_*.py
+
+# Environment files (will be mounted)
+.env.example
+
+# Temporary files
+*.tmp
+*.temp 

@@ -9,11 +9,13 @@ ENV PIP_NO_CACHE_DIR=1
 WORKDIR /app
 
 # Install system-level dependencies and clean up
+# Added nodejs and npm for React build
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential gcc libssl-dev libffi-dev \
     libxml2-dev libxslt1-dev zlib1g-dev curl dos2unix \
-    postgresql-client netcat-openbsd && \
+    postgresql-client netcat-openbsd \
+    nodejs npm supervisor && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy the requirements.txt first to leverage Docker cache
@@ -23,6 +25,12 @@ COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --verbose -r requirements.txt
 
+# Copy package.json and webpack config for React dependencies
+COPY package.json webpack.config.js ./
+
+# Install Node.js dependencies
+RUN npm install
+
 # Copy the entrypoint script first and set it up
 COPY entrypoint.sh /app/
 RUN dos2unix /app/entrypoint.sh && \
@@ -31,8 +39,13 @@ RUN dos2unix /app/entrypoint.sh && \
 # Copy the rest of the application code into the container
 COPY . .
 
-# Create a directory for data if it doesn't exist
-RUN mkdir -p /app/app/data && chmod 777 /app/app/data
+# Build React components
+RUN npm run build
+
+# Create necessary directories and set permissions
+RUN mkdir -p /app/app/data && chmod 777 /app/app/data && \
+    mkdir -p /app/logs && chmod 777 /app/logs && \
+    mkdir -p /app/app/static/components/build && chmod 777 /app/app/static/components/build
 
 # Ensure the .env file is writable and load it if it exists
 RUN touch /app/.env && chmod 666 /app/.env
@@ -45,6 +58,12 @@ ENV PYTHONPATH=/app
 
 # Set environment variable for Docker detection
 ENV IN_DOCKER=true
+
+# Copy supervisor configuration
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Expose ports for Streamlit and Flask API
+EXPOSE 8503 5001
 
 # Use the entrypoint script
 ENTRYPOINT ["/app/entrypoint.sh"]

@@ -272,6 +272,8 @@ else
     echo "⚠️ Skipping migrations due to database connection issues"
 fi
 
-# Start the Streamlit app
-echo "Starting Streamlit app on port $PORT"
-exec streamlit run app/main.py --server.port=$PORT --server.address=0.0.0.0 
+# Start both Streamlit app and Flask API using supervisord
+echo "Starting services with supervisord..."
+echo "- Streamlit app on port 8503"
+echo "- Flask API server on port 5001"
+exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf 

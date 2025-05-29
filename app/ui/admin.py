@@ -11,9 +11,10 @@ from app.auth.admin import (
     grant_admin_privileges,
     revoke_admin_privileges
 )
-from app.auth.api import list_users, update_user_status, update_user_email
+from app.auth.api import list_users, update_user_status, update_user_email, get_authentik_users
 from app.utils.config import Config
 from app.db.database import SessionLocal
+from app.db.models import User, UserNote
 from app.db.operations import (
     get_admin_users, 
     create_admin_event, 
@@ -22,12 +23,14 @@ from app.db.operations import (
     get_user_notes,
     update_user_note,
     delete_user_note,
-    get_note_by_id
+    get_note_by_id,
+    sync_user_data_incremental
 )
 from app.utils.helpers import send_email
 import pandas as pd
 from datetime import datetime
 import time
+from sqlalchemy import or_, and_
 
 def render_admin_dashboard():
     """
@@ -66,808 +69,181 @@ def render_admin_dashboard():
         render_admin_logs()
 
 def render_user_management():
-    """Render the user management section of the admin dashboard."""
-    st.header("User Management")
+    """Render the user management interface with optional React frontend."""
+    st.header("👥 User Management")
     
-    # Initialize session state for filters if not exists
-    if 'user_filters' not in st.session_state:
-        st.session_state['user_filters'] = {
-            'search_term': '',
-            'status_filter': 'All',
-            'group_filter': 'All',
-            'sort_by': 'Username',
-            'sort_order': 'Ascending'
-        }
-    
-    # Create filter section with columns for better layout
-    st.subheader("Filter Users")
-    filter_col1, filter_col2 = st.columns(2)
-    
-    with filter_col1:
-        # Search by name, username, or email
-        search_term = st.text_input(
-            "Search by name, username, or email", 
-            value=st.session_state['user_filters']['search_term'],
-            key="user_search"
-        )
-        st.session_state['user_filters']['search_term'] = search_term
+    # Check if React frontend is available
+    try:
+        from app.ui.components import render_user_table_with_fallback
         
-        # Filter by status
-        status_options = ['All', 'Active', 'Inactive']
-        status_filter = st.selectbox(
-            "Filter by status",
-            options=status_options,
-            index=status_options.index(st.session_state['user_filters']['status_filter']),
-            key="status_filter"
-        )
-        st.session_state['user_filters']['status_filter'] = status_filter
-    
-    with filter_col2:
-        # Get all groups for filtering
-        all_groups = get_authentik_groups()
-        group_options = ['All'] + [g.get('name') for g in all_groups]
-        
-        # Filter by group membership
-        group_filter = st.selectbox(
-            "Filter by group membership",
-            options=group_options,
-            index=group_options.index(st.session_state['user_filters']['group_filter']) 
-                if st.session_state['user_filters']['group_filter'] in group_options else 0,
-            key="group_filter"
-        )
-        st.session_state['user_filters']['group_filter'] = group_filter
-        
-        # Sorting options
-        sort_options = ['Username', 'Name', 'Email', 'Last Login', 'Status']
-        sort_by = st.selectbox(
-            "Sort by",
-            options=sort_options,
-            index=sort_options.index(st.session_state['user_filters']['sort_by']),
-            key="sort_by"
-        )
-        st.session_state['user_filters']['sort_by'] = sort_by
-        
-        # Sort order
-        order_options = ['Ascending', 'Descending']
-        sort_order = st.selectbox(
-            "Sort order",
-            options=order_options,
-            index=order_options.index(st.session_state['user_filters']['sort_order']),
-            key="sort_order"
-        )
-        st.session_state['user_filters']['sort_order'] = sort_order
-    
-    # Get headers for API requests
-    headers = {
-        'Authorization': f"Bearer {Config.AUTHENTIK_API_TOKEN}",
-        'Content-Type': 'application/json'
-    }
-    
-    # Get users from Authentik
-    with st.spinner("Loading users..."):
-        users = list_users(Config.AUTHENTIK_API_URL, headers, search_term)
-    
-    if not users:
-        st.info("No users found.")
-        return
-    
-    # Apply filters
-    filtered_users = users
-    
-    # Filter by status
-    if status_filter != 'All':
-        is_active = status_filter == 'Active'
-        filtered_users = [u for u in filtered_users if u.get('is_active', False) == is_active]
-    
-    # Filter by group membership
-    if group_filter != 'All':
-        # Find the group ID for the selected group name
-        group_id = next((g.get('pk') for g in all_groups if g.get('name') == group_filter), None)
-        
-        if group_id:
-            # This is a more complex filter that requires checking each user's group membership
-            users_in_group = []
-            for user in filtered_users:
-                user_id = user.get('pk')
-                if user_id:
-                    user_groups = get_user_groups(user_id)
-                    if any(g.get('pk') == group_id for g in user_groups):
-                        users_in_group.append(user)
-            filtered_users = users_in_group
-    
-    # Convert to DataFrame for easier display and sorting
-    user_data = []
-    for user in filtered_users:
-        # Format last login date
-        last_login = user.get('last_login', 'Never')
-        if last_login and last_login != 'Never':
-            try:
-                last_login_dt = datetime.fromisoformat(last_login.replace('Z', '+00:00'))
-                last_login = last_login_dt.strftime('%Y-%m-%d %H:%M')
-            except (ValueError, TypeError):
-                last_login = 'Invalid date'
-        
-        # Get note count for this user
-        note_count = 0
-        with SessionLocal() as db:
-            try:
-                db_user = db.query(db.model.User).filter_by(username=user.get('username')).first()
-                if db_user:
-                    note_count = len(db_user.notes) if hasattr(db_user, 'notes') else 0
-            except Exception as e:
-                logging.error(f"Error getting note count: {e}")
-        
-        # Add note indicator if there are notes
-        notes_indicator = f"📝 {note_count}" if note_count > 0 else ""
-        
-        user_data.append({
-            'ID': user.get('pk'),
-            'Username': user.get('username'),
-            'Name': user.get('name'),
-            'Email': user.get('email'),
-            'Status': '✅ Active' if user.get('is_active', False) else '❌ Inactive',
-            'Last Login': last_login,
-            'Notes': notes_indicator
-        })
-    
-    df = pd.DataFrame(user_data)
-    
-    # Apply sorting
-    sort_column_map = {
-        'Username': 'Username',
-        'Name': 'Name',
-        'Email': 'Email',
-        'Last Login': 'Last Login',
-        'Status': 'Status'
-    }
-    
-    sort_column = sort_column_map.get(sort_by, 'Username')
-    ascending = sort_order == 'Ascending'
-    
-    if not df.empty:
-        df = df.sort_values(by=sort_column, ascending=ascending)
-    
-    # Display user count
-    st.write(f"Found {len(df)} users matching your filters")
-    
-    # Create tabs for different user management views
-    user_tabs = st.tabs(["User List", "Bulk Operations", "User Details"])
-    
-    # Tab 1: User List
-    with user_tabs[0]:
-        if not df.empty:
-            # Display users in a table with selection
-            st.subheader("Select Users to Manage")
-            
-            # Use Streamlit's data editor for better interaction
-            selection = st.data_editor(
-                df,
-                column_config={
-                    "ID": st.column_config.TextColumn(
-                        "ID",
-                        width="small",
-                        required=True,
-                    ),
-                    "Username": st.column_config.TextColumn(
-                        "Username",
-                        width="medium",
-                    ),
-                    "Name": st.column_config.TextColumn(
-                        "Name",
-                        width="medium",
-                    ),
-                    "Email": st.column_config.TextColumn(
-                        "Email",
-                        width="medium",
-                    ),
-                    "Status": st.column_config.TextColumn(
-                        "Status",
-                        width="small",
-                    ),
-                    "Last Login": st.column_config.TextColumn(
-                        "Last Login",
-                        width="medium",
-                    ),
-                    "Notes": st.column_config.TextColumn(
-                        "Notes",
-                        width="small",
-                        help="Number of moderator notes for this user"
-                    ),
-                },
-                hide_index=True,
-                key="user_table",
-                use_container_width=True,
-                disabled=["ID", "Username", "Name", "Email", "Status", "Last Login", "Notes"],
-                selection="multiple",
-                height=400
+        # Add a toggle for React frontend (admin preference)
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            use_react = st.checkbox(
+                "Use Enhanced UI",
+                value=st.session_state.get("use_react_frontend", False),
+                help="Enable React-based interface with AG Grid for better performance with large datasets"
             )
-            
-            # Get selected rows
-            selected_rows = selection.get("selected_rows", [])
-            
-            if selected_rows:
-                st.success(f"Selected {len(selected_rows)} users")
-                
-                # Store selected users in session state for other tabs
-                st.session_state['selected_users'] = selected_rows
-                
-                # Quick actions for selected users
-                st.subheader("Quick Actions")
-                
-                # Create columns for action buttons
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    if st.button("View Details", key="view_details_btn"):
-                        # Switch to User Details tab
-                        user_tabs[2].active = True
-                
-                with col2:
-                    if st.button("Manage Groups", key="manage_groups_btn"):
-                        # Switch to Bulk Operations tab
-                        user_tabs[1].active = True
-                
-                with col3:
-                    # Toggle active status
-                    all_active = all(row.get('Status', '').startswith('✅') for row in selected_rows)
-                    status_action = "Deactivate" if all_active else "Activate"
-                    
-                    if st.button(f"{status_action} Selected", key="toggle_status_btn"):
-                        success_count = 0
-                        for row in selected_rows:
-                            user_id = row.get('ID')
-                            result = update_user_status(
-                                Config.AUTHENTIK_API_URL,
-                                headers,
-                                user_id,
-                                not all_active  # Activate if not all active, otherwise deactivate
-                            )
-                            if result:
-                                success_count += 1
-                        
-                        if success_count == len(selected_rows):
-                            st.success(f"Successfully {status_action.lower()}d {success_count} users")
-                        else:
-                            st.warning(f"Partially successful: {status_action.lower()}d {success_count} out of {len(selected_rows)} users")
-                        
-                        # Refresh the page to show updated status
-                        time.sleep(1)
-                        st.rerun()
-            else:
-                st.info("Select one or more users to perform actions")
-        else:
-            st.warning("No users match the filter criteria.")
+            st.session_state["use_react_frontend"] = use_react
+        
+        # Update config temporarily
+        if use_react:
+            import os
+            os.environ["USE_REACT_FRONTEND"] = "true"
+        
+        # Render with React or fallback
+        render_user_table_with_fallback(st.session_state)
+        return
+        
+    except ImportError:
+        # If components module is not available, use original implementation
+        pass
     
-    # Tab 2: Bulk Operations
-    with user_tabs[1]:
-        st.subheader("Bulk Group Management")
-        
-        # Check if users are selected
-        selected_users = st.session_state.get('selected_users', [])
-        
-        if not selected_users:
-            st.info("Please select users from the User List tab first")
-        else:
-            st.write(f"Managing groups for {len(selected_users)} selected users:")
-            
-            # Display selected usernames
-            st.write(", ".join([user.get('Username', 'Unknown') for user in selected_users]))
-            
-            # Get all available groups
-            all_groups = get_authentik_groups()
-            
-            if not all_groups:
-                st.warning("No groups found. Please create groups first.")
-            else:
-                # Create two columns for add/remove operations
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.subheader("Add to Groups")
-                    groups_to_add = st.multiselect(
-                        "Select groups to add users to",
-                        options=[g.get('pk') for g in all_groups],
-                        format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
-                        key="bulk_add_groups"
-                    )
-                    
-                    if groups_to_add and st.button("Add to Selected Groups", key="bulk_add_btn"):
-                        success_count = 0
-                        for user in selected_users:
-                            user_id = user.get('ID')
-                            result = manage_user_groups(
-                                st.session_state.get("username"),
-                                user_id,
-                                groups_to_add=groups_to_add
-                            )
-                            
-                            if result.get('success'):
-                                success_count += 1
-                        
-                        if success_count == len(selected_users):
-                            st.success(f"Successfully added {success_count} users to the selected groups")
-                        else:
-                            st.warning(f"Partially successful: Added {success_count} out of {len(selected_users)} users to the selected groups")
-                
-                with col2:
-                    st.subheader("Remove from Groups")
-                    groups_to_remove = st.multiselect(
-                        "Select groups to remove users from",
-                        options=[g.get('pk') for g in all_groups],
-                        format_func=lambda pk: next((g.get('name') for g in all_groups if g.get('pk') == pk), pk),
-                        key="bulk_remove_groups"
-                    )
-                    
-                    if groups_to_remove and st.button("Remove from Selected Groups", key="bulk_remove_btn"):
-                        success_count = 0
-                        for user in selected_users:
-                            user_id = user.get('ID')
-                            result = manage_user_groups(
-                                st.session_state.get("username"),
-                                user_id,
-                                groups_to_remove=groups_to_remove
-                            )
-                            
-                            if result.get('success'):
-                                success_count += 1
-                        
-                        if success_count == len(selected_users):
-                            st.success(f"Successfully removed {success_count} users from the selected groups")
-                        else:
-                            st.warning(f"Partially successful: Removed {success_count} out of {len(selected_users)} users from the selected groups")
-                
-                # Add Bulk Email section
-                st.markdown("---")
-                st.subheader("Bulk Email")
-                
-                # Check if SMTP is configured
-                if not Config.SMTP_ACTIVE:
-                    st.warning("SMTP is not active. Please configure SMTP settings in your .env file to enable email functionality.")
-                else:
-                    with st.form("bulk_email_form"):
-                        st.write(f"Send email to {len(selected_users)} selected users:")
-                        
-                        # Display email addresses that will receive the message
-                        recipient_emails = [user.get('Email') for user in selected_users if user.get('Email')]
-                        st.write(f"Recipients: {', '.join(recipient_emails)}")
-                        
-                        # Email form fields
-                        email_subject = st.text_input("Subject", key="bulk_email_subject", placeholder="Enter email subject")
-                        email_body = st.text_area("Message", key="bulk_email_body", height=200, placeholder="Enter your message here...")
-                        
-                        # Add HTML checkbox
-                        is_html = st.checkbox("Send as HTML", value=True, key="bulk_email_is_html")
-                        
-                        # Submit button
-                        submit_email = st.form_submit_button("Send Email to All Selected Users")
-                        
-                        if submit_email:
-                            if not email_subject:
-                                st.error("Please enter a subject for the email.")
-                            elif not email_body:
-                                st.error("Please enter a message for the email.")
-                            else:
-                                try:
-                                    # Add admin signature
-                                    admin_username = st.session_state.get("username", "Admin")
-                                    signature = f"\n\nSent by {admin_username} from the Admin Dashboard"
-                                    
-                                    # Format the email body based on HTML setting
-                                    if is_html:
-                                        # Convert newlines to <br> tags if not already HTML
-                                        if not email_body.strip().startswith("<"):
-                                            email_body = email_body.replace("\n", "<br>")
-                                        
-                                        # Add HTML signature
-                                        if not email_body.lower().endswith("</body>") and not email_body.lower().endswith("</html>"):
-                                            email_body += f"<br><br><em>Sent by {admin_username} from the Admin Dashboard</em>"
-                                    else:
-                                        # Add plain text signature
-                                        email_body += signature
-                                    
-                                    # Initialize counters
-                                    success_count = 0
-                                    failed_users = []
-                                    
-                                    # Create a progress bar
-                                    progress = st.progress(0)
-                                    total_users = len(recipient_emails)
-                                    
-                                    # Send emails to all selected users
-                                    for idx, (user, email) in enumerate([(u, u.get('Email')) for u in selected_users if u.get('Email')]):
-                                        try:
-                                            # Update progress
-                                            progress.progress((idx + 1) / total_users)
-                                            
-                                            # Send the email
-                                            result = send_email(
-                                                to=email,
-                                                subject=email_subject,
-                                                body=email_body
-                                            )
-                                            
-                                            if result:
-                                                # Log the email action
-                                                with SessionLocal() as db:
-                                                    create_admin_event(
-                                                        db,
-                                                        "email_sent",
-                                                        st.session_state.get("username", "unknown"),
-                                                        f"Bulk email sent to {user.get('Username')} ({email}) with subject: {email_subject}"
-                                                    )
-                                                success_count += 1
-                                            else:
-                                                failed_users.append(f"{user.get('Username')} ({email})")
-                                        except Exception as e:
-                                            logging.error(f"Error sending email to {email}: {str(e)}")
-                                            failed_users.append(f"{user.get('Username')} ({email}): {str(e)}")
-                                    
-                                    # Display final results
-                                    if success_count == total_users:
-                                        st.success(f"Successfully sent emails to all {success_count} users")
-                                    elif success_count > 0:
-                                        st.warning(f"Partially successful: Sent emails to {success_count} out of {total_users} users")
-                                        with st.expander("Failed recipients"):
-                                            for user in failed_users:
-                                                st.write(f"- {user}")
-                                    else:
-                                        st.error("Failed to send any emails. Check SMTP settings and try again.")
-                                        with st.expander("Failed recipients"):
-                                            for user in failed_users:
-                                                st.write(f"- {user}")
-                                
-                                except Exception as e:
-                                    logging.error(f"Error in bulk email: {str(e)}")
-                                    st.error(f"An error occurred while sending emails: {str(e)}")
+    # Original Streamlit implementation continues below...
+    # Get authentik users with caching
+    @st.cache_data(ttl=300)  # Cache for 5 minutes
+    def get_cached_users():
+        return get_authentik_users()
     
-    # Tab 3: User Details
-    with user_tabs[2]:
-        st.subheader("User Details")
-        
-        # Check if users are selected
-        selected_users = st.session_state.get('selected_users', [])
-        
-        if not selected_users:
-            st.info("Please select users from the User List tab first")
-        elif len(selected_users) > 1:
-            st.info("Multiple users selected. Please select only one user to view details.")
-        else:
-            user = selected_users[0]
-            
-            # Create columns for user info and actions
-            info_col, action_col = st.columns([2, 1])
-            
-            with info_col:
-                st.subheader(f"{user.get('Name')} (@{user.get('Username')})")
-                st.write(f"**Email:** {user.get('Email')}")
-                st.write(f"**Status:** {user.get('Status')}")
-                st.write(f"**Last Login:** {user.get('Last Login')}")
-                
-                # Get user groups
-                user_groups = get_user_groups(user.get('ID'))
-                
-                st.subheader("Group Membership")
-                if user_groups:
-                    group_data = []
-                    for group in user_groups:
-                        group_data.append({
-                            'ID': group.get('pk'),
-                            'Name': group.get('name'),
-                            'Description': group.get('attributes', {}).get('description', '')
-                        })
-                    
-                    group_df = pd.DataFrame(group_data)
-                    st.dataframe(group_df, hide_index=True)
-                else:
-                    st.info("User is not a member of any groups.")
-            
-            with action_col:
-                st.subheader("User Actions")
-                
-                # Toggle active status
-                is_active = user.get('Status', '').startswith('✅')
-                status_action = "Deactivate" if is_active else "Activate"
-                
-                if st.button(f"{status_action} User", key="toggle_user_status"):
-                    result = update_user_status(
-                        Config.AUTHENTIK_API_URL,
-                        headers,
-                        user.get('ID'),
-                        not is_active
-                    )
-                    
-                    if result:
-                        st.success(f"Successfully {status_action.lower()}d user {user.get('Username')}")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error(f"Failed to {status_action.lower()} user {user.get('Username')}")
-                
-                # Update email
-                st.subheader("Update Email")
-                new_email = st.text_input("New Email Address", value=user.get('Email', ''), key="new_email")
-                
-                if st.button("Update Email", key="update_email_btn"):
-                    if new_email != user.get('Email', ''):
-                        result = update_user_email(
-                            Config.AUTHENTIK_API_URL,
-                            headers,
-                            user.get('ID'),
-                            new_email
-                        )
-                        
-                        if result:
-                            st.success(f"Successfully updated email for {user.get('Username')}")
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error(f"Failed to update email for {user.get('Username')}")
-                    else:
-                        st.info("Email address unchanged")
-                
-                # Admin privileges
-                st.subheader("Admin Privileges")
-                
-                # Check if user is an admin
+    # Sync with local database
+    def sync_users():
+        with st.spinner("Syncing users..."):
+            try:
                 with SessionLocal() as db:
-                    try:
-                        db_user = db.query(db.model.User).filter_by(username=user.get('Username')).first()
-                        is_admin = db_user.is_admin if db_user else False
-                    except Exception as e:
-                        logging.error(f"Error checking admin status: {e}")
-                        is_admin = False
-                
-                if is_admin:
-                    if st.button(f"Revoke Admin Privileges", key=f"revoke_admin_detail"):
-                        result = revoke_admin_privileges(
-                            st.session_state.get("username"),
-                            user.get('Username')
-                        )
-                        
-                        if result.get('success'):
-                            st.success(f"Successfully revoked admin privileges from {user.get('Username')}.")
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error(f"Failed to revoke admin privileges: {result.get('error')}")
-                else:
-                    if st.button(f"Grant Admin Privileges", key=f"grant_admin_detail"):
-                        result = grant_admin_privileges(
-                            st.session_state.get("username"),
-                            user.get('Username')
-                        )
-                        
-                        if result.get('success'):
-                            st.success(f"Successfully granted admin privileges to {user.get('Username')}.")
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error(f"Failed to grant admin privileges: {result.get('error')}")
+                    users = get_cached_users()
+                    if users:
+                        sync_user_data_incremental(db, users)
+                        st.success(f"Synced {len(users)} users")
+                    else:
+                        st.error("No users found in Authentik")
+            except Exception as e:
+                st.error(f"Error syncing users: {str(e)}")
+    
+    # Sidebar for filters and actions
+    with st.sidebar:
+        st.subheader("Filters & Actions")
+        
+        # Sync button
+        if st.button("🔄 Sync Users", use_container_width=True):
+            sync_users()
+            st.cache_data.clear()
+            st.rerun()
+        
+        # Search and filter options
+        search_term = st.text_input("🔍 Search", placeholder="Username, email, or name...")
+        
+        # Status filter
+        status_filter = st.selectbox(
+            "Status",
+            ["All", "Active", "Inactive"],
+            index=0
+        )
+        
+        # Role filter
+        role_filter = st.multiselect(
+            "Roles",
+            ["Admin", "Moderator", "Regular User"],
+            default=[]
+        )
+        
+        # Group filter
+        all_groups = get_authentik_groups()
+        group_filter = st.multiselect(
+            "Groups",
+            options=[g.get('name') for g in all_groups] if all_groups else [],
+            default=[]
+        )
+        
+        # Advanced filters
+        with st.expander("Advanced Filters"):
+            has_notes = st.checkbox("Has moderator notes")
+            date_joined_after = st.date_input("Joined after", value=None)
+            last_login_before = st.date_input("Last login before", value=None)
+    
+    # Get users from database with filters
+    with SessionLocal() as db:
+        query = db.query(User)
+        
+        # Apply search filter
+        if search_term:
+            search_pattern = f"%{search_term}%"
+            query = query.filter(
+                or_(
+                    User.username.ilike(search_pattern),
+                    User.email.ilike(search_pattern),
+                    User.first_name.ilike(search_pattern),
+                    User.last_name.ilike(search_pattern)
+                )
+            )
+        
+        # Apply status filter
+        if status_filter == "Active":
+            query = query.filter(User.is_active == True)
+        elif status_filter == "Inactive":
+            query = query.filter(User.is_active == False)
+        
+        # Apply role filter
+        if role_filter:
+            role_conditions = []
+            if "Admin" in role_filter:
+                role_conditions.append(User.is_admin == True)
+            if "Moderator" in role_filter:
+                role_conditions.append(User.is_moderator == True)
+            if "Regular User" in role_filter:
+                role_conditions.append(and_(User.is_admin == False, User.is_moderator == False))
             
-            # Create tabs for different user detail sections
-            detail_tabs = st.tabs(["User Notes", "Send Email", "Activity"])
-            
-            # Tab 1: User Notes
-            with detail_tabs[0]:
-                st.subheader("Moderator Notes")
-                
-                # Get the user ID from the database
-                with SessionLocal() as db:
-                    try:
-                        db_user = db.query(db.model.User).filter_by(username=user.get('Username')).first()
-                        if db_user:
-                            user_id = db_user.id
-                            
-                            # Add a new note
-                            with st.form("add_note_form"):
-                                st.write("Add a new note")
-                                note_content = st.text_area("Note Content", key="new_note_content", height=100)
-                                submit_note = st.form_submit_button("Add Note")
-                                
-                                if submit_note and note_content:
-                                    result = create_user_note(
-                                        db,
-                                        user_id,
-                                        note_content,
-                                        st.session_state.get("username", "unknown")
-                                    )
-                                    
-                                    if result:
-                                        st.success(f"Note added for {user.get('Username')}")
-                                        # Clear the form
-                                        st.session_state["new_note_content"] = ""
-                                        time.sleep(1)
-                                        st.rerun()
-                                    else:
-                                        st.error(f"Failed to add note for {user.get('Username')}")
-                            
-                            # Display existing notes
-                            notes = get_user_notes(db, user_id)
-                            
-                            if notes:
-                                st.write(f"### Notes for {user.get('Username')} ({len(notes)})")
-                                
-                                for i, note in enumerate(notes):
-                                    with st.expander(f"Note {i+1} - {note.created_at.strftime('%Y-%m-%d %H:%M')} by {note.created_by}", expanded=i==0):
-                                        # Initialize session state for editing
-                                        edit_key = f"edit_note_{note.id}"
-                                        if edit_key not in st.session_state:
-                                            st.session_state[edit_key] = False
-                                        
-                                        # Display note content or edit form
-                                        if st.session_state[edit_key]:
-                                            # Edit form
-                                            edited_content = st.text_area(
-                                                "Edit Note", 
-                                                value=note.content, 
-                                                key=f"edit_content_{note.id}",
-                                                height=100
-                                            )
-                                            
-                                            col1, col2 = st.columns(2)
-                                            with col1:
-                                                if st.button("Save Changes", key=f"save_note_{note.id}"):
-                                                    result = update_user_note(
-                                                        db,
-                                                        note.id,
-                                                        edited_content,
-                                                        st.session_state.get("username", "unknown")
-                                                    )
-                                                    
-                                                    if result:
-                                                        st.success("Note updated successfully")
-                                                        st.session_state[edit_key] = False
-                                                        time.sleep(1)
-                                                        st.rerun()
-                                                    else:
-                                                        st.error("Failed to update note")
-                                            
-                                            with col2:
-                                                if st.button("Cancel", key=f"cancel_edit_{note.id}"):
-                                                    st.session_state[edit_key] = False
-                                                    st.rerun()
-                                        else:
-                                            # Display note
-                                            st.markdown(note.content)
-                                            
-                                            # Show edit history if available
-                                            if note.last_edited_by:
-                                                st.caption(f"Last edited by {note.last_edited_by} on {note.updated_at.strftime('%Y-%m-%d %H:%M')}")
-                                            
-                                            # Edit and delete buttons
-                                            col1, col2 = st.columns(2)
-                                            with col1:
-                                                if st.button("Edit", key=f"edit_btn_{note.id}"):
-                                                    st.session_state[edit_key] = True
-                                                    st.rerun()
-                                            
-                                            with col2:
-                                                if st.button("Delete", key=f"delete_note_{note.id}"):
-                                                    # Confirm deletion
-                                                    confirm_key = f"confirm_delete_{note.id}"
-                                                    st.session_state[confirm_key] = True
-                                                    st.rerun()
-                                        
-                                        # Handle deletion confirmation
-                                        confirm_key = f"confirm_delete_{note.id}"
-                                        if st.session_state.get(confirm_key, False):
-                                            st.warning("Are you sure you want to delete this note? This action cannot be undone.")
-                                            col1, col2 = st.columns(2)
-                                            with col1:
-                                                if st.button("Yes, Delete", key=f"confirm_yes_{note.id}"):
-                                                    result = delete_user_note(
-                                                        db,
-                                                        note.id,
-                                                        st.session_state.get("username", "unknown")
-                                                    )
-                                                    
-                                                    if result:
-                                                        st.success("Note deleted successfully")
-                                                        st.session_state[confirm_key] = False
-                                                        time.sleep(1)
-                                                        st.rerun()
-                                                    else:
-                                                        st.error("Failed to delete note")
-                                            
-                                            with col2:
-                                                if st.button("Cancel", key=f"confirm_no_{note.id}"):
-                                                    st.session_state[confirm_key] = False
-                                                    st.rerun()
-                            else:
-                                st.info(f"No notes found for {user.get('Username')}")
-                        else:
-                            st.error(f"User {user.get('Username')} not found in the database")
-                    except Exception as e:
-                        logging.error(f"Error loading user notes: {e}")
-                        st.error(f"Error loading user notes: {str(e)}")
-            
-            # Tab 2: Send Email
-            with detail_tabs[1]:
-                st.subheader("Send Email to User")
-                
-                # Check if SMTP is configured and active
-                if not Config.SMTP_ACTIVE:
-                    st.warning("SMTP is not active. Please enable SMTP in the settings to send emails.")
-                elif not all([Config.SMTP_SERVER, Config.SMTP_PORT, Config.SMTP_USERNAME, Config.SMTP_PASSWORD, Config.SMTP_FROM_EMAIL]):
-                    st.error("SMTP configuration is incomplete. Please check your SMTP settings.")
-                else:
-                    # Email form
-                    with st.form("send_email_form"):
-                        # Pre-fill the recipient field with the user's email
-                        recipient_email = user.get('Email', '')
-                        st.text_input("To", value=recipient_email, disabled=True, key="email_recipient")
-                        
-                        # Email subject
-                        email_subject = st.text_input("Subject", key="email_subject", placeholder="Enter email subject")
-                        
-                        # Email body
-                        email_body = st.text_area("Message", key="email_body", height=200, placeholder="Enter your message here...")
-                        
-                        # Add HTML checkbox
-                        is_html = st.checkbox("Send as HTML", value=True, key="email_is_html")
-                        
-                        # Submit button
-                        submit_email = st.form_submit_button("Send Email")
-                        
-                        if submit_email:
-                            if not email_subject:
-                                st.error("Please enter a subject for the email.")
-                            elif not email_body:
-                                st.error("Please enter a message for the email.")
-                            else:
-                                try:
-                                    # Add admin signature if not already in the email body
-                                    admin_username = st.session_state.get("username", "Admin")
-                                    signature = f"\n\nSent by {admin_username} from the Admin Dashboard"
-                                    
-                                    # Format the email body based on HTML setting
-                                    if is_html:
-                                        # Convert newlines to <br> tags if not already HTML
-                                        if not email_body.strip().startswith("<"):
-                                            email_body = email_body.replace("\n", "<br>")
-                                        
-                                        # Add HTML signature
-                                        if not email_body.lower().endswith("</body>") and not email_body.lower().endswith("</html>"):
-                                            email_body += f"<br><br><em>Sent by {admin_username} from the Admin Dashboard</em>"
-                                    else:
-                                        # Add plain text signature
-                                        email_body += signature
-                                    
-                                    # Send the email
-                                    result = send_email(
-                                        to=recipient_email,
-                                        subject=email_subject,
-                                        body=email_body
-                                    )
-                                    
-                                    if result:
-                                        # Log the email action
-                                        with SessionLocal() as db:
-                                            create_admin_event(
-                                                db,
-                                                "email_sent",
-                                                st.session_state.get("username", "unknown"),
-                                                f"Email sent to {user.get('Username')} ({recipient_email}) with subject: {email_subject}"
-                                            )
-                                        
-                                        st.success(f"Email sent successfully to {user.get('Username')} ({recipient_email})")
-                                        
-                                        # Clear the form fields
-                                        st.session_state["email_subject"] = ""
-                                        st.session_state["email_body"] = ""
-                                    else:
-                                        st.error(f"Failed to send email to {recipient_email}. Check SMTP settings and try again.")
-                                except Exception as e:
-                                    logging.error(f"Error sending email: {str(e)}")
-                                    st.error(f"An error occurred while sending the email: {str(e)}")
-                    
-                    # Show email history (placeholder for future enhancement)
-                    with st.expander("Email History", expanded=False):
-                        st.info("Email history tracking will be available in a future update.")
-            
-            # Tab 3: Activity (placeholder for future expansion)
-            with detail_tabs[2]:
-                st.info("User activity tracking will be available in a future update.")
+            if role_conditions:
+                query = query.filter(or_(*role_conditions))
+        
+        # Apply advanced filters
+        if has_notes:
+            query = query.join(User.notes).distinct()
+        
+        if date_joined_after:
+            query = query.filter(User.date_joined >= date_joined_after)
+        
+        if last_login_before:
+            query = query.filter(User.last_login <= last_login_before)
+        
+        # Get filtered users
+        db_users = query.all()
+        
+        # Convert to list of dicts and add note counts
+        users_data = []
+        for user in db_users:
+            user_dict = user.to_dict()
+            # Add note count
+            note_count = db.query(UserNote).filter(UserNote.user_id == user.id).count()
+            user_dict['note_count'] = note_count
+            users_data.append(user_dict)
+    
+    # Create DataFrame for display
+    if users_data:
+        df = pd.DataFrame(users_data)
+        
+        # Reorder and rename columns for display
+        display_columns = {
+            'id': 'ID',
+            'username': 'Username',
+            'name': 'Name',
+            'email': 'Email',
+            'is_active': 'Status',
+            'last_login': 'Last Login',
+            'note_count': 'Notes'
+        }
+        
+        # Select and rename columns
+        df_display = df[list(display_columns.keys())].rename(columns=display_columns)
+        
+        # Format the Status column
+        df_display['Status'] = df_display['Status'].apply(lambda x: '✅ Active' if x else '❌ Inactive')
+        
+        # Format Last Login
+        df_display['Last Login'] = pd.to_datetime(df['last_login']).dt.strftime('%Y-%m-%d %H:%M')
+        df_display['Last Login'] = df_display['Last Login'].fillna('Never')
+    else:
+        df = pd.DataFrame()
+        df_display = pd.DataFrame()
 
 def render_group_management():
     """Render the group management section of the admin dashboard."""

@@ -2,9 +2,11 @@ services:
   streamlit:
     build: .
     ports:
-      - "${PORT:-8503}:${PORT:-8503}"  # Map container's internal port to host's port (default 8503)
+      - "${PORT:-8503}:8503"          # External port (configurable) : Internal port (fixed at 8503)
+      - "${API_PORT:-5001}:5001"      # External port (configurable) : Internal port (fixed at 5001)
     volumes:
       - .:/app
+      - /app/node_modules  # Prevent node_modules from being overwritten by volume mount
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1  # Enable unbuffered output
@@ -15,16 +17,20 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       # When inside Docker network, always use the internal port 5432
       - POSTGRES_PORT=5432
+      # Enhanced User Management API configuration
+      - API_SECRET_KEY=${API_SECRET_KEY:-default-docker-api-key}
+      - API_BASE_URL=http://localhost:5001
+      - USE_REACT_FRONTEND=${USE_REACT_FRONTEND:-false}
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8503}"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8503 && curl -f http://localhost:5001/api/users/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
 
   db:
     image: postgres:15

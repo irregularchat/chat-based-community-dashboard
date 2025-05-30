@@ -639,7 +639,7 @@ def get_email_html_content(full_name, username, password, topic_id, discourse_po
     </body>
     </html>
     """
-def admin_user_email(to, subject, admin_message, is_local_account=False):
+def admin_user_email(to, subject, admin_message, is_local_account=False, attachments=None):
     """
     Send an email to a user in the community from an admin.
     admin_message is the message from the admin.
@@ -650,6 +650,7 @@ def admin_user_email(to, subject, admin_message, is_local_account=False):
         subject (str): Email subject
         admin_message (str): Message from the admin
         is_local_account (bool): Whether this is a local dashboard account
+        attachments (list, optional): List of file paths, file-like objects, or dicts to attach
         
     Returns:
         bool: True if email was sent successfully, False otherwise

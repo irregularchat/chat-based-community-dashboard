@@ -147,7 +147,7 @@ This roadmap is organized by timeline and shows how contributors at different sk
 ## 🔥 Current Sprint (Next 2-4 weeks)
 
 ### High Priority Fixes
-- [ ] **Fix List of Users** ⚡ *Good for: Entry-level developers*
+- [ ] **Fix List of Users** ⚡ *Good for: Entry-level developers* Section https://github.com/irregularchat/chat-based-community-dashboard/blob/9c2048800cbca6e2cc361829b07a2e2a0789fbed/app/ui/forms.py#L3055C1-L3152C2
    - Fix the user list to allow bulk actions on selected users
    - **Actions needed**: 
      - ✅ Activate / Deactivate users
@@ -160,7 +160,7 @@ This roadmap is organized by timeline and shows how contributors at different sk
    - **Time estimate**: 4-8 hours
    - **Impact**: High - Core functionality for community managers
 
-- [ ] **Admin Email to User Email** 📧 *Good for: Mid-level developers*
+- [ ] **Admin Email to User Email** 📧 *Good for: Mid-level developers* Section https://github.com/irregularchat/chat-based-community-dashboard/blob/9c2048800cbca6e2cc361829b07a2e2a0789fbed/app/ui/forms.py#L3055C1-L3152C2
    - Add direct email functionality from dashboard to users
    - **Features**: 
      - Send emails from admin SMTP account

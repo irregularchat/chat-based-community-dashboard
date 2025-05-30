@@ -1,5 +1,6 @@
 # utils/helpers.py
 import logging
+import re
 import streamlit as st
 import requests
 from pytz import timezone  
@@ -99,13 +100,9 @@ def create_unique_username(db, desired_username):
     Returns:
         str: Username with random 2-digit suffix
     """
-    import logging
-    import random
-    
     # Clean up the desired username
     desired_username = desired_username.strip().lower()
     desired_username = desired_username.replace(" ", "-")
-    import re
     desired_username = re.sub(r'[^a-z0-9-]', '', desired_username)
     
     if not desired_username:
@@ -783,6 +780,149 @@ def is_valid_email_for_sending(email):
     
     return True
 
+def send_admin_email_to_users(selected_users, subject, message, attachments=None):
+    """
+    Send an admin email to multiple selected users with optional attachments.
+    
+    This is a helper function that can be used in forms.py or other UI modules
+    to send emails to selected users in the dashboard.
+    
+    Args:
+        selected_users (list): List of user dictionaries with at least 'Email' and 'Username' keys
+        subject (str): Email subject line
+        message (str): Admin message content
+        attachments (list, optional): List of file paths, file-like objects, or dicts to attach
+        
+    Returns:
+        dict: Results containing success count, failed users, and status
+    """
+    try:
+        if not selected_users:
+            return {
+                'success': False,
+                'error': 'No users selected',
+                'success_count': 0,
+                'failed_users': []
+            }
+        
+        if not Config.SMTP_ACTIVE:
+            return {
+                'success': False,
+                'error': 'SMTP is not active. Please enable SMTP in settings.',
+                'success_count': 0,
+                'failed_users': []
+            }
+            
+        if not all([Config.SMTP_SERVER, Config.SMTP_PORT, Config.SMTP_USERNAME, Config.SMTP_PASSWORD, Config.SMTP_FROM_EMAIL]):
+            return {
+                'success': False,
+                'error': 'SMTP configuration is incomplete. Check all SMTP settings.',
+                'success_count': 0,
+                'failed_users': []
+            }
+        
+        success_count = 0
+        failed_users = []
+        
+        # Get users with valid email addresses, excluding @irregularchat.com placeholder emails
+        users_with_email = [user for user in selected_users if is_valid_email_for_sending(user.get('Email'))]
+        
+        # Count filtered users for reporting
+        total_selected = len(selected_users)
+        users_with_emails_count = len([user for user in selected_users if user.get('Email')])
+        filtered_count = users_with_emails_count - len(users_with_email)
+        
+        if not users_with_email:
+            error_msg = 'No users with valid email addresses found'
+            if filtered_count > 0:
+                error_msg += f' ({filtered_count} users filtered out due to invalid/placeholder emails)'
+            return {
+                'success': False,
+                'error': error_msg,
+                'success_count': 0,
+                'failed_users': []
+            }
+        # Send emails to each user
+        for user in users_with_email:
+            email = user.get('Email')
+            username = user.get('Username', 'Unknown')
+            
+            try:
+                result = admin_user_email(
+                    to=email,
+                    subject=subject,
+                    admin_message=message,
+                    attachments=attachments
+                )
+                
+                if result:
+                    success_count += 1
+                    # Log timeline event
+                    try:
+                        db = next(get_db())
+                        add_timeline_event(db, "email_sent", username, f"Email sent to {username} ({email}) with subject: {subject}")
+                    except Exception as e:
+                        logging.error(f"Failed to log timeline event: {e}")
+                    logging.info(f"Successfully sent admin email to {username} ({email})")
+                else:
+                    # Log timeline event for failure
+                    try:
+                        db = next(get_db())
+                        add_timeline_event(db, "email_failed", username, f"Email failed to send to {username} ({email}) with subject: {subject}")
+                    except Exception as e:
+                        logging.error(f"Failed to log timeline event: {e}")
+                    failed_users.append(f"{username} ({email})")
+                    logging.error(f"Failed to send admin email to {username} ({email})")
+                    
+            except Exception as e:
+                failed_users.append(f"{username} ({email}): {str(e)}")
+                logging.error(f"Error sending admin email to {username} ({email}): {str(e)}")
+        
+        # Return results
+        total_users = len(users_with_email)
+        if success_count == total_users:
+            # All emails were sent
+            message = f'Successfully sent emails to all {success_count} users'
+            if filtered_count > 0:
+                message += f' ({filtered_count} users were filtered out due to invalid/placeholder emails)'
+            return {
+                'success': True,
+                'message': message,
+                'success_count': success_count,
+                'failed_users': failed_users
+            }
+        elif success_count > 0:
+            # More than 0 emails were sent, but not all
+            message = f'Partially successful: Sent emails to {success_count} out of {total_users} users'
+            if filtered_count > 0:
+                message += f' ({filtered_count} users were filtered out due to invalid/placeholder emails)'
+            return {
+                'success': True,
+                'message': message,
+                'success_count': success_count,
+                'failed_users': failed_users
+            }
+        else:
+            error_msg = 'Failed to send any emails. Check SMTP settings.'
+            if filtered_count > 0:
+                error_msg += f' ({filtered_count} users were filtered out due to invalid/placeholder emails)'
+            return {
+                'success': False,
+                'error': error_msg,
+                'success_count': success_count,
+                'failed_users': failed_users
+            }
+            
+    except Exception as e:
+        logging.error(f"Error in send_admin_email_to_users: {str(e)}")
+        return {
+            'success': False,
+            'error': f'An error occurred: {str(e)}',
+            'success_count': 0,
+            'failed_users': []
+        }
+
+
 def community_intro_email(to, subject, full_name, username, password, topic_id, discourse_post_url=None, is_local_account=False):
     """
     Send a community introduction email to a new user.
@@ -1074,3 +1214,4 @@ def send_invite_email(to, subject, full_name, invite_link):
         logging.error(f"Error preparing or sending invitation email: {e}")
         logging.error(f"Error details: {traceback.format_exc()}")
         return False
+

@@ -559,8 +559,8 @@ def get_email_html_content(full_name, username, password, topic_id, discourse_po
             
             <ul>
                 <li><a href="https://forum.irregularchat.com">Community Forum</a> - Discussions, announcements, and resources</li>
-                <li><a href="https://wiki.irregularchat.com">Community Wiki</a> - Knowledge base and documentation</li>
-                <li><a href="https://calendar.irregularchat.com">Community Calendar</a> - Upcoming events and activities</li>
+                <li><a href="https://irregularpedia.org">Community Wiki</a> - Knowledge base and documentation</li>
+                <li><a href="https://event.irregularchat.com">Community Calendar</a> - Upcoming events and activities</li>
             </ul>
             
             <a href="https://sso.irregularchat.com" class="button">Log in Now</a>

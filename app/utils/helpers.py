@@ -316,7 +316,19 @@ def handle_form_submission(action, username, email=None, invited_by=None, intro=
         st.error(f"Error processing action {action} for user {username}")
         return False
 
-def send_email(to, subject, body):
+def send_email(to, subject, body, attachments=None):
+    """
+    Send an email with optional attachments.
+    
+    Args:
+        to (str): Recipient's email address
+        subject (str): Email subject
+        body (str): Email body (HTML format)
+        attachments (list, optional): List of file paths or file-like objects to attach
+        
+    Returns:
+        bool: True if email was sent successfully, False otherwise
+    """
     try:
         logging.info(f"Attempting to send email to: {to}")
         
@@ -328,6 +340,107 @@ def send_email(to, subject, body):
             msg['Bcc'] = Config.SMTP_BCC
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'html'))
+        
+        # Handle attachments if provided
+        if attachments:
+            for attachment in attachments:
+                try:
+                    # Handle both file paths (strings) and file-like objects
+                    if isinstance(attachment, str):
+                        # It's a file path
+                        import os
+                        from email.mime.base import MIMEBase
+                        from email import encoders
+                        import mimetypes
+                        
+                        if not os.path.exists(attachment):
+                            logging.warning(f"Attachment file not found: {attachment}")
+                            continue
+                            
+                        # Determine the file's MIME type
+                        content_type, encoding = mimetypes.guess_type(attachment)
+                        if content_type is None or encoding is not None:
+                            content_type = 'application/octet-stream'
+                        
+                        main_type, sub_type = content_type.split('/', 1)
+                        
+                        with open(attachment, 'rb') as fp:
+                            attachment_data = fp.read()
+                            
+                        # Create the attachment
+                        part = MIMEBase(main_type, sub_type)
+                        part.set_payload(attachment_data)
+                        encoders.encode_base64(part)
+                        
+                        # Add header for the attachment
+                        filename = os.path.basename(attachment)
+                        part.add_header(
+                            'Content-Disposition',
+                            f'attachment; filename= {filename}',
+                        )
+                        
+                        msg.attach(part)
+                        logging.info(f"Attached file: {filename}")
+                        
+                    elif hasattr(attachment, 'read'):
+                        # It's a file-like object with filename and content
+                        from email.mime.base import MIMEBase
+                        from email import encoders
+                        import mimetypes
+                        
+                        filename = getattr(attachment, 'name', 'attachment')
+                        content_type, encoding = mimetypes.guess_type(filename)
+                        if content_type is None or encoding is not None:
+                            content_type = 'application/octet-stream'
+                        
+                        main_type, sub_type = content_type.split('/', 1)
+                        
+                        # Read the content
+                        attachment.seek(0)  # Make sure we're at the beginning
+                        attachment_data = attachment.read()
+                        
+                        # Create the attachment
+                        part = MIMEBase(main_type, sub_type)
+                        part.set_payload(attachment_data)
+                        encoders.encode_base64(part)
+                        
+                        # Add header for the attachment
+                        part.add_header(
+                            'Content-Disposition',
+                            f'attachment; filename= {filename}',
+                        )
+                        
+                        msg.attach(part)
+                        logging.info(f"Attached file-like object: {filename}")
+                        
+                    elif isinstance(attachment, dict):
+                        # Handle dictionary format: {'filename': 'test.txt', 'content': b'content', 'content_type': 'text/plain'}
+                        from email.mime.base import MIMEBase
+                        from email import encoders
+                        
+                        filename = attachment.get('filename', 'attachment')
+                        content = attachment.get('content', b'')
+                        content_type = attachment.get('content_type', 'application/octet-stream')
+                        
+                        main_type, sub_type = content_type.split('/', 1)
+                        
+                        # Create the attachment
+                        part = MIMEBase(main_type, sub_type)
+                        part.set_payload(content)
+                        encoders.encode_base64(part)
+                        
+                        # Add header for the attachment
+                        part.add_header(
+                            'Content-Disposition',
+                            f'attachment; filename= {filename}',
+                        )
+                        
+                        msg.attach(part)
+                        logging.info(f"Attached dictionary content: {filename}")
+                        
+                except Exception as attachment_error:
+                    logging.error(f"Error processing attachment {attachment}: {attachment_error}")
+                    # Continue with other attachments and email sending
 
         logging.info(f"Email content prepared. From: {Config.SMTP_FROM_EMAIL}, To: {to}, Subject: {subject}")
 

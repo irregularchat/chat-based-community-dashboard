@@ -3097,7 +3097,7 @@ async def display_user_list(auth_api_url=None, headers=None):
     )
     
     if selected_users:
-        if action == "Update Matrix Username":
+        
             new_matrix_username = st.text_input("New Matrix Username", key="new_matrix_username")
             if st.button("Update Matrix Username"):
                 if new_matrix_username:

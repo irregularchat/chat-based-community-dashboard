@@ -24,7 +24,7 @@ from app.db.operations import (
     delete_user_note,
     get_note_by_id
 )
-from app.utils.helpers import send_email
+from app.utils.helpers import send_email, admin_user_email
 import pandas as pd
 from datetime import datetime
 import time
@@ -435,9 +435,6 @@ def render_user_management():
                         email_subject = st.text_input("Subject", key="bulk_email_subject", placeholder="Enter email subject")
                         email_body = st.text_area("Message", key="bulk_email_body", height=200, placeholder="Enter your message here...")
                         
-                        # Add HTML checkbox
-                        is_html = st.checkbox("Send as HTML", value=True, key="bulk_email_is_html")
-                        
                         # Submit button
                         submit_email = st.form_submit_button("Send Email to All Selected Users")
                         
@@ -448,23 +445,6 @@ def render_user_management():
                                 st.error("Please enter a message for the email.")
                             else:
                                 try:
-                                    # Add admin signature
-                                    admin_username = st.session_state.get("username", "Admin")
-                                    signature = f"\n\nSent by {admin_username} from the Admin Dashboard"
-                                    
-                                    # Format the email body based on HTML setting
-                                    if is_html:
-                                        # Convert newlines to <br> tags if not already HTML
-                                        if not email_body.strip().startswith("<"):
-                                            email_body = email_body.replace("\n", "<br>")
-                                        
-                                        # Add HTML signature
-                                        if not email_body.lower().endswith("</body>") and not email_body.lower().endswith("</html>"):
-                                            email_body += f"<br><br><em>Sent by {admin_username} from the Admin Dashboard</em>"
-                                    else:
-                                        # Add plain text signature
-                                        email_body += signature
-                                    
                                     # Initialize counters
                                     success_count = 0
                                     failed_users = []
@@ -479,11 +459,11 @@ def render_user_management():
                                             # Update progress
                                             progress.progress((idx + 1) / total_users)
                                             
-                                            # Send the email
-                                            result = send_email(
+                                            # Send the email using the professional admin email function
+                                            result = admin_user_email(
                                                 to=email,
                                                 subject=email_subject,
-                                                body=email_body
+                                                admin_message=email_body
                                             )
                                             
                                             if result:
@@ -803,9 +783,6 @@ def render_user_management():
                         # Email body
                         email_body = st.text_area("Message", key="email_body", height=200, placeholder="Enter your message here...")
                         
-                        # Add HTML checkbox
-                        is_html = st.checkbox("Send as HTML", value=True, key="email_is_html")
-                        
                         # Submit button
                         submit_email = st.form_submit_button("Send Email")
                         
@@ -816,28 +793,11 @@ def render_user_management():
                                 st.error("Please enter a message for the email.")
                             else:
                                 try:
-                                    # Add admin signature if not already in the email body
-                                    admin_username = st.session_state.get("username", "Admin")
-                                    signature = f"\n\nSent by {admin_username} from the Admin Dashboard"
-                                    
-                                    # Format the email body based on HTML setting
-                                    if is_html:
-                                        # Convert newlines to <br> tags if not already HTML
-                                        if not email_body.strip().startswith("<"):
-                                            email_body = email_body.replace("\n", "<br>")
-                                        
-                                        # Add HTML signature
-                                        if not email_body.lower().endswith("</body>") and not email_body.lower().endswith("</html>"):
-                                            email_body += f"<br><br><em>Sent by {admin_username} from the Admin Dashboard</em>"
-                                    else:
-                                        # Add plain text signature
-                                        email_body += signature
-                                    
-                                    # Send the email
-                                    result = send_email(
+                                    # Send the email using the professional admin email function
+                                    result = admin_user_email(
                                         to=recipient_email,
                                         subject=email_subject,
-                                        body=email_body
+                                        admin_message=email_body
                                     )
                                     
                                     if result:

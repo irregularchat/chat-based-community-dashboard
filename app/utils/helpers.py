@@ -729,7 +729,7 @@ def admin_user_email(to, subject, admin_message, is_local_account=False, attachm
         
         # Send the email and get the result
         logging.info(f"Attempting to send admin email to {to}")
-        result = send_email(to, subject, html_content)
+        result = send_email(to, subject, html_content, attachments)
         
         if result:
             logging.info(f"Successfully sent admin email to {to}")

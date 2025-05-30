@@ -39,6 +39,20 @@ import asyncio
 import traceback
 import sys
 
+# Add custom exception classes at the top after imports
+
+class EmailConfigError(Exception):
+    """Raised when SMTP configuration is invalid or incomplete."""
+    pass
+
+class EmailValidationError(Exception):
+    """Raised when email addresses fail validation."""
+    pass
+
+class EmailSendError(Exception):
+    """Raised when email sending fails."""
+    pass
+
 def setup_logging():
     logging.basicConfig(
         level=logging.INFO,
@@ -757,6 +771,14 @@ def is_valid_email_for_sending(email):
     if not re.match(email_pattern, email):
         return False
     
+    # Additional validation for edge cases
+    if '..' in email:  # No consecutive dots
+        return False
+    if email.startswith('.') or email.endswith('.'):  # No leading/trailing dots
+        return False
+    if '@.' in email or '.@' in email:  # No dots adjacent to @
+        return False
+    
     email_lower = email.lower()
     
     # Exclude placeholder emails from irregularchat.com domain
@@ -795,36 +817,38 @@ def send_admin_email_to_users(selected_users, subject, message, attachments=None
         
     Returns:
         dict: Results containing success count, failed users, and status
-    """
-    try:
-        if not selected_users:
-            return {
-                'success': False,
-                'error': 'No users selected',
-                'success_count': 0,
-                'failed_users': []
-            }
         
-        if not Config.SMTP_ACTIVE:
-            return {
-                'success': False,
-                'error': 'SMTP is not active. Please enable SMTP in settings.',
-                'success_count': 0,
-                'failed_users': []
-            }
+    Raises:
+        EmailConfigError: When SMTP configuration is invalid
+        EmailValidationError: When no valid email addresses found
+    """
+    start_time = time.time()
+    logging.info(f"Starting bulk email send to {len(selected_users) if selected_users else 0} users")
+    
+    try:
+        # Input validation
+        if not selected_users:
+            raise EmailValidationError('No users selected')
+        
+        if not subject or not subject.strip():
+            raise EmailValidationError('Email subject is required')
             
-        if not all([Config.SMTP_SERVER, Config.SMTP_PORT, Config.SMTP_USERNAME, Config.SMTP_PASSWORD, Config.SMTP_FROM_EMAIL]):
-            return {
-                'success': False,
-                'error': 'SMTP configuration is incomplete. Check all SMTP settings.',
-                'success_count': 0,
-                'failed_users': []
-            }
+        if not message or not message.strip():
+            raise EmailValidationError('Email message is required')
+        
+        # Validate SMTP configuration
+        smtp_validation = validate_smtp_configuration()
+        if not smtp_validation['valid']:
+            raise EmailConfigError(f"SMTP configuration invalid: {'; '.join(smtp_validation['errors'])}")
+        
+        # Log configuration warnings
+        for warning in smtp_validation.get('warnings', []):
+            logging.warning(f"SMTP configuration warning: {warning}")
         
         success_count = 0
         failed_users = []
         
-        # Get users with valid email addresses, excluding @irregularchat.com placeholder emails
+        # Get users with valid email addresses, excluding filtered emails
         users_with_email = [user for user in selected_users if is_valid_email_for_sending(user.get('Email'))]
         
         # Count filtered users for reporting
@@ -832,20 +856,20 @@ def send_admin_email_to_users(selected_users, subject, message, attachments=None
         users_with_emails_count = len([user for user in selected_users if user.get('Email')])
         filtered_count = users_with_emails_count - len(users_with_email)
         
+        logging.info(f"Email sending stats: {total_selected} selected, {users_with_emails_count} have emails, {len(users_with_email)} valid, {filtered_count} filtered")
+        
         if not users_with_email:
             error_msg = 'No users with valid email addresses found'
             if filtered_count > 0:
                 error_msg += f' ({filtered_count} users filtered out due to invalid/placeholder emails)'
-            return {
-                'success': False,
-                'error': error_msg,
-                'success_count': 0,
-                'failed_users': []
-            }
+            raise EmailValidationError(error_msg)
+        
         # Send emails to each user
-        for user in users_with_email:
+        for i, user in enumerate(users_with_email, 1):
             email = user.get('Email')
             username = user.get('Username', 'Unknown')
+            
+            logging.info(f"Sending email {i}/{len(users_with_email)} to {username} ({email})")
             
             try:
                 result = admin_user_email(
@@ -860,23 +884,27 @@ def send_admin_email_to_users(selected_users, subject, message, attachments=None
                     # Log timeline event
                     try:
                         db = next(get_db())
-                        add_timeline_event(db, "email_sent", username, f"Email sent to {username} ({email}) with subject: {subject}")
+                        add_timeline_event(db, "email_sent", username, f"📧 Admin email sent with subject: '{subject}'")
                     except Exception as e:
                         logging.error(f"Failed to log timeline event: {e}")
-                    logging.info(f"Successfully sent admin email to {username} ({email})")
+                    logging.info(f"✅ Successfully sent admin email to {username} ({email})")
                 else:
                     # Log timeline event for failure
                     try:
                         db = next(get_db())
-                        add_timeline_event(db, "email_failed", username, f"Email failed to send to {username} ({email}) with subject: {subject}")
+                        add_timeline_event(db, "email_failed", username, f"❌ Email send failed with subject: '{subject}'")
                     except Exception as e:
                         logging.error(f"Failed to log timeline event: {e}")
                     failed_users.append(f"{username} ({email})")
-                    logging.error(f"Failed to send admin email to {username} ({email})")
+                    logging.error(f"❌ Failed to send admin email to {username} ({email})")
                     
             except Exception as e:
                 failed_users.append(f"{username} ({email}): {str(e)}")
-                logging.error(f"Error sending admin email to {username} ({email}): {str(e)}")
+                logging.error(f"❌ Error sending admin email to {username} ({email}): {str(e)}")
+        
+        # Calculate timing
+        elapsed_time = time.time() - start_time
+        logging.info(f"Bulk email send completed in {elapsed_time:.2f} seconds. Success: {success_count}, Failed: {len(failed_users)}")
         
         # Return results
         total_users = len(users_with_email)
@@ -889,7 +917,8 @@ def send_admin_email_to_users(selected_users, subject, message, attachments=None
                 'success': True,
                 'message': message,
                 'success_count': success_count,
-                'failed_users': failed_users
+                'failed_users': failed_users,
+                'elapsed_time': elapsed_time
             }
         elif success_count > 0:
             # More than 0 emails were sent, but not all
@@ -900,26 +929,39 @@ def send_admin_email_to_users(selected_users, subject, message, attachments=None
                 'success': True,
                 'message': message,
                 'success_count': success_count,
-                'failed_users': failed_users
+                'failed_users': failed_users,
+                'elapsed_time': elapsed_time
             }
         else:
-            error_msg = 'Failed to send any emails. Check SMTP settings.'
+            error_msg = 'Failed to send any emails. Check SMTP settings and server connectivity.'
             if filtered_count > 0:
                 error_msg += f' ({filtered_count} users were filtered out due to invalid/placeholder emails)'
             return {
                 'success': False,
                 'error': error_msg,
                 'success_count': success_count,
-                'failed_users': failed_users
+                'failed_users': failed_users,
+                'elapsed_time': elapsed_time
             }
             
-    except Exception as e:
-        logging.error(f"Error in send_admin_email_to_users: {str(e)}")
+    except (EmailConfigError, EmailValidationError) as e:
+        logging.error(f"Email operation error: {str(e)}")
         return {
             'success': False,
-            'error': f'An error occurred: {str(e)}',
+            'error': str(e),
             'success_count': 0,
-            'failed_users': []
+            'failed_users': [],
+            'elapsed_time': time.time() - start_time
+        }
+    except Exception as e:
+        logging.error(f"Unexpected error in send_admin_email_to_users: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {
+            'success': False,
+            'error': f'An unexpected error occurred: {str(e)}',
+            'success_count': 0,
+            'failed_users': [],
+            'elapsed_time': time.time() - start_time
         }
 
 
@@ -1055,33 +1097,150 @@ def get_safety_number_change_email_html_content(full_name, username, verificatio
     </html>
     """
 
-def test_email_connection():
-    """Test SMTP connection and settings"""
+def validate_smtp_configuration():
+    """
+    Validate SMTP configuration completeness and accessibility.
+    
+    Returns:
+        dict: {'valid': bool, 'errors': list, 'warnings': list}
+    """
+    errors = []
+    warnings = []
+    
     try:
-        # Create test connection
-        server = smtplib.SMTP(Config.SMTP_SERVER, Config.SMTP_PORT)
-        server.set_debuglevel(1)  # Enable debug output
+        # Check if SMTP is enabled
+        if not Config.SMTP_ACTIVE:
+            errors.append("SMTP is not active (SMTP_ACTIVE=False)")
+            return {'valid': False, 'errors': errors, 'warnings': warnings}
         
-        # Try STARTTLS
+        # Check required configuration
+        required_configs = [
+            ('SMTP_SERVER', Config.SMTP_SERVER),
+            ('SMTP_PORT', Config.SMTP_PORT),
+            ('SMTP_USERNAME', Config.SMTP_USERNAME),
+            ('SMTP_PASSWORD', Config.SMTP_PASSWORD),
+            ('SMTP_FROM_EMAIL', Config.SMTP_FROM_EMAIL)
+        ]
+        
+        for config_name, config_value in required_configs:
+            if not config_value:
+                errors.append(f"Missing {config_name}")
+        
+        if errors:
+            return {'valid': False, 'errors': errors, 'warnings': warnings}
+        
+        # Validate email format
+        import re
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, Config.SMTP_FROM_EMAIL):
+            errors.append(f"Invalid SMTP_FROM_EMAIL format: {Config.SMTP_FROM_EMAIL}")
+        
+        # Validate port
         try:
-            server.starttls()
-            logging.info("STARTTLS successful")
-        except Exception as e:
-            logging.error(f"STARTTLS failed: {e}")
-            
-        # Try login
-        try:
-            server.login(Config.SMTP_USERNAME, Config.SMTP_PASSWORD)
-            logging.info("SMTP login successful")
-        except Exception as e:
-            logging.error(f"SMTP login failed: {e}")
-            
-        server.quit()
-        return True
+            port = int(Config.SMTP_PORT)
+            if port < 1 or port > 65535:
+                errors.append(f"Invalid SMTP_PORT: {Config.SMTP_PORT} (must be 1-65535)")
+        except ValueError:
+            errors.append(f"SMTP_PORT must be a number: {Config.SMTP_PORT}")
+        
+        # Check for common configuration issues
+        if Config.SMTP_SERVER.startswith('smtp.') and Config.SMTP_PORT == '25':
+            warnings.append("Using port 25 with SMTP server - consider port 587 or 465 for better security")
+        
+        if 'gmail' in Config.SMTP_SERVER.lower() and Config.SMTP_PORT not in ['465', '587']:
+            warnings.append("Gmail SMTP typically uses port 465 (SSL) or 587 (TLS)")
+        
+        return {'valid': len(errors) == 0, 'errors': errors, 'warnings': warnings}
         
     except Exception as e:
-        logging.error(f"SMTP connection test failed: {e}")
-        return False
+        errors.append(f"Configuration validation error: {str(e)}")
+        return {'valid': False, 'errors': errors, 'warnings': warnings}
+
+def test_smtp_connection():
+    """
+    Test SMTP connection and authentication.
+    
+    Returns:
+        dict: {'success': bool, 'error': str or None, 'server_info': dict}
+    """
+    try:
+        validation = validate_smtp_configuration()
+        if not validation['valid']:
+            return {
+                'success': False, 
+                'error': f"Configuration invalid: {', '.join(validation['errors'])}", 
+                'server_info': {}
+            }
+        
+        import smtplib
+        import socket
+        
+        server_info = {}
+        
+        # Test connection
+        logging.info(f"Testing SMTP connection to {Config.SMTP_SERVER}:{Config.SMTP_PORT}")
+        
+        try:
+            server = smtplib.SMTP(Config.SMTP_SERVER, int(Config.SMTP_PORT), timeout=10)
+            server_info['connection'] = 'success'
+            
+            # Get server info
+            server_info['greeting'] = server.getwelcome().decode() if server.getwelcome() else 'No greeting'
+            
+            # Test STARTTLS
+            try:
+                server.starttls()
+                server_info['starttls'] = 'success'
+                logging.info("STARTTLS successful")
+            except Exception as tls_error:
+                server_info['starttls'] = f'failed: {str(tls_error)}'
+                logging.warning(f"STARTTLS failed: {tls_error}")
+            
+            # Test authentication
+            try:
+                server.login(Config.SMTP_USERNAME, Config.SMTP_PASSWORD)
+                server_info['authentication'] = 'success'
+                logging.info("SMTP authentication successful")
+            except Exception as auth_error:
+                server_info['authentication'] = f'failed: {str(auth_error)}'
+                server.quit()
+                return {
+                    'success': False, 
+                    'error': f"Authentication failed: {str(auth_error)}", 
+                    'server_info': server_info
+                }
+            
+            server.quit()
+            logging.info("SMTP connection test successful")
+            return {'success': True, 'error': None, 'server_info': server_info}
+            
+        except socket.timeout:
+            return {
+                'success': False, 
+                'error': f"Connection timeout to {Config.SMTP_SERVER}:{Config.SMTP_PORT}", 
+                'server_info': server_info
+            }
+        except socket.gaierror as e:
+            return {
+                'success': False, 
+                'error': f"DNS resolution failed for {Config.SMTP_SERVER}: {str(e)}", 
+                'server_info': server_info
+            }
+        except ConnectionRefusedError:
+            return {
+                'success': False, 
+                'error': f"Connection refused to {Config.SMTP_SERVER}:{Config.SMTP_PORT}", 
+                'server_info': server_info
+            }
+            
+    except Exception as e:
+        logging.error(f"SMTP connection test error: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {
+            'success': False, 
+            'error': f"Test failed with error: {str(e)}", 
+            'server_info': {}
+        }
 
 def send_invite_email(to, subject, full_name, invite_link):
     """

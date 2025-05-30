@@ -526,6 +526,107 @@ def get_email_html_content(full_name, username, password, topic_id, discourse_po
     </body>
     </html>
     """
+def admin_user_email(to, subject, admin_message, is_local_account=False):
+    """
+    Send an email to a user in the community from an admin.
+    admin_message is the message from the admin.
+    This email is sent to the user from the community no reply email address. This can be used for moderating and awareness reasons.
+    
+    Args:
+        to (str): Email address to send to
+        subject (str): Email subject
+        admin_message (str): Message from the admin
+        is_local_account (bool): Whether this is a local dashboard account
+        
+    Returns:
+        bool: True if email was sent successfully, False otherwise
+    """
+    try:
+        logging.info(f"Preparing admin email to {to}")
+        logging.info(f"Email configuration active: {Config.SMTP_ACTIVE}")
+        
+        if not Config.SMTP_ACTIVE:
+            logging.warning("SMTP is not active. Enable it in settings to send emails.")
+            return False
+            
+        if not all([Config.SMTP_SERVER, Config.SMTP_PORT, Config.SMTP_USERNAME, Config.SMTP_PASSWORD, Config.SMTP_FROM_EMAIL]):
+            logging.error("Missing SMTP configuration. Check all SMTP settings are provided.")
+            return False
+        
+        # Create HTML content for the email
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    line-height: 1.6;
+                    color: #333;
+                    margin: 0;
+                    padding: 0;
+                }}
+                .email-container {{
+                    max-width: 600px;
+                    margin: auto;
+                    padding: 20px;
+                    border: 1px solid #ddd;
+                    border-radius: 8px;
+                    background-color: #f9f9f9;
+                }}
+                h1 {{
+                    color: #2a6496;
+                    border-bottom: 2px solid #eee;
+                    padding-bottom: 10px;
+                }}
+                .message {{
+                    background-color: #f5f5f5;
+                    padding: 15px;
+                    border-radius: 5px;
+                    margin: 20px 0;
+                    border-left: 4px solid #2a6496;
+                    white-space: pre-wrap;
+                }}
+                .footer {{
+                    margin-top: 30px;
+                    padding-top: 15px;
+                    border-top: 1px solid #eee;
+                    font-size: 0.9em;
+                    color: #777;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="email-container">
+                <h1>Message from IrregularChat Administration</h1>
+                
+                <div class="message">
+                    {admin_message}
+                </div>
+                
+                <div class="footer">
+                    <p>This message was sent by a community administrator.</p>
+                    <p>If you have questions about this message, please contact our <a href="https://signal.group/#CjQKIL5qhTG80gnMDHO4u7gyArJm2VXkKmRlyWorGQFif8n_EhCIsKoPI0FBFas5ujyH2Uve">admin signal group</a></p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Send the email and get the result
+        logging.info(f"Attempting to send admin email to {to}")
+        result = send_email(to, subject, html_content)
+        
+        if result:
+            logging.info(f"Successfully sent admin email to {to}")
+            return True
+        else:
+            logging.error(f"Failed to send admin email to {to}")
+            return False
+    except Exception as e:
+        logging.error(f"Error preparing or sending admin email: {e}")
+        logging.error(f"Error details: {traceback.format_exc()}")
+        return False
 
 def community_intro_email(to, subject, full_name, username, password, topic_id, discourse_post_url=None, is_local_account=False):
     """

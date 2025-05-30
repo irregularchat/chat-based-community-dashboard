@@ -741,6 +741,47 @@ def admin_user_email(to, subject, admin_message, is_local_account=False):
         logging.error(f"Error details: {traceback.format_exc()}")
         return False
 
+def is_valid_email_for_sending(email):
+    """
+    Validate email address and exclude placeholder emails and restricted TLDs.
+    
+    Args:
+        email (str): Email address to validate
+        
+    Returns:
+        bool: True if email is valid and should receive emails, False otherwise
+    """
+    if not email:
+        return False
+    
+    # Basic email format validation
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(email_pattern, email):
+        return False
+    
+    email_lower = email.lower()
+    
+    # Exclude placeholder emails from irregularchat.com domain
+    if email_lower.endswith('@irregularchat.com'):
+        return False
+    
+    # Exclude Russian TLDs for obvious reasons
+    russian_tlds = ['.ru', '.рф', '.su']
+    if any(email_lower.endswith(tld) for tld in russian_tlds):
+        return False
+    
+    # Exclude Chinese TLDs for obvious reasons
+    chinese_tlds = ['.cn', '.中国', '.中國']
+    if any(email_lower.endswith(tld) for tld in chinese_tlds):
+        return False
+    
+    # Exclude Iranian TLDs for obvious reasons
+    iranian_tlds = ['.ir']
+    if any(email_lower.endswith(tld) for tld in iranian_tlds):
+        return False
+    
+    return True
+
 def community_intro_email(to, subject, full_name, username, password, topic_id, discourse_post_url=None, is_local_account=False):
     """
     Send a community introduction email to a new user.

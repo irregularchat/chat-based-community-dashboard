@@ -18,6 +18,7 @@ This document captures key lessons learned during the development and debugging 
 13. [Cookie-Based Authentication Implementation](#cookie-based-authentication-implementation)
 14. [Docker Package Dependency Resolution](#docker-package-dependency-resolution-2025-05-31)
 15. [Streamlit DataFrame Display Limitations](#streamlit-dataframe-display-limitations-2025-05-31)
+16. [Test Organization and Structure](#test-organization-and-structure-2025-05-31)
 
 ---
 

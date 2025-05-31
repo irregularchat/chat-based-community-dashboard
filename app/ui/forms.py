@@ -3064,19 +3064,66 @@ async def display_user_list(auth_api_url=None, headers=None):
     # Display total count prominently
     st.success(f"📊 **Total Users in Database: {len(users)}**")
     
+    # Add search functionality BEFORE pagination
+    st.subheader("Search & Filter")
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        search_term = st.text_input(
+            "🔍 Search users", 
+            placeholder="Search by username, name, or email...",
+            key="user_search",
+            help="Search across username, first name, last name, and email"
+        )
+    
+    with col2:
+        status_filter = st.selectbox(
+            "Status",
+            ["All", "Active", "Inactive"],
+            key="status_filter"
+        )
+    
+    # Filter users based on search and status
+    filtered_users = users
+    
+    # Apply search filter
+    if search_term:
+        search_lower = search_term.lower()
+        filtered_users = [
+            user for user in filtered_users
+            if (search_lower in user.username.lower() or
+                search_lower in user.first_name.lower() or
+                search_lower in user.last_name.lower() or
+                search_lower in (user.email or "").lower())
+        ]
+    
+    # Apply status filter
+    if status_filter == "Active":
+        filtered_users = [user for user in filtered_users if user.is_active]
+    elif status_filter == "Inactive":
+        filtered_users = [user for user in filtered_users if not user.is_active]
+    
+    # Show filtered count if different from total
+    if len(filtered_users) < len(users):
+        st.info(f"🔎 Found {len(filtered_users)} users matching your criteria (out of {len(users)} total)")
+    
+    if not filtered_users:
+        st.warning("No users found matching your search criteria.")
+        return
+    
     # Add pagination controls
     st.subheader("User List")
     
-    # Pagination settings
+    # Pagination settings - with smaller default for better performance
     users_per_page = st.selectbox(
         "Users per page:",
-        options=[50, 100, 250, 500, 1000, len(users)],
-        value=100,
+        options=[25, 50, 100, 200],
+        value=50,
         key="users_per_page"
     )
     
-    # Calculate pagination
-    total_pages = (len(users) + users_per_page - 1) // users_per_page
+    # Calculate pagination for filtered users
+    total_pages = (len(filtered_users) + users_per_page - 1) // users_per_page
     
     if total_pages > 1:
         page = st.selectbox(
@@ -3089,13 +3136,13 @@ async def display_user_list(auth_api_url=None, headers=None):
     
     # Calculate slice indices
     start_idx = (page - 1) * users_per_page
-    end_idx = min(start_idx + users_per_page, len(users))
+    end_idx = min(start_idx + users_per_page, len(filtered_users))
     
     # Show current page info
-    st.info(f"Showing users {start_idx + 1}-{end_idx} of {len(users)}")
+    st.info(f"Showing users {start_idx + 1}-{end_idx} of {len(filtered_users)}")
     
-    # Get users for current page
-    page_users = users[start_idx:end_idx]
+    # Get users for current page from FILTERED users
+    page_users = filtered_users[start_idx:end_idx]
     
     # Convert users to DataFrame for display
     user_data = []
@@ -3114,6 +3161,35 @@ async def display_user_list(auth_api_url=None, headers=None):
     
     df = pd.DataFrame(user_data)
     
+    # Add export functionality
+    col1, col2 = st.columns([4, 1])
+    with col2:
+        # Create CSV for all filtered users (not just current page)
+        all_filtered_data = []
+        for user in filtered_users:
+            user_dict = {
+                "Username": user.username,
+                "Name": f"{user.first_name} {user.last_name}",
+                "Email": user.email,
+                "Matrix Username": user.matrix_username or "Not set",
+                "Status": "Active" if user.is_active else "Inactive",
+                "Admin": "Yes" if user.is_admin else "No",
+                "Date Joined": format_date(user.date_joined),
+                "Last Login": format_date(user.last_login)
+            }
+            all_filtered_data.append(user_dict)
+        
+        csv_df = pd.DataFrame(all_filtered_data)
+        csv = csv_df.to_csv(index=False)
+        
+        st.download_button(
+            label=f"📥 Export {len(filtered_users)} users",
+            data=csv,
+            file_name=f"users_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            help="Download all filtered users as CSV"
+        )
+    
     # Display the DataFrame with explicit configuration
     st.dataframe(
         df,
@@ -3129,12 +3205,12 @@ async def display_user_list(auth_api_url=None, headers=None):
         key="user_action"
     )
     
-    # Get selected users (from all users, not just current page)
+    # Get selected users (from filtered users to match what's visible)
     selected_users = st.multiselect(
         "Select Users",
-        options=[user.username for user in users],  # All users, not just page_users
+        options=[user.username for user in filtered_users],  # Filtered users, not all users
         key="selected_users",
-        help=f"Select from all {len(users)} users (not limited to current page)"
+        help=f"Select from {len(filtered_users)} filtered users (across all pages)"
     )
     
     if selected_users:

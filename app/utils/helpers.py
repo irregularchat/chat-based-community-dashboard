@@ -655,7 +655,7 @@ def admin_user_email(to, subject, admin_message, is_local_account=False, attachm
     """
     Send an email to a user in the community from an admin.
     admin_message is the message from the admin.
-    This email is sent to the user from the community no reply email address. This can be used for moderating and awareness reasons.
+    This email is sent to the user from the community no reply email address. This can be used for moderating and awareness reasons. 
     
     Args:
         to (str): Email address to send to
@@ -715,47 +715,47 @@ def admin_user_email(to, subject, admin_message, is_local_account=False, attachm
         
         # Create HTML content for the email
         html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    line-height: 1.6;
-                    color: #333;
-                    margin: 0;
-                    padding: 0;
-                }}
-                .email-container {{
-                    max-width: 600px;
-                    margin: auto;
-                    padding: 20px;
-                    border: 1px solid #ddd;
-                    border-radius: 8px;
-                    background-color: #f9f9f9;
-                }}
-                h1 {{
-                    color: #2a6496;
-                    border-bottom: 2px solid #eee;
-                    padding-bottom: 10px;
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                line-height: 1.6;
+                color: #333;
+                margin: 0;
+                padding: 0;
+            }}
+            .email-container {{
+                max-width: 600px;
+                margin: auto;
+                padding: 20px;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                background-color: #f9f9f9;
+            }}
+            h1 {{
+                color: #2a6496;
+                border-bottom: 2px solid #eee;
+                padding-bottom: 10px;
                     margin-bottom: 20px;
-                }}
-                .message {{
+            }}
+            .message {{
                     background-color: #ffffff;
                     padding: 20px;
-                    border-radius: 5px;
-                    margin: 20px 0;
-                    border-left: 4px solid #2a6496;
+                border-radius: 5px;
+                margin: 20px 0;
+                border-left: 4px solid #2a6496;
                     white-space: pre-wrap;
                     font-size: 14px;
                     line-height: 1.6;
-                }}
-                .footer {{
-                    margin-top: 30px;
-                    padding-top: 15px;
-                    border-top: 1px solid #eee;
-                    font-size: 0.9em;
-                    color: #777;
+            }}
+            .footer {{
+                margin-top: 30px;
+                padding-top: 15px;
+                border-top: 1px solid #eee;
+                font-size: 0.9em;
+                color: #777;
                 }}
                 .variables-info {{
                     margin-top: 20px;
@@ -1018,7 +1018,7 @@ def send_admin_email_to_users(selected_users, subject, message, attachments=None
             'elapsed_time': time.time() - start_time
         }
 
-
+                
 def community_intro_email(to, subject, full_name, username, password, topic_id, discourse_post_url=None, is_local_account=False):
     """
     Send a community introduction email to a new user.
@@ -1066,13 +1066,13 @@ def community_intro_email(to, subject, full_name, username, password, topic_id, 
         result = send_email(to, subject, html_content)
         
         if result:
-            logging.info(f"Successfully sent community intro email to {to}")
             return True
         else:
-            logging.error(f"Failed to send community intro email to {to}")
+            logging.error(f"Failed to send invitation email to {to}")
             return False
+            
     except Exception as e:
-        logging.error(f"Error preparing or sending community intro email: {e}")
+        logging.error(f"Error preparing or sending invitation email: {e}")
         logging.error(f"Error details: {traceback.format_exc()}")
         return False
 
@@ -1240,7 +1240,7 @@ def test_smtp_connection():
             
             # Get server info
             server_info['greeting'] = server.getwelcome().decode() if server.getwelcome() else 'No greeting'
-            
+
             # Test STARTTLS
             try:
                 server.starttls()
@@ -1249,7 +1249,7 @@ def test_smtp_connection():
             except Exception as tls_error:
                 server_info['starttls'] = f'failed: {str(tls_error)}'
                 logging.warning(f"STARTTLS failed: {tls_error}")
-            
+
             # Test authentication
             try:
                 server.login(Config.SMTP_USERNAME, Config.SMTP_PASSWORD)
@@ -1263,11 +1263,11 @@ def test_smtp_connection():
                     'error': f"Authentication failed: {str(auth_error)}", 
                     'server_info': server_info
                 }
-            
+
             server.quit()
             logging.info("SMTP connection test successful")
             return {'success': True, 'error': None, 'server_info': server_info}
-            
+
         except socket.timeout:
             return {
                 'success': False, 
@@ -1286,7 +1286,7 @@ def test_smtp_connection():
                 'error': f"Connection refused to {Config.SMTP_SERVER}:{Config.SMTP_PORT}", 
                 'server_info': server_info
             }
-            
+
     except Exception as e:
         logging.error(f"SMTP connection test error: {str(e)}")
         logging.error(traceback.format_exc())
@@ -1423,6 +1423,7 @@ def send_invite_email(to, subject, full_name, invite_link):
         else:
             logging.error(f"Failed to send invitation email to {to}")
             return False
+            
     except Exception as e:
         logging.error(f"Error preparing or sending invitation email: {e}")
         logging.error(f"Error details: {traceback.format_exc()}")

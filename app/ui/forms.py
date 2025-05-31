@@ -3053,25 +3053,58 @@ async def render_invite_form():
         st.session_state['parsing_successful'] = False
     
 async def display_user_list(auth_api_url=None, headers=None):
-    """Display the list of users with actions."""
-    # Clear any potential session state cache
-    for key in ['user_list_cache', 'cached_users', 'users_data']:
-        if key in st.session_state:
-            del st.session_state[key]
+    """Display the list of users with actions and pagination."""
+    # Initialize session state for pagination if not exists
+    if 'users_per_page' not in st.session_state:
+        st.session_state.users_per_page = 50
+        
+    # Add force refresh control
+    if 'force_refresh' not in st.session_state:
+        st.session_state.force_refresh = False
     
-    # Get users from database using the improved function
-    with st.spinner("Loading users from database..."):
-        users = get_users_from_db()
+    # Get current page from URL or default to 1
+    try:
+        current_page = int(st.query_params.get('page', 1))
+    except (ValueError, TypeError):
+        current_page = 1
+    
+    # Get search and filter values from URL params or session state
+    search_term = st.query_params.get('search', '')
+    status_filter = st.query_params.get('status', 'All')
+    
+    # Update search and filter in session state
+    if 'search_term' not in st.session_state:
+        st.session_state.search_term = search_term
+    if 'status_filter' not in st.session_state:
+        st.session_state.status_filter = status_filter
+    
+    # Store in session state
+    st.session_state.search_term = search_term
+    st.session_state.status_filter = status_filter
+    
+    # Get pagination parameters from URL or defaults
+    users_per_page = st.session_state.users_per_page
+    offset = (current_page - 1) * users_per_page
+    
+    # Get users from database with pagination and filtering
+    with st.spinner(f"Loading users {offset + 1} to {offset + users_per_page}..."):
+        users, total_count = get_users_from_db(
+            limit=users_per_page,
+            offset=offset,
+            search_term=search_term,
+            status_filter=status_filter,
+            force_refresh=st.session_state.get('force_refresh', False)
+        )
+        
+        # Reset force_refresh after using it
+        if st.session_state.get('force_refresh', False):
+            st.session_state.force_refresh = False
     
     # Debug logging
-    logging.info(f"display_user_list: Received {len(users) if users else 0} users")
-    
-    if not users:
-        st.warning("No users found in the database.")
-        return
+    logging.info(f"display_user_list: Loaded {len(users)} of {total_count} total users")
     
     # Display total count prominently
-    st.success(f"📊 **Total Users in Database: {len(users)}**")
+    st.success(f"📊 **Total Users: {total_count}** (showing {len(users)} per page)")
     
     # Debug info - always show for troubleshooting
     with st.expander("Debug Information", expanded=False):
@@ -3094,102 +3127,333 @@ async def display_user_list(auth_api_url=None, headers=None):
         except:
             pass
     
-    # Add search functionality BEFORE pagination
-    st.subheader("Search & Filter")
-    col1, col2 = st.columns([3, 1])
+    # Add refresh button and IDP comparison
+    col1, col2 = st.columns([1, 3])
     
     with col1:
-        search_term = st.text_input(
-            "🔍 Search users", 
-            placeholder="Search by username, name, or email...",
-            key="user_search",
-            help="Search across username, first name, last name, and email"
-        )
+        if st.button("🔄 Refresh Data", help="Force refresh user data from database"):
+            st.session_state.force_refresh = True
+            st.rerun()
     
+    # Check IDP sync status if we have the API URL and headers
+    if auth_api_url and headers:
+        with col2:
+            with st.spinner("Checking IDP sync status..."):
+                try:
+                    # Get local user count
+                    from app.db.database import SessionLocal
+                    from app.db.models import User
+                    
+                    db = SessionLocal()
+                    try:
+                        local_count = db.query(User).count()
+                        
+                        # Get IDP user count
+                        from app.auth.api import list_users
+                        idp_users = list_users(auth_api_url, headers)
+                        idp_count = len(idp_users) if idp_users else 0
+                        
+                        # Show sync status
+                        if local_count == idp_count:
+                            st.success(f"✅ In sync: {local_count} local users / {idp_count} IDP users")
+                        else:
+                            st.warning(f"⚠️ Out of sync: {local_count} local users / {idp_count} IDP users")
+                            
+                            # Show sync button if out of sync
+                            if st.button("🔄 Sync Now", key="sync_now_btn"):
+                                from app.services.matrix_cache import sync_authentik_users
+                                with st.spinner("Syncing users from IDP..."):
+                                    success = await sync_authentik_users(auth_api_url, headers)
+                                    if success:
+                                        st.success("Sync completed successfully!")
+                                        st.session_state.force_refresh = True
+                                        st.rerun()
+                                    else:
+                                        st.error("Failed to sync users from IDP")
+                    finally:
+                        db.close()
+                except Exception as e:
+                    st.error(f"Error checking IDP sync status: {str(e)}")
+    
+    # Display user table
+    if users:
+        # Convert users to DataFrame for display
+        import pandas as pd
+        user_data = [{
+            'ID': user.id,
+            'Username': user.username,
+            'First Name': user.first_name or '',
+            'Last Name': user.last_name or '',
+            'Email': user.email or '',
+            'Status': 'Active' if user.is_active else 'Inactive'
+        } for user in users]
+        
+        df = pd.DataFrame(user_data)
+        
+        # Display the table with better formatting
+        st.dataframe(
+            df,
+            column_config={
+                'ID': st.column_config.NumberColumn('ID'),
+                'Username': 'Username',
+                'First Name': 'First Name',
+                'Last Name': 'Last Name',
+                'Email': 'Email',
+                'Status': st.column_config.SelectboxColumn(
+                    'Status',
+                    options=['Active', 'Inactive'],
+                    required=True
+                )
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+    else:
+        st.warning("No users found matching the current filters.")
+    
+    # Search and filter UI
+    st.subheader("Search & Filter")
+    
+    # Use form to prevent multiple reruns
+    with st.form("user_search_form", clear_on_submit=False):
+        col1, col2, col3 = st.columns([3, 1, 1])
+        
+        with col1:
+            new_search_term = st.text_input(
+                "🔍 Search users", 
+                value=search_term,
+                placeholder="Search by username, name, or email...",
+                help="Search across username, first name, last name, and email",
+                key="search_input"
+            )
+        
+        with col2:
+            new_status_filter = st.selectbox(
+                "Status",
+                ["All", "Active", "Inactive"],
+                index=["All", "Active", "Inactive"].index(status_filter) if status_filter in ["All", "Active", "Inactive"] else 0,
+                key="status_select"
+            )
+        
+        with col3:
+            st.write("")
+            st.write("")
+            apply_filters = st.form_submit_button("🔍 Apply Filters")
+            
+        if apply_filters:
+            # Update URL parameters
+            params = {}
+            if new_search_term:
+                params["search"] = new_search_term
+            if new_status_filter != "All":
+                params["status"] = new_status_filter
+            
+            # Reset to first page when filters change
+            params["page"] = 1
+            
+            # Update query parameters and rerun
+            st.query_params.update(params)
+            st.rerun()
+    
+    # Show filter summary if any filter is active
+    active_filters = []
+    if search_term:
+        active_filters.append(f'search: "{search_term}"')
+    if status_filter != "All":
+        active_filters.append(f'status: {status_filter}')
+    
+    if active_filters:
+        st.info(f"🔍 Active filters: {', '.join(active_filters)} - {total_count} users found")
+    
+    # User List Section
+    st.subheader("User List")
+    
+    # Pagination controls
+    st.write("---")
+    
+    # Calculate total pages
+    total_pages = max(1, (total_count + users_per_page - 1) // users_per_page)
+    
+    # Ensure current page is within bounds
+    if current_page > total_pages and total_pages > 0:
+        current_page = total_pages
+        st.query_params["page"] = current_page
+        st.rerun()
+    
+    # Create pagination columns
+    col1, col2, col3 = st.columns([1, 3, 1])
+    
+    # Users per page selector
+    with col1:
+        new_users_per_page = st.selectbox(
+            "Users per page:",
+            [25, 50, 100, 200, 500],
+            index=[25, 50, 100, 200, 500].index(users_per_page) if users_per_page in [25, 50, 100, 200, 500] else 1,
+            key="users_per_page"
+        )
+        
+        # Update users per page if changed
+        if new_users_per_page != users_per_page:
+            st.session_state.users_per_page = new_users_per_page
+            st.query_params["page"] = 1  # Reset to first page
+            st.rerun()
+    
+    # Page numbers
     with col2:
-        status_filter = st.selectbox(
-            "Status",
-            ["All", "Active", "Inactive"],
-            key="status_filter"
-        )
+        if total_pages > 1:
+            st.write(f"Page {current_page} of {total_pages}")
+            
+            # Calculate page range to show (max 5 pages)
+            start_page = max(1, current_page - 2)
+            end_page = min(total_pages, current_page + 2)
+            
+            # Adjust start_page if we're near the end
+            if end_page - start_page < 4 and start_page > 1:
+                start_page = max(1, end_page - 4)
+            
+            # Show first page if not in range
+            if start_page > 1:
+                if st.button("1"):
+                    st.query_params["page"] = 1
+                    st.rerun()
+                if start_page > 2:
+                    st.write(" ... ")
+            
+            # Show page numbers
+            for p in range(start_page, end_page + 1):
+                if p == current_page:
+                    st.write(f"**{p}**", end=" ")
+                else:
+                    if st.button(str(p), key=f"page_{p}"):
+                        st.query_params["page"] = p
+                        st.rerun()
+                
+            # Show last page if not in range
+            if end_page < total_pages:
+                if end_page < total_pages - 1:
+                    st.write(" ... ")
+                if st.button(str(total_pages), key=f"page_{total_pages}"):
+                    st.query_params["page"] = total_pages
+                    st.rerun()
     
-    # Filter users based on search and status
+        # Navigation buttons
+        with col3:
+            if current_page < total_pages:
+                if st.button("Next ➡️"):
+                    st.query_params["page"] = current_page + 1
+                    st.rerun()
+    
+    # Show current page info
+    start_idx = (current_page - 1) * users_per_page + 1
+    end_idx = min(start_idx + users_per_page - 1, total_count)
+    st.caption(f"Showing users {start_idx} to {end_idx} of {total_count}")
+    
+    # Add a small progress bar for large datasets
+    if total_count > 500:
+        progress = min(1.0, end_idx / total_count)
+        st.progress(progress)
+    
+    # Display user data with actions
+    if not users:
+        st.warning("No users to display.")
+        return
+    
+    # Show IDP sync status if available
+    if auth_api_url and headers:
+        st.subheader("🔗 IDP Sync Status")
+        try:
+            from app.services.matrix_cache import get_authentik_user_count
+            idp_count = await get_authentik_user_count(auth_api_url, headers)
+            if idp_count is not None:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Users in IDP", idp_count)
+                with col2:
+                    st.metric("Users in Database", total_count)
+                
+                if idp_count > total_count:
+                    st.warning(f"⚠️ {idp_count - total_count} users in IDP not in database")
+                    if st.button("🔄 Sync Users from IDP"):
+                        with st.spinner("Syncing users from IDP..."):
+                            from app.services.matrix_cache import sync_authentik_users
+                            success = await sync_authentik_users(auth_api_url, headers)
+                            if success:
+                                st.success("Sync completed successfully!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to sync users from IDP")
+        except Exception as e:
+            st.error(f"Error checking IDP status: {str(e)}")
+    
+    # Display users with actions
+    st.subheader("👥 User Management")
+    
+    # Create a search box
+    search_term = st.text_input("🔍 Search users", "", 
+                              placeholder="Search by username, name, or email...")
+    
+    # Filter users based on search
     filtered_users = users
-    
-    # Apply search filter
     if search_term:
         search_lower = search_term.lower()
         filtered_users = [
-            user for user in filtered_users
-            if (search_lower in user.username.lower() or
-                search_lower in user.first_name.lower() or
-                search_lower in user.last_name.lower() or
-                search_lower in (user.email or "").lower())
+            u for u in users 
+            if (search_lower in u.username.lower() or 
+                search_lower in (u.first_name or "").lower() or 
+                search_lower in (u.last_name or "").lower() or
+                search_lower in (u.email or "").lower())
         ]
     
-    # Apply status filter
-    if status_filter == "Active":
-        filtered_users = [user for user in filtered_users if user.is_active]
-    elif status_filter == "Inactive":
-        filtered_users = [user for user in filtered_users if not user.is_active]
-    
-    # Show filtered count if different from total
-    if len(filtered_users) < len(users):
-        st.info(f"🔎 Found {len(filtered_users)} users matching your criteria (out of {len(users)} total)")
-    
-    if not filtered_users:
-        st.warning("No users found matching your search criteria.")
+    try:
+        # Display users with actions
+        for user in filtered_users:
+            with st.expander(f"{user.username} - {user.email or 'No email'}", expanded=False):
+                col1, col2 = st.columns([1, 2])
+                
+                with col1:
+                    st.write(f"**ID:** {user.id}")
+                    st.write(f"**Name:** {user.first_name or ''} {user.last_name or ''}")
+                    st.write(f"**Status:** {'🟢 Active' if user.is_active else '🔴 Inactive'}")
+                    st.write(f"**Last Login:** {format_date(user.last_login) if user.last_login else 'Never'}")
+                
+                with col2:
+                    # Status toggle
+                    new_status = st.toggle(
+                        "Active", 
+                        value=user.is_active,
+                        key=f"status_{user.id}",
+                        on_change=update_user_status,
+                        args=(user.id, not user.is_active, user.username)
+                    )
+                    
+                    # Actions dropdown
+                    action = st.selectbox(
+                        "Actions",
+                        ["Select an action", "View Details", "Edit User", "Reset Password", 
+                         "Send Message", "View Groups", "View Notes"],
+                        key=f"action_{user.id}"
+                    )
+                    
+                    if action == "View Details":
+                        st.json({
+                            "ID": user.id,
+                            "Username": user.username,
+                            "Email": user.email,
+                            "First Name": user.first_name,
+                            "Last Name": user.last_name,
+                            "Status": "Active" if user.is_active else "Inactive",
+                            "Admin": "Yes" if user.is_admin else "No",
+                            "Moderator": "Yes" if user.is_moderator else "No",
+                            "Last Login": format_date(user.last_login) if user.last_login else "Never",
+                            "Date Joined": format_date(user.date_joined) if user.date_joined else "Unknown",
+                            "Matrix Username": user.matrix_username or "Not set"
+                        })
+    except Exception as e:
+        st.error(f"Error displaying user data: {str(e)}")
+        logging.exception("Error in user list display")
+        logging.error(f"Error in displaying user data: {str(e)}")
+        logging.error(traceback.format_exc())
         return
-    
-    # Add pagination controls
-    st.subheader("User List")
-    
-    # Pagination settings - with smaller default for better performance
-    users_per_page = st.selectbox(
-        "Users per page:",
-        options=[25, 50, 100, 200],
-        value=50,
-        key="users_per_page"
-    )
-    
-    # Calculate pagination for filtered users
-    total_pages = (len(filtered_users) + users_per_page - 1) // users_per_page
-    
-    if total_pages > 1:
-        page = st.selectbox(
-            f"Page (1 of {total_pages}):",
-            options=list(range(1, total_pages + 1)),
-            key="user_page"
-        )
-    else:
-        page = 1
-    
-    # Calculate slice indices
-    start_idx = (page - 1) * users_per_page
-    end_idx = min(start_idx + users_per_page, len(filtered_users))
-    
-    # Show current page info
-    st.info(f"Showing users {start_idx + 1}-{end_idx} of {len(filtered_users)}")
-    
-    # Get users for current page from FILTERED users
-    page_users = filtered_users[start_idx:end_idx]
-    
-    # Convert users to DataFrame for display
-    user_data = []
-    for user in page_users:
-        user_dict = {
-            "Username": user.username,
-            "Name": f"{user.first_name} {user.last_name}",
-            "Email": user.email,
-            "Matrix Username": user.matrix_username or "Not set",
-            "Status": "Active" if user.is_active else "Inactive",
-            "Admin": "Yes" if user.is_admin else "No",
-            "Date Joined": format_date(user.date_joined),
-            "Last Login": format_date(user.last_login)
-        }
-        user_data.append(user_dict)
-    
-    df = pd.DataFrame(user_data)
     
     # Add export functionality
     col1, col2 = st.columns([4, 1])
@@ -3302,20 +3566,51 @@ async def display_user_list(auth_api_url=None, headers=None):
                 else:
                     st.error("Failed to delete users")
 
+def update_user_status(user_id: int, new_status: bool, username: str):
+    """Update user status in the database"""
+    try:
+        from app.db.database import get_db
+        from app.db.models import User
+        
+        db = next(get_db())
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user:
+                user.is_active = new_status
+                db.commit()
+                st.success(f"User {username} has been {'activated' if new_status else 'deactivated'}")
+                st.rerun()
+            else:
+                st.error("User not found")
+        except Exception as e:
+            db.rollback()
+            st.error(f"Error updating user status: {str(e)}")
+        finally:
+            db.close()
+    except Exception as e:
+        st.error(f"Database connection error: {str(e)}")
+
 def format_date(date_obj):
     """Format a date object for display."""
-    if date_obj is None or pd.isna(date_obj):
-        return ""
+    if not date_obj:
+        return "Never"
     try:
-        return date_obj.strftime("%Y-%m-%d %H:%M")
-    except (AttributeError, TypeError, ValueError):
+        # Check if it's already a datetime object
+        if hasattr(date_obj, 'strftime'):
+            return date_obj.strftime("%Y-%m-%d %H:%M")
         # If it's a string, try to parse it
         if isinstance(date_obj, str):
+            from datetime import datetime
+            # Try parsing with timezone info
             try:
-                from datetime import datetime
-                return datetime.fromisoformat(date_obj.replace('Z', '+00:00')).strftime("%Y-%m-%d %H:%M")
-            except (ValueError, AttributeError):
-                return date_obj
+                dt = datetime.fromisoformat(date_obj)
+                return dt.strftime("%Y-%m-%d %H:%M")
+            except ValueError:
+                # If that fails, try without timezone
+                return date_obj.split('.')[0].replace('T', ' ')[:16]
+        return str(date_obj)
+    except Exception as e:
+        logging.error(f"Error formatting date: {e}")
         return str(date_obj)
 
 def handle_action(action_type, selected_users, action_params=None):
@@ -3483,71 +3778,105 @@ def handle_action(action_type, selected_users, action_params=None):
         logging.error(traceback.format_exc())
         return False
 
-def get_users_from_db():
-    """Get all users from the database."""
-    # Clear any cached users in session state
-    if 'cached_users' in st.session_state:
-        del st.session_state['cached_users']
+def get_users_from_db(limit=500, offset=0, search_term=None, status_filter="All", force_refresh=False):
+    """
+    Get users from the database with pagination and filtering.
     
+    Args:
+        limit (int): Maximum number of users to return
+        offset (int): Number of users to skip
+        search_term (str, optional): Search term to filter users
+        status_filter (str): Status filter ('All', 'Active', 'Inactive')
+        force_refresh (bool): If True, forces a fresh query from the database
+        
+    Returns:
+        tuple: (list of User objects, total_count) or (None, 0) on error
+    """
+    from sqlalchemy import or_
+    from sqlalchemy.orm import sessionmaker
+    logging.info(f"=== Starting get_users_from_db(limit={limit}, offset={offset}, search='{search_term}', force_refresh={force_refresh}) ===")
+    
+    db = None
     try:
-        # Get a database session
+        # Import database components
+        from app.db.database import engine, SessionLocal, get_db
+        from app.db.models import User
+        
+        # Log database URL (masking password)
+        db_url = str(engine.url)
+        if '@' in db_url:
+            parts = db_url.split('@', 1)
+            db_url = f"{parts[0].split('//')[0]}//***:***@{parts[1]}"
+        logging.info(f"Using database: {db_url}")
+        
+        # Get a fresh database session
         db = next(get_db())
-        try:
-            # Get users from database
-            from app.db.models import User
-            
-            # First, get the exact count
-            total_count = db.query(User).count()
-            logging.info(f"Total users in database: {total_count}")
-            
-            # Check if this is SQLite or PostgreSQL
-            db_type = "sqlite" if "sqlite" in str(db.bind.url) else "postgresql"
-            logging.info(f"Database type: {db_type}")
-            
-            # For SQLite, try a different approach if needed
-            if total_count > 500:
-                # Load users in batches to avoid any potential limits
-                users = []
-                batch_size = 200
-                offset = 0
-                
-                while offset < total_count:
-                    batch = db.query(User).order_by(User.id).offset(offset).limit(batch_size).all()
-                    if not batch:
-                        break
-                    users.extend(batch)
-                    offset += len(batch)
-                    logging.info(f"Loaded batch: {len(users)}/{total_count} users")
-                
-                logging.info(f"Batch loading complete: {len(users)} users loaded")
-            else:
-                # If less than 500 users, just get all at once
-                users = db.query(User).order_by(User.username).all()
-                logging.info(f"Direct query loaded {len(users)} users")
-            
-            # Verify we got all users
-            if len(users) != total_count:
-                logging.error(f"User count mismatch! Expected: {total_count}, Got: {len(users)}")
-                st.error(f"⚠️ Data loading issue: Expected {total_count} users but loaded {len(users)}")
-            
-            # Log sample for verification
-            if users:
-                sample = [u.username for u in users[:5]]
-                logging.info(f"First 5 usernames: {sample}")
-                if len(users) > 5:
-                    last_sample = [u.username for u in users[-5:]]
-                    logging.info(f"Last 5 usernames: {last_sample}")
-            
-            return users
-        finally:
-            db.close()
+        
+        # Start a new transaction
+        db.begin()
+        
+        # Build base query
+        query = db.query(User)
+        
+        # Apply search filter if provided
+        if search_term and search_term.strip():
+            search = f"%{search_term}%"  # Case-sensitive search
+            query = query.filter(
+                or_(
+                    User.username.ilike(search),
+                    User.first_name.ilike(search),
+                    User.last_name.ilike(search),
+                    User.email.ilike(search)
+                )
+            )
+            logging.info(f"Applied search filter: '{search_term}'")
+        
+        # Apply status filter
+        if status_filter == "Active":
+            query = query.filter(User.is_active == True)
+            logging.info("Applied status filter: Active")
+        elif status_filter == "Inactive":
+            query = query.filter(User.is_active == False)
+            logging.info("Applied status filter: Inactive")
+        
+        # Get total count for the current filters
+        total_count = query.count()
+        logging.info(f"Total users matching filters: {total_count}")
+        
+        if total_count == 0:
+            logging.info("No users found matching the criteria")
+            return [], 0
+        
+        # Apply pagination and ordering
+        users = query.order_by(User.username.asc())\
+                    .offset(offset)\
+                    .limit(limit)\
+                    .all()
+        
+        # Log first few users for debugging
+        if users:
+            sample_users = [f"{u.username} (ID: {u.id})" for u in users[:3]]
+            logging.info(f"Sample users: {', '.join(sample_users)}")
+        else:
+            logging.info("No users returned from query")
+        
+        logging.info(f"Loaded {len(users)} users (offset: {offset}, limit: {limit})")
+        
+        return users, total_count
+        
     except Exception as e:
-        st.error(f"Error getting users from database: {str(e)}")
-        logging.error(f"Error in get_users_from_db: {str(e)}")
-        logging.error(traceback.format_exc())
-        return []
-
-# Add this function before handle_action function
+        logging.error(f"Error in get_users_from_db: {str(e)}", exc_info=True)
+        st.error(f"⚠️ Error loading users: {str(e)}")
+        return [], 0
+        
+    finally:
+        # Ensure database connection is always closed
+        if db is not None:
+            try:
+                db.close()
+                logging.debug("Database connection closed")
+            except Exception as e:
+                logging.error(f"Error closing database connection: {e}", exc_info=True)
 
 def render_email_form(users_for_email):
     """

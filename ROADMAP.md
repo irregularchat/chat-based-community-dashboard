@@ -4,7 +4,41 @@
 
 This roadmap is organized by timeline and shows how contributors at different skill levels can help. Whether you have 15 minutes or 15 hours, there's a way to contribute!
 
-## ✅ Recently Completed (v0.1.2)
+## ✅ Recently Completed (v0.1.3)
+
+### 👥 **Enhanced User Management** - *COMPLETED*
+- ✅ **Comprehensive User Listing & Actions**
+   - **Features Delivered**:
+     - ✅ Paginated user list with search and filtering
+     - ✅ User actions (approve, reject, delete) with confirmation
+     - ✅ Status indicators for user states (pending, approved, rejected)
+     - ✅ Bulk action support for multiple users
+     - ✅ Detailed user information display
+   - **Skills used**: UI/UX design, Database operations, State management
+   - **Time invested**: 25+ hours
+   - **Impact**: High - Streamlined user administration
+
+- ✅ **Email Integration**
+   - **Features Delivered**:
+     - ✅ Email notifications for user actions
+     - ✅ Configurable email templates
+     - ✅ Support for HTML and plain text emails
+     - ✅ Email delivery status tracking
+   - **Skills used**: Email protocols, Template design, Async operations
+   - **Time invested**: 15+ hours
+   - **Impact**: Medium - Improved user communication
+
+- ✅ **INDOC Room Management**
+   - **Features Delivered**:
+     - ✅ Automated INDOC room graduation process
+     - ✅ Welcome messages with encryption delay
+     - ✅ User removal from INDOC rooms after approval
+     - ✅ Configurable INDOC room settings
+   - **Skills used**: Matrix API, Encryption, Async programming
+   - **Time invested**: 20+ hours
+   - **Impact**: High - Streamlined user onboarding
+
+## ✅ Previously Completed (v0.1.2)
 
 ### 💬 **Matrix Mention Formatting & Configuration Consolidation** - *COMPLETED*
 - ✅ **Professional Matrix Mention System**

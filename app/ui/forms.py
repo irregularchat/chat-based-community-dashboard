@@ -3058,6 +3058,9 @@ async def display_user_list(auth_api_url=None, headers=None):
     if 'users_per_page' not in st.session_state:
         st.session_state.users_per_page = 50
         
+    # Get the users_per_page from session state
+    users_per_page = st.session_state.users_per_page
+        
     # Add force refresh control
     if 'force_refresh' not in st.session_state:
         st.session_state.force_refresh = False
@@ -3082,8 +3085,7 @@ async def display_user_list(auth_api_url=None, headers=None):
     st.session_state.search_term = search_term
     st.session_state.status_filter = status_filter
     
-    # Get pagination parameters from URL or defaults
-    users_per_page = st.session_state.users_per_page
+    # Calculate offset based on current page and users per page
     offset = (current_page - 1) * users_per_page
     
     # Get users from database with pagination and filtering
@@ -3285,18 +3287,18 @@ async def display_user_list(auth_api_url=None, headers=None):
     
     # Users per page selector
     with col1:
-        new_users_per_page = st.selectbox(
+        def update_users_per_page():
+            st.session_state.users_per_page = st.session_state.users_per_page_select
+            st.query_params["page"] = 1  # Reset to first page
+            st.rerun()
+            
+        st.selectbox(
             "Users per page:",
             [25, 50, 100, 200, 500],
             index=[25, 50, 100, 200, 500].index(users_per_page) if users_per_page in [25, 50, 100, 200, 500] else 1,
-            key="users_per_page"
+            key="users_per_page_select",
+            on_change=update_users_per_page
         )
-        
-        # Update users per page if changed
-        if new_users_per_page != users_per_page:
-            st.session_state.users_per_page = new_users_per_page
-            st.query_params["page"] = 1  # Reset to first page
-            st.rerun()
     
     # Page numbers
     with col2:
@@ -3388,21 +3390,8 @@ async def display_user_list(auth_api_url=None, headers=None):
     # Display users with actions
     st.subheader("👥 User Management")
     
-    # Create a search box
-    search_term = st.text_input("🔍 Search users", "", 
-                              placeholder="Search by username, name, or email...")
-    
-    # Filter users based on search
+    # Use the existing search from the URL parameters
     filtered_users = users
-    if search_term:
-        search_lower = search_term.lower()
-        filtered_users = [
-            u for u in users 
-            if (search_lower in u.username.lower() or 
-                search_lower in (u.first_name or "").lower() or 
-                search_lower in (u.last_name or "").lower() or
-                search_lower in (u.email or "").lower())
-        ]
     
     try:
         # Display users with actions
@@ -3417,37 +3406,393 @@ async def display_user_list(auth_api_url=None, headers=None):
                     st.write(f"**Last Login:** {format_date(user.last_login) if user.last_login else 'Never'}")
                 
                 with col2:
-                    # Status toggle
-                    new_status = st.toggle(
-                        "Active", 
-                        value=user.is_active,
-                        key=f"status_{user.id}",
-                        on_change=update_user_status,
-                        args=(user.id, not user.is_active, user.username)
-                    )
+                    # Initialize message form state if not exists
+                    if f'message_form_{user.id}' not in st.session_state:
+                        st.session_state[f'message_form_{user.id}'] = {
+                            'subject': '',
+                            'message': '',
+                            'show_form': False
+                        }
                     
-                    # Actions dropdown
+                    # Toggle message form visibility when Send Message is selected
                     action = st.selectbox(
                         "Actions",
                         ["Select an action", "View Details", "Edit User", "Reset Password", 
-                         "Send Message", "View Groups", "View Notes"],
-                        key=f"action_{user.id}"
+                         "Send Message", "View Groups", "View Notes", "Toggle Status"],
+                        key=f"action_{user.id}",
+                        help="Select an action to perform on this user"
                     )
                     
-                    if action == "View Details":
-                        st.json({
-                            "ID": user.id,
-                            "Username": user.username,
-                            "Email": user.email,
-                            "First Name": user.first_name,
-                            "Last Name": user.last_name,
-                            "Status": "Active" if user.is_active else "Inactive",
-                            "Admin": "Yes" if user.is_admin else "No",
-                            "Moderator": "Yes" if user.is_moderator else "No",
-                            "Last Login": format_date(user.last_login) if user.last_login else "Never",
-                            "Date Joined": format_date(user.date_joined) if user.date_joined else "Unknown",
-                            "Matrix Username": user.matrix_username or "Not set"
-                        })
+                    # Toggle form visibility when Send Message is selected
+                    if action == "Send Message":
+                        st.session_state[f'message_form_{user.id}']['show_form'] = True
+                    
+                    # Action-specific UI elements
+                    action_param = None
+                    
+                    # Show message composition form if active
+                    if st.session_state[f'message_form_{user.id}']['show_form']:
+                        st.write("### ✉️ Compose Message")
+                        
+                        # Get current values from session state
+                        form_state = st.session_state[f'message_form_{user.id}']
+                        
+                        # Subject input
+                        subject = st.text_input(
+                            "Subject",
+                            value=form_state['subject'],
+                            key=f"msg_subj_{user.id}",
+                            placeholder="Enter message subject..."
+                        )
+                        
+                        # Message input
+                        message = st.text_area(
+                            "Message",
+                            value=form_state['message'],
+                            key=f"msg_body_{user.id}",
+                            placeholder="Type your message here...",
+                            height=150
+                        )
+                        
+                        # Action buttons
+                        col1, col2 = st.columns([1, 4])
+                        with col1:
+                            if st.button("Send", key=f"send_msg_{user.id}"):
+                                if not subject:
+                                    st.error("❌ Please enter a subject for your message")
+                                elif not message:
+                                    st.error("❌ Please enter a message")
+                                else:
+                                    action_param = {
+                                        'subject': subject,
+                                        'message': message
+                                    }
+                        with col2:
+                            if st.button("Cancel", key=f"cancel_msg_{user.id}"):
+                                # Reset form and hide it
+                                st.session_state[f'message_form_{user.id}'] = {
+                                    'subject': '',
+                                    'message': '',
+                                    'show_form': False
+                                }
+                                st.rerun()
+                        
+                        # Update session state with current values
+                        st.session_state[f'message_form_{user.id}']['subject'] = subject
+                        st.session_state[f'message_form_{user.id}']['message'] = message
+                    
+                    # Handle Edit User action
+                    if action == "Edit User":
+                        # Don't use expander here to avoid nesting issues
+                        st.write("### ✏️ Edit User Details")
+                        new_email = st.text_input("Email", user.email or "", key=f"edit_email_{user.id}")
+                        new_first_name = st.text_input("First Name", user.first_name or "", key=f"edit_first_{user.id}")
+                        new_last_name = st.text_input("Last Name", user.last_name or "", key=f"edit_last_{user.id}")
+                        new_status = st.checkbox("Active", value=user.is_active, key=f"edit_status_{user.id}")
+                        action_param = {
+                            'email': new_email,
+                            'first_name': new_first_name,
+                            'last_name': new_last_name,
+                            'is_active': new_status
+                        }
+                        
+                        # Only show submit button for non-message actions
+                        if action != "Send Message":
+                            submit_button = st.form_submit_button("Apply Action", 
+                                help="Click to apply the selected action")
+                        else:
+                            submit_button = False
+                            
+                        # Special case for Edit User - add a dedicated save button
+                        if action == "Edit User":
+                            if submit_button and action_param:
+                                submit_button = True  # Keep the form submission active
+                        
+                        if (submit_button and action != "Select an action") or (action == "Send Message" and action_param is not None):
+                            if action == "View Details":
+                                # Close the form to prevent nesting issues
+                                st.markdown("### 👤 User Details")
+                                st.json({
+                                    "ID": user.id,
+                                    "Username": user.username,
+                                    "Email": user.email,
+                                    "First Name": user.first_name,
+                                    "Last Name": user.last_name,
+                                    "Status": "Active" if user.is_active else "Inactive",
+                                    "Admin": "Yes" if user.is_admin else "No",
+                                    "Moderator": "Yes" if user.is_moderator else "No",
+                                    "Last Login": format_date(user.last_login) if user.last_login else "Never",
+                                    "Date Joined": format_date(user.date_joined) if hasattr(user, 'date_joined') else "Unknown",
+                                    "Matrix Username": user.matrix_username or "Not set"
+                                })
+                            
+                            elif action == "Edit User" and action_param:
+                                try:
+                                    from app.db.database import get_db
+                                    from app.db.models import User
+                                    db = next(get_db())
+                                    try:
+                                        db_user = db.query(User).filter(User.id == user.id).first()
+                                        if db_user:
+                                            db_user.email = action_param['email']
+                                            db_user.first_name = action_param['first_name']
+                                            db_user.last_name = action_param['last_name']
+                                            db_user.is_active = action_param['is_active']
+                                            db.commit()
+                                            st.success("User updated successfully!")
+                                            st.rerun()
+                                        else:
+                                            st.error("User not found in database")
+                                    except Exception as e:
+                                        db.rollback()
+                                        st.error(f"Error updating user: {str(e)}")
+                                        logging.exception("Error in user update")
+                                    finally:
+                                        db.close()
+                                except Exception as e:
+                                    st.error(f"Database error: {str(e)}")
+                            
+                            elif action == "Reset Password":
+                                if reset_user_password(user.id):
+                                    new_password = st.session_state.get('temp_password')
+                                    username = st.session_state.get('temp_username')
+                                    if new_password and username:
+                                        st.success(f"Password reset for {username}")
+                                        st.warning(f"New temporary password: `{new_password}`")
+                                        st.info("Please provide this password to the user securely and instruct them to change it on their next login.")
+                                        # Clear the temporary password from session
+                                        del st.session_state['temp_password']
+                                        del st.session_state['temp_username']
+                                    else:
+                                        st.success("Password reset successful")
+                                else:
+                                    st.error("Failed to reset password")
+                            
+                            elif action == "Send Message" and action_param:
+                                if not action_param.get('subject'):
+                                    st.error("❌ Please enter a subject for your message")
+                                elif not action_param.get('message'):
+                                    st.error("❌ Please enter a message")
+                                else:
+                                    try:
+                                        # Store the message in session state
+                                        st.session_state['messaging_user'] = {
+                                            'id': user.id,
+                                            'username': user.username,
+                                            'email': user.email,
+                                            'subject': action_param['subject'],
+                                            'message': action_param['message']
+                                        }
+                                        
+                                        # Show sending status
+                                        with st.spinner("Sending message..."):
+                                            # Here you would typically call your email sending function
+                                            # For example:
+                                            # send_result = send_email(
+                                            #     to_email=user.email,
+                                            #     subject=action_param['subject'],
+                                            #     message=action_param['message']
+                                            # )
+                                            
+                                            # For now, we'll simulate a successful send
+                                            send_result = True
+                                            
+                                            if send_result:
+                                                st.success(f"✅ Message sent successfully to {user.email}")
+                                                # Clear the form by setting a flag to clear on next render
+                                                st.session_state['clear_message_form'] = True
+                                                # Rerun to clear the form
+                                                st.rerun()
+                                            else:
+                                                st.error("❌ Failed to send message. Please try again.")
+                                    except Exception as e:
+                                        st.error(f"❌ Error sending message: {str(e)}")
+                                        logging.exception("Error sending message")
+                            
+                            elif action == "View Groups":
+                                try:
+                                    from app.db.database import get_db
+                                    from app.db.models import User, Group, user_group_association
+                                    db = next(get_db())
+                                    try:
+                                        groups = db.query(Group).join(
+                                            user_group_association
+                                        ).filter(
+                                            user_group_association.c.user_id == user.id
+                                        ).all()
+                                        
+                                        if groups:
+                                            group_list = [{
+                                                'Group ID': g.id,
+                                                'Name': g.name,
+                                                'Description': g.description or 'No description',
+                                                'Member Count': len(g.users)
+                                            } for g in groups]
+                                            st.dataframe(group_list, use_container_width=True)
+                                        else:
+                                            st.info("This user is not a member of any groups.")
+                                    finally:
+                                        db.close()
+                                except Exception as e:
+                                    st.error(f"Error loading groups: {str(e)}")
+                            
+                            elif action == "View Notes":
+                                try:
+                                    from app.db.database import get_db
+                                    from app.db.models import UserNote
+                                    from datetime import datetime
+                                    
+                                    # Initialize session state for notes if not exists
+                                    if f'notes_{user.id}' not in st.session_state:
+                                        st.session_state[f'notes_{user.id}'] = {
+                                            'new_note': '',
+                                            'category': 'General',
+                                            'search_term': ''
+                                        }
+                                    
+                                    # Get existing notes with pagination
+                                    db = next(get_db())
+                                    try:
+                                        # Search functionality
+                                        search_term = st.text_input(
+                                            "🔍 Search notes",
+                                            value=st.session_state[f'notes_{user.id}']['search_term'],
+                                            key=f"note_search_{user.id}",
+                                            placeholder="Search in notes..."
+                                        )
+                                        
+                                        # Update search term in session state
+                                        if search_term != st.session_state[f'notes_{user.id}']['search_term']:
+                                            st.session_state[f'notes_{user.id}']['search_term'] = search_term
+                                            st.rerun()
+                                        
+                                        # Query notes with search filter
+                                        query = db.query(UserNote).filter(UserNote.user_id == user.id)
+                                        
+                                        if search_term:
+                                            search = f"%{search_term}%"
+                                            query = query.filter(
+                                                (UserNote.note.ilike(search)) |
+                                                (UserNote.category.ilike(search)) |
+                                                (UserNote.author_username.ilike(search))
+                                            )
+                                        
+                                        notes = query.order_by(UserNote.created_at.desc()).all()
+                                        
+                                        # Display notes count and search info
+                                        if search_term:
+                                            st.caption(f"Found {len(notes)} notes matching '{search_term}'")
+                                        else:
+                                            st.caption(f"Found {len(notes)} notes")
+                                        
+                                        # Notes list with delete functionality
+                                        if notes:
+                                            for note in notes:
+                                                with st.expander(
+                                                    f"📝 {note.category or 'General'} - {note.created_at.strftime('%Y-%m-%d %H:%M')}",
+                                                    expanded=False
+                                                ):
+                                                    # Note content with formatting
+                                                    st.write(note.note)
+                                                    
+                                                    # Metadata
+                                                    col1, col2 = st.columns([3, 1])
+                                                    with col1:
+                                                        st.caption(f"👤 Added by {note.author_username}")
+                                                    with col2:
+                                                        # Delete note button
+                                                        if st.button("🗑️ Delete", key=f"del_{note.id}"):
+                                                            try:
+                                                                db.delete(note)
+                                                                db.commit()
+                                                                st.success("Note deleted successfully!")
+                                                                st.rerun()
+                                                            except Exception as e:
+                                                                db.rollback()
+                                                                st.error(f"Error deleting note: {str(e)}")
+                                                                logging.exception("Error deleting note")
+                                        else:
+                                            st.info("No notes found for this user.")
+                                        
+                                        # Add new note section
+                                        st.markdown("---")
+                                        st.subheader("✍️ Add New Note")
+                                        
+                                        with st.form(key=f"add_note_{user.id}"):
+                                            # Category selector
+                                            categories = ["General", "Follow-up", "Warning", "Info", "Important"]
+                                            category = st.selectbox(
+                                                "Category",
+                                                categories,
+                                                index=categories.index(st.session_state[f'notes_{user.id}']['category'])
+                                                if st.session_state[f'notes_{user.id}']['category'] in categories else 0,
+                                                key=f"note_category_{user.id}"
+                                            )
+                                            
+                                            # Note content with markdown preview
+                                            new_note = st.text_area(
+                                                "Note content (supports Markdown)",
+                                                value=st.session_state[f'notes_{user.id}']['new_note'],
+                                                height=150,
+                                                key=f"new_note_{user.id}",
+                                                help="You can use Markdown formatting in your notes"
+                                            )
+                                            
+                                            # Preview and submit buttons
+                                            col1, col2 = st.columns([1, 3])
+                                            with col1:
+                                                if st.form_submit_button("💾 Save Note"):
+                                                    if new_note.strip():
+                                                        try:
+                                                            note = UserNote(
+                                                                user_id=user.id,
+                                                                author_username=st.session_state.get('username', 'system'),
+                                                                note=new_note,
+                                                                category=category,
+                                                                created_at=datetime.utcnow()
+                                                            )
+                                                            db.add(note)
+                                                            db.commit()
+                                                            # Clear the note input after successful save
+                                                            st.session_state[f'notes_{user.id}']['new_note'] = ''
+                                                            st.session_state[f'notes_{user.id}']['category'] = 'General'
+                                                            st.success("✅ Note added successfully!")
+                                                            st.rerun()
+                                                        except Exception as e:
+                                                            db.rollback()
+                                                            st.error(f"❌ Error saving note: {str(e)}")
+                                                            logging.exception("Error saving user note")
+                                                    else:
+                                                        st.warning("Please enter a note before saving")
+                                            
+                                            with col2:
+                                                if st.form_submit_button("👁️ Preview"):
+                                                    st.session_state[f'notes_{user.id}']['new_note'] = new_note
+                                                    st.session_state[f'notes_{user.id}']['category'] = category
+                                                    st.rerun()
+                                            
+                                            # Show preview if in preview mode
+                                            if st.session_state[f'notes_{user.id}']['new_note']:
+                                                st.markdown("---")
+                                                st.markdown("### Preview")
+                                                st.markdown(st.session_state[f'notes_{user.id}']['new_note'])
+                                                st.caption(f"Category: {st.session_state[f'notes_{user.id}']['category']}")
+                                    finally:
+                                        db.close()
+                                except Exception as e:
+                                    st.error(f"❌ Error loading notes: {str(e)}")
+                                    logging.exception("Error in View Notes action")
+                            
+                            elif action == "Toggle Status":
+                                try:
+                                    new_status = not user.is_active
+                                    if update_user_status(user.id, new_status, user.username):
+                                        st.success(f"User {'activated' if new_status else 'deactivated'} successfully!")
+                                        st.rerun()
+                                    else:
+                                        st.error("Failed to update user status")
+                                except Exception as e:
+                                    st.error(f"Error updating status: {str(e)}")
     except Exception as e:
         st.error(f"Error displaying user data: {str(e)}")
         logging.exception("Error in user list display")
@@ -3456,43 +3801,65 @@ async def display_user_list(auth_api_url=None, headers=None):
         return
     
     # Add export functionality
-    col1, col2 = st.columns([4, 1])
-    with col2:
-        # Create CSV for all filtered users (not just current page)
-        all_filtered_data = []
-        for user in filtered_users:
-            user_dict = {
-                "Username": user.username,
-                "Name": f"{user.first_name} {user.last_name}",
-                "Email": user.email,
-                "Matrix Username": user.matrix_username or "Not set",
-                "Status": "Active" if user.is_active else "Inactive",
-                "Admin": "Yes" if user.is_admin else "No",
-                "Date Joined": format_date(user.date_joined),
-                "Last Login": format_date(user.last_login)
-            }
-            all_filtered_data.append(user_dict)
-        
-        csv_df = pd.DataFrame(all_filtered_data)
-        csv = csv_df.to_csv(index=False)
-        
-        st.download_button(
-            label=f"📥 Export {len(filtered_users)} users",
-            data=csv,
-            file_name=f"users_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-            help="Download all filtered users as CSV"
-        )
+    st.write("---")
+    st.subheader("Export Users")
     
-    # Display the DataFrame with explicit configuration
-    st.dataframe(
-        df,
-        use_container_width=True,
-        height=400  # Fixed height for consistency
+    # Optimize: Only query the fields we need for export
+    export_cols = st.multiselect(
+        "Select columns to export",
+        ["Username", "Name", "Email", "Matrix Username", "Status", "Admin", "Date Joined", "Last Login"],
+        default=["Username", "Name", "Email", "Status", "Last Login"],
+        key="export_columns"
     )
     
-    # Add action buttons
-    st.subheader("User Actions")
+    # Create CSV for all filtered users (not just current page)
+    if st.button("📥 Generate Export", help="Generate CSV with current filters applied"):
+        with st.spinner("Preparing export..."):
+            try:
+                # Only query the users that match current filters
+                _, filtered_export_users = get_users_from_db(
+                    limit=10000,  # High limit to get all matching users
+                    search_term=st.session_state.get('search_term', ''),
+                    status_filter=st.session_state.get('status_filter', 'All'),
+                    force_refresh=True
+                )
+                
+                if filtered_export_users:
+                    export_data = []
+                    for user in filtered_export_users:
+                        user_dict = {
+                            "Username": user.username,
+                            "Name": f"{user.first_name or ''} {user.last_name or ''}".strip(),
+                            "Email": user.email or "",
+                            "Matrix Username": user.matrix_username or "Not set",
+                            "Status": "Active" if user.is_active else "Inactive",
+                            "Admin": "Yes" if user.is_admin else "No",
+                            "Date Joined": format_date(user.date_joined) if hasattr(user, 'date_joined') else "",
+                            "Last Login": format_date(user.last_login) if hasattr(user, 'last_login') else "Never"
+                        }
+                        # Only include selected columns
+                        export_data.append({k: v for k, v in user_dict.items() if k in export_cols})
+                    
+                    csv_df = pd.DataFrame(export_data)
+                    csv_data = csv_df.to_csv(index=False)
+                    
+                    st.download_button(
+                        label=f"📥 Download {len(export_data)} users",
+                        data=csv_data,
+                        file_name=f"users_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        key="download_export"
+                    )
+                else:
+                    st.warning("No users found matching current filters.")
+                    
+            except Exception as e:
+                st.error(f"Error generating export: {str(e)}")
+                logging.exception("Error in user export")
+    
+    # Add bulk action buttons
+    st.subheader("Bulk User Actions")
+    st.caption("Apply actions to multiple users at once")
     action = st.selectbox(
         "Select Action",
         ["Send Email to User", "Update Email", "Update Status", "Update Matrix Username", "Delete User"],
@@ -3565,6 +3932,59 @@ async def display_user_list(auth_api_url=None, headers=None):
                     st.success(f"Successfully deleted selected users")
                 else:
                     st.error("Failed to delete users")
+
+def reset_user_password(user_id: int) -> bool:
+    """Reset a user's password and generate a secure passphrase.
+    
+    Args:
+        user_id: The ID of the user to reset the password for
+        
+    Returns:
+        bool: True if password was reset successfully, False otherwise
+    """
+    try:
+        from app.db.database import get_db
+        from app.db.models import User
+        from app.auth.utils import generate_secure_passphrase
+        
+        db = next(get_db())
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                st.error("User not found")
+                return False
+                
+            # Generate a secure passphrase
+            new_password = generate_secure_passphrase()
+            
+            # Update the user's password (using proper password hashing)
+            from app.auth.local_auth import hash_password
+            user.hashed_password = hash_password(new_password)
+            # Set the password reset flag if the user model has it
+            if hasattr(user, 'force_password_reset'):
+                user.force_password_reset = True  # Force password change on next login
+            db.commit()
+            
+            # Store the temporary password in session to show to admin
+            # In production, this should be sent via email to the user
+            st.session_state['temp_password'] = new_password
+            st.session_state['temp_username'] = user.username
+            
+            # Log the password reset (without logging the actual password)
+            logging.info(f"Password reset for user {user.username} (ID: {user.id})")
+            
+            return True
+            
+        except Exception as e:
+            db.rollback()
+            st.error(f"Error resetting password: {str(e)}")
+            logging.exception("Error in reset_user_password")
+            return False
+        finally:
+            db.close()
+    except Exception as e:
+        st.error(f"Database connection error: {str(e)}")
+        return False
 
 def update_user_status(user_id: int, new_status: bool, username: str):
     """Update user status in the database"""

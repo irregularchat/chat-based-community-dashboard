@@ -60,7 +60,7 @@ from app.db.operations import (
 )
 from app.messages import create_invite_message, create_user_message, display_welcome_message_ui
 from app.utils.messages import WELCOME_MESSAGE
-from app.utils.helpers import send_invite_email
+from app.utils.helpers import send_invite_email, send_admin_email_to_users
 from app.utils.recommendation import invite_user_to_recommended_rooms_sync
 from app.utils.form_helpers import reset_create_user_form_fields
 from datetime import datetime, timedelta
@@ -3085,7 +3085,7 @@ async def display_user_list(auth_api_url=None, headers=None):
     st.subheader("User Actions")
     action = st.selectbox(
         "Select Action",
-        ["Update Email", "Update Status", "Update Matrix Username", "Delete User"],
+        ["Send Email to User", "Update Email", "Update Status", "Update Matrix Username", "Delete User"],
         key="user_action"
     )
     
@@ -3097,7 +3097,11 @@ async def display_user_list(auth_api_url=None, headers=None):
     )
     
     if selected_users:
-        if action == "Update Matrix Username":
+        if action == "Send Email to User":
+            # Call handle_action with send_email action to get user data and show email form
+            success = handle_action("send_email", selected_users)
+        
+        elif action == "Update Matrix Username":
             new_matrix_username = st.text_input("New Matrix Username", key="new_matrix_username")
             if st.button("Update Matrix Username"):
                 if new_matrix_username:
@@ -3282,6 +3286,29 @@ def handle_action(action_type, selected_users, action_params=None):
                     st.success(f"Successfully {status_text} {len(users)} users")
                 return success
                 
+            elif action_type == "send_email":
+                # Handle email sending - prepare user data and delegate to email form
+                try:
+                    # Convert to format expected by send_admin_email_to_users
+                    users_for_email = []
+                    for user in users:
+                        user_dict = {
+                            'Username': user.username,
+                            'Email': user.email,
+                            'Name': f"{user.first_name} {user.last_name}"
+                        }
+                        users_for_email.append(user_dict)
+                    
+                    # Use the extracted email form function
+                    success, result = render_email_form(users_for_email)
+                    return success
+                    
+                except Exception as e:
+                    st.error(f"❌ Error preparing email form: {str(e)}")
+                    logging.error(f"Error in send_email action: {str(e)}")
+                    logging.error(traceback.format_exc())
+                    return False
+                
             elif action_type == "delete":
                 # Delete users
                 success = True
@@ -3326,3 +3353,172 @@ def get_users_from_db():
         logging.error(f"Error in get_users_from_db: {str(e)}")
         logging.error(traceback.format_exc())
         return []
+
+# Add this function before handle_action function
+
+def render_email_form(users_for_email):
+    """
+    Render the email composition form for sending emails to selected users.
+    
+    Args:
+        users_for_email (list): List of user dictionaries with Username, Email, and Name
+        
+    Returns:
+        tuple: (success: bool, result: dict or None)
+    """
+    st.write(f"**Selected {len(users_for_email)} users for email:**")
+    
+    # Show basic user info
+    with st.expander("View selected users"):
+        for user in users_for_email:
+            email_status = user.get('Email', 'No email') or 'No email'
+            st.write(f"• {user['Name']} ({user['Username']}) - {email_status}")
+    
+    # Check if SMTP is configured
+    if not Config.SMTP_ACTIVE:
+        st.error("📧 SMTP is not active. Please configure SMTP settings to enable email functionality.")
+        return False, None
+    
+    # Validate SMTP configuration
+    smtp_config_issues = []
+    if not Config.SMTP_SERVER:
+        smtp_config_issues.append("SMTP_SERVER")
+    if not Config.SMTP_PORT:
+        smtp_config_issues.append("SMTP_PORT") 
+    if not Config.SMTP_USERNAME:
+        smtp_config_issues.append("SMTP_USERNAME")
+    if not Config.SMTP_PASSWORD:
+        smtp_config_issues.append("SMTP_PASSWORD")
+    if not Config.SMTP_FROM_EMAIL:
+        smtp_config_issues.append("SMTP_FROM_EMAIL")
+        
+    if smtp_config_issues:
+        st.error(f"❌ Missing SMTP configuration: {', '.join(smtp_config_issues)}")
+        return False, None
+    
+    # Email form
+    with st.form("send_email_form", clear_on_submit=False):
+        st.subheader("📧 Compose Email")
+        
+        # Instructions
+        st.info(f"📬 Ready to send email to selected users. All emails will be sent with professional admin formatting and your message will be included. Invalid emails will be automatically filtered out.")
+        
+        # Subject field with session state persistence
+        email_subject = st.text_input(
+            "Subject *",
+            value=st.session_state.get('email_form_subject', ''),
+            placeholder="Enter email subject",
+            help="Required: Email subject line",
+            key="email_subject_input"
+        )
+        
+        # Message field with session state persistence
+        email_message = st.text_area(
+            "Message *",
+            value=st.session_state.get('email_form_message', ''),
+            height=200,
+            placeholder="Enter your message here...",
+            help="Required: Email message content",
+            key="email_message_input"
+        )
+        
+        # File upload for attachments
+        st.subheader("📎 Attachments (Optional)")
+        uploaded_files = st.file_uploader(
+            "Choose files to attach",
+            accept_multiple_files=True,
+            help="Upload files to attach to the email. Multiple files are supported.",
+            key="email_attachments_input"
+        )
+        
+        if uploaded_files:
+            st.write("**Files to attach:**")
+            total_size = 0
+            for file in uploaded_files:
+                file_size = len(file.getvalue()) if hasattr(file, 'getvalue') else 0
+                total_size += file_size
+                st.write(f"• {file.name} ({file_size / 1024:.1f} KB)")
+            st.write(f"**Total size:** {total_size / 1024:.1f} KB")
+            
+            # Warn if files are too large (5MB limit)
+            if total_size > 5 * 1024 * 1024:
+                st.warning("⚠️ Total attachment size exceeds 5MB. Some email providers may reject large attachments.")
+        
+        # Form submission
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            send_email_button = st.form_submit_button("📤 Send Email", type="primary")
+        with col2:
+            if st.form_submit_button("🗑️ Clear Form"):
+                # Clear session state for form fields
+                for key in ['email_form_subject', 'email_form_message']:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                st.rerun()
+        
+        # Handle form submission
+        if send_email_button:
+            # Store form values in session state for persistence
+            st.session_state['email_form_subject'] = email_subject
+            st.session_state['email_form_message'] = email_message
+            
+            if not email_subject:
+                st.error("❌ Subject is required")
+                return False, None
+            elif not email_message:
+                st.error("❌ Message is required")
+                return False, None
+            else:
+                # Prepare attachments if any
+                attachments = []
+                if uploaded_files:
+                    for file in uploaded_files:
+                        try:
+                            # Convert uploaded file to the format expected by send_email
+                            attachment_dict = {
+                                'filename': file.name,
+                                'content': file.getvalue(),
+                                'content_type': file.type or 'application/octet-stream'
+                            }
+                            attachments.append(attachment_dict)
+                        except Exception as attachment_error:
+                            st.warning(f"⚠️ Could not process attachment {file.name}: {str(attachment_error)}")
+                            logging.warning(f"Attachment processing error: {attachment_error}")
+                
+                # Send emails
+                with st.spinner(f"Sending emails to {len(users_for_email)} users..."):
+                    try:
+                        result = send_admin_email_to_users(
+                            selected_users=users_for_email,
+                            subject=email_subject,
+                            message=email_message,
+                            attachments=attachments if attachments else None
+                        )
+                        
+                        if result['success']:
+                            st.success(f"✅ {result['message']}")
+                            
+                            # Show detailed results
+                            if result.get('failed_users'):
+                                st.warning("⚠️ Some emails failed to send:")
+                                for failed_user in result['failed_users']:
+                                    st.write(f"• {failed_user}")
+                            
+                            # Clear form on successful send
+                            for key in ['email_form_subject', 'email_form_message']:
+                                if key in st.session_state:
+                                    del st.session_state[key]
+                            
+                            return True, result
+                        else:
+                            st.error(f"❌ {result['error']}")
+                            return False, result
+                            
+                    except Exception as e:
+                        st.error(f"❌ Error sending emails: {str(e)}")
+                        logging.error(f"Error in send email form: {str(e)}")
+                        logging.error(traceback.format_exc())
+                        return False, {'error': str(e)}
+    
+    # Return True to indicate the form was displayed successfully (but not submitted)
+    return True, None

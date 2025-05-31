@@ -431,9 +431,27 @@ def render_user_management():
                         recipient_emails = [user.get('Email') for user in selected_users if user.get('Email')]
                         st.write(f"Recipients: {', '.join(recipient_emails)}")
                         
+                        # Variable substitution help
+                        with st.expander("📝 Variable Substitution Help", expanded=False):
+                            st.markdown("""
+                            **Available Variables (use in subject or message):**
+                            - `$Username` - User's username  
+                            - `$DisplayName` - User's full name  
+                            - `$FirstName` - User's first name  
+                            - `$LastName` - User's last name  
+                            - `$Email` - User's email address  
+                            - `$MatrixUsername` - User's Matrix username  
+                            
+                            **Example:**
+                            ```
+                            Subject: Hello $DisplayName, account update
+                            Message: Hi $FirstName, your username $Username has been updated...
+                            ```
+                            """)
+                        
                         # Email form fields
-                        email_subject = st.text_input("Subject", key="bulk_email_subject", placeholder="Enter email subject")
-                        email_body = st.text_area("Message", key="bulk_email_body", height=200, placeholder="Enter your message here...")
+                        email_subject = st.text_input("Subject", key="bulk_email_subject", placeholder="Enter email subject (supports variables like $DisplayName)")
+                        email_body = st.text_area("Message", key="bulk_email_body", height=200, placeholder="Enter your message here... (use $Username, $DisplayName, etc. for personalization)")
                         
                         # Submit button
                         submit_email = st.form_submit_button("Send Email to All Selected Users")
@@ -459,11 +477,22 @@ def render_user_management():
                                             # Update progress
                                             progress.progress((idx + 1) / total_users)
                                             
+                                            # Prepare user data for variable substitution
+                                            user_data = {
+                                                'Username': user.get('Username'),
+                                                'Email': email,
+                                                'Name': user.get('Name'),
+                                                'first_name': user.get('Name', '').split(' ')[0] if user.get('Name') else '',
+                                                'last_name': ' '.join(user.get('Name', '').split(' ')[1:]) if user.get('Name') and len(user.get('Name', '').split(' ')) > 1 else '',
+                                                'Matrix Username': user.get('matrix_username', '')
+                                            }
+                                            
                                             # Send the email using the professional admin email function
                                             result = admin_user_email(
                                                 to=email,
                                                 subject=email_subject,
-                                                admin_message=email_body
+                                                admin_message=email_body,
+                                                user_data=user_data
                                             )
                                             
                                             if result:
@@ -771,6 +800,24 @@ def render_user_management():
                 elif not all([Config.SMTP_SERVER, Config.SMTP_PORT, Config.SMTP_USERNAME, Config.SMTP_PASSWORD, Config.SMTP_FROM_EMAIL]):
                     st.error("SMTP configuration is incomplete. Please check your SMTP settings.")
                 else:
+                    # Variable substitution help
+                    with st.expander("📝 Variable Substitution Help", expanded=False):
+                        st.markdown(f"""
+                        **Available Variables for {user.get('Username', 'this user')}:**
+                        - `$Username` → {user.get('Username', 'N/A')}
+                        - `$DisplayName` → {user.get('Name', 'N/A')}
+                        - `$FirstName` → {user.get('Name', '').split(' ')[0] if user.get('Name') else 'N/A'}
+                        - `$LastName` → {' '.join(user.get('Name', '').split(' ')[1:]) if user.get('Name') and len(user.get('Name', '').split(' ')) > 1 else 'N/A'}
+                        - `$Email` → {user.get('Email', 'N/A')}
+                        - `$MatrixUsername` → {user.get('matrix_username', 'N/A')}
+                        
+                        **Example:**
+                        ```
+                        Subject: Account Update for $DisplayName
+                        Message: Hi $FirstName, your account $Username has been updated...
+                        ```
+                        """)
+                    
                     # Email form
                     with st.form("send_email_form"):
                         # Pre-fill the recipient field with the user's email
@@ -778,10 +825,10 @@ def render_user_management():
                         st.text_input("To", value=recipient_email, disabled=True, key="email_recipient")
                         
                         # Email subject
-                        email_subject = st.text_input("Subject", key="email_subject", placeholder="Enter email subject")
+                        email_subject = st.text_input("Subject", key="email_subject", placeholder="Enter email subject (supports variables like $DisplayName)")
                         
                         # Email body
-                        email_body = st.text_area("Message", key="email_body", height=200, placeholder="Enter your message here...")
+                        email_body = st.text_area("Message", key="email_body", height=200, placeholder="Enter your message here... (use $Username, $FirstName, etc. for personalization)")
                         
                         # Submit button
                         submit_email = st.form_submit_button("Send Email")
@@ -793,11 +840,22 @@ def render_user_management():
                                 st.error("Please enter a message for the email.")
                             else:
                                 try:
+                                    # Prepare user data for variable substitution
+                                    user_data = {
+                                        'Username': user.get('Username'),
+                                        'Email': recipient_email,
+                                        'Name': user.get('Name'),
+                                        'first_name': user.get('Name', '').split(' ')[0] if user.get('Name') else '',
+                                        'last_name': ' '.join(user.get('Name', '').split(' ')[1:]) if user.get('Name') and len(user.get('Name', '').split(' ')) > 1 else '',
+                                        'Matrix Username': user.get('matrix_username', '')
+                                    }
+                                    
                                     # Send the email using the professional admin email function
                                     result = admin_user_email(
                                         to=recipient_email,
                                         subject=email_subject,
-                                        admin_message=email_body
+                                        admin_message=email_body,
+                                        user_data=user_data
                                     )
                                     
                                     if result:

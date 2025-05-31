@@ -650,7 +650,8 @@ def get_email_html_content(full_name, username, password, topic_id, discourse_po
     </body>
     </html>
     """
-def admin_user_email(to, subject, admin_message, is_local_account=False, attachments=None):
+
+def admin_user_email(to, subject, admin_message, is_local_account=False, attachments=None, user_data=None):
     """
     Send an email to a user in the community from an admin.
     admin_message is the message from the admin.
@@ -659,9 +660,18 @@ def admin_user_email(to, subject, admin_message, is_local_account=False, attachm
     Args:
         to (str): Email address to send to
         subject (str): Email subject
-        admin_message (str): Message from the admin
+        admin_message (str): Message from the admin (supports variable substitution)
         is_local_account (bool): Whether this is a local dashboard account
         attachments (list, optional): List of file paths, file-like objects, or dicts to attach
+        user_data (dict, optional): User data for variable substitution
+        
+    Supported Variables:
+        $Username - User's username
+        $DisplayName - User's display name (first + last name)
+        $FirstName - User's first name
+        $LastName - User's last name
+        $Email - User's email address
+        $MatrixUsername - User's Matrix username
         
     Returns:
         bool: True if email was sent successfully, False otherwise
@@ -677,6 +687,31 @@ def admin_user_email(to, subject, admin_message, is_local_account=False, attachm
         if not all([Config.SMTP_SERVER, Config.SMTP_PORT, Config.SMTP_USERNAME, Config.SMTP_PASSWORD, Config.SMTP_FROM_EMAIL]):
             logging.error("Missing SMTP configuration. Check all SMTP settings are provided.")
             return False
+        
+        # Process variable substitution in admin message and subject
+        processed_message = admin_message
+        processed_subject = subject
+        
+        if user_data:
+            # Define available variables
+            variables = {
+                '$Username': user_data.get('Username', user_data.get('username', '')),
+                '$DisplayName': user_data.get('Name', user_data.get('display_name', '')),
+                '$FirstName': user_data.get('first_name', ''),
+                '$LastName': user_data.get('last_name', ''),
+                '$Email': user_data.get('Email', user_data.get('email', '')),
+                '$MatrixUsername': user_data.get('Matrix Username', user_data.get('matrix_username', '')),
+            }
+            
+            # If DisplayName is not available, try to construct it from first/last name
+            if not variables['$DisplayName'] and (variables['$FirstName'] or variables['$LastName']):
+                variables['$DisplayName'] = f"{variables['$FirstName']} {variables['$LastName']}".strip()
+            
+            # Replace variables in both message and subject
+            for variable, value in variables.items():
+                if value:  # Only replace if we have a value
+                    processed_message = processed_message.replace(variable, str(value))
+                    processed_subject = processed_subject.replace(variable, str(value))
         
         # Create HTML content for the email
         html_content = f"""
@@ -703,14 +738,17 @@ def admin_user_email(to, subject, admin_message, is_local_account=False, attachm
                     color: #2a6496;
                     border-bottom: 2px solid #eee;
                     padding-bottom: 10px;
+                    margin-bottom: 20px;
                 }}
                 .message {{
-                    background-color: #f5f5f5;
-                    padding: 15px;
+                    background-color: #ffffff;
+                    padding: 20px;
                     border-radius: 5px;
                     margin: 20px 0;
                     border-left: 4px solid #2a6496;
                     white-space: pre-wrap;
+                    font-size: 14px;
+                    line-height: 1.6;
                 }}
                 .footer {{
                     margin-top: 30px;
@@ -719,15 +757,22 @@ def admin_user_email(to, subject, admin_message, is_local_account=False, attachm
                     font-size: 0.9em;
                     color: #777;
                 }}
+                .variables-info {{
+                    margin-top: 20px;
+                    padding: 10px;
+                    background-color: #f0f8ff;
+                    border-radius: 5px;
+                    font-size: 0.85em;
+                    color: #666;
+                    border-left: 3px solid #2a6496;
+                }}
             </style>
         </head>
         <body>
             <div class="email-container">
                 <h1>Message from IrregularChat Administration</h1>
                 
-                <div class="message">
-                    {admin_message}
-                </div>
+                <div class="message">{processed_message}</div>
                 
                 <div class="footer">
                     <p>This message was sent by a community administrator.</p>
@@ -740,7 +785,7 @@ def admin_user_email(to, subject, admin_message, is_local_account=False, attachm
         
         # Send the email and get the result
         logging.info(f"Attempting to send admin email to {to}")
-        result = send_email(to, subject, html_content, attachments)
+        result = send_email(to, processed_subject, html_content, attachments)
         
         if result:
             logging.info(f"Successfully sent admin email to {to}")
@@ -804,16 +849,24 @@ def is_valid_email_for_sending(email):
 
 def send_admin_email_to_users(selected_users, subject, message, attachments=None):
     """
-    Send an admin email to multiple selected users with optional attachments.
+    Send an admin email to multiple selected users with optional attachments and variable substitution.
     
     This is a helper function that can be used in forms.py or other UI modules
     to send emails to selected users in the dashboard.
     
     Args:
         selected_users (list): List of user dictionaries with at least 'Email' and 'Username' keys
-        subject (str): Email subject line
-        message (str): Admin message content
+        subject (str): Email subject line (supports variable substitution)
+        message (str): Admin message content (supports variable substitution)
         attachments (list, optional): List of file paths, file-like objects, or dicts to attach
+        
+    Supported Variables in subject and message:
+        $Username - User's username
+        $DisplayName - User's display name (first + last name)
+        $FirstName - User's first name
+        $LastName - User's last name
+        $Email - User's email address
+        $MatrixUsername - User's Matrix username
         
     Returns:
         dict: Results containing success count, failed users, and status
@@ -876,7 +929,8 @@ def send_admin_email_to_users(selected_users, subject, message, attachments=None
                     to=email,
                     subject=subject,
                     admin_message=message,
-                    attachments=attachments
+                    attachments=attachments,
+                    user_data=user
                 )
                 
                 if result:

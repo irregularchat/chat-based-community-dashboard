@@ -552,31 +552,38 @@ def create_user(
 def list_users(auth_api_url, headers, search_term=None):
     """List users, optionally filtering by a search term, handling pagination to fetch all users."""
     try:
-        # First get all users since the API search might not catch attribute contents
-        params = {'page_size': 500}  # Reduced page size for better reliability
+        # FIXED: Proper pagination handling for Authentik API
+        params = {'page_size': 500}  # Keep page size at 500 for reliability
         users = []
-        url = f"{auth_api_url}/core/users/"
-        page_count = 0
-        total_fetched = 0
+        base_url = f"{auth_api_url}/core/users/"
+        current_page = 1
         max_retries = 3
+        total_fetched = 0
 
-        while url:
-            page_count += 1
-            logger.info(f"Fetching users page {page_count}...")
+        while True:
+            logger.info(f"Fetching users page {current_page}...")
+            
+            # Construct URL and params for current page
+            if current_page == 1:
+                url = base_url
+                request_params = params
+            else:
+                url = base_url
+                request_params = {**params, 'page': current_page}
             
             # Try with retries for each page
             for retry in range(max_retries):
                 try:
-                    response = session.get(url, headers=headers, params=params, timeout=60)  # Increased timeout
+                    response = session.get(url, headers=headers, params=request_params, timeout=60)
                     response.raise_for_status()
                     data = response.json()
                     break  # Success, exit retry loop
                 except Exception as e:
                     if retry < max_retries - 1:
-                        logger.warning(f"Error fetching page {page_count}, retrying ({retry+1}/{max_retries}): {e}")
+                        logger.warning(f"Error fetching page {current_page}, retrying ({retry+1}/{max_retries}): {e}")
                         time.sleep(2)  # Wait before retrying
                     else:
-                        logger.error(f"Failed to fetch page {page_count} after {max_retries} attempts: {e}")
+                        logger.error(f"Failed to fetch page {current_page} after {max_retries} attempts: {e}")
                         raise  # Re-raise the exception after all retries failed
             
             results = data.get('results', [])
@@ -611,8 +618,21 @@ def list_users(auth_api_url, headers, search_term=None):
             else:
                 users.extend(results)
             
-            url = data.get('next')
-            params = {}  # Clear params after first request
+            # FIXED: Check pagination field for next page (Authentik returns page numbers, not URLs)
+            pagination = data.get('pagination', {})
+            next_page = pagination.get('next')
+            total_pages = pagination.get('total_pages', 1)
+            total_count = pagination.get('count', len(users))
+            
+            logger.info(f"Page {current_page}/{total_pages}, Total users available: {total_count}")
+            
+            # Stop if no more pages
+            if not next_page or next_page <= current_page:
+                logger.info("No more pages to fetch")
+                break
+                
+            # Move to next page
+            current_page = next_page
 
         logger.info(f"Total users fetched: {len(users)}")
         return users

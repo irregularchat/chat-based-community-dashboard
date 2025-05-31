@@ -3061,9 +3061,45 @@ async def display_user_list(auth_api_url=None, headers=None):
         st.warning("No users found in the database.")
         return
     
+    # Display total count prominently
+    st.success(f"📊 **Total Users in Database: {len(users)}**")
+    
+    # Add pagination controls
+    st.subheader("User List")
+    
+    # Pagination settings
+    users_per_page = st.selectbox(
+        "Users per page:",
+        options=[50, 100, 250, 500, 1000, len(users)],
+        value=100,
+        key="users_per_page"
+    )
+    
+    # Calculate pagination
+    total_pages = (len(users) + users_per_page - 1) // users_per_page
+    
+    if total_pages > 1:
+        page = st.selectbox(
+            f"Page (1 of {total_pages}):",
+            options=list(range(1, total_pages + 1)),
+            key="user_page"
+        )
+    else:
+        page = 1
+    
+    # Calculate slice indices
+    start_idx = (page - 1) * users_per_page
+    end_idx = min(start_idx + users_per_page, len(users))
+    
+    # Show current page info
+    st.info(f"Showing users {start_idx + 1}-{end_idx} of {len(users)}")
+    
+    # Get users for current page
+    page_users = users[start_idx:end_idx]
+    
     # Convert users to DataFrame for display
     user_data = []
-    for user in users:
+    for user in page_users:
         user_dict = {
             "Username": user.username,
             "Name": f"{user.first_name} {user.last_name}",
@@ -3078,8 +3114,12 @@ async def display_user_list(auth_api_url=None, headers=None):
     
     df = pd.DataFrame(user_data)
     
-    # Display the DataFrame
-    st.dataframe(df)
+    # Display the DataFrame with explicit configuration
+    st.dataframe(
+        df,
+        use_container_width=True,
+        height=400  # Fixed height for consistency
+    )
     
     # Add action buttons
     st.subheader("User Actions")
@@ -3089,11 +3129,12 @@ async def display_user_list(auth_api_url=None, headers=None):
         key="user_action"
     )
     
-    # Get selected users
+    # Get selected users (from all users, not just current page)
     selected_users = st.multiselect(
         "Select Users",
-        options=[user.username for user in users],
-        key="selected_users"
+        options=[user.username for user in users],  # All users, not just page_users
+        key="selected_users",
+        help=f"Select from all {len(users)} users (not limited to current page)"
     )
     
     if selected_users:
@@ -3403,12 +3444,36 @@ def render_email_form(users_for_email):
         # Instructions
         st.info(f"📬 Ready to send email to selected users. All emails will be sent with professional admin formatting and your message will be included. Invalid emails will be automatically filtered out.")
         
+        # Variable substitution help
+        with st.expander("📝 Variable Substitution Help", expanded=False):
+            st.markdown("""
+            **Personalize your emails with variables:**
+            - `$Username` - User's username  
+            - `$DisplayName` - User's full name  
+            - `$FirstName` - User's first name  
+            - `$LastName` - User's last name  
+            - `$Email` - User's email address  
+            - `$MatrixUsername` - User's Matrix username  
+            
+            **Example:**
+            ```
+            Subject: Welcome $DisplayName to our community!
+            Message: Hi $FirstName, 
+            
+            Your account $Username has been created successfully.
+            You can reach us if needed.
+            
+            Best regards,
+            Admin Team
+            ```
+            """)
+        
         # Subject field with session state persistence
         email_subject = st.text_input(
             "Subject *",
             value=st.session_state.get('email_form_subject', ''),
-            placeholder="Enter email subject",
-            help="Required: Email subject line",
+            placeholder="Enter email subject (supports variables like $DisplayName)",
+            help="Required: Email subject line (supports variable substitution)",
             key="email_subject_input"
         )
         
@@ -3417,8 +3482,8 @@ def render_email_form(users_for_email):
             "Message *",
             value=st.session_state.get('email_form_message', ''),
             height=200,
-            placeholder="Enter your message here...",
-            help="Required: Email message content",
+            placeholder="Enter your message here... (use $Username, $FirstName, etc. for personalization)",
+            help="Required: Email message content (supports variable substitution)",
             key="email_message_input"
         )
         

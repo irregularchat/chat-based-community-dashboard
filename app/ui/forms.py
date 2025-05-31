@@ -3054,8 +3054,17 @@ async def render_invite_form():
     
 async def display_user_list(auth_api_url=None, headers=None):
     """Display the list of users with actions."""
-    # Get users from database
-    users = get_users_from_db()
+    # Clear any potential session state cache
+    for key in ['user_list_cache', 'cached_users', 'users_data']:
+        if key in st.session_state:
+            del st.session_state[key]
+    
+    # Get users from database using the improved function
+    with st.spinner("Loading users from database..."):
+        users = get_users_from_db()
+    
+    # Debug logging
+    logging.info(f"display_user_list: Received {len(users) if users else 0} users")
     
     if not users:
         st.warning("No users found in the database.")
@@ -3063,6 +3072,27 @@ async def display_user_list(auth_api_url=None, headers=None):
     
     # Display total count prominently
     st.success(f"📊 **Total Users in Database: {len(users)}**")
+    
+    # Debug info - always show for troubleshooting
+    with st.expander("Debug Information", expanded=False):
+        st.write(f"Users loaded: {len(users)}")
+        st.write(f"First 5 usernames: {[u.username for u in users[:5]] if users else 'None'}")
+        if len(users) > 5:
+            st.write(f"Last 5 usernames: {[u.username for u in users[-5:]] if users else 'None'}")
+        
+        # Show database type
+        try:
+            db = next(get_db())
+            try:
+                db_url = str(db.bind.url)
+                if "sqlite" in db_url:
+                    st.write("Database type: SQLite")
+                else:
+                    st.write("Database type: PostgreSQL")
+            finally:
+                db.close()
+        except:
+            pass
     
     # Add search functionality BEFORE pagination
     st.subheader("Search & Filter")
@@ -3455,13 +3485,59 @@ def handle_action(action_type, selected_users, action_params=None):
 
 def get_users_from_db():
     """Get all users from the database."""
+    # Clear any cached users in session state
+    if 'cached_users' in st.session_state:
+        del st.session_state['cached_users']
+    
     try:
         # Get a database session
         db = next(get_db())
         try:
             # Get users from database
             from app.db.models import User
-            users = db.query(User).all()
+            
+            # First, get the exact count
+            total_count = db.query(User).count()
+            logging.info(f"Total users in database: {total_count}")
+            
+            # Check if this is SQLite or PostgreSQL
+            db_type = "sqlite" if "sqlite" in str(db.bind.url) else "postgresql"
+            logging.info(f"Database type: {db_type}")
+            
+            # For SQLite, try a different approach if needed
+            if total_count > 500:
+                # Load users in batches to avoid any potential limits
+                users = []
+                batch_size = 200
+                offset = 0
+                
+                while offset < total_count:
+                    batch = db.query(User).order_by(User.id).offset(offset).limit(batch_size).all()
+                    if not batch:
+                        break
+                    users.extend(batch)
+                    offset += len(batch)
+                    logging.info(f"Loaded batch: {len(users)}/{total_count} users")
+                
+                logging.info(f"Batch loading complete: {len(users)} users loaded")
+            else:
+                # If less than 500 users, just get all at once
+                users = db.query(User).order_by(User.username).all()
+                logging.info(f"Direct query loaded {len(users)} users")
+            
+            # Verify we got all users
+            if len(users) != total_count:
+                logging.error(f"User count mismatch! Expected: {total_count}, Got: {len(users)}")
+                st.error(f"⚠️ Data loading issue: Expected {total_count} users but loaded {len(users)}")
+            
+            # Log sample for verification
+            if users:
+                sample = [u.username for u in users[:5]]
+                logging.info(f"First 5 usernames: {sample}")
+                if len(users) > 5:
+                    last_sample = [u.username for u in users[-5:]]
+                    logging.info(f"Last 5 usernames: {last_sample}")
+            
             return users
         finally:
             db.close()

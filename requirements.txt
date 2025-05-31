@@ -22,5 +22,6 @@ python-olm
 nest-asyncio
 streamlit-extras
 streamlit-option-menu
+streamlit-cookies-controller
 pytest-asyncio
 bcrypt

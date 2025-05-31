@@ -81,7 +81,49 @@ def handle_local_login(username: str, password: str) -> Tuple[bool, str]:
         Tuple of (success, message)
     """
     try:
-        # Verify credentials
+        # Debug log to see what credentials are being used
+        from app.utils.config import Config
+        logger.info(f"Login attempt for username: {username}")
+        logger.info(f"Expected admin username from Config: {Config.DEFAULT_ADMIN_USERNAME}")
+        
+        # Check if username and password match the default admin from .env
+        if username == Config.DEFAULT_ADMIN_USERNAME and password == Config.DEFAULT_ADMIN_PASSWORD:
+            logger.info("Direct admin credential match from .env - setting admin privileges")
+            # Set session state directly for admin
+            st.session_state['is_authenticated'] = True
+            st.session_state['username'] = username
+            st.session_state['is_admin'] = True
+            st.session_state['is_moderator'] = False
+            st.session_state['auth_method'] = 'local'
+            st.session_state['auth_timestamp'] = datetime.now().timestamp()
+            
+            # Set permanent flags for session restoration
+            st.session_state['permanent_auth'] = True
+            st.session_state['permanent_admin'] = True
+            st.session_state['permanent_moderator'] = False
+            st.session_state['permanent_username'] = username
+            st.session_state['permanent_auth_method'] = 'local'
+            
+            # Create user info
+            st.session_state['user_info'] = {
+                'preferred_username': username,
+                'name': username,
+                'email': '',
+                'is_local_admin': True
+            }
+            
+            # Store authentication state in browser cookies with error handling
+            try:
+                store_auth_in_cookies(username, True, False, 'local')
+            except Exception as cookie_error:
+                logger.warning(f"Could not store auth state in cookies: {cookie_error}")
+                # Don't fail the login if cookie storage fails
+            
+            logger.info(f"Direct admin login successful: {username}")
+            return True, f"Welcome, {username}! You are now logged in as a local admin."
+            
+        # Fall back to database verification if direct match fails
+        logger.info("Direct admin match failed, checking database...")
         is_valid, is_admin = verify_local_admin(username, password)
         
         if is_valid:

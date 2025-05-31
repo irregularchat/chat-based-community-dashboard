@@ -529,6 +529,9 @@ class MatrixCacheService:
         Perform startup sync with smart logic.
         Only syncs if cache is older than 10 minutes or doesn't exist.
         """
+        from app.utils.matrix_actions import get_matrix_client, close_matrix_client
+        client = None
+        
         try:
             # Check if we need to sync at startup
             if self.is_cache_fresh(db, max_age_minutes=10):
@@ -543,11 +546,21 @@ class MatrixCacheService:
             
             # Cache exists but is stale, perform background sync
             logger.info("Cache is stale at startup, performing background sync")
-            return await self.full_sync(db, force=False)
+            result = await self.full_sync(db, force=False)
+            return result
             
         except Exception as e:
             logger.error(f"Error in startup sync: {str(e)}")
             return {"status": "error", "error": str(e)}
+        finally:
+            # Make sure to close any client sessions
+            if hasattr(self, 'session') and self.session is not None:
+                try:
+                    await self.session.close()
+                    logger.info("Closed matrix cache client session")
+                except Exception as e:
+                    logger.error(f"Error closing matrix cache client session: {e}")
+                self.session = None
 
     def get_user_count_by_room(self, db: Session, room_id: str) -> int:
         """Get cached user count for a specific room."""

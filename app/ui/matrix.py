@@ -29,7 +29,7 @@ from app.utils.matrix_actions import (
     _send_room_message_with_content_async
 )
 from app.db.session import get_db
-from app.db.operations import User, AdminEvent, MatrixRoomMember, get_matrix_room_members, create_admin_event
+from app.db.operations import User, AdminEvent, MatrixRoomMember, get_matrix_room_members, create_admin_event, get_user
 from app.db.models import MatrixRoomMembership
 from app.utils.config import Config
 from app.utils.recommendation import get_entrance_room_users, invite_user_to_recommended_rooms
@@ -38,6 +38,37 @@ from app.services.matrix_cache import matrix_cache
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+async def _send_welcome_messages_to_rooms(username: str, intro_link: str, room_ids: List[str]) -> Dict[str, bool]:
+    """
+    Sends a welcome message to a list of specified rooms.
+
+    Args:
+        username: The username (display name part) of the user being welcomed.
+        intro_link: The introduction link for the user.
+        room_ids: A list of room IDs to send the welcome message to.
+
+    Returns:
+        A dictionary mapping room_id to a boolean indicating send success.
+    """
+    results = {}
+    welcome_message_format = (
+        f"🚀 Welcome to the Chat @{username}! 🚀\n"
+        f"Please take a moment to look at the group description.\n\n"
+        f"Your intro can be found here: {intro_link}, anything you'd like to add for the group?\n\n"
+        f"This is one of many community chats, find them all here (login required): https://forum.irregularchat.com/t/229"
+    )
+
+    for room_id in room_ids:
+        try:
+            success, _, _ = await send_matrix_message(room_id, welcome_message_format)
+            results[room_id] = success
+            if not success:
+                logger.error(f"Failed to send welcome message to room {room_id} for user @{username}")
+        except Exception as e:
+            logger.error(f"Exception sending welcome message to room {room_id} for user @{username}: {e}")
+            results[room_id] = False
+    return results
 
 def save_user_categories():
     """Save user categories to JSON file for persistence."""
@@ -961,14 +992,43 @@ async def render_matrix_messaging_page():
                     st.success(f"User invited to {success_count} out of {len(room_ids)} rooms")
                     
                     if send_welcome:
-                        # Send welcome message to each room
-                        welcome_message = f"Welcome {username} to the room! 👋"
-                        for room_id in room_ids:
-                            try:
-                                await send_matrix_message(room_id, welcome_message)
-                            except Exception as e:
-                                logger.error(f"Error sending welcome message to room {room_id}: {e}")
-                                # Continue with next room
+                        intro_link = "LINK_NOT_FOUND" # Default value
+                        db = None  # Initialize db to None
+                        try:
+                            db = next(get_db())
+                            user_object = get_user(db, username=username)
+                            if user_object and user_object.attributes:
+                                intro_link = user_object.attributes.get('intro_link')
+                                if not intro_link:
+                                    intro_data = user_object.attributes.get('intro', {})
+                                    if isinstance(intro_data, dict): # Ensure intro_data is a dictionary
+                                        intro_link = intro_data.get('link')
+                                if not intro_link: # If still not found after checking nested structure
+                                    intro_link = "LINK_NOT_FOUND" # Explicitly set if not found in attributes
+                            # If user_object is None or has no attributes, intro_link remains "LINK_NOT_FOUND" as set initially
+                        except Exception as e:
+                            logger.error(f"Error fetching intro_link for user {username}: {e}")
+                            intro_link = "ERROR_FETCHING_LINK" # Or keep as "LINK_NOT_FOUND"
+                        finally:
+                            if db:
+                                db.close()
+
+                        # Call the helper function to send welcome messages
+                        if room_ids: # Ensure there are rooms to send to
+                            logger.info(f"Attempting to send welcome messages to {len(room_ids)} rooms for user {username}")
+                            welcome_results = await _send_welcome_messages_to_rooms(username, intro_link, room_ids)
+
+                            # Log results from sending welcome messages
+                            successful_welcomes = sum(1 for status in welcome_results.values() if status)
+                            if successful_welcomes == len(room_ids):
+                                logger.info(f"Successfully sent welcome messages to all {len(room_ids)} rooms for user {username}.")
+                            else:
+                                logger.warning(
+                                    f"Sent welcome messages to {successful_welcomes}/{len(room_ids)} rooms for user {username}. "
+                                    f"Failed rooms: {[rid for rid, status in welcome_results.items() if not status]}"
+                                )
+                        else:
+                            logger.info(f"No rooms specified to send welcome message for user {username}")
                 else:
                     st.error("Failed to invite user to any rooms")
             else:

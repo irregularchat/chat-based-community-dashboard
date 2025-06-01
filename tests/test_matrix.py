@@ -341,3 +341,114 @@ def test_get_direct_message_history_sync():
         
         # Should return the same messages as the async version
         assert result == expected_messages
+
+from app.ui.matrix import _send_welcome_messages_to_rooms
+# We might need User if we were creating real DB objects, but for mocking, it's not strictly necessary
+# from app.db.models import User
+
+class TestWelcomeMessages:
+    @pytest.mark.asyncio
+    async def test_send_welcome_happy_path_with_link(self):
+        with patch('app.ui.matrix.send_matrix_message', new_callable=AsyncMock) as mock_send_msg:
+            # Configure the mock to return (True, "event_id_mock", "room_id_mock")
+            # The helper function _send_welcome_messages_to_rooms expects send_matrix_message to return a tuple
+            # where the first element is a boolean indicating success.
+            mock_send_msg.return_value = (True, "event_id_mock", "!room_id_mock:server.com") # Simulate successful send_matrix_message
+
+            username = "testuser"
+            intro_link = "http://example.com/intro"
+            room_ids = ["!room1:server.com", "!room2:server.com"]
+
+            results = await _send_welcome_messages_to_rooms(username, intro_link, room_ids)
+
+            assert mock_send_msg.call_count == 2
+            expected_message_content = (
+                f"🚀 Welcome to the Chat @{username}! 🚀\n"
+                f"Please take a moment to look at the group description.\n\n"
+                f"Your intro can be found here: {intro_link}, anything you'd like to add for the group?\n\n"
+                f"This is one of many community chats, find them all here (login required): https://forum.irregularchat.com/t/229"
+            )
+
+            mock_send_msg.assert_any_call(room_ids[0], expected_message_content)
+            mock_send_msg.assert_any_call(room_ids[1], expected_message_content)
+
+            assert results == {room_ids[0]: True, room_ids[1]: True}
+
+    @pytest.mark.asyncio
+    async def test_send_welcome_link_not_found(self):
+        with patch('app.ui.matrix.send_matrix_message', new_callable=AsyncMock) as mock_send_msg:
+            mock_send_msg.return_value = (True, "event_id_mock", "!room_id_mock:server.com")
+            username = "testuser"
+            intro_link = "LINK_NOT_FOUND"
+            room_ids = ["!room1:server.com"]
+
+            results = await _send_welcome_messages_to_rooms(username, intro_link, room_ids)
+
+            assert mock_send_msg.call_count == 1
+            expected_message_content = (
+                f"🚀 Welcome to the Chat @{username}! 🚀\n"
+                f"Please take a moment to look at the group description.\n\n"
+                f"Your intro can be found here: {intro_link}, anything you'd like to add for the group?\n\n"
+                f"This is one of many community chats, find them all here (login required): https://forum.irregularchat.com/t/229"
+            )
+            mock_send_msg.assert_called_with(room_ids[0], expected_message_content)
+            assert results == {room_ids[0]: True}
+
+    @pytest.mark.asyncio
+    async def test_send_welcome_error_fetching_link(self):
+        with patch('app.ui.matrix.send_matrix_message', new_callable=AsyncMock) as mock_send_msg:
+            mock_send_msg.return_value = (True, "event_id_mock", "!room_id_mock:server.com")
+            username = "testuser"
+            intro_link = "ERROR_FETCHING_LINK"
+            room_ids = ["!room1:server.com"]
+
+            results = await _send_welcome_messages_to_rooms(username, intro_link, room_ids)
+
+            assert mock_send_msg.call_count == 1
+            expected_message_content = (
+                f"🚀 Welcome to the Chat @{username}! 🚀\n"
+                f"Please take a moment to look at the group description.\n\n"
+                f"Your intro can be found here: {intro_link}, anything you'd like to add for the group?\n\n"
+                f"This is one of many community chats, find them all here (login required): https://forum.irregularchat.com/t/229"
+            )
+            mock_send_msg.assert_called_with(room_ids[0], expected_message_content)
+            assert results == {room_ids[0]: True}
+
+    @pytest.mark.asyncio
+    async def test_send_welcome_one_room_fails(self):
+        with patch('app.ui.matrix.send_matrix_message', new_callable=AsyncMock) as mock_send_msg:
+            # Simulate failure for the first room, success for the second
+            mock_send_msg.side_effect = [(False, None, None), (True, "event_id_mock", "!room_id_mock:server.com")]
+            username = "testuser"
+            intro_link = "http://example.com/intro"
+            room_ids = ["!room_fail:server.com", "!room_success:server.com"]
+
+            results = await _send_welcome_messages_to_rooms(username, intro_link, room_ids)
+
+            assert mock_send_msg.call_count == 2
+            assert results == {room_ids[0]: False, room_ids[1]: True}
+
+    @pytest.mark.asyncio
+    async def test_send_welcome_send_message_raises_exception(self):
+        with patch('app.ui.matrix.send_matrix_message', new_callable=AsyncMock) as mock_send_msg:
+            mock_send_msg.side_effect = Exception("Matrix API is down")
+            username = "testuser"
+            intro_link = "http://example.com/intro"
+            room_ids = ["!room1:server.com", "!room2:server.com"]
+
+            results = await _send_welcome_messages_to_rooms(username, intro_link, room_ids)
+
+            assert mock_send_msg.call_count == 2 # Still called for both rooms
+            assert results == {room_ids[0]: False, room_ids[1]: False} # Both should be marked as False
+
+    @pytest.mark.asyncio
+    async def test_send_welcome_empty_room_list(self):
+        with patch('app.ui.matrix.send_matrix_message', new_callable=AsyncMock) as mock_send_msg:
+            username = "testuser"
+            intro_link = "http://example.com/intro"
+            room_ids = []
+
+            results = await _send_welcome_messages_to_rooms(username, intro_link, room_ids)
+
+            mock_send_msg.assert_not_called()
+            assert results == {}

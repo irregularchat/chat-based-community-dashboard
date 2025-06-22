@@ -21,7 +21,8 @@ from app.auth.api import (
     shorten_url,
     list_users
 )
-from app.ui.forms import render_create_user_form, render_invite_form, display_user_list
+from app.ui.forms_components.create_user import render_create_user_form
+from app.ui.forms import render_invite_form, display_user_list
 from app.utils.helpers import (
     create_unique_username,
     update_username,

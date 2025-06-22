@@ -107,10 +107,17 @@ def parse_and_rerun():
         # Set a flag to indicate parsing was successful
         st.session_state["parsing_successful"] = True
         
-        # Display success message instead of using st.rerun()
-        # IMPORTANT: We're avoiding st.rerun() calls entirely due to RerunData errors in Streamlit 1.37+
+        # Display success message and trigger rerun to update form fields
         st.success("Data parsed successfully! Form has been updated with the parsed information.")
         logging.info("Parsing completed successfully")
+        
+        # Trigger a rerun to update the form fields with parsed data
+        try:
+            st.rerun()
+        except AttributeError:
+            # Fall back to experimental_rerun if rerun is not available
+            logging.warning("st.rerun() not available, falling back to st.experimental_rerun()")
+            st.experimental_rerun()
         
     except Exception as e:
         logging.error(f"Exception during parsing: {str(e)}")

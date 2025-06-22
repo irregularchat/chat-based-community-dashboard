@@ -1223,7 +1223,7 @@ async def render_create_user_form():
             
         matrix_user_options = [f"{user['display_name']} ({user['user_id']})" for user in st.session_state.matrix_users]
         selected_user = st.selectbox(
-            "Select Matrix User",
+            "Select Matrix User (Bridge User from Signal, Etc)",
             options=[""] + matrix_user_options,
             key="matrix_user_select"
         )

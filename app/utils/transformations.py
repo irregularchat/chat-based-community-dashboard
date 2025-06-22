@@ -71,7 +71,7 @@ def simple_parse_input(input_text):
                 # Process each line by specific position, removing the number prefix
                 for i, line in enumerate(lines):
                     # Remove the number prefix with enhanced regex to handle more formats
-                    content = re.sub(r'^\d+[\.\:\-\)\(\]\[\}\{_\s]*\s*', '', line).strip()
+                    content = re.sub(r'^\d+[\.\:\-\)\(\]\[\}\{_\s\@]*\s*', '', line).strip()
                     
                     if i == 0:  # Line 1: Name
                         name_parts = content.split()

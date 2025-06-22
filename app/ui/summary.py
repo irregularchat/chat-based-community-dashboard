@@ -79,14 +79,41 @@ def display_metrics(metrics):
 
 def display_event_history(db: Session):
     st.subheader("Admin Event Timeline")
-    events = db.query(AdminEvent).order_by(AdminEvent.timestamp.desc()).all()
+    
+    # Filter out system-level events from the community timeline
+    # These are internal operations that shouldn't clutter the community timeline
+    system_event_types = [
+        'system_sync',           # Database synchronization
+        'system_maintenance',    # System maintenance operations
+        'backup_created',        # Automated backups
+        'configuration_changed', # Internal config changes
+    ]
+    
+    events = db.query(AdminEvent).filter(
+        ~AdminEvent.event_type.in_(system_event_types)
+    ).order_by(AdminEvent.timestamp.desc()).limit(50).all()
+    
     if not events:
         st.info("No admin events recorded yet.")
         return
+    
+    st.write(f"**Showing recent administrative actions** (last {len(events)} events)")
+    
     for event in events:
-        st.write(
-            f"{event.timestamp}: [{event.event_type}] {event.username} - {event.details}"
-        )
+        # Format timestamp nicely
+        formatted_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Create a more readable display
+        with st.container():
+            col1, col2 = st.columns([1, 4])
+            with col1:
+                st.write(f"**{formatted_time}**")
+            with col2:
+                # Display event with better formatting
+                event_display = f"**[{event.event_type}]** {event.username}"
+                if event.details:
+                    event_display += f" - {event.details}"
+                st.write(event_display)
 
 def main():
     # Display Useful Links in the sidebar

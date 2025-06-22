@@ -216,6 +216,8 @@ def on_interests_change():
 
 def clear_parse_data():
     """Clear parse data from session state and reset form fields."""
+    logging.info("Starting form clear operation")
+    
     # Clear parse data from session state
     if 'parse_data' in st.session_state:
         del st.session_state.parse_data
@@ -224,13 +226,105 @@ def clear_parse_data():
     if 'parse_data_input_outside' in st.session_state:
         del st.session_state.parse_data_input_outside
     
-    # Reset form fields
-    reset_create_user_form_fields()
+    # Clear preserved parse data field
+    if 'preserved_parse_data' in st.session_state:
+        del st.session_state.preserved_parse_data
     
-    # Display success message instead of using st.rerun()
-    # IMPORTANT: We're avoiding st.rerun() calls entirely due to RerunData errors in Streamlit 1.37+
-    st.success("Form has been cleared successfully!")
-    logging.info("Form cleared successfully")
+    # Clear all parsed data fields
+    parsed_keys = [key for key in st.session_state.keys() if key.startswith('_parsed_')]
+    for key in parsed_keys:
+        del st.session_state[key]
+    
+    # FIRST: Set all form field values to empty strings to clear the widgets
+    # This ensures the widgets display empty values when they're recreated
+    form_field_keys = [
+        # Internal form field keys (used as default values)
+        "username_input",
+        "first_name_input",
+        "last_name_input", 
+        "email_input",
+        "invited_by_input",
+        "data_to_parse_input",
+        "intro_input",
+        "intro_text_input",
+        "organization_input",
+        "interests_input",
+        "signal_username_input",
+        "phone_number_input",
+        "linkedin_username_input",
+        # External form field keys (actual widget keys)
+        "username_input_outside", 
+        "first_name_input_outside",
+        "last_name_input_outside",
+        "email_input_outside",
+        "invited_by_input_outside",
+        "intro_input_outside",
+        "intro_text_input_outside",
+        "organization_input_outside",
+        "interests_input_outside",
+        "signal_username_input_outside", 
+        "phone_number_input_outside",
+        "linkedin_username_input_outside",
+        "parse_data_input_outside"
+    ]
+    
+    # Set all form fields to empty strings first
+    for field in form_field_keys:
+        st.session_state[field] = ""
+    
+    logging.info("Set all form fields to empty strings")
+    
+    # Clear Matrix user selection
+    st.session_state.matrix_user_selected = None
+    
+    # Clear recommended rooms and selected rooms
+    st.session_state.recommended_rooms = []
+    if 'selected_rooms' in st.session_state:
+        st.session_state.selected_rooms = set()
+    
+    # Clear group selection - reset to default
+    from app.utils.config import Config
+    main_group_id = Config.MAIN_GROUP_ID
+    st.session_state.selected_groups = [main_group_id] if main_group_id else []
+    st.session_state.group_selection = [main_group_id] if main_group_id else []
+    
+    # Clear admin checkbox
+    if 'is_admin_checkbox' in st.session_state:
+        st.session_state.is_admin_checkbox = False
+    
+    # Clear username generation flag
+    if 'username_was_auto_generated' in st.session_state:
+        st.session_state.username_was_auto_generated = False
+    
+    # Clear parsing flags
+    st.session_state.parsing_successful = False
+    
+    # Clear welcome message state
+    if 'welcome_message_sent' in st.session_state:
+        st.session_state.welcome_message_sent = False
+    
+    # Clear welcome message content
+    if 'welcome_message' in st.session_state:
+        del st.session_state.welcome_message
+    
+    # Clear any other form-related flags
+    if 'welcome_message_is_placeholder' in st.session_state:
+        del st.session_state.welcome_message_is_placeholder
+    
+    logging.info("Form cleared successfully - set all form fields to empty strings and cleared related state")
+    
+    # Trigger rerun to update the UI - this is necessary to actually clear the visible fields
+    try:
+        st.rerun()
+    except AttributeError:
+        # Fall back to experimental_rerun if rerun is not available
+        logging.warning("st.rerun() not available, falling back to st.experimental_rerun()")
+        try:
+            st.experimental_rerun()
+        except AttributeError:
+            # If neither rerun method is available, just show success message
+            st.success("Form has been cleared successfully! Please refresh the page if fields are still visible.")
+            logging.warning("No rerun method available, showing manual refresh message")
 
 async def render_create_user_form():
     """Render the user creation form with improved layout and group selection."""

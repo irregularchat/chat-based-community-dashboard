@@ -7,10 +7,10 @@ from app.db.session import get_db
 from app.db.operations import User, AdminEvent
 from app.ui.home import render_home_page
 from app.ui.forms import (
-    render_create_user_form,
     render_invite_form,
     display_user_list
 )
+from app.ui.forms.create_user import render_create_user_form
 from app.ui.summary import main as render_summary_page, display_event_history
 from app.ui.help_resources import main as render_help_page
 from app.ui.prompts import main as render_prompts_page

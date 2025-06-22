@@ -86,7 +86,7 @@ def simple_parse_input(input_text):
                         logging.info(f"Parsed organization: {content}")
                         
                     elif i == 2:  # Line 3: Invited by
-                        parsed_data["invited_by"] = content
+                        parsed_data["invited_by"] = clean_invited_by_field(content)
                         logging.info(f"Parsed invited by: {content}")
                         
                     elif i == 3:  # Line 4: Email
@@ -196,7 +196,7 @@ def simple_parse_input(input_text):
             # Invited by
             match = re.search(form_patterns['invited_by'], line, re.IGNORECASE)
             if match and match.group(1).strip():
-                parsed_data["invited_by"] = match.group(1).strip()
+                parsed_data["invited_by"] = clean_invited_by_field(match.group(1).strip())
                 continue
                 
             # Interests
@@ -226,7 +226,7 @@ def simple_parse_input(input_text):
             # Also check for lines that just have "Invited by" text without the colon
             invited_match = re.search(r'^Invited\s+by\s+(.+)', line, re.IGNORECASE)
             if invited_match and invited_match.group(1).strip():
-                parsed_data["invited_by"] = invited_match.group(1).strip()
+                parsed_data["invited_by"] = clean_invited_by_field(invited_match.group(1).strip())
                 continue
                 
             # If none of the patterns match but the line has an email, extract it
@@ -328,7 +328,7 @@ def simple_parse_input(input_text):
                     # Try to extract just the name part after "invited by"
                     invited_match = re.search(r'invited\s+by\s+(.+)', invited_line, re.IGNORECASE)
                     if invited_match:
-                        parsed_data["invited_by"] = invited_match.group(1).strip()
+                        parsed_data["invited_by"] = clean_invited_by_field(invited_match.group(1).strip())
                     else:
                         parsed_data["invited_by"] = lines[2]
                 else:
@@ -367,7 +367,7 @@ def simple_parse_input(input_text):
                     # Try to extract just the name part after "invited by"
                     invited_match = re.search(r'invited\s+by\s+(.+)', invited_line, re.IGNORECASE)
                     if invited_match:
-                        parsed_data["invited_by"] = invited_match.group(1).strip()
+                        parsed_data["invited_by"] = clean_invited_by_field(invited_match.group(1).strip())
                     else:
                         parsed_data["invited_by"] = lines[2]
                 else:
@@ -594,3 +594,30 @@ def parse_input(input_text):
         import traceback
         logging.error(traceback.format_exc())
         return {"error": f"Error parsing input: {str(e)}"}
+
+def clean_invited_by_field(invited_by_text):
+    """
+    Clean up the invited_by field by removing @ symbols and other special characters
+    that commonly appear at the beginning of names when copied from social media or messaging apps.
+    
+    Args:
+        invited_by_text (str): The raw invited_by text
+        
+    Returns:
+        str: Cleaned invited_by text with special characters removed
+    """
+    if not invited_by_text:
+        return invited_by_text
+    
+    # Remove @ symbols and other common special characters at the beginning
+    # This handles cases like "@Carlos Gongora" -> "Carlos Gongora"
+    cleaned = re.sub(r'^[@#\+\-\*\~\!\$\%\^\&\(\)\[\]\{\}\|\\\/\<\>\?]+\s*', '', invited_by_text.strip())
+    
+    # Also remove trailing special characters that might be copied accidentally
+    cleaned = re.sub(r'\s*[@#\+\-\*\~\!\$\%\^\&\(\)\[\]\{\}\|\\\/\<\>\?]+$', '', cleaned)
+    
+    # Remove any extra whitespace
+    cleaned = cleaned.strip()
+    
+    logging.info(f"Cleaned invited_by: '{invited_by_text}' -> '{cleaned}'")
+    return cleaned

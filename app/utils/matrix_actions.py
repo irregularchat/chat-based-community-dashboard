@@ -27,6 +27,40 @@ nest_asyncio.apply()
 # Set up logging
 logger = logging.getLogger(__name__)
 
+async def close_matrix_client_properly(client: Optional[AsyncClient]) -> None:
+    """
+    Properly close a Matrix client, ensuring all resources are cleaned up.
+    
+    Args:
+        client: The AsyncClient instance to close
+    """
+    if not client:
+        return
+        
+    try:
+        # Close the custom aiohttp session if it exists
+        if hasattr(client, '_http_client') and client._http_client:
+            try:
+                await client._http_client.close()
+                logger.debug("Closed custom aiohttp session")
+            except Exception as session_error:
+                logger.warning(f"Error closing aiohttp session: {session_error}")
+        
+        # Close the connector if it exists
+        if hasattr(client, '_connector') and client._connector:
+            try:
+                await client._connector.close()
+                logger.debug("Closed aiohttp connector")
+            except Exception as connector_error:
+                logger.warning(f"Error closing aiohttp connector: {connector_error}")
+        
+        # Close the main client
+        await client.close()
+        logger.debug("Matrix client closed properly")
+        
+    except Exception as e:
+        logger.warning(f"Error during Matrix client cleanup: {e}")
+
 # Import get_db conditionally to avoid import errors
 try:
     from app.db.session import get_db
@@ -464,8 +498,17 @@ async def get_matrix_client() -> Optional[AsyncClient]:
         
         # Set the connector for TLS 1.2 handling
         if hasattr(client, '_http_client') and client._http_client:
-            await client._http_client.close()
+            # Properly close the existing session before replacing it
+            try:
+                await client._http_client.close()
+            except Exception as close_error:
+                logger.warning(f"Error closing existing http client: {close_error}")
+        
+        # Create new session with proper connector
         client._http_client = aiohttp.ClientSession(connector=connector)
+        
+        # Store reference to connector for cleanup
+        client._connector = connector
         
         client.access_token = MATRIX_ACCESS_TOKEN
         client.user_id = MATRIX_BOT_USERNAME
@@ -477,7 +520,7 @@ async def get_matrix_client() -> Optional[AsyncClient]:
         logger.error(f"Error creating Matrix client: {e}")
         if client:
             try:
-                await client.close()
+                await close_matrix_client_properly(client)
             except Exception as close_error:
                 logger.error(f"Error closing Matrix client: {close_error}")
         return None
@@ -502,7 +545,7 @@ async def send_matrix_message(room_id, message, client=None):
         
         # Only close if we created the client
         if should_close:
-            await client.close()
+            await close_matrix_client_properly(client)
             
         return True
     except Exception as e:
@@ -510,7 +553,7 @@ async def send_matrix_message(room_id, message, client=None):
         # Make sure to close client even on error if we created it
         if should_close and client:
             try:
-                await client.close()
+                await close_matrix_client_properly(client)
             except Exception as close_error:
                 logging.error(f"Error closing Matrix client: {close_error}")
         return False
@@ -1262,13 +1305,14 @@ def get_joined_rooms() -> List[str]:
         logger.error(f"Error in get_joined_rooms: {e}")
         return []
 
-async def get_room_details_async(client: AsyncClient, room_id: str) -> Dict:
+async def get_room_details_async(client: AsyncClient, room_id: str, skip_member_count: bool = False) -> Dict:
     """
     Get details about a specific room.
     
     Args:
         client: The Matrix client
         room_id: The ID of the room
+        skip_member_count: If True, skip the expensive member count API call
         
     Returns:
         Dict: Room details including name and aliases
@@ -1307,9 +1351,31 @@ async def get_room_details_async(client: AsyncClient, room_id: str) -> Dict:
         if not room_details['display_name']:
             room_details['display_name'] = room_details['room_id'].split(':')[0].lstrip('!')
         
-        # Get member count using our get_room_members_async function
-        members = await get_room_members_async(client, room_id)
-        room_details['member_count'] = len(members)
+        # Only get member count if not skipping (this is the expensive operation)
+        if not skip_member_count:
+            # Try to get member count from database cache first
+            try:
+                from app.db.session import get_db
+                from app.db.operations import get_matrix_room_member_count
+                db = next(get_db())
+                cached_count = get_matrix_room_member_count(db, room_id)
+                if cached_count > 0:
+                    room_details['member_count'] = cached_count
+                    logger.debug(f"Using cached member count for {room_id}: {cached_count}")
+                    db.close()
+                else:
+                    db.close()
+                    # Fall back to API call only if no cached data
+                    members = await get_room_members_async(client, room_id)
+                    room_details['member_count'] = len(members)
+            except Exception as cache_error:
+                logger.warning(f"Error getting cached member count for {room_id}: {cache_error}")
+                # Fall back to API call
+                members = await get_room_members_async(client, room_id)
+                room_details['member_count'] = len(members)
+        else:
+            # Skip member count to avoid expensive API calls during sync
+            logger.debug(f"Skipping member count for {room_id} to avoid expensive API calls")
         
         return room_details
     except Exception as e:
@@ -1318,6 +1384,7 @@ async def get_room_details_async(client: AsyncClient, room_id: str) -> Dict:
             "room_id": room_id,
             "name": None,
             "display_name": room_id.split(':')[0].lstrip('!'),  # Fallback to formatted room ID
+            "member_count": 0,
             "error": str(e)
         }
 
@@ -1399,11 +1466,25 @@ async def get_all_accessible_rooms() -> List[Dict]:
             # Get joined rooms
             joined_rooms = await get_joined_rooms_async(client)
             
-            # Get details for each room
+            # Get details for each room (skip expensive member count API calls)
             rooms = []
             for room_id in joined_rooms:
-                room_details = await get_room_details_async(client, room_id)
+                room_details = await get_room_details_async(client, room_id, skip_member_count=True)
                 if room_details:
+                    # Try to get member count from database cache
+                    try:
+                        from app.db.session import get_db
+                        from app.db.operations import get_matrix_room_member_count
+                        db = next(get_db())
+                        cached_count = get_matrix_room_member_count(db, room_id)
+                        if cached_count > 0:
+                            room_details['member_count'] = cached_count
+                        db.close()
+                    except Exception as cache_error:
+                        logger.debug(f"No cached member count for {room_id}: {cache_error}")
+                        # Don't make expensive API calls here - leave member_count as 0
+                        room_details['member_count'] = 0
+                    
                     rooms.append(room_details)
                     
             return rooms
@@ -1411,7 +1492,7 @@ async def get_all_accessible_rooms() -> List[Dict]:
         finally:
             # Always close the client if we have one
             if client:
-                await client.close()
+                await close_matrix_client_properly(client)
             
     except Exception as e:
         logger.error(f"Error getting accessible rooms: {e}")
@@ -1700,6 +1781,7 @@ def remove_from_matrix_room(room_id: str, user_id: str, reason: str = "Removed v
 async def get_room_members_async(client, room_id: str) -> Dict[str, Any]:
     """
     Get all members of a Matrix room asynchronously.
+    Prioritizes database cache to avoid expensive API calls.
     
     Args:
         client: Matrix client
@@ -1709,22 +1791,30 @@ async def get_room_members_async(client, room_id: str) -> Dict[str, Any]:
         Dict[str, Any]: Dictionary mapping user IDs to member details
     """
     try:
-        # Get database connection - wrap in try/except to avoid issues
+        # Always try to get from cache first to avoid expensive API calls
         try:
             db = next(get_db())
-            # Try to get from cache first
             cached_members = get_matrix_room_members(db, room_id)
+            db.close()
             if cached_members:
-                logging.info(f"Using cached members for room {room_id}")
-                return cached_members
+                logger.debug(f"Using cached members for room {room_id}: {len(cached_members)} members")
+                # Convert list format to dict format expected by callers
+                members_dict = {}
+                for member in cached_members:
+                    if isinstance(member, dict) and member.get('user_id'):
+                        members_dict[member['user_id']] = {
+                            'display_name': member.get('display_name', ''),
+                            'avatar_url': member.get('avatar_url', '')
+                        }
+                return members_dict
         except Exception as db_error:
-            logging.warning(f"Error accessing database for room member cache: {db_error}")
+            logger.debug(f"Error accessing database for room member cache: {db_error}")
         
-        # If not in cache, fetch from Matrix
-        logging.info(f"Fetching members for room {room_id}")
+        # Only make expensive API calls if absolutely no cached data and this is critical
+        logger.warning(f"No cached members found for room {room_id}, making expensive API call")
         members_dict = {}
         
-        # Try room_get_state first
+        # Try room_get_state first (this is the expensive call we want to avoid)
         try:
             state_response = await client.room_get_state(room_id)
             
@@ -1732,7 +1822,7 @@ async def get_room_members_async(client, room_id: str) -> Dict[str, Any]:
             if hasattr(state_response, 'members') and state_response.members:
                 # Format: Object with members attribute (dictionary)
                 members_dict = state_response.members
-                logging.info(f"Found {len(members_dict)} members in room {room_id} using room_get_state.members")
+                logger.info(f"Found {len(members_dict)} members in room {room_id} using room_get_state.members")
             
             elif hasattr(state_response, 'events'):
                 # Format: Object with events list
@@ -1744,12 +1834,12 @@ async def get_room_members_async(client, room_id: str) -> Dict[str, Any]:
                                 'display_name': event.get('content', {}).get('displayname', user_id),
                                 'avatar_url': event.get('content', {}).get('avatar_url', '')
                             }
-                logging.info(f"Found {len(members_dict)} members in room {room_id} using room_get_state.events")
+                logger.info(f"Found {len(members_dict)} members in room {room_id} using room_get_state.events")
         
         except Exception as e:
-            logging.warning(f"Failed to get members using room_get_state: {str(e)}")
+            logger.warning(f"Failed to get members using room_get_state: {str(e)}")
         
-        # If we didn't get any members, try room_get_joined_members
+        # If we didn't get any members, try room_get_joined_members as fallback
         if not members_dict:
             try:
                 members_response = await client.room_get_joined_members(room_id)
@@ -1762,22 +1852,34 @@ async def get_room_members_async(client, room_id: str) -> Dict[str, Any]:
                 elif isinstance(members_response, dict) and 'joined' in members_response:
                     members_dict = members_response['joined']
                 
-                logging.info(f"Found {len(members_dict)} members in room {room_id} using room_get_joined_members")
+                logger.info(f"Found {len(members_dict)} members in room {room_id} using room_get_joined_members")
             
             except Exception as e:
-                logging.error(f"Failed to get members using room_get_joined_members: {str(e)}")
+                logger.error(f"Failed to get members using room_get_joined_members: {str(e)}")
         
-        # Cache the results if we got some
-        if members_dict and db:
+        # Cache the results if we got some (but don't fail if caching fails)
+        if members_dict:
             try:
-                update_matrix_room_members(db, room_id, members_dict)
+                db = next(get_db())
+                # Convert dict format to list format for database storage
+                members_list = []
+                for user_id, details in members_dict.items():
+                    members_list.append({
+                        'user_id': user_id,
+                        'display_name': details.get('display_name', ''),
+                        'avatar_url': details.get('avatar_url', ''),
+                        'membership': 'join'
+                    })
+                update_matrix_room_members(db, room_id, members_list)
+                db.close()
+                logger.debug(f"Cached {len(members_list)} members for room {room_id}")
             except Exception as cache_error:
-                logging.warning(f"Failed to cache room members: {cache_error}")
+                logger.warning(f"Failed to cache room members: {cache_error}")
         
         return members_dict
         
     except Exception as e:
-        logging.error(f"Error getting room members for {room_id}: {str(e)}")
+        logger.error(f"Error getting room members for {room_id}: {str(e)}")
         return {}
 
 async def get_all_accessible_users() -> List[Dict]:
@@ -2235,20 +2337,28 @@ async def send_matrix_message_async(target: str, message, is_formatted: bool = F
         logger.error(f"Error sending message to {target}: {e}")
         return False
 
-# Stub implementations for matrix room member functions
+# Database operations for matrix room member functions
 def get_matrix_room_members(db, room_id):
     """
-    Get matrix room members from cache (stub implementation).
-    In the future, this will retrieve room members from the database.
+    Get matrix room members from cache using the database operations.
     """
-    return None  # Always return None to force fetching from matrix API
+    try:
+        from app.db.operations import get_matrix_room_members as db_get_members
+        return db_get_members(db, room_id)
+    except Exception as e:
+        logger.debug(f"Error getting cached room members: {e}")
+        return []
     
 def update_matrix_room_members(db, room_id, members):
     """
-    Update matrix room members in cache (stub implementation).
-    In the future, this will store room members in the database.
+    Update matrix room members in cache using the database operations.
     """
-    pass  # No-op
+    try:
+        from app.db.operations import update_matrix_room_members as db_update_members
+        return db_update_members(db, room_id, members)
+    except Exception as e:
+        logger.warning(f"Error updating cached room members: {e}")
+        pass
 
 async def create_user(username, password, display_name=None, admin=False):
     """Create a new user in Matrix."""

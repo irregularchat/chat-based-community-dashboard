@@ -129,11 +129,10 @@ async def get_all_accessible_rooms_with_details() -> List[Dict[str, Any]]:
     
     db = next(get_db())
     try:
-        # 1. Try main persistent DB cache via MatrixCacheService
-        # Check if the main cache is reasonably fresh (e.g., last successful sync within ~10-15 mins)
-        # We use a slightly longer tolerance here than the UI's direct "is_cache_fresh" for triggering a new sync,
-        # as this function is about providing *any* reasonable list for recommendations.
-        if matrix_cache.is_cache_fresh(db, max_age_minutes=15):
+        # 1. Try main persistent DB cache via MatrixCacheService with more lenient freshness check
+        # Use a much longer tolerance (2 hours) to avoid expensive API calls
+        # Even stale data is better than making expensive API calls for every recommendation
+        if matrix_cache.is_cache_fresh(db, max_age_minutes=120):  # Changed from 15 to 120 minutes
             cached_db_rooms = matrix_cache.get_cached_rooms(db) # This is synchronous
             if cached_db_rooms:
                 logger.info(f"Using main DB cache ({len(cached_db_rooms)} rooms) for get_all_accessible_rooms_with_details.")
@@ -170,64 +169,64 @@ async def get_all_accessible_rooms_with_details() -> List[Dict[str, Any]]:
                 globals()['_room_cache_time'] = current_time
                 return detailed_rooms
             else:
-                logger.info("Main DB cache (MatrixRoom table) is fresh but returned no rooms. Proceeding to fallback.")
-        else:
-            logger.info("Main DB cache is stale or not fresh enough (max_age_minutes=15). Proceeding to fallback for recommendations list.")
+                logger.info("Main DB cache (MatrixRoom table) is fresh but returned no rooms. Checking for any cached data.")
+        
+        # 2. Try to get ANY cached data from database, even if stale - better than API calls
+        logger.info("Trying to get any cached room data from database, even if stale...")
+        cached_db_rooms = matrix_cache.get_cached_rooms(db)
+        if cached_db_rooms:
+            logger.info(f"Using stale DB cache ({len(cached_db_rooms)} rooms) for recommendations - better than expensive API calls.")
+            
+            # Augment with category info from config
+            configured_rooms_map = {
+                room_conf.get('room_id'): room_conf 
+                for room_conf in Config.get_all_matrix_rooms()
+            }
+            
+            detailed_rooms = []
+            for room_from_db_cache in cached_db_rooms:
+                room_id = room_from_db_cache.get('room_id')
+                details = room_from_db_cache.copy()
+                
+                config_data = configured_rooms_map.get(room_id)
+                if config_data:
+                    details['categories'] = config_data.get('categories')
+                    details['category'] = config_data.get('category')
+                    details['configured'] = True
+                    if not details.get('name') and config_data.get('name'):
+                        details['name'] = config_data.get('name')
+                    if not details.get('display_name') and config_data.get('name'):
+                        details['display_name'] = config_data.get('name')
+                else:
+                    details['categories'] = []
+                    details['category'] = None
+                    details['configured'] = False
+                detailed_rooms.append(details)
+            
+            globals()['_room_cache'] = detailed_rooms
+            globals()['_room_cache_time'] = current_time
+            return detailed_rooms
 
-        # 2. Fallback: Original logic (Config files, then live Matrix API)
-        logger.debug("Falling back to config/API for get_all_accessible_rooms_with_details.")
+        # 3. Fallback to config only - avoid expensive API calls entirely
+        logger.info("No DB cache available, using config rooms only to avoid expensive API calls.")
         matrix_rooms_from_config = Config.get_all_matrix_rooms()
         if not matrix_rooms_from_config:
             logger.info("No rooms from Config.get_all_matrix_rooms() in fallback, using get_matrix_rooms().")
             matrix_rooms_from_config = Config.get_matrix_rooms()
         
         if matrix_rooms_from_config:
-            logger.debug(f"Using {len(matrix_rooms_from_config)} rooms from config for recommendations as part of fallback.")
+            logger.info(f"Using {len(matrix_rooms_from_config)} rooms from config for recommendations.")
             globals()['_room_cache'] = matrix_rooms_from_config
             globals()['_room_cache_time'] = current_time
             return matrix_rooms_from_config
             
-        logger.info("No rooms found in config files during fallback, trying live Matrix API for recommendations list.")
-        try:
-            from app.utils.matrix_actions import get_all_accessible_rooms # This is the API call
-            
-            api_future = asyncio.ensure_future(get_all_accessible_rooms()) # This calls matrix_actions version
-            matrix_rooms_from_api = await asyncio.wait_for(api_future, timeout=10.0) # Increased timeout slightly
-            
-            if matrix_rooms_from_api:
-                logger.info(f"Fetched {len(matrix_rooms_from_api)} rooms from live Matrix API for recommendations list.")
-                # Note: These rooms from API already have details like name, topic, member_count
-                # We might still want to augment with categories if they match configured rooms.
-                configured_rooms_map = {
-                    room_conf.get('room_id'): room_conf 
-                    for room_conf in Config.get_all_matrix_rooms()
-                }
-                api_rooms_detailed = []
-                for room_from_api in matrix_rooms_from_api:
-                    details = room_from_api.copy()
-                    config_data = configured_rooms_map.get(details.get('room_id'))
-                    if config_data:
-                        details['categories'] = config_data.get('categories')
-                        details['category'] = config_data.get('category')
-                        details['configured'] = True
-                    else:
-                        details['categories'] = []
-                        details['category'] = None
-                        details['configured'] = False
-                    api_rooms_detailed.append(details)
-
-                globals()['_room_cache'] = api_rooms_detailed
-                globals()['_room_cache_time'] = current_time
-                return api_rooms_detailed
-        except asyncio.TimeoutError:
-            logger.error("Timeout getting rooms from live Matrix API during fallback for recommendations list.")
-        except Exception as e_api:
-            logger.error(f"Error getting rooms from live Matrix API during fallback for recommendations list: {e_api}")
-        
-        logger.warning("Could not get rooms from any source for recommendations list, returning empty list.")
+        # 4. Last resort: Only try API if absolutely no other data is available
+        logger.warning("No rooms found in DB cache or config. This should trigger a background sync instead of API calls.")
+        # Instead of making expensive API calls, return empty list and let background sync handle it
         globals()['_room_cache'] = []
         globals()['_room_cache_time'] = current_time
         return []
+        
     except Exception as e_main:
         logger.error(f"Major error in get_all_accessible_rooms_with_details: {e_main}", exc_info=True)
         return []
@@ -247,9 +246,9 @@ async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[D
     try:
         # Get all rooms with timeout protection
         try:
-            # Set a timeout for getting rooms to prevent hanging
+            # Set a very short timeout for getting rooms to prevent hanging
             all_rooms_future = asyncio.ensure_future(get_all_accessible_rooms_with_details())
-            all_rooms = await asyncio.wait_for(all_rooms_future, timeout=5.0)
+            all_rooms = await asyncio.wait_for(all_rooms_future, timeout=2.0)  # Reduced from 3.0 to 2.0 seconds
             
             # Quick validation of result
             if not isinstance(all_rooms, list):
@@ -257,6 +256,9 @@ async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[D
                 all_rooms = []
         except asyncio.TimeoutError:
             logger.error("Timeout while fetching rooms list")
+            # Cancel the future if it's still running
+            if not all_rooms_future.done():
+                all_rooms_future.cancel()
             all_rooms = []
         except Exception as e:
             logger.error(f"Error fetching rooms: {e}")
@@ -797,31 +799,31 @@ def get_room_recommendations_sync(user_id: str, interests: str) -> List[Dict[str
             thread_local.loop = asyncio.new_event_loop()
             
         # Create a timeout mechanism
-        timeout_seconds = 15  # Increase timeout from 7 to 15 seconds for async operation
+        timeout_seconds = 5  # Reduced from 8 to 5 seconds
         
         # Run the async match_interests_with_rooms function with timeout
         try:
             asyncio.set_event_loop(thread_local.loop)
             task = asyncio.ensure_future(match_interests_with_rooms(interests), loop=thread_local.loop)
             
-            # Set timeout for the task
+            # Set timeout for the task with improved handling
             try:
                 result = thread_local.loop.run_until_complete(
                     asyncio.wait_for(task, timeout=timeout_seconds)
                 )
                 logger.info(f"Room recommendation completed successfully with {len(result) if result else 0} results")
             except asyncio.TimeoutError:
-                # Handle timeout explicitly
-                logger.error(f"Async operation timed out after {timeout_seconds} seconds")
+                # Handle timeout explicitly with better error message
+                logger.error(f"Room recommendation timed out after {timeout_seconds} seconds")
+                # Cancel the task if it's still running
                 if not task.done():
-                    # Try to cancel the task
                     task.cancel()
                     try:
-                        # Wait a short time for cancellation to complete
-                        thread_local.loop.run_until_complete(asyncio.sleep(0.1))
-                    except (asyncio.CancelledError, Exception):
+                        # Wait a bit for cancellation to complete
+                        thread_local.loop.run_until_complete(asyncio.wait_for(task, timeout=1.0))
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
                         pass
-                return []  # Return empty list on timeout
+                result = []  # Return empty list on timeout
             
             # Ensure result is a list
             if result is None:

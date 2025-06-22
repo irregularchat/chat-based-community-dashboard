@@ -142,14 +142,30 @@ class MatrixCacheService:
             
             for room_id in room_ids:
                 try:
+                    # Get room details from Matrix (skip expensive member count API calls during sync)
+                    room_details = await get_room_details_async(client, room_id, skip_member_count=True)
+                    
                     # Get current room from database
                     existing_room = db.query(MatrixRoom).filter(
                         MatrixRoom.room_id == room_id
                     ).first()
                     
-                    # Get room details from Matrix (this includes member_count)
-                    room_details = await get_room_details_async(client, room_id)
-                    current_member_count = room_details.get("member_count", 0)
+                    # Get member count from database cache instead of expensive API calls
+                    try:
+                        from app.db.operations import get_matrix_room_member_count
+                        cached_member_count = get_matrix_room_member_count(db, room_id)
+                        current_member_count = cached_member_count if cached_member_count > 0 else 0
+                        logger.debug(f"Using cached member count for {room_id}: {current_member_count}")
+                    except Exception as cache_error:
+                        logger.warning(f"Error getting cached member count for {room_id}: {cache_error}")
+                        # Only fall back to expensive API call if absolutely no cached data and it's a manual sync
+                        if is_rapid_manual_sync:
+                            current_member_count = room_details.get("member_count", 0)
+                        else:
+                            # Skip this room during automatic sync to avoid expensive calls
+                            logger.info(f"Skipping room {room_id} during automatic sync - no cached member count")
+                            rooms_skipped += 1
+                            continue
                     
                     # Skip rooms with fewer than minimum members
                     if current_member_count <= Config.MATRIX_MIN_ROOM_MEMBERS:
@@ -529,7 +545,7 @@ class MatrixCacheService:
         Perform startup sync with smart logic.
         Only syncs if cache is older than 10 minutes or doesn't exist.
         """
-        from app.utils.matrix_actions import get_matrix_client, close_matrix_client
+        from app.utils.matrix_actions import get_matrix_client, close_matrix_client_properly
         client = None
         
         try:

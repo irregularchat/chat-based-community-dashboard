@@ -1371,7 +1371,7 @@ If you have any questions, feel free to reach out to the community admins.
                     
                     # Wait for result with a firm timeout
                     start_time = time.time()
-                    max_wait = 10  # Maximum 10 seconds wait
+                    max_wait = 5  # Reduced from 8 to 5 seconds maximum wait
                     
                     while time.time() - start_time < max_wait:
                         if not result_queue.empty():
@@ -1380,29 +1380,31 @@ If you have any questions, feel free to reach out to the community admins.
                                 # Ensure result is not None before assigning to session state
                                 if result is not None:
                                     st.session_state.recommended_rooms = result
-                                    logging.info(f"Set recommended_rooms with {len(result)} rooms")
+                                    st.success(f"Found {len(result)} recommended rooms based on your interests!")
+                                    st.rerun()
                                 else:
                                     st.session_state.recommended_rooms = []
-                                    st.warning("No recommendations found. Using empty list.")
-                                    logging.warning("Recommendation result was None")
-                            else:
-                                st.error(f"Error getting room recommendations: {result}")
-                                st.session_state.recommended_rooms = []  # Ensure it's initialized as empty list
-                                logging.error(f"Recommendation error: {result}")
-                            break
-                        
-                        # Sleep briefly to avoid CPU spinning
-                        time.sleep(0.1)
+                                    st.info("No rooms found matching your interests. You can still create the user without room recommendations.")
+                                    st.rerun()
+                                break
+                            elif status == "timeout":
+                                st.session_state.recommended_rooms = []
+                                st.warning("⏱️ Room recommendation search timed out. This may be due to network issues. You can still create the user without recommendations.")
+                                st.rerun()
+                                break
+                            elif status == "error":
+                                st.session_state.recommended_rooms = []
+                                error_msg = result if isinstance(result, str) else "Unknown error occurred"
+                                st.error(f"❌ Error getting room recommendations: {error_msg}. You can still create the user.")
+                                st.rerun()
+                                break
+                        time.sleep(0.1)  # Short sleep to avoid busy waiting
                     else:
-                        # Loop completed without finding result
-                        st.warning("Timed out while getting room recommendations. Please try again.")
+                        # Timeout reached
                         st.session_state.recommended_rooms = []
-                        logging.warning("Recommendation timed out after waiting for result")
+                        st.warning("⏱️ Room search timed out after 5 seconds. This may be due to server load. You can still create the user without recommendations.")
+                        st.rerun()
                         
-                        # If thread is still alive after timeout, log a warning
-                        if rec_thread.is_alive():
-                            logging.warning("Recommendation thread is still running after timeout")
-                    
                 except Exception as e:
                     st.error(f"Error getting room recommendations: {str(e)}")
                     logging.error(f"Error getting room recommendations: {str(e)}")

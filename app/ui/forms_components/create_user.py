@@ -1225,7 +1225,8 @@ async def render_create_user_form():
         selected_user = st.selectbox(
             "Select Matrix User (Bridge User from Signal, Etc)",
             options=[""] + matrix_user_options,
-            key="matrix_user_select"
+            key="matrix_user_select",
+            help="Connect a Matrix account to this user to: 1) Send welcome message directly to them, 2) Automatically remove them from the entry/INDOC chat after account creation, 3) Enable future direct communication and room management"
         )
         
         if selected_user:

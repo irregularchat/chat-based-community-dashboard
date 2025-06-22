@@ -182,3 +182,21 @@ This project is open source. See [LICENSE](LICENSE) for details.
 ---
 
 **Ready to transform your community management?** [Get started in 5 minutes](#-quick-start-5-minutes) or [join our community](https://forum.irregularchat.com/) to learn more!
+
+## Environment Variables
+
+### Authentication Configuration
+
+The application supports flexible authentication configuration:
+
+- `REQUIRE_LOGIN=True` (default) - Requires users to authenticate before accessing the application
+- `REQUIRE_LOGIN=False` - Disables authentication requirement, allows open access to all features
+
+**Note:** When `REQUIRE_LOGIN=False`, all authentication code remains intact but is bypassed. This is useful for:
+- Development and testing environments
+- Internal networks where authentication is handled elsewhere
+- Situations where you want to temporarily disable login requirements
+
+### Other Configuration
+
+// ... existing environment variables documentation ...

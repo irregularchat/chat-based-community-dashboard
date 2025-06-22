@@ -1,6 +1,7 @@
 import streamlit as st
 from app.auth.authentication import is_authenticated, require_authentication
 from app.auth.local_auth import is_local_admin
+from app.utils.config import Config
 import logging
 import sys
 
@@ -15,6 +16,12 @@ def auth_middleware(page_function):
         function: A wrapped function that checks authentication first
     """
     def wrapper(*args, **kwargs):
+        # Check if login is required
+        if not Config.REQUIRE_LOGIN:
+            # Authentication is disabled, allow access
+            logging.info("Authentication disabled via REQUIRE_LOGIN=False, allowing access")
+            return page_function(*args, **kwargs)
+        
         # Get the current page path
         page_path = st.session_state.get('current_page')
         
@@ -44,6 +51,12 @@ def admin_middleware(page_function):
     """
     def wrapper(*args, **kwargs):
         try:
+            # Check if login is required
+            if not Config.REQUIRE_LOGIN:
+                # Authentication is disabled, allow access with admin privileges
+                logging.info("Authentication disabled via REQUIRE_LOGIN=False, allowing admin access")
+                return page_function(*args, **kwargs)
+            
             # First check authentication
             if not is_authenticated():
                 # Display login button instead of the requested page

@@ -316,15 +316,17 @@ def save_user_settings(
 
 def render_settings_page():
     """Main function to render the settings page with tabs for different setting categories"""
+    from app.utils.config import Config
+    
     # Add authentication protection directly in the page
-    if not st.session_state.get('is_authenticated', False):
+    if Config.REQUIRE_LOGIN and not st.session_state.get('is_authenticated', False):
         st.title("Authentication Required")
         st.warning("You must log in to access Settings.")
         display_login_button(location="main")
         return
         
-    # Only admin users should access settings
-    if not st.session_state.get('is_admin', False):
+    # Only admin users should access settings (unless login is disabled)
+    if Config.REQUIRE_LOGIN and not st.session_state.get('is_admin', False):
         st.title("Access Denied")
         st.error("You need administrator privileges to access the Settings page.")
         st.info("Please contact an administrator if you need access to these settings.")

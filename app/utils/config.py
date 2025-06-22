@@ -177,6 +177,9 @@ class Config:
     DEFAULT_ADMIN_USERNAME = os.getenv("DEFAULT_ADMIN_USERNAME", "adminuser")
     DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "Admin_Password123!")
     
+    # Authentication toggles
+    REQUIRE_LOGIN = os.getenv("REQUIRE_LOGIN", "True").lower() == "true"
+    
     # Application configuration
     DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
     SECRET_KEY = os.getenv('SECRET_KEY', 'your-secret-key-here')

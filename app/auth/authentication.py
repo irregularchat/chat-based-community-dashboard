@@ -233,9 +233,17 @@ def require_authentication():
     Require authentication for the current page.
     Redirects to login if not authenticated.
     """
+    # Check if login is required
+    if not Config.REQUIRE_LOGIN:
+        # Authentication is disabled, allow access
+        logging.info("Authentication disabled via REQUIRE_LOGIN=False, allowing access")
+        return True
+    
     if not is_authenticated():
         st.warning("Please log in to access this page.")
         st.stop()
+    
+    return True
 
 def get_current_user() -> Optional[Dict[str, Any]]:
     """

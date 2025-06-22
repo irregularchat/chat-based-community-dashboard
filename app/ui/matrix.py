@@ -1317,17 +1317,17 @@ async def render_matrix_messaging_page():
         # Initialize room_selection_mode in session state if it doesn't exist
         # This ensures the mode persists across user interactions and page reruns.
         if 'room_selection_mode' not in st.session_state:
-            st.session_state.room_selection_mode = "🏷️ By Categories" # Default mode
+            st.session_state.room_selection_mode = "🌐 All Rooms" # Changed default to "All Rooms"
 
         # Add room selection mode radio buttons
         # The `index` is set from session_state to ensure the correct radio button is pre-selected on rerun.
         # A `st.rerun()` is called if the mode changes to update the UI accordingly.
         room_selection_mode = st.radio(
             "Room Selection Mode:",
-            ["🏷️ By Categories", "🎯 Individual Rooms", "👥 User Membership Rooms"],
+            ["🌐 All Rooms", "🏷️ By Categories", "🎯 Individual Rooms"],
             key="room_selection_mode_radio", 
-            index=["🏷️ By Categories", "🎯 Individual Rooms", "👥 User Membership Rooms"].index(st.session_state.room_selection_mode),
-            help="Choose how to select rooms for user removal"
+            index=["🌐 All Rooms", "🏷️ By Categories", "🎯 Individual Rooms"].index(st.session_state.room_selection_mode),
+            help="Choose how to select rooms for user removal. 'All Rooms' will remove users from all rooms where they are members."
         )
         if room_selection_mode != st.session_state.room_selection_mode:
             st.session_state.room_selection_mode = room_selection_mode
@@ -1335,8 +1335,79 @@ async def render_matrix_messaging_page():
 
         room_ids = [] # Initialize room_ids, this list will be populated based on the selected mode.
 
+        # Mode 0: Remove from All Rooms (NEW DEFAULT)
+        if st.session_state.room_selection_mode == "🌐 All Rooms":
+            st.markdown("##### 🌐 Remove from All Rooms")
+            st.info("💡 **Default Mode**: Users will be removed from ALL rooms where they are currently members.")
+            
+            if selected_user_ids:
+                # Get all rooms where any of the selected users are members
+                all_user_rooms = set()
+                db = next(get_db())
+                try:
+                    for user_id in selected_user_ids:
+                        user_memberships = db.query(MatrixRoomMembership).filter(
+                            MatrixRoomMembership.user_id == user_id,
+                            MatrixRoomMembership.membership_status == 'join'
+                        ).all()
+                        for membership in user_memberships:
+                            all_user_rooms.add(membership.room_id)
+                finally:
+                    db.close()
+                
+                # Get room details for display
+                room_details = []
+                db = next(get_db())
+                try:
+                    cached_rooms = matrix_cache.get_cached_rooms(db)
+                    for room in cached_rooms:
+                        if room.get('room_id') in all_user_rooms:
+                            room_details.append(room)
+                finally:
+                    db.close()
+                
+                # Filter by minimum member count
+                eligible_rooms = [
+                    room for room in room_details 
+                    if room.get('member_count', 0) > Config.MATRIX_MIN_ROOM_MEMBERS
+                ]
+                
+                room_ids = [room.get('room_id') for room in eligible_rooms if room.get('room_id')]
+                
+                if room_ids:
+                    st.success(f"✅ Will remove users from {len(room_ids)} rooms where they are members")
+                    
+                    with st.expander(f"📋 View All Target Rooms ({len(room_ids)})", expanded=False):
+                        for room in eligible_rooms:
+                            room_name = room.get('name', 'Unnamed Room')
+                            r_id = room.get('room_id')
+                            member_count = room.get('member_count', 0)
+                            
+                            # Show which users are in this room
+                            users_in_room = []
+                            for user_id in selected_user_ids:
+                                db_inner = next(get_db())
+                                try:
+                                    membership = db_inner.query(MatrixRoomMembership).filter(
+                                        MatrixRoomMembership.user_id == user_id,
+                                        MatrixRoomMembership.room_id == r_id,
+                                        MatrixRoomMembership.membership_status == 'join'
+                                    ).first()
+                                    if membership:
+                                        username = user_id.split(":")[0].lstrip("@") if ":" in user_id else user_id.lstrip("@")
+                                        users_in_room.append(username)
+                                finally:
+                                    db_inner.close()
+                            
+                            st.write(f"**{room_name}** ({member_count} members) - Users: {', '.join(users_in_room) if users_in_room else 'None'}")
+                            st.caption(f"Room ID: {r_id}")
+                else:
+                    st.warning("⚠️ No eligible rooms found where selected users are members (rooms must have more than minimum member count)")
+            else:
+                st.info("Please select users first to see all rooms where they are members")
+
         # Mode 1: Select Rooms by Category
-        if st.session_state.room_selection_mode == "🏷️ By Categories":
+        elif st.session_state.room_selection_mode == "🏷️ By Categories":
             st.markdown("##### 🏷️ Select Rooms by Category")
             # Uses a multiselect to pick from available categories.
             # `filter_rooms_by_category` (an existing helper) filters the main `matrix_rooms` list.
@@ -1444,100 +1515,6 @@ async def render_matrix_messaging_page():
                     st.info("No individual rooms selected. Use the search and multiselect above.")
             finally:
                 db.close()
-
-        # Mode 3: Select Rooms Based on User Membership
-        elif st.session_state.room_selection_mode == "👥 User Membership Rooms":
-            st.markdown("##### 👥 Select Rooms Based on User Membership")
-            # This mode is active only if users have already been selected for removal.
-            # - It queries the database for rooms where any of the `selected_user_ids` (for removal) are members.
-            # - Similar to "Individual Rooms" mode, it uses a map for display strings and session state
-            #   (`st.session_state.membership_selected_room_displays`) to persist multiselect choices.
-            if selected_user_ids:
-                st.info("💡 Showing rooms where at least one selected user is a member.")
-                user_rooms_set = set() # Using a set to store unique room_ids
-                db = next(get_db())
-                try:
-                    for user_id_member_check in selected_user_ids:
-                        user_memberships = db.query(MatrixRoomMembership).filter(
-                            MatrixRoomMembership.user_id == user_id_member_check,
-                            MatrixRoomMembership.membership_status == 'join'
-                        ).all()
-                        for membership in user_memberships:
-                            user_rooms_set.add(membership.room_id)
-                finally:
-                    db.close()
-
-                available_rooms_for_membership_mode = []
-                db = next(get_db())
-                try:
-                    cached_rooms_for_membership = matrix_cache.get_cached_rooms(db)
-                    for room in cached_rooms_for_membership:
-                        if room.get('room_id') in user_rooms_set:
-                            available_rooms_for_membership_mode.append(room)
-                finally:
-                    db.close()
-
-                if available_rooms_for_membership_mode:
-                    # Filter rooms by minimum member count
-                    filtered_membership_rooms = [
-                        room for room in available_rooms_for_membership_mode 
-                        if room.get('member_count', 0) > Config.MATRIX_MIN_ROOM_MEMBERS
-                    ]
-                    
-                    membership_room_options_map = {} # Maps display name to room_id
-                    for room in filtered_membership_rooms:
-                        room_name = room.get('name', 'Unnamed Room')
-                        r_id = room.get('room_id')
-                        member_count = room.get('member_count', 0)
-                        
-                        users_in_this_room_details = []
-                        db_inner = next(get_db())
-                        try:
-                            for user_id_check in selected_user_ids: # Iterate through *selected_user_ids* for removal
-                                membership = db_inner.query(MatrixRoomMembership).filter(
-                                    MatrixRoomMembership.user_id == user_id_check,
-                                    MatrixRoomMembership.room_id == r_id,
-                                    MatrixRoomMembership.membership_status == 'join'
-                                ).first()
-                                if membership:
-                                    username_display = user_id_check.split(":")[0].lstrip("@") if ":" in user_id_check else user_id_check.lstrip("@")
-                                    users_in_this_room_details.append(username_display)
-                        finally:
-                            db_inner.close()
-                        
-                        users_text = f"Users: {', '.join(users_in_this_room_details)}" if users_in_this_room_details else "No selected users in this room"
-                        display_name = f"{room_name} ({member_count} members) - {users_text} [{r_id}]"
-                        membership_room_options_map[display_name] = r_id
-
-                    # Preserve selection across reruns
-                    if 'membership_selected_room_displays' not in st.session_state:
-                        st.session_state.membership_selected_room_displays = []
-                    
-                    selected_membership_room_displays = st.multiselect(
-                        f"Select rooms for removal ({len(filtered_membership_rooms)} available):",
-                        options=list(membership_room_options_map.keys()),
-                        default=st.session_state.membership_selected_room_displays,
-                        key="membership_room_multiselect", 
-                        help=f"Only rooms where at least one selected user is a member and with more than {Config.MATRIX_MIN_ROOM_MEMBERS} members are shown."
-                    )
-                    st.session_state.membership_selected_room_displays = selected_membership_room_displays
-                    
-                    room_ids = [membership_room_options_map[display] for display in selected_membership_room_displays if display in membership_room_options_map]
-
-                    if room_ids:
-                        st.success(f"✅ Selected {len(room_ids)} rooms based on user membership.")
-                        with st.expander("📋 View Selected Membership Rooms & Details"):
-                            for room_display_name in selected_membership_room_displays:
-                                r_id = membership_room_options_map.get(room_display_name)
-                                if r_id:
-                                    st.write(f"**{room_display_name.split(' [')[0]}** (`{r_id}`)")
-                                    # User details already in display name
-                    else:
-                        st.info("No rooms selected from user membership list.")
-                else:
-                    st.warning("No rooms found where the selected users are members.")
-            else:
-                st.warning("Please select users first to see rooms based on their membership.")
         
         st.markdown("---")
         
@@ -1585,6 +1562,20 @@ async def render_matrix_messaging_page():
                             st.error("Failed to get Matrix client for verification")
                     except Exception as e:
                         st.error(f"Error checking room memberships: {e}")
+        
+        # Show helpful message when no rooms are selected
+        elif selected_user_ids and not room_ids:
+            st.markdown("---")
+            st.warning("⚠️ **No rooms selected for removal**")
+            st.info("""
+            **To proceed with user removal, you need to select rooms:**
+            
+            • **🌐 All Rooms** (Recommended): Automatically selects all rooms where the users are members
+            • **🏷️ By Categories**: Select rooms by category (e.g., Tech, AI, etc.)
+            • **🎯 Individual Rooms**: Manually select specific rooms
+            
+            **💡 Tip**: Use "🌐 All Rooms" mode for the most comprehensive removal.
+            """)
         
         # Confirmation and execution
         st.subheader("⚠️ Confirm Removal")
@@ -2082,9 +2073,28 @@ async def render_matrix_messaging_page():
                         
         else:
             if not selected_user_ids:
-                st.warning("Please select at least one Matrix user to remove")
+                st.warning("⚠️ **No users selected for removal**")
+                st.info("""
+                **To remove users from Matrix rooms:**
+                
+                1. **Select Users**: Use the user selection interface above to choose one or more Matrix users
+                2. **Choose Room Mode**: Select how you want to choose rooms (🌐 All Rooms is recommended)
+                3. **Confirm Removal**: Review the summary and confirm the removal
+                
+                **💡 Tip**: Start by clicking "🔄 Load Users" if no users are shown in the selection.
+                """)
             elif not room_ids:
-                st.warning("No rooms found in selected categories")
+                st.warning("⚠️ **No rooms selected for removal**")
+                st.info("""
+                **To proceed with user removal, you need to select rooms:**
+                
+                • **🌐 All Rooms** (Recommended): Automatically selects all rooms where the users are members
+                • **🏷️ By Categories**: Select rooms by category (e.g., Tech, AI, etc.)
+                • **🎯 Individual Rooms**: Manually select specific rooms
+                • **👥 User Membership Rooms**: Select from rooms where the users are actually members
+                
+                **💡 Tip**: Use "🌐 All Rooms" mode for the most comprehensive removal.
+                """)
     
     with tab5:
         st.header("Entrance Room Users")

@@ -1404,7 +1404,7 @@ If you have any questions, feel free to reach out to the community admins.
     
     # Data parsing section
     st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
-    st.subheader("Parse User Data")
+    st.subheader("Room Recommendations for New User")
     
     # Room recommendations based on interests - check that matrix_user_selected exists and is not None
     matrix_user = st.session_state.get('matrix_user_selected')

@@ -46,7 +46,6 @@ from app.auth.api import (
     force_password_reset,
     reset_user_password,
     create_discourse_post,
-    create_user,
     generate_recovery_link
 )
 from app.auth.utils import generate_username_with_random_word
@@ -58,12 +57,12 @@ from app.db.operations import (
     delete_user_note,
     get_note_by_id
 )
-from app.messages import create_invite_message, create_user_message, display_welcome_message_ui
+from app.messages import create_invite_message
 from app.utils.messages import WELCOME_MESSAGE
 from app.utils.helpers import send_invite_email, send_admin_email_to_users
 from app.utils.recommendation import invite_user_to_recommended_rooms_sync
-from app.utils.form_helpers import reset_create_user_form_fields
 from datetime import datetime, timedelta
+from app.utils.form_helpers import parse_and_rerun
 
 # Utility function for running async tasks safely in Streamlit
 def run_async_safely(async_func, *args, **kwargs):
@@ -149,114 +148,6 @@ def run_async_safely(async_func, *args, **kwargs):
         logging.error(traceback.format_exc())
         return None
 
-# reset_create_user_form_fields function is now imported from app.utils.form_helpers
-
-def parse_and_rerun():
-    """Callback to parse data and rerun the script so widgets see updated session state."""
-    # Check if input is empty
-    if not st.session_state.get("parse_data_input_outside", "").strip():
-        logging.warning("Parsing called with empty data")
-        st.warning("Nothing to parse. Please enter some data first.")
-        return  # Just return if there's no data to parse
-    
-    # Log the input data for debugging
-    input_data = st.session_state.get("parse_data_input_outside", "")
-    # Save to the preserved data field to ensure it persists
-    st.session_state['preserved_parse_data'] = input_data
-    
-    logging.info(f"Parsing data: {input_data[:100]}..." if len(input_data) > 100 else f"Parsing data: {input_data}")
-    
-    try:
-        # Parse the data from the text area
-        parsed = parse_input(input_data)
-        
-        # Check for error in parsed data
-        if isinstance(parsed, dict) and "error" in parsed:
-            error_msg = parsed["error"]
-            logging.error(f"Error parsing input: {error_msg}")
-            st.error(f"Error parsing input: {error_msg}")
-            return
-        
-        if not parsed:
-            logging.error("Could not parse the input text, empty result")
-            st.error("Could not parse the input text. The parser returned an empty result.")
-            return
-            
-        # Log the parsed data
-        logging.info(f"Successfully parsed data: {parsed}")
-        
-        # Store parsed data in temporary session state variables that can be used after rerun
-        # Do NOT modify the widget values directly with _outside suffix
-        if "first_name" in parsed:
-            st.session_state["_parsed_first_name"] = parsed.get("first_name", "")
-            logging.info(f"Set _parsed_first_name to: '{parsed.get('first_name', '')}'")
-            
-        if "last_name" in parsed:
-            st.session_state["_parsed_last_name"] = parsed.get("last_name", "")
-            logging.info(f"Set _parsed_last_name to: '{parsed.get('last_name', '')}'")
-            
-        if "email" in parsed:
-            st.session_state["_parsed_email"] = parsed.get("email", "")
-            logging.info(f"Set _parsed_email to: '{parsed.get('email', '')}'")
-            
-        if "invited_by" in parsed:
-            st.session_state["_parsed_invited_by"] = parsed.get("invited_by", "")
-            logging.info(f"Set _parsed_invited_by to: '{parsed.get('invited_by', '')}'")
-            
-        if "organization" in parsed:
-            st.session_state["_parsed_organization"] = parsed.get("organization", "")
-            logging.info(f"Set _parsed_organization to: '{parsed.get('organization', '')}'")
-            
-        if "intro" in parsed and isinstance(parsed["intro"], dict):
-            intro_data = parsed.get("intro", {})
-            org = intro_data.get("organization", "")
-            interests = intro_data.get("interests", "")
-            
-            # Set organization and interests as separate fields
-            if org:
-                st.session_state["_parsed_organization"] = org
-                logging.info(f"Set _parsed_organization to: '{org}'")
-                
-            if interests:
-                st.session_state["_parsed_interests"] = interests
-                logging.info(f"Set _parsed_interests to: '{interests}'")
-            
-            # Set the intro field to only contain actual introduction text if any
-            intro_text = intro_data.get("text", "")
-            if intro_text:
-                st.session_state["_parsed_intro"] = intro_text
-                logging.info(f"Set _parsed_intro to: '{intro_text}'")
-        elif "intro" in parsed and isinstance(parsed["intro"], str):
-            # If intro is just a string, use it directly
-            st.session_state["_parsed_intro"] = parsed["intro"]
-            logging.info(f"Set _parsed_intro to string value: '{parsed['intro']}'")
-        
-        # Handle additional fields if present in parsed data
-        if "signal_username" in parsed:
-            st.session_state["_parsed_signal_username"] = parsed.get("signal_username", "")
-            logging.info(f"Set _parsed_signal_username to: '{parsed.get('signal_username', '')}'")
-            
-        if "phone_number" in parsed:
-            st.session_state["_parsed_phone_number"] = parsed.get("phone_number", "")
-            logging.info(f"Set _parsed_phone_number to: '{parsed.get('phone_number', '')}'")
-            
-        if "linkedin_username" in parsed:
-            st.session_state["_parsed_linkedin_username"] = parsed.get("linkedin_username", "")
-            logging.info(f"Set _parsed_linkedin_username to: '{parsed.get('linkedin_username', '')}'")
-        
-        # Set a flag to indicate parsing was successful
-        st.session_state["parsing_successful"] = True
-        
-        # Display success message instead of using st.rerun()
-        # IMPORTANT: We're avoiding st.rerun() calls entirely due to RerunData errors in Streamlit 1.37+
-        st.success("Data parsed successfully! Form has been updated with the parsed information.")
-        logging.info("Parsing completed successfully")
-        
-    except Exception as e:
-        logging.error(f"Exception during parsing: {str(e)}")
-        logging.error(traceback.format_exc())
-        st.error(f"An error occurred while parsing: {str(e)}")
-    
 
 def update_username_from_inputs():
     """

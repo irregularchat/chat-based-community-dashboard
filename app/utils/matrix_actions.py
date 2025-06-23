@@ -1726,9 +1726,9 @@ async def remove_from_matrix_room_async(room_id: str, user_id: str, reason: str 
             
             return result
         finally:
-            logger.info(f"Closing Matrix client after removal attempt...")
-            await client.close()
-            logger.info(f"✅ Matrix client closed after removal")
+            logger.info(f"Properly closing Matrix client after removal attempt...")
+            await close_matrix_client_properly(client)
+            logger.info(f"✅ Matrix client closed properly after removal")
             
     except Exception as e:
         logger.error(f"❌ EXCEPTION: Error in remove_from_matrix_room_async: {e}")
@@ -1950,6 +1950,7 @@ async def _send_direct_message_async(user_id: str, message: str) -> Tuple[bool, 
         logger.warning("Matrix integration is not active. Cannot send direct message.")
         return False, None, None
     
+    client = None
     try:
         # Log Matrix configuration for debugging (only on first call or errors)
         logger.debug(f"Matrix configuration: MATRIX_ACTIVE={MATRIX_ACTIVE}, HOMESERVER={HOMESERVER}, BOT_USERNAME={MATRIX_BOT_USERNAME}")
@@ -2054,15 +2055,24 @@ async def _send_direct_message_async(user_id: str, message: str) -> Tuple[bool, 
                     return True, room_id, response.event_id
                 else:
                     logger.error(f"Failed to send message. Response: {response}")
+                    return False, room_id, None
             except Exception as e:
                 logger.error(f"Error sending message to room {room_id}: {str(e)}")
                 return False, room_id, None
         
-        await client.close()
         return False, None, None
     except Exception as e:
         logger.error(f"Error in _send_direct_message_async: {str(e)}")
         return False, None, None
+    finally:
+        # Ensure client is properly closed even on exceptions
+        if client:
+            try:
+                logger.debug(f"Properly closing Matrix client for direct message...")
+                await close_matrix_client_properly(client)
+                logger.debug(f"✅ Matrix client closed properly for direct message")
+            except Exception as close_error:
+                logger.warning(f"⚠️ Error closing Matrix client for direct message: {close_error}")
 
 def send_direct_message(user_id: str, message: str) -> Tuple[bool, Optional[str], Optional[str]]:
     """
@@ -2280,11 +2290,11 @@ async def _send_room_message_with_content_async(room_id: str, content: dict) -> 
         logger.error(f"Traceback: {traceback.format_exc()}")
         return False
     finally:
-        # Ensure client is closed
+        # Ensure client is closed properly with custom aiohttp cleanup
         if client:
             try:
-                logger.info(f"Closing Matrix client...")
-                await client.close()
+                logger.info(f"Properly closing Matrix client with custom aiohttp cleanup...")
+                await close_matrix_client_properly(client)
                 logger.info(f"✅ Matrix client closed successfully")
             except Exception as close_error:
                 logger.warning(f"⚠️ Error closing Matrix client: {close_error}")

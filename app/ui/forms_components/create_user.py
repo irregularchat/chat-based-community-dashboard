@@ -18,6 +18,14 @@ from app.messages import create_user_message, display_welcome_message_ui
 from app.utils.form_helpers import reset_create_user_form_fields, parse_and_rerun
 from app.utils.config import Config
 from app.db.session import get_db
+# Add missing imports for async functions
+from app.ui.forms import run_async_safely
+from app.utils.matrix_actions import (
+    _send_room_message_with_content_async,
+    remove_from_matrix_room_async,
+    send_welcome_message_with_encryption_delay_sync
+)
+from app.auth.utils import generate_username_with_random_word
 
 
 def update_username_from_inputs():
@@ -37,7 +45,6 @@ def update_username_from_inputs():
         # Generate username with first name and random word
         if first_name:
             # Use the new function to generate a username with random word
-            from app.auth.utils import generate_username_with_random_word
             base_username = generate_username_with_random_word(first_name)
             logging.info(f"Generated base username with random word: {base_username}")
         else:

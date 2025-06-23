@@ -987,7 +987,7 @@ async def render_matrix_messaging_page():
         #
         # Key Concepts:
         # - Streamlit Session State: Used extensively to manage:
-        #   - `st.session_state.room_selection_mode`: Stores the current active mode (e.g., "🏷️ By Categories").
+        #   - `st.session_state.removal_room_selection_mode`: Stores the current active mode (e.g., "🏷️ By Categories").
         #   - `st.session_state.individual_selected_room_displays`: Stores the display names of rooms selected in "Individual Rooms" mode.
         #   - `st.session_state.membership_selected_room_displays`: Stores display names for "User Membership Rooms" mode.
         #   - This persistence is crucial for maintaining user selections across Streamlit reruns (e.g., after a button click or widget interaction).
@@ -1314,10 +1314,10 @@ async def render_matrix_messaging_page():
         # Room selection section
         st.subheader("🏠 Select Rooms for Removal")
         
-        # Initialize room_selection_mode in session state if it doesn't exist
+        # Initialize removal_room_selection_mode in session state if it doesn't exist
         # This ensures the mode persists across user interactions and page reruns.
-        if 'room_selection_mode' not in st.session_state:
-            st.session_state.room_selection_mode = "🌐 All Rooms" # Changed default to "All Rooms"
+        if 'removal_room_selection_mode' not in st.session_state:
+            st.session_state.removal_room_selection_mode = "🌐 All Rooms" # Default to "All Rooms"
 
         # Add room selection mode radio buttons
         # The `index` is set from session_state to ensure the correct radio button is pre-selected on rerun.
@@ -1325,18 +1325,18 @@ async def render_matrix_messaging_page():
         room_selection_mode = st.radio(
             "Room Selection Mode:",
             ["🌐 All Rooms", "🏷️ By Categories", "🎯 Individual Rooms"],
-            key="room_selection_mode_radio", 
-            index=["🌐 All Rooms", "🏷️ By Categories", "🎯 Individual Rooms"].index(st.session_state.room_selection_mode),
+            key="removal_room_selection_mode_radio", 
+            index=["🌐 All Rooms", "🏷️ By Categories", "🎯 Individual Rooms"].index(st.session_state.removal_room_selection_mode),
             help="Choose how to select rooms for user removal. 'All Rooms' will remove users from all rooms where they are members."
         )
-        if room_selection_mode != st.session_state.room_selection_mode:
-            st.session_state.room_selection_mode = room_selection_mode
+        if room_selection_mode != st.session_state.removal_room_selection_mode:
+            st.session_state.removal_room_selection_mode = room_selection_mode
             st.rerun() 
 
         room_ids = [] # Initialize room_ids, this list will be populated based on the selected mode.
 
         # Mode 0: Remove from All Rooms (NEW DEFAULT)
-        if st.session_state.room_selection_mode == "🌐 All Rooms":
+        if st.session_state.removal_room_selection_mode == "🌐 All Rooms":
             st.markdown("##### 🌐 Remove from All Rooms")
             st.info("💡 **Default Mode**: Users will be removed from ALL rooms where they are currently members.")
             
@@ -1403,11 +1403,16 @@ async def render_matrix_messaging_page():
                             st.caption(f"Room ID: {r_id}")
                 else:
                     st.warning("⚠️ No eligible rooms found where selected users are members (rooms must have more than minimum member count)")
+                    # Set room_ids to empty list to ensure consistency
+                    room_ids = []
             else:
                 st.info("Please select users first to see all rooms where they are members")
+                # Important: Don't set room_ids to empty here - this was causing the submit button to disappear
+                # Instead, we'll handle this in the confirmation section
+                pass
 
         # Mode 1: Select Rooms by Category
-        elif st.session_state.room_selection_mode == "🏷️ By Categories":
+        elif st.session_state.removal_room_selection_mode == "🏷️ By Categories":
             st.markdown("##### 🏷️ Select Rooms by Category")
             # Uses a multiselect to pick from available categories.
             # `filter_rooms_by_category` (an existing helper) filters the main `matrix_rooms` list.
@@ -1436,7 +1441,7 @@ async def render_matrix_messaging_page():
             room_ids = [room.get('room_id') for room in rooms_in_categories if room.get('room_id')]
 
         # Mode 2: Select Individual Rooms by Name/ID
-        elif st.session_state.room_selection_mode == "🎯 Individual Rooms":
+        elif st.session_state.removal_room_selection_mode == "🎯 Individual Rooms":
             st.markdown("##### 🎯 Select Individual Rooms by Name/ID")
             # This mode allows fine-grained selection of specific rooms.
             # - Fetches all cached rooms.
@@ -1563,22 +1568,9 @@ async def render_matrix_messaging_page():
                     except Exception as e:
                         st.error(f"Error checking room memberships: {e}")
         
-        # Show helpful message when no rooms are selected
-        elif selected_user_ids and not room_ids:
-            st.markdown("---")
-            st.warning("⚠️ **No rooms selected for removal**")
-            st.info("""
-            **To proceed with user removal, you need to select rooms:**
-            
-            • **🌐 All Rooms** (Recommended): Automatically selects all rooms where the users are members
-            • **🏷️ By Categories**: Select rooms by category (e.g., Tech, AI, etc.)
-            • **🎯 Individual Rooms**: Manually select specific rooms
-            
-            **💡 Tip**: Use "🌐 All Rooms" mode for the most comprehensive removal.
-            """)
         
-        # Confirmation and execution
-        st.subheader("⚠️ Confirm Removal")
+        # Always show the separator and confirmation section
+        st.markdown("---")
         
         # Add helpful note about bot permissions
         with st.expander("ℹ️ About Bot Permissions and Room Removal"):
@@ -1600,7 +1592,12 @@ async def render_matrix_messaging_page():
             - `Room not found`: Room may have been deleted or bot lost access
             """)
         
+        # Always show the confirmation section header
+        st.subheader("⚠️ Confirm Removal")
+        
+        # Customize the content based on what's selected
         if selected_user_ids and room_ids:
+            # Both users and rooms selected - show full confirmation interface
             user_count = len(selected_user_ids)
             room_count = len(room_ids)
             
@@ -2072,7 +2069,25 @@ async def render_matrix_messaging_page():
                         # Note: confirm_user_removal checkbox will reset automatically on next page load
                         
         else:
-            if not selected_user_ids:
+            # Cases where users or rooms aren't properly selected - show guidance AND still show submit area
+            if selected_user_ids and not room_ids:
+                # Users selected but no rooms
+                if st.session_state.removal_room_selection_mode == "🌐 All Rooms":
+                    st.warning("⚠️ **No eligible rooms found for removal**")
+                    st.info("This could be because the selected users are not members of any rooms, or all their rooms have fewer than the minimum required members.")
+                else:
+                    st.warning("⚠️ **No rooms selected for removal**")
+                    st.info("""
+                    **To proceed with user removal, you need to select rooms:**
+                    
+                    • **🌐 All Rooms** (Recommended): Automatically selects all rooms where the users are members
+                    • **🏷️ By Categories**: Select rooms by category (e.g., Tech, AI, etc.)
+                    • **🎯 Individual Rooms**: Manually select specific rooms
+                    
+                    **💡 Tip**: Use "🌐 All Rooms" mode for the most comprehensive removal.
+                    """)
+            elif not selected_user_ids:
+                # No users selected
                 st.warning("⚠️ **No users selected for removal**")
                 st.info("""
                 **To remove users from Matrix rooms:**
@@ -2083,18 +2098,17 @@ async def render_matrix_messaging_page():
                 
                 **💡 Tip**: Start by clicking "🔄 Load Users" if no users are shown in the selection.
                 """)
+            
+            # Always show the submit button area, but disabled with helpful message
+            st.markdown("---")
+            
+            # Show disabled submit button with clear explanation
+            if not selected_user_ids:
+                st.button("🚫 Execute Removal", disabled=True, type="primary", help="Select users first to enable removal")
+                st.caption("💡 **Next Step**: Select users from the 'Select Users for Removal' section above")
             elif not room_ids:
-                st.warning("⚠️ **No rooms selected for removal**")
-                st.info("""
-                **To proceed with user removal, you need to select rooms:**
-                
-                • **🌐 All Rooms** (Recommended): Automatically selects all rooms where the users are members
-                • **🏷️ By Categories**: Select rooms by category (e.g., Tech, AI, etc.)
-                • **🎯 Individual Rooms**: Manually select specific rooms
-                • **👥 User Membership Rooms**: Select from rooms where the users are actually members
-                
-                **💡 Tip**: Use "🌐 All Rooms" mode for the most comprehensive removal.
-                """)
+                st.button("🚫 Execute Removal", disabled=True, type="primary", help="Select rooms first to enable removal")
+                st.caption("💡 **Next Step**: Ensure rooms are properly selected based on your chosen room selection mode")
     
     with tab5:
         st.header("Entrance Room Users")

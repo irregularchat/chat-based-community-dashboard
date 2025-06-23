@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import logging
 from app.utils.config import Config
-from app.db.models import User, AdminEvent, MatrixRoomMember, VerificationCode, UserNote, ModeratorPermission
+from app.db.models import User, AdminEvent, MatrixRoomMember, MatrixRoomMembership, VerificationCode, UserNote, ModeratorPermission
 from app.db.database import get_db
 
 def sync_user_data(db: Session, authentik_users: List[Dict[str, Any]]):
@@ -749,7 +749,12 @@ def get_matrix_room_member_count(db: Session, room_id: str) -> int:
         Number of members in the room
     """
     try:
-        return db.query(MatrixRoomMember).filter(MatrixRoomMember.room_id == room_id).count()
+        # Use the new MatrixRoomMembership table (matrix_cache_memberships)
+        # instead of the old MatrixRoomMember table
+        return db.query(MatrixRoomMembership).filter(
+            MatrixRoomMembership.room_id == room_id,
+            MatrixRoomMembership.membership_status == 'join'
+        ).count()
     except Exception as e:
         logging.error(f"Error getting member count for room {room_id}: {str(e)}")
         return 0
@@ -767,10 +772,12 @@ def is_matrix_room_member(db: Session, room_id: str, user_id: str) -> bool:
         True if the user is a member, False otherwise
     """
     try:
-        return db.query(MatrixRoomMember).filter(
-            MatrixRoomMember.room_id == room_id,
-            MatrixRoomMember.user_id == user_id,
-            MatrixRoomMember.membership == 'join'
+        # Use the new MatrixRoomMembership table (matrix_cache_memberships)
+        # instead of the old MatrixRoomMember table
+        return db.query(MatrixRoomMembership).filter(
+            MatrixRoomMembership.room_id == room_id,
+            MatrixRoomMembership.user_id == user_id,
+            MatrixRoomMembership.membership_status == 'join'
         ).count() > 0
     except Exception as e:
         logging.error(f"Error checking room membership for {user_id} in {room_id}: {str(e)}")

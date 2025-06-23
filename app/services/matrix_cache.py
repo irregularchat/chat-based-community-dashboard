@@ -140,32 +140,59 @@ class MatrixCacheService:
             rooms_synced = 0
             rooms_skipped = 0
             
+            # Check if this is an initial sync (no rooms in database yet)
+            total_rooms_in_db = db.query(MatrixRoom).count()
+            is_initial_sync = total_rooms_in_db == 0
+            
+            if is_initial_sync:
+                logger.info("Detected initial sync - will populate cache with fresh data from Matrix")
+            
             for room_id in room_ids:
                 try:
-                    # Get room details from Matrix (skip expensive member count API calls during sync)
-                    room_details = await get_room_details_async(client, room_id, skip_member_count=True)
+                    # Get room details from Matrix (skip member count only for efficiency syncs)
+                    skip_expensive_calls = not (is_initial_sync or is_rapid_manual_sync)
+                    room_details = await get_room_details_async(client, room_id, skip_member_count=skip_expensive_calls)
                     
                     # Get current room from database
                     existing_room = db.query(MatrixRoom).filter(
                         MatrixRoom.room_id == room_id
                     ).first()
                     
-                    # Get member count from database cache instead of expensive API calls
-                    try:
-                        from app.db.operations import get_matrix_room_member_count
-                        cached_member_count = get_matrix_room_member_count(db, room_id)
-                        current_member_count = cached_member_count if cached_member_count > 0 else 0
-                        logger.debug(f"Using cached member count for {room_id}: {current_member_count}")
-                    except Exception as cache_error:
-                        logger.warning(f"Error getting cached member count for {room_id}: {cache_error}")
-                        # Only fall back to expensive API call if absolutely no cached data and it's a manual sync
-                        if is_rapid_manual_sync:
-                            current_member_count = room_details.get("member_count", 0)
-                        else:
-                            # Skip this room during automatic sync to avoid expensive calls
-                            logger.info(f"Skipping room {room_id} during automatic sync - no cached member count")
-                            rooms_skipped += 1
-                            continue
+                    # Handle member count logic based on sync type
+                    if is_initial_sync or is_rapid_manual_sync:
+                        # During initial sync or manual sync, always get fresh data
+                        current_member_count = room_details.get("member_count", 0)
+                        logger.debug(f"Using fresh member count for {room_id}: {current_member_count}")
+                    else:
+                        # For subsequent automatic syncs, try to use cached data for efficiency
+                        try:
+                            from app.db.operations import get_matrix_room_member_count
+                            cached_member_count = get_matrix_room_member_count(db, room_id)
+                            if cached_member_count > 0 and existing_room:
+                                # Use cached count if it's reliable and room hasn't changed much
+                                if abs(existing_room.member_count - cached_member_count) < 2:
+                                    logger.debug(f"Skipping room {room_id} - cached count stable ({cached_member_count})")
+                                    rooms_skipped += 1
+                                    continue
+                                else:
+                                    # Use the existing room's member count (from previous sync)
+                                    current_member_count = existing_room.member_count
+                                    logger.debug(f"Using existing room member count for {room_id}: {current_member_count}")
+                            else:
+                                # No reliable cached data, need to get fresh member count
+                                if skip_expensive_calls:
+                                    # We skipped the expensive call but need member count
+                                    room_details = await get_room_details_async(client, room_id, skip_member_count=False)
+                                current_member_count = room_details.get("member_count", 0)
+                                logger.debug(f"Using fresh member count for {room_id}: {current_member_count}")
+                        except Exception as cache_error:
+                            logger.debug(f"Error with cached data for {room_id}: {cache_error}, using existing or fresh data")
+                            if existing_room:
+                                current_member_count = existing_room.member_count
+                            else:
+                                if skip_expensive_calls:
+                                    room_details = await get_room_details_async(client, room_id, skip_member_count=False)
+                                current_member_count = room_details.get("member_count", 0)
                     
                     # Skip rooms with fewer than minimum members
                     if current_member_count <= Config.MATRIX_MIN_ROOM_MEMBERS:

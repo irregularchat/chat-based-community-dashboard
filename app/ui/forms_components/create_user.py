@@ -760,11 +760,10 @@ async def render_create_user_form():
                     
                     if sync_result.get("status") == "completed":
                         # Reload only users from the welcome room
-                        cached_users_after_sync = matrix_cache.get_room_members(welcome_room_id, db_sync)
+                        cached_users_after_sync = matrix_cache.get_users_in_room(db_sync, welcome_room_id)
                         st.session_state.matrix_users = [
                             {'user_id': u['user_id'], 'display_name': u['display_name']}
                             for u in cached_users_after_sync
-                            if u.get('membership') == 'join'  # Only include joined members
                         ]
                         
                         # Restore form state before rerun
@@ -815,7 +814,7 @@ async def render_create_user_form():
                         threading.Thread(target=bg_sync, daemon=True).start()
                     
                     # Get users only from the welcome/INDOC room
-                    room_members = matrix_cache.get_room_members(welcome_room_id, db)
+                    room_members = matrix_cache.get_users_in_room(db, welcome_room_id)
                     
                     # Convert to the expected format
                     st.session_state.matrix_users = [
@@ -824,7 +823,6 @@ async def render_create_user_form():
                             'display_name': user.get('display_name', user['user_id'].split(':')[0][1:])
                         }
                         for user in room_members
-                        if user.get('membership') == 'join'  # Only include joined members
                     ]
                     
                     logging.info(f"Loaded {len(st.session_state.matrix_users)} users from INDOC room")

@@ -741,14 +741,14 @@ async def render_create_user_form():
             st.session_state['last_name_input'] = state['last_name']
             st.session_state['email_input'] = state['email']
             st.session_state['matrix_user_selected'] = state['selected_matrix_user']
-            # Handle manual Matrix username field (might not exist in older saved states)
+            # Handle manual Matrix username field
             if 'manual_matrix_username' in state:
                 st.session_state['manual_matrix_username'] = state['manual_matrix_username']
     
-    # Manual Sync Button for Matrix Cache
-    if st.button("🔄 Sync Matrix User Cache", key="manual_sync_matrix_cache_in_form"):
+    # Add a manual sync button to refresh Matrix users cache
+    if st.button("🔄 Sync Matrix User Cache", key="manual_sync_matrix_cache"):
         form_state = save_form_state()
-        with st.spinner("Syncing all Matrix rooms..."):
+        with st.spinner("Syncing Matrix rooms and refreshing user list..."):
             try:
                 from app.services.matrix_cache import matrix_cache
                 db_sync = next(get_db())
@@ -759,23 +759,27 @@ async def render_create_user_form():
                     if sync_result.get("status") == "completed":
                         # Reload users from the welcome room
                         cached_users_after_sync = matrix_cache.get_users_in_room(db_sync, Config.MATRIX_WELCOME_ROOM_ID)
+                        logging.info(f"Matrix sync completed. Found {len(cached_users_after_sync)} users in INDOC room")
+                        
+                        # Update the matrix users list
                         st.session_state.matrix_users = [
                             {'user_id': u['user_id'], 'display_name': u['display_name']}
                             for u in cached_users_after_sync
                         ]
                         
-                        # Restore form state before rerun
+                        # Restore form state
                         restore_form_state(form_state)
-                        st.toast("Successfully synced all Matrix rooms and updated user list", icon="✅")
+                        st.toast("Successfully synced Matrix rooms and updated user list", icon="✅")
+                        
+                        # Force a rerun to update the dropdown
+                        st.rerun()
                     else:
                         st.error(f"Failed to sync Matrix users: {sync_result.get('error', 'Unknown error')}")
-                        restore_form_state(form_state)
-                        
                 except Exception as e:
                     st.error(f"Error during Matrix sync: {str(e)}")
                     logging.error(f"Error during Matrix sync: {str(e)}", exc_info=True)
-                    restore_form_state(form_state)
-                    return
+                finally:
+                    db_sync.close()
             except Exception as e_sync:
                 st.error(f"Error during Matrix cache sync: {str(e_sync)}")
                 logging.error(f"Error during Matrix cache sync: {str(e_sync)}", exc_info=True)
@@ -1487,69 +1491,81 @@ If you have any questions, feel free to reach out to the community admins.
     
     # Data parsing section
     st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
-    st.subheader("Room Recommendations for New User")
     
-    # Room recommendations based on interests - check that matrix_user_selected exists and is not None
-    matrix_user = st.session_state.get('matrix_user_selected')
+    # Only show room recommendations section when not in the middle of creating a user
+    # This prevents the recommendation search from running before user creation
+    show_recommendations = not st.session_state.get('user_creation_in_progress', False)
     
-    if matrix_user and interests:
-        st.subheader("Recommended Rooms")
+    if show_recommendations:
+        st.subheader("Room Recommendations for New User")
         
-        # Get room recommendations
-        if "recommended_rooms" not in st.session_state:
-            st.session_state.recommended_rooms = []
-        if not st.session_state.recommended_rooms:
-            with st.spinner("Getting room recommendations based on interests..."):
-                try:
-                    # Use a timeout to prevent hanging if the recommendation service is slow
-                    import threading
-                    import queue
-                    import time
-                    from concurrent.futures import ThreadPoolExecutor
-                    
-                    result_queue = queue.Queue()
-                    
-                    def get_recommendations_with_timeout():
-                        try:
-                            # Ensure the recommendation function is properly imported
-                            from app.utils.recommendation import get_room_recommendations_sync
-                            
-                            # Ensure matrix_user has a value and use safe get()
-                            matrix_user_id = st.session_state.get('matrix_user_selected')
-                            if matrix_user_id is None:
-                                # Log the issue but don't raise an exception
-                                logging.warning("matrix_user_selected is None during recommendation")
-                                matrix_user_id = ""  # Empty string as fallback
+        # Room recommendations based on interests - check that matrix_user_selected exists and is not None
+        matrix_user = st.session_state.get('matrix_user_selected')
+        
+        if matrix_user and interests:
+            st.subheader("Recommended Rooms")
+            
+            # Get room recommendations
+            if "recommended_rooms" not in st.session_state:
+                st.session_state.recommended_rooms = []
+            if not st.session_state.recommended_rooms:
+                with st.spinner("Getting room recommendations based on interests..."):
+                    try:
+                        # Use a timeout to prevent hanging if the recommendation service is slow
+                        import threading
+                        import queue
+                        import time
+                        from concurrent.futures import ThreadPoolExecutor
+                        
+                        result_queue = queue.Queue()
+                        
+                        def get_recommendations_with_timeout():
+                            try:
+                                # Ensure the recommendation function is properly imported
+                                from app.utils.recommendation import get_room_recommendations_sync
                                 
-                            # Get room recommendations with defensive checks
-                            logging.info(f"Starting room recommendation request for user: {matrix_user_id}, interests: {interests}")
-                            
-                            # Use a separate thread with timeout to avoid getting stuck
-                            with ThreadPoolExecutor(max_workers=1) as executor:
-                                future = executor.submit(get_room_recommendations_sync, matrix_user_id, interests or "")
-                                try:
-                                    # Wait for result with timeout
-                                    rooms = future.result(timeout=8)  # 8 second timeout
-                                    result_queue.put(("success", rooms))
-                                    logging.info(f"Successfully got room recommendations: {len(rooms) if rooms else 0} rooms")
-                                except TimeoutError:
-                                    logging.error("Room recommendation timed out in ThreadPoolExecutor")
-                                    result_queue.put(("error", "Recommendation request timed out"))
-                                    # Force cancel the future if possible
-                                    future.cancel()
-                        except Exception as e:
-                            # Log the full exception details
-                            logging.error(f"Error in get_recommendations_with_timeout: {str(e)}")
-                            logging.error(traceback.format_exc())
-                            result_queue.put(("error", str(e)))
-                    
-                    # Start the recommendation thread
-                    rec_thread = threading.Thread(target=get_recommendations_with_timeout)
-                    rec_thread.daemon = True
-                    rec_thread.start()
-                    
-                    # Wait for result with a firm timeout
-                    start_time = time.time()
+                                # Ensure matrix_user has a value and use safe get()
+                                matrix_user_id = st.session_state.get('matrix_user_selected')
+                                if matrix_user_id is None:
+                                    # Log the issue but don't raise an exception
+                                    logging.warning("matrix_user_selected is None during recommendation")
+                                    matrix_user_id = ""  # Empty string as fallback
+                                    
+                                # Get room recommendations with defensive checks
+                                logging.info(f"Starting room recommendation request for user: {matrix_user_id}, interests: {interests}")
+                                
+                                # Use a separate thread with timeout to avoid getting stuck
+                                with ThreadPoolExecutor(max_workers=1) as executor:
+                                    future = executor.submit(get_room_recommendations_sync, matrix_user_id, interests or "")
+                                    try:
+                                        # Wait for result with timeout
+                                        rooms = future.result(timeout=8)  # 8 second timeout
+                                        result_queue.put(("success", rooms))
+                                        logging.info(f"Successfully got room recommendations: {len(rooms) if rooms else 0} rooms")
+                                    except TimeoutError:
+                                        logging.error("Room recommendation timed out in ThreadPoolExecutor")
+                                        result_queue.put(("error", "Recommendation request timed out"))
+                                        # Force cancel the future if possible
+                                        future.cancel()
+                            except Exception as e:
+                                # Log the full exception details
+                                logging.error(f"Error in get_recommendations_with_timeout: {str(e)}")
+                                logging.error(traceback.format_exc())
+                                result_queue.put(("error", str(e)))
+                        
+                        # Start the recommendation thread
+                        rec_thread = threading.Thread(target=get_recommendations_with_timeout)
+                        rec_thread.daemon = True
+                        rec_thread.start()
+                        
+                        # Wait for result with a firm timeout
+                        start_time = time.time()
+                    except Exception as e:
+                        # Handle any exceptions in the setup process
+                        logging.error(f"Error setting up recommendation thread: {str(e)}")
+                        logging.error(traceback.format_exc())
+                        st.error(f"Failed to start recommendation search: {str(e)}")
+                        return
                     max_wait = 5  # Reduced from 8 to 5 seconds maximum wait
                     
                     while time.time() - start_time < max_wait:
@@ -1583,12 +1599,6 @@ If you have any questions, feel free to reach out to the community admins.
                         st.session_state.recommended_rooms = []
                         st.warning("⏱️ Room search timed out after 5 seconds. This may be due to server load. You can still create the user without recommendations.")
                         st.rerun()
-                        
-                except Exception as e:
-                    st.error(f"Error getting room recommendations: {str(e)}")
-                    logging.error(f"Error getting room recommendations: {str(e)}")
-                    logging.error(traceback.format_exc())
-                    st.session_state.recommended_rooms = []
         
         # Display recommended rooms with checkboxes
         if st.session_state.recommended_rooms:
@@ -1793,18 +1803,70 @@ If you have any questions, feel free to reach out to the community admins.
         search_rooms_button = st.button("Search Rooms", key="search_rooms_button")
     
     # Handle room search
-    if search_rooms_button and room_search_query:
+    if st.session_state.get("search_rooms_button", False) and room_search_query:
         with st.spinner("Searching for rooms..."):
             try:
-                from app.utils.recommendation import get_room_recommendations_sync
-                
                 # Combine search query with category if selected
                 search_terms = room_search_query
                 if search_category != "All Categories":
                     search_terms = f"{search_terms}, {search_category}"
                 
-                # Use the search query as the interests parameter
-                search_results = get_room_recommendations_sync("", search_terms)
+                # First try to get rooms from database
+                search_results = []
+                db = next(get_db())
+                try:
+                    from app.db.models import MatrixRoom
+                    # Look for matches in database first
+                    search_keywords = [kw.strip().lower() for kw in search_terms.split(',') if kw.strip()]
+                    
+                    db_rooms = []
+                    if search_keywords:
+                        for keyword in search_keywords:
+                            if len(keyword) > 2:  # Only use keywords with reasonable length
+                                # Search in room name, topic, or description
+                                matching_rooms = db.query(MatrixRoom).filter(
+                                    db.or_(
+                                        MatrixRoom.name.ilike(f"%{keyword}%"),
+                                        MatrixRoom.topic.ilike(f"%{keyword}%")
+                                    )
+                                ).all()
+                                
+                                # Add to results
+                                for room in matching_rooms:
+                                    if room not in db_rooms:  # Avoid duplicates
+                                        db_rooms.append(room)
+                    
+                    # Format database rooms like recommendation results
+                    if db_rooms:
+                        search_results = [
+                            {
+                                'room_id': room.room_id,
+                                'name': room.name or room.room_id,
+                                'topic': room.topic or "",
+                                'description': room.topic or "",
+                                'from_database': True
+                            }
+                            for room in db_rooms
+                        ]
+                        logging.info(f"Loaded {len(search_results)} rooms from database for search")
+                except Exception as db_err:
+                    logging.error(f"Error searching rooms in database: {str(db_err)}")
+                finally:
+                    db.close()
+                
+                # If we didn't find enough rooms in the database, use the recommendation service
+                if len(search_results) < 3:
+                    # Use the existing recommendation service as backup
+                    from app.utils.recommendation import get_room_recommendations_sync
+                    additional_rooms = get_room_recommendations_sync("", search_terms)
+                    
+                    # Filter out any rooms already in the list
+                    existing_ids = {room['room_id'] for room in search_results}
+                    new_rooms = [room for room in additional_rooms if room['room_id'] not in existing_ids]
+                    
+                    # Add new rooms to the list
+                    search_results.extend(new_rooms)
+                    logging.info(f"Added {len(new_rooms)} additional rooms from recommendation service for search")
                 
                 if search_results:
                     st.success(f"Found {len(search_results)} rooms matching your search")
@@ -1918,12 +1980,16 @@ If you have any questions, feel free to reach out to the community admins.
     col1, col2, col3 = st.columns([1, 1, 1])
     
     with col2:
-        st.markdown("<div class='create-btn'>", unsafe_allow_html=True)
-        create_user_button = st.button("Create User", key="create_user_button")
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("<div class='form-section-container'>", unsafe_allow_html=True)
+        st.subheader("Create User")
+        
+        if st.button("Create User", key="create_user_button", type="primary"):
+            # Set flag to indicate user creation is in progress
+            # This will prevent showing recommendations during creation
+            st.session_state.user_creation_in_progress = True
     
     # Handle Create User button logic
-    if create_user_button:
+    if st.session_state.get('create_user_button'):
         # Save currently selected Matrix user info to ensure it persists
         if 'matrix_user_selected' in st.session_state:
             matrix_user_selected = st.session_state.matrix_user_selected
@@ -2405,20 +2471,32 @@ If you have any questions, feel free to reach out to the community admins.
                                         except Exception as e:
                                             logging.warning(f"Could not get display name from cache: {e}")
                                         
-                                        # Define INDOC graduation message template
+                                        # Define INDOC graduation message template (plain text version)
                                         graduation_template = """@USER Good to go. Thanks for verifying. This is how we keep the community safe.
+                                        
 1. Please leave this chat
+
 2. You'll receive a direct message with your IrregularChat Login and a Link to all the chats.
+
 3. Join all the Chats that interest you when you get your login
+
 4. Until then, Learn about the community https://irregularpedia.org/index.php/Main_Page
 
+See you out there!"""
+
+                                        # Define HTML version of the template with proper formatting
+                                        graduation_template_html = """@USER Good to go. Thanks for verifying. This is how we keep the community safe.<br><br>
+1. Please leave this chat<br><br>
+2. You'll receive a direct message with your IrregularChat Login and a Link to all the chats.<br><br>
+3. Join all the Chats that interest you when you get your login<br><br>
+4. Until then, Learn about the community <a href="https://irregularpedia.org/index.php/Main_Page">https://irregularpedia.org/index.php/Main_Page</a><br><br>
 See you out there!"""
                                         
                                         # Create HTML mention link for the user
                                         mention_html = f'<a href="https://matrix.to/#/{matrix_user_id}" data-mention-type="user">@{display_name}</a>'
                                         
-                                        # Create personalized message with HTML mention
-                                        personalized_message = graduation_template.replace("@USER", mention_html)
+                                        # Create personalized messages with proper HTML formatting
+                                        personalized_message = graduation_template_html.replace("@USER", mention_html)
                                         plain_text_body = graduation_template.replace("@USER", f"@{display_name}")
                                         
                                         # Create message content with HTML formatting
@@ -2516,6 +2594,76 @@ See you out there!"""
                     st.session_state['user_created_successfully'] = True
                     # Don't clear form fields yet to allow message to be seen
                     st.session_state['should_clear_form'] = False
+                    # User creation is no longer in progress
+                    st.session_state['user_creation_in_progress'] = False
+                    
+                    # Now that the user is created, load room recommendations from the database first
+                    try:
+                        # If we have interests, try to load recommendations after user creation
+                        if interests:
+                            st.session_state.recommended_rooms = []
+                            with st.spinner("Loading room recommendations..."):
+                                # First try to get rooms from database
+                                db = next(get_db())
+                                try:
+                                    from app.db.models import MatrixRoom
+                                    # Query rooms from database that match interests keywords
+                                    interest_keywords = [kw.strip().lower() for kw in interests.split(',') if kw.strip()]
+                                    
+                                    db_rooms = []
+                                    if interest_keywords:
+                                        for keyword in interest_keywords:
+                                            if len(keyword) > 3:  # Only use keywords with reasonable length
+                                                # Search in room name, topic, or description
+                                                matching_rooms = db.query(MatrixRoom).filter(
+                                                    db.or_(
+                                                        MatrixRoom.name.ilike(f"%{keyword}%"),
+                                                        MatrixRoom.topic.ilike(f"%{keyword}%")
+                                                    )
+                                                ).all()
+                                                
+                                                # Convert to dict format for recommendations
+                                                for room in matching_rooms:
+                                                    if room not in db_rooms:  # Avoid duplicates
+                                                        db_rooms.append(room)
+                                    
+                                    # Format database rooms like recommendation results
+                                    if db_rooms:
+                                        st.session_state.recommended_rooms = [
+                                            {
+                                                'room_id': room.room_id,
+                                                'name': room.name or room.room_id,
+                                                'topic': room.topic or "",
+                                                'description': room.topic or "",
+                                                'from_database': True
+                                            }
+                                            for room in db_rooms
+                                        ]
+                                        logging.info(f"Loaded {len(st.session_state.recommended_rooms)} rooms from database")
+                                except Exception as db_err:
+                                    logging.error(f"Error loading rooms from database: {str(db_err)}")
+                                finally:
+                                    db.close()
+                                    
+                                # If we didn't find enough rooms in the database, use the recommendation service
+                                if len(st.session_state.recommended_rooms) < 3:
+                                    # Use the existing async recommendation logic for backup
+                                    from app.utils.recommendation import get_room_recommendations_sync
+                                    additional_rooms = get_room_recommendations_sync(matrix_user, interests)
+                                    
+                                    # Filter out any rooms already in the list
+                                    existing_ids = {room['room_id'] for room in st.session_state.recommended_rooms}
+                                    new_rooms = [room for room in additional_rooms if room['room_id'] not in existing_ids]
+                                    
+                                    # Add new rooms to the list
+                                    st.session_state.recommended_rooms.extend(new_rooms)
+                                    logging.info(f"Added {len(new_rooms)} additional rooms from recommendation service")
+                            
+                            # Force a rerun to display the recommendations
+                            st.experimental_rerun()
+                    except Exception as rec_err:
+                        logging.error(f"Error loading recommendations after user creation: {str(rec_err)}")
+                        # Non-blocking error, we can continue without recommendations
                 else:
                     st.error(f"Failed to create user: {error_message}")
     

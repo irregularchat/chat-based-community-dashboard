@@ -730,7 +730,8 @@ async def render_create_user_form():
             'first_name': st.session_state.get('first_name_input', ''),
             'last_name': st.session_state.get('last_name_input', ''),
             'email': st.session_state.get('email_input', ''),
-            'selected_matrix_user': st.session_state.get('matrix_user_selected')
+            'selected_matrix_user': st.session_state.get('matrix_user_selected'),
+            'manual_matrix_username': st.session_state.get('manual_matrix_username', '')
         }
         
     def restore_form_state(state):
@@ -740,27 +741,24 @@ async def render_create_user_form():
             st.session_state['last_name_input'] = state['last_name']
             st.session_state['email_input'] = state['email']
             st.session_state['matrix_user_selected'] = state['selected_matrix_user']
+            # Handle manual Matrix username field (might not exist in older saved states)
+            if 'manual_matrix_username' in state:
+                st.session_state['manual_matrix_username'] = state['manual_matrix_username']
     
     # Manual Sync Button for Matrix Cache
     if st.button("🔄 Sync Matrix User Cache", key="manual_sync_matrix_cache_in_form"):
         form_state = save_form_state()
-        with st.spinner("Syncing Matrix users from INDOC room..."):
+        with st.spinner("Syncing all Matrix rooms..."):
             try:
                 from app.services.matrix_cache import matrix_cache
                 db_sync = next(get_db())
                 try:
-                    # Only sync the INDOC room instead of full sync
-                    welcome_room_id = Config.MATRIX_WELCOME_ROOM_ID
-                    if not welcome_room_id:
-                        st.error("MATRIX_WELCOME_ROOM_ID not configured")
-                        return
-                        
-                    # Sync only the welcome/INDOC room
-                    sync_result = await matrix_cache.sync_room(welcome_room_id, db_sync)
+                    # Perform a full sync of all rooms
+                    sync_result = await matrix_cache.full_sync(db_sync, force=True)
                     
                     if sync_result.get("status") == "completed":
-                        # Reload only users from the welcome room
-                        cached_users_after_sync = matrix_cache.get_users_in_room(db_sync, welcome_room_id)
+                        # Reload users from the welcome room
+                        cached_users_after_sync = matrix_cache.get_users_in_room(db_sync, Config.MATRIX_WELCOME_ROOM_ID)
                         st.session_state.matrix_users = [
                             {'user_id': u['user_id'], 'display_name': u['display_name']}
                             for u in cached_users_after_sync
@@ -768,15 +766,16 @@ async def render_create_user_form():
                         
                         # Restore form state before rerun
                         restore_form_state(form_state)
-                        st.success(f"✅ Matrix user sync completed! Found {len(st.session_state.matrix_users)} users in INDOC room.")
-                        st.rerun()
+                        st.toast("Successfully synced all Matrix rooms and updated user list", icon="✅")
                     else:
-                        st.error(f"Matrix sync failed: {sync_result.get('error', 'Unknown error')}")
+                        st.error(f"Failed to sync Matrix users: {sync_result.get('error', 'Unknown error')}")
+                        restore_form_state(form_state)
+                        
                 except Exception as e:
                     st.error(f"Error during Matrix sync: {str(e)}")
                     logging.error(f"Error during Matrix sync: {str(e)}", exc_info=True)
-                finally:
-                    db_sync.close()
+                    restore_form_state(form_state)
+                    return
             except Exception as e_sync:
                 st.error(f"Error during Matrix cache sync: {str(e_sync)}")
                 logging.error(f"Error during Matrix cache sync: {str(e_sync)}", exc_info=True)
@@ -803,17 +802,27 @@ async def render_create_user_form():
                                 loop = asyncio.new_event_loop()
                                 asyncio.set_event_loop(loop)
                                 try:
-                                    loop.run_until_complete(matrix_cache.sync_room(welcome_room_id, db))
+                                    # Perform a full sync in the background
+                                    loop.run_until_complete(matrix_cache.full_sync(db, force=True))
+                                    # Reload users from the welcome room after sync
+                                    room_members = matrix_cache.get_users_in_room(db, welcome_room_id)
+                                    st.session_state.matrix_users = [
+                                        {'user_id': user['user_id'], 'display_name': user.get('display_name', user['user_id'].split(':')[0][1:])}
+                                        for user in room_members
+                                    ]
+                                    st.rerun()
+                                except Exception as e:
+                                    logging.error(f"Background sync error: {e}")
                                 finally:
                                     loop.close()
                             except Exception as e:
-                                logging.error(f"Background sync error: {e}")
+                                logging.error(f"Background sync thread error: {str(e)}", exc_info=True)
                         
-                        # Start sync in background
-                        import threading
-                        threading.Thread(target=bg_sync, daemon=True).start()
+                        # Start the background sync thread
+                        thread = threading.Thread(target=bg_sync, daemon=True)
+                        thread.start()
                     
-                    # Get users only from the welcome/INDOC room
+                    # Get users from the welcome room
                     room_members = matrix_cache.get_users_in_room(db, welcome_room_id)
                     
                     # Convert to the expected format
@@ -827,18 +836,17 @@ async def render_create_user_form():
                     
                     logging.info(f"Loaded {len(st.session_state.matrix_users)} users from INDOC room")
                     
-                    if not st.session_state.matrix_users:
-                        st.warning("No active Matrix users found in INDOC room. Please check back later or try syncing.")
+                except Exception as e:
+                    logging.error(f"Error loading Matrix users: {str(e)}", exc_info=True)
+                    st.session_state.matrix_users = []
                 finally:
                     db.close()
             except Exception as e:
-                logging.error(f"Error loading Matrix users: {str(e)}")
-                logging.error(traceback.format_exc())
-                st.error(f"Error loading Matrix users: {str(e)}")
+                logging.error(f"Error initializing Matrix users: {str(e)}", exc_info=True)
                 st.session_state.matrix_users = []
     
     # Display Matrix user selection
-    if st.session_state.matrix_users:
+    if 'matrix_users' in st.session_state and st.session_state.matrix_users:
         # Ensure matrix_user_selected is initialized
         if 'matrix_user_selected' not in st.session_state:
             st.session_state.matrix_user_selected = None
@@ -884,7 +892,33 @@ async def render_create_user_form():
                 st.session_state.recommended_rooms = []
                 # Reset message sending status to allow auto-sending to the newly selected user
                 if 'welcome_message_sent' in st.session_state:
-                    del st.session_state['welcome_message_sent']
+                    st.session_state.welcome_message_sent = False
+                    
+        # Add manual Matrix username input field
+        manual_username = st.text_input(
+            "Or enter Matrix username manually (e.g., @username:domain.com)",
+            key="manual_matrix_username",
+            value=st.session_state.get('manual_matrix_username', '')
+        )
+        
+        # Handle manual username entry
+        if manual_username:
+            # Override dropdown selection with manual input
+            logging.info(f"Using manually entered Matrix username: {manual_username}")
+            
+            # Extract display name from the user ID if possible
+            display_name = manual_username.split(':')[0][1:] if manual_username.startswith('@') else manual_username
+            
+            # Store in session state
+            st.session_state.matrix_user_selected = manual_username
+            st.session_state.matrix_user_display_name = display_name
+            
+            # Reset message sending status for new manual user
+            if previous_selection != manual_username:
+                logging.info(f"Matrix user changed to manual entry: {manual_username}. Resetting message status.")
+                st.session_state.recommended_rooms = []
+                if 'welcome_message_sent' in st.session_state:
+                    st.session_state.welcome_message_sent = False
                 if 'welcome_message_status' in st.session_state:
                     del st.session_state['welcome_message_status']
                 

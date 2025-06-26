@@ -723,76 +723,120 @@ async def render_create_user_form():
     # Add a section to connect with Matrix user from INDOC
     st.subheader("Connect with Matrix User")
     
+    # Store current form state before sync to prevent data loss
+    def save_form_state():
+        return {
+            'username': st.session_state.get('username_input', ''),
+            'first_name': st.session_state.get('first_name_input', ''),
+            'last_name': st.session_state.get('last_name_input', ''),
+            'email': st.session_state.get('email_input', ''),
+            'selected_matrix_user': st.session_state.get('matrix_user_selected')
+        }
+        
+    def restore_form_state(state):
+        if state:
+            st.session_state['username_input'] = state['username']
+            st.session_state['first_name_input'] = state['first_name']
+            st.session_state['last_name_input'] = state['last_name']
+            st.session_state['email_input'] = state['email']
+            st.session_state['matrix_user_selected'] = state['selected_matrix_user']
+    
     # Manual Sync Button for Matrix Cache
     if st.button("🔄 Sync Matrix User Cache", key="manual_sync_matrix_cache_in_form"):
-        with st.spinner("Running full Matrix cache sync..."):
+        form_state = save_form_state()
+        with st.spinner("Syncing Matrix users from INDOC room..."):
             try:
                 from app.services.matrix_cache import matrix_cache
-                db_sync = next(get_db()) # Use a different variable name for this db session
+                db_sync = next(get_db())
                 try:
-                    sync_result = await matrix_cache.full_sync(db_sync, force=True)
-                    if sync_result["status"] == "completed":
-                        st.success(f"✅ Matrix cache sync completed! Users: {sync_result.get('users_synced',0)}, Rooms: {sync_result.get('rooms_synced',0)}")
-                        # Reload matrix_users for the dropdown
-                        cached_users_after_sync = matrix_cache.get_cached_users(db_sync)
+                    # Only sync the INDOC room instead of full sync
+                    welcome_room_id = Config.MATRIX_WELCOME_ROOM_ID
+                    if not welcome_room_id:
+                        st.error("MATRIX_WELCOME_ROOM_ID not configured")
+                        return
+                        
+                    # Sync only the welcome/INDOC room
+                    sync_result = await matrix_cache.sync_room(welcome_room_id, db_sync)
+                    
+                    if sync_result.get("status") == "completed":
+                        # Reload only users from the welcome room
+                        cached_users_after_sync = matrix_cache.get_room_members(welcome_room_id, db_sync)
                         st.session_state.matrix_users = [
                             {'user_id': u['user_id'], 'display_name': u['display_name']}
                             for u in cached_users_after_sync
+                            if u.get('membership') == 'join'  # Only include joined members
                         ]
-                        st.rerun() # Rerun to refresh the user list in the selectbox
+                        
+                        # Restore form state before rerun
+                        restore_form_state(form_state)
+                        st.success(f"✅ Matrix user sync completed! Found {len(st.session_state.matrix_users)} users in INDOC room.")
+                        st.rerun()
                     else:
-                        st.error(f"Matrix cache sync failed: {sync_result.get('error', 'Unknown error')}")
+                        st.error(f"Matrix sync failed: {sync_result.get('error', 'Unknown error')}")
+                except Exception as e:
+                    st.error(f"Error during Matrix sync: {str(e)}")
+                    logging.error(f"Error during Matrix sync: {str(e)}", exc_info=True)
                 finally:
                     db_sync.close()
             except Exception as e_sync:
-                st.error(f"Error during manual Matrix cache sync: {str(e_sync)}")
-                logging.error(f"Error during manual Matrix cache sync: {str(e_sync)}", exc_info=True)
+                st.error(f"Error during Matrix cache sync: {str(e_sync)}")
+                logging.error(f"Error during Matrix cache sync: {str(e_sync)}", exc_info=True)
     
     # Load Matrix users from INDOC room if not already loaded
-    if not st.session_state.matrix_users:
+    if 'matrix_users' not in st.session_state or not st.session_state.matrix_users:
         with st.spinner("Loading Matrix users from INDOC room..."):
             try:
-                # Use cached Matrix users instead of slow API calls
                 from app.services.matrix_cache import matrix_cache
                 
                 db = next(get_db())
                 try:
+                    welcome_room_id = Config.MATRIX_WELCOME_ROOM_ID
+                    if not welcome_room_id:
+                        st.warning("MATRIX_WELCOME_ROOM_ID not configured")
+                        st.session_state.matrix_users = []
+                        return
+                    
                     # Check if cache is fresh, if not trigger background sync
                     if not matrix_cache.is_cache_fresh(db, max_age_minutes=30):
                         # Trigger background sync but don't wait for it
-                        import threading
                         def bg_sync():
                             try:
                                 loop = asyncio.new_event_loop()
                                 asyncio.set_event_loop(loop)
                                 try:
-                                    loop.run_until_complete(matrix_cache.background_sync(max_age_minutes=30))
+                                    loop.run_until_complete(matrix_cache.sync_room(welcome_room_id, db))
                                 finally:
                                     loop.close()
                             except Exception as e:
                                 logging.error(f"Background sync error: {e}")
+                        
+                        # Start sync in background
+                        import threading
                         threading.Thread(target=bg_sync, daemon=True).start()
                     
-                    # Get cached users (fast)
-                    cached_users = matrix_cache.get_cached_users(db)
+                    # Get users only from the welcome/INDOC room
+                    room_members = matrix_cache.get_room_members(welcome_room_id, db)
                     
                     # Convert to the expected format
                     st.session_state.matrix_users = [
                         {
                             'user_id': user['user_id'],
-                            'display_name': user['display_name']
+                            'display_name': user.get('display_name', user['user_id'].split(':')[0][1:])
                         }
-                        for user in cached_users
+                        for user in room_members
+                        if user.get('membership') == 'join'  # Only include joined members
                     ]
+                    
+                    logging.info(f"Loaded {len(st.session_state.matrix_users)} users from INDOC room")
+                    
+                    if not st.session_state.matrix_users:
+                        st.warning("No active Matrix users found in INDOC room. Please check back later or try syncing.")
                 finally:
                     db.close()
-                
-                if not st.session_state.matrix_users:
-                    st.warning("No Matrix users found in INDOC room. Please try again later.")
             except Exception as e:
                 logging.error(f"Error loading Matrix users: {str(e)}")
-                st.error(f"Error loading Matrix users: {str(e)}")
                 logging.error(traceback.format_exc())
+                st.error(f"Error loading Matrix users: {str(e)}")
                 st.session_state.matrix_users = []
     
     # Display Matrix user selection

@@ -545,6 +545,21 @@ def parse_input(input_text):
         # Replace semicolons between fields with newlines to improve parsing
         input_text = re.sub(r';\s*(?=[A-Za-z]+\s*:)', '\n', input_text)
         
+        # Pre-process to extract LinkedIn URLs and prevent them from being included in interests
+        # First look for LinkedIn URLs anywhere in the text
+        extracted_linkedin_url = None
+        linkedin_pattern = r'https?://(?:www\.)?linkedin\.com/in/[\w\-]+(?:[/?][^\s;,\n]*)?'
+        linkedin_urls = re.findall(linkedin_pattern, input_text)
+        
+        # If LinkedIn URL found, remove it from input text to prevent it from being included in interests
+        if linkedin_urls:
+            # Clean the LinkedIn URL (remove tracking parameters)
+            extracted_linkedin_url = linkedin_urls[0].split('?')[0]  # Remove query parameters
+            extracted_linkedin_url = re.sub(r'/[?].*$', '', extracted_linkedin_url)  # Remove any remaining query params
+            
+            # Remove LinkedIn URL from input text (replace with empty string)
+            input_text = re.sub(linkedin_pattern, '', input_text)
+        
         # Determine input format
         format_type, is_confident = determine_input_format(input_text)
         logging.info(f"Determined format: {format_type}, confidence: {is_confident}")
@@ -564,6 +579,11 @@ def parse_input(input_text):
             if not result.get("first_name") and not result.get("last_name"):
                 logging.warning("Parsing successful but no name found")
                 # Still return the partial result as it might have other useful information
+            
+            # Add extracted LinkedIn URL to the result if present
+            if extracted_linkedin_url:
+                result["linkedin_username"] = extracted_linkedin_url
+                logging.info(f"Added extracted LinkedIn URL to result: {extracted_linkedin_url}")
             
             return result
             

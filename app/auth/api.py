@@ -500,11 +500,13 @@ def create_user(
                 invited_by = None
                 organization = None
                 interests = None
+                linkedin_username = None
                 if attributes and isinstance(attributes, dict):
                     intro = attributes.get('intro')
                     invited_by = attributes.get('invited_by')
                     organization = attributes.get('organization')
                     interests = attributes.get('interests')
+                    linkedin_username = attributes.get('linkedin_username')
                 
                 # Format intro text to include organization and interests if available
                 formatted_intro = ""
@@ -516,6 +518,16 @@ def create_user(
                 
                 if interests:
                     formatted_intro += f"**Interests:** {interests}\n"
+                
+                # Include LinkedIn URL if available
+                if linkedin_username:
+                    # Check if it's a full URL or just a username
+                    if linkedin_username.startswith('http'):
+                        formatted_intro += f"\n**LinkedIn:** [{linkedin_username}]({linkedin_username})\n"
+                    else:
+                        # If it's just a username, construct a URL
+                        linkedin_url = f"https://linkedin.com/in/{linkedin_username}"
+                        formatted_intro += f"\n**LinkedIn:** [{linkedin_username}]({linkedin_url})\n"
                 
                 # Use the formatted intro or the original intro if no formatting was done
                 final_intro = formatted_intro.strip() if formatted_intro.strip() else intro

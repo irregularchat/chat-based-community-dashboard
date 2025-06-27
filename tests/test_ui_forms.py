@@ -1,10 +1,29 @@
 import pytest
 from unittest.mock import patch, Mock, AsyncMock, MagicMock
 import streamlit as st
+import pytest
 import pandas as pd
 import asyncio
-from app.ui.forms import display_user_list, handle_action, format_date, parse_and_rerun, clear_parse_data, render_create_user_form
+from unittest.mock import patch, MagicMock, Mock, AsyncMock
+from app.ui.forms import format_date, display_user_list, handle_action, render_create_user_form, \
+    clear_parse_data, parse_and_rerun, create_user, update_username_from_inputs, reset_create_user_form_fields
 import logging
+
+class SessionStateMock(dict):
+    """
+    A mock for Streamlit's session_state that supports both dictionary and attribute access.
+    This helps tests work with code that uses either st.session_state['key'] or st.session_state.key.
+    """
+    def __getattr__(self, name):
+        if name in self:
+            return self[name]
+        return None
+        
+    def __setattr__(self, name, value):
+        self[name] = value
+        
+    def get(self, key, default=None):
+        return self[key] if key in self else default
 
 @pytest.mark.asyncio
 async def test_display_user_list():
@@ -36,12 +55,13 @@ async def test_display_user_list():
         ]
         mock_search_users.return_value = mock_users
         
-        # Set up mock Streamlit session state
-        st.session_state = {
+        # Set up mock Streamlit session state with SessionStateMock for attribute access
+        st.session_state = SessionStateMock({
             'filter_term': '',
             'status_filter': 'All',
-            'selection_state': 'viewing'
-        }
+            'selection_state': 'viewing',
+            'users_per_page': 10  # Add this since it's checked in display_user_list
+        })
         
         # Set up mock returns for Streamlit components
         mock_text_input.return_value = ''
@@ -177,10 +197,10 @@ def test_parse_and_rerun_session_state_handling():
         }
     }
     
-    # Mock Streamlit's session state
-    st.session_state = {
+    # Mock Streamlit's session state with SessionStateMock for attribute access
+    st.session_state = SessionStateMock({
         "parse_data_input_outside": "John Doe\nACME Corp\njohn@example.com\nInvited by Jane Smith\nPython, Testing",
-    }
+    })
     
     # Setup mocks
     with patch('app.ui.forms.parse_input', return_value=mock_parsed_data) as mock_parse_input, \
@@ -228,8 +248,8 @@ def test_clear_parse_data_session_state_handling():
     with patch('app.utils.config.Config') as mock_config:
         mock_config.MAIN_GROUP_ID = "default-group-id"
         
-        # Setup initial session state with parsed data
-        st.session_state = {
+        # Setup initial session state with SessionStateMock for attribute access compatibility
+        st.session_state = SessionStateMock({
             "_parsed_first_name": "John",
             "_parsed_last_name": "Doe",
             "_parsed_email": "john@example.com",
@@ -239,7 +259,7 @@ def test_clear_parse_data_session_state_handling():
             "parse_data_input_outside": "Some parsed data",
             "selected_groups": ["some-other-group"],
             "group_selection": ["some-other-group"]
-        }
+        })
         
         # Setup mocks
         with patch('streamlit.rerun') as mock_rerun:
@@ -313,16 +333,19 @@ def test_render_create_user_form_handles_parsed_data():
     """Test that render_create_user_form correctly applies parsed data from temporary session state variables."""
     from app.ui.forms import render_create_user_form
     
-    # Setup session state with parsed data
-    st.session_state = {
+    # Setup session state with SessionStateMock for attribute access compatibility
+    st.session_state = SessionStateMock({
         'parsing_successful': True,
         '_parsed_first_name': 'John',
         '_parsed_last_name': 'Doe',
         '_parsed_email': 'john@example.com',
         '_parsed_invited_by': 'Jane Smith',
         '_parsed_intro': 'ACME Corp\n\nInterests: Python, Testing',
-        'username_was_auto_generated': False
-    }
+        'username_was_auto_generated': False,
+        # Also add the attributes that we access in render_create_user_form
+        'matrix_user_selected': None,
+        'recommended_rooms': []
+    })
     
     # Mocks for Streamlit widgets and functions
     with patch('streamlit.text_input') as mock_text_input, \
@@ -474,8 +497,12 @@ def test_authentik_groups_caching():
         mock_response.json.return_value = {'results': [{'id': '1', 'name': 'Test Group'}]}
         mock_get.return_value = mock_response
         
-        # First call should fetch groups
-        st.session_state = {}
+        # First call should fetch groups with SessionStateMock for attribute access
+        st.session_state = SessionStateMock({
+            # Add required session state fields for render_create_user_form
+            'matrix_user_selected': None,
+            'recommended_rooms': []
+        })
         asyncio.run(render_create_user_form())
         
         # Verify API was called
@@ -696,8 +723,8 @@ def test_matrix_user_selection_dropdown_initialization():
 
 def test_matrix_user_defensive_get_method_during_account_creation():
     """Test that the Matrix user ID is correctly included in attributes during account creation."""
-    # Mock Streamlit's session_state and key functions
-    st.session_state = {
+    # Mock Streamlit's session_state using our SessionStateMock to support both dict and attribute access
+    st.session_state = SessionStateMock({
         'username_input': 'testuser',
         'first_name_input': 'Test',
         'last_name_input': 'User',
@@ -705,7 +732,7 @@ def test_matrix_user_defensive_get_method_during_account_creation():
         'create_user_button': True,
         'add_to_recommended_rooms': True,
         'matrix_user_selected': '@user1:example.com'
-    }
+    })
     
     # Set up mocks for required functions
     with patch('app.ui.forms.create_user') as mock_create_user:
@@ -723,8 +750,12 @@ def test_matrix_user_defensive_get_method_during_account_creation():
         
         # Create a function that simulates the account creation logic but only for matrix_user_selected
         def create_user_with_matrix():
-            # Extract Matrix username
-            matrix_user_id = st.session_state.get('matrix_user_selected')
+            # Extract Matrix username using direct attribute access since our SessionStateMock supports it
+            # Use defensive access in case the attribute doesn't exist
+            try:
+                matrix_user_id = st.session_state.matrix_user_selected
+            except AttributeError:
+                matrix_user_id = None
             
             # Build attributes dictionary
             attributes = {}
@@ -754,7 +785,7 @@ def test_matrix_user_defensive_get_method_during_account_creation():
         assert capture_attributes.attributes.get('matrix_user_id') == '@user1:example.com'
         
         # Test with matrix_user_selected not set
-        st.session_state = {
+        st.session_state = SessionStateMock({
             'username_input': 'testuser',
             'first_name_input': 'Test',
             'last_name_input': 'User',
@@ -762,7 +793,7 @@ def test_matrix_user_defensive_get_method_during_account_creation():
             'create_user_button': True,
             'add_to_recommended_rooms': True
             # matrix_user_selected is not in session_state
-        }
+        })
         
         # Reset mocks
         mock_create_user.reset_mock()

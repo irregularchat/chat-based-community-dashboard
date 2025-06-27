@@ -42,8 +42,16 @@ def mock_user_data():
 async def test_handle_registration_success(mock_db_session, mock_user_data):
     with patch('app.auth.api.create_user') as mock_create_user, \
          patch('app.auth.api.send_verification_email') as mock_send_email:
-        # Mock create_user to return success tuple
-        mock_create_user.return_value = (True, "testuser", "temp_password", None)
+        # Mock create_user to return dictionary instead of tuple
+        mock_create_user.return_value = {
+            'success': True,
+            'username': 'testuser',
+            'temp_password': 'temp_password',
+            'user_id': '123',
+            'error': None,
+            'password_reset': False,
+            'message': 'Welcome testuser!'
+        }
         mock_send_email.return_value = True
         
         result = await handle_registration(mock_user_data, mock_db_session)
@@ -53,8 +61,8 @@ async def test_handle_registration_success(mock_db_session, mock_user_data):
         assert result["temp_password"] == "temp_password"
         mock_create_user.assert_called_once_with(
             username="testuser",
-            full_name="",
             email="test@example.com",
+            name="",  # Changed from full_name to name to match the actual implementation
             invited_by=None,
             intro="TestOrg"
         )
@@ -88,21 +96,45 @@ async def test_reset_password_success(mock_db_session):
 async def test_create_user():
     """Test user creation"""
     with patch('app.auth.api.requests.post') as mock_post, \
-         patch('app.auth.api.Config') as mock_config:
+         patch('app.auth.api.Config') as mock_config, \
+         patch('app.auth.api.threading.Thread') as mock_thread, \
+         patch('app.auth.api.send_welcome_to_user') as mock_send_welcome, \
+         patch('app.auth.api.os') as mock_os, \
+         patch('app.utils.helpers.community_intro_email') as mock_email:
+        # Configure mocks
         mock_post.return_value.status_code = 201
         mock_post.return_value.json.return_value = {"pk": "123"}
         mock_config.MATRIX_ENABLED = False
+        mock_config.AUTHENTIK_API_TOKEN = "test_token"
+        mock_config.AUTHENTIK_API_URL = "https://test.example.com/api/v3"
+        mock_os.getenv.return_value = None  # Mock os.getenv for USER_PATH
+        mock_thread.return_value = Mock()
+        mock_send_welcome.return_value = True
+        
+        # Call the function under test
+        try:
+            result = await create_user(
+                username="testuser",
+                password="testpass",
+                email="test@example.com",
+                name="Test User"
+            )
+            print(f"Test result: {result}")
+        except Exception as e:
+            import traceback
+            print(f"Exception in test_create_user: {e}")
+            traceback.print_exc()
+            raise
 
-        result = await create_user(
-            username="testuser",
-            password="testpass",
-            email="test@example.com",
-            name="Test User"
-        )
-
-        assert result['success'] is True
-        assert result['user_id'] == "123"
-        assert "Welcome testuser" in result['message']
+        # Verify the result
+        assert result['success'] is True, f"Expected success=True, got {result}"
+        assert result['user_id'] == "123", f"Expected user_id=123, got {result.get('user_id')}"
+        assert "Welcome testuser" in result.get('message', ''), f"Expected 'Welcome testuser' in message, got {result.get('message', '')}"
+        
+        # Verify mocks were called correctly
+        mock_post.assert_called_once()
+        called_url = mock_post.call_args[0][0]
+        assert "users" in called_url, f"Expected 'users' in URL, got {called_url}"
 
 @pytest.mark.asyncio
 async def test_create_invite():

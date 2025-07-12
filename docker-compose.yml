@@ -1,26 +1,39 @@
 services:
-  streamlit:
-    build: .
+  app:
+    build: 
+      context: ./modern-stack
+      dockerfile: Dockerfile
     ports:
-      - "${PORT:-8503}:${PORT:-8503}"  # Map container's internal port to host's port (default 8503)
-    volumes:
-      - .:/app
+      - "${PORT:-8504}:3000"  # Map container's internal port 3000 to host's port (default 8504)
     environment:
-      - PYTHONPATH=/app
-      - PYTHONUNBUFFERED=1  # Enable unbuffered output
-      - IN_DOCKER=true      # Indicate we're running in Docker
-      - DB_HOST=db          # Explicitly set database host
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      # When inside Docker network, always use the internal port 5432
-      - POSTGRES_PORT=5432
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - NEXTAUTH_URL=http://localhost:${PORT:-8504}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      # Database seeding (set to true for initial setup)
+      - SEED_DATABASE=true
+      # Authentication provider configuration
+      - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID}
+      - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET}
+      - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER}
+      - AUTHENTIK_REDIRECT_URI=${AUTHENTIK_REDIRECT_URI}
+      # Email configuration
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - SMTP_FROM=${SMTP_FROM}
+      # Matrix configuration
+      - MATRIX_HOMESERVER=${MATRIX_HOMESERVER}
+      - MATRIX_ACCESS_TOKEN=${MATRIX_ACCESS_TOKEN}
+      - MATRIX_USER_ID=${MATRIX_USER_ID}
+      - MATRIX_WELCOME_ROOM_ID=${MATRIX_WELCOME_ROOM_ID}
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-8503}"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
       retries: 3

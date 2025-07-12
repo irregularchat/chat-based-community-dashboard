@@ -2068,14 +2068,38 @@ If you have any questions, feel free to reach out to the community admins.
                 logging.error(f"Error in room search: {str(e)}")
                 logging.error(traceback.format_exc())
     
+    # User Creation and Room Assignment Section
+    st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
+    st.subheader("👤 Create User & Add to Selected Rooms")
+    
+    # Show summary of what will happen
+    selected_room_count = len(st.session_state.get('selected_rooms', set()))
+    matrix_user_selected = st.session_state.get('matrix_user_selected')
+    
+    if selected_room_count > 0:
+        st.info(f"📊 **Summary**: Will create user and add to {selected_room_count} selected rooms")
+    else:
+        st.warning("⚠️ **Note**: No rooms selected. User will be created but not added to any rooms.")
+    
+    if not matrix_user_selected:
+        st.warning("⚠️ **Important**: Please select a Matrix user above to connect with the new account.")
+    
     # Bottom row with Create User button
     col1, col2, col3 = st.columns([1, 1, 1])
     
     with col2:
         st.markdown("<div class='form-section-container'>", unsafe_allow_html=True)
-        st.subheader("Create User")
         
-        if st.button("Create User", key="create_user_button", type="primary"):
+        # Show what the button will do
+        button_text = "Create User"
+        if selected_room_count > 0 and matrix_user_selected:
+            button_text = f"🚀 Create User & Add to {selected_room_count} Rooms"
+        elif selected_room_count > 0:
+            button_text = f"Create User (Select Matrix User First)"
+        
+        button_disabled = not matrix_user_selected if selected_room_count > 0 else False
+        
+        if st.button(button_text, key="create_user_button", type="primary", disabled=button_disabled):
             # Set flag to indicate user creation is in progress
             # This will prevent showing recommendations during creation
             st.session_state.user_creation_in_progress = True
@@ -2283,8 +2307,6 @@ If you have any questions, feel free to reach out to the community admins.
                             # automatically send the welcome message
                             if st.session_state.get('send_matrix_welcome', True) and not message_sent:
                                 try:
-                                    from app.utils.matrix_actions import send_direct_message
-                                    
                                     # Log the attempt for debugging
                                     logging.info(f"Starting automatic send process to {matrix_user}...")
                                     
@@ -2293,15 +2315,12 @@ If you have any questions, feel free to reach out to the community admins.
                                     logging.info(f"Sending to Matrix user ID: {matrix_user_id}")
                                     
                                     # Show progress indicator
-                                    with st.spinner(f"Sending welcome message to {matrix_user}..."):
-                                        # Add a slight delay to ensure UI updates before sending
-                                        import time
-                                        time.sleep(0.5)
-                                        
-                                        # Send the message directly with enhanced return values
-                                        success, room_id, event_id = send_direct_message(
+                                    with st.spinner(f"Sending welcome message to {matrix_user} (with encryption setup)..."):
+                                        # Send the message with encryption delay to ensure readability
+                                        success, room_id, event_id = send_welcome_message_with_encryption_delay_sync(
                                             matrix_user_id,
-                                            welcome_message
+                                            welcome_message,
+                                            delay_seconds=2  # Wait 2 seconds for encryption setup
                                         )
                                         
                                         # Log the result immediately
@@ -2374,17 +2393,16 @@ If you have any questions, feel free to reach out to the community admins.
                                 send_btn = st.button(button_text, key=button_key)
                                 if send_btn:
                                     try:
-                                        from app.utils.matrix_actions import send_direct_message
-                                        
                                         # Log the attempt for debugging
                                         logging.info(f"Manually sending welcome message to {matrix_user}...")
                                         
                                         # Show progress indicator
-                                        with st.spinner(f"Sending message to {matrix_user}..."):
-                                            # Send the message directly with enhanced return values
-                                            success, room_id, event_id = send_direct_message(
+                                        with st.spinner(f"Sending message to {matrix_user} (with encryption setup)..."):
+                                            # Send the message with encryption delay to ensure readability
+                                            success, room_id, event_id = send_welcome_message_with_encryption_delay_sync(
                                                 st.session_state.get('matrix_user_selected'),
-                                                welcome_message
+                                                welcome_message,
+                                                delay_seconds=2  # Wait 2 seconds for encryption setup
                                             )
                                         
                                         # Track message status details for verification

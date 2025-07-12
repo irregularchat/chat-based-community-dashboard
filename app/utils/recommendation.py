@@ -244,45 +244,75 @@ async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[D
         List[Dict[str, Any]]: List of recommended room dictionaries
     """
     try:
-        # Get all rooms with optimized cache-first approach
+        # Get all rooms with optimized database-first approach
         try:
-            # First try to get configured rooms from environment
+            # Database-first strategy for fastest recommendations with descriptions
             all_rooms = []
             
             try:
-                # Get configured rooms from .env file (fastest)
-                configured_rooms = Config.get_configured_rooms()
-                if configured_rooms:
-                    all_rooms = configured_rooms
-                    logger.info(f"Using configured rooms for recommendations: {len(all_rooms)} rooms")
-                else:
-                    # Fallback to database cache
-                    db = next(get_db())
-                    try:
-                        # Get rooms from Matrix cache for faster performance
-                        cached_rooms = matrix_cache.get_cached_rooms(db)
-                        if cached_rooms:
-                            # Convert cached rooms to expected format
-                            all_rooms = [
-                                {
-                                    'room_id': room['room_id'],
-                                    'name': room['name'] or room['display_name'] or f"Room {room['room_id']}",
-                                    'description': room['topic'] or '',
-                                    'topic': room['topic'] or '',
-                                    'member_count': room['member_count'],
-                                    'is_direct': room['is_direct'],
-                                    'room_type': room['room_type'],
-                                    'categories': []  # No categories from cache
-                                }
-                                for room in cached_rooms
-                                if not room['is_direct'] and room['member_count'] > 0  # Filter out direct chats and empty rooms
-                            ]
-                            logger.info(f"Using cached rooms for recommendations: {len(all_rooms)} rooms")
-                    finally:
-                        db.close()
+                # First try database-cached rooms with descriptions (fastest and most complete)
+                db = next(get_db())
+                try:
+                    # Get rooms from Matrix cache for faster performance
+                    cached_rooms = matrix_cache.get_cached_rooms(db)
+                    if cached_rooms:
+                        # Get configured rooms to enhance with categories
+                        configured_rooms_map = {
+                            room.get('room_id'): room 
+                            for room in Config.get_configured_rooms()
+                        }
+                        
+                        # Convert cached rooms to expected format with config enhancement
+                        all_rooms = []
+                        for room in cached_rooms:
+                            if room['is_direct'] or room['member_count'] <= 0:
+                                continue  # Skip direct chats and empty rooms
+                            
+                            room_id = room['room_id']
+                            config_data = configured_rooms_map.get(room_id, {})
+                            
+                            room_data = {
+                                'room_id': room_id,
+                                'name': room['name'] or room['display_name'] or config_data.get('name', f"Room {room_id}"),
+                                'description': room['topic'] or config_data.get('description', ''),
+                                'topic': room['topic'] or config_data.get('description', ''),
+                                'member_count': room['member_count'],
+                                'is_direct': room['is_direct'],
+                                'room_type': room['room_type'],
+                                'categories': config_data.get('categories', []),
+                                'category_keywords': []
+                            }
+                            
+                            # Add category keywords for better matching
+                            if config_data.get('categories'):
+                                categories_config = Config.get_configured_categories()
+                                for cat_name in config_data['categories']:
+                                    for cat_id, cat_config in categories_config.items():
+                                        if cat_config['name'] == cat_name:
+                                            room_data['category_keywords'].extend(cat_config['keywords'])
+                            
+                            all_rooms.append(room_data)
+                        
+                        logger.info(f"Using enhanced database cache for recommendations: {len(all_rooms)} rooms")
+                    else:
+                        # Fallback to configured rooms only if no database cache
+                        configured_rooms = Config.get_configured_rooms()
+                        if configured_rooms:
+                            all_rooms = configured_rooms
+                            logger.info(f"Using configured rooms for recommendations: {len(all_rooms)} rooms")
+                finally:
+                    db.close()
             except Exception as cache_error:
-                logger.warning(f"Failed to get rooms from config/cache: {cache_error}")
-                all_rooms = []
+                logger.warning(f"Failed to get rooms from database cache: {cache_error}")
+                # Fallback to configured rooms only
+                try:
+                    configured_rooms = Config.get_configured_rooms()
+                    if configured_rooms:
+                        all_rooms = configured_rooms
+                        logger.info(f"Using configured rooms fallback for recommendations: {len(all_rooms)} rooms")
+                except Exception as config_error:
+                    logger.error(f"Failed to get configured rooms: {config_error}")
+                    all_rooms = []
             
             # If no configured rooms and cache is empty, fall back to API with shorter timeout
             if not all_rooms:
@@ -350,11 +380,23 @@ async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[D
         # Get keyword expansions from configuration
         recommendation_keyword_expansions = Config.get_interest_keyword_expansions()
         
+        # Also get category keywords for better matching
+        categories_config = Config.get_configured_categories()
+        
         expanded_set = set(all_keywords)
+        
+        # Apply manual keyword expansions
         for keyword in all_keywords.copy():
             for base_word, expansions in recommendation_keyword_expansions.items():
                 if base_word in keyword:
                     expanded_set.update(expansions)
+        
+        # Apply category-based keyword matching
+        for keyword in all_keywords.copy():
+            for cat_id, cat_config in categories_config.items():
+                if keyword in cat_config['keywords']:
+                    # Add all other keywords from this category
+                    expanded_set.update(cat_config['keywords'])
         
         # Update the keywords list with expanded terms
         all_keywords = list(expanded_set)
@@ -422,30 +464,46 @@ async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[D
             
             # Check for keyword matches more efficiently
             try:
-                # Create a single string for easier text matching instead of looping through keywords
+                # Create comprehensive text for matching
                 room_text = f"{room_name} {room_topic} {' '.join(room_categories)}".lower()
                 
+                # Add category keywords if available
+                category_keywords = room.get('category_keywords', [])
+                if category_keywords:
+                    room_text += f" {' '.join(category_keywords)}"
+                
                 # Check if any interest keyword is in the room text
-                if any(keyword in room_text for keyword in all_keywords):
-                    matched_rooms.append(room)
-                    logger.info(f"Matched room: {room_name} based on expanded keywords")
-                    
+                matched_keywords = [kw for kw in all_keywords if kw in room_text]
+                
+                if matched_keywords:
                     # Add a match score to help with sorting (higher is better)
                     match_score = 0
                     
-                    # Check for exact category matches - give these higher priority
-                    if any(category.lower() in all_keywords for category in room_categories):
-                        match_score += 10
-                        
-                    # Check for name matches - these are also important
-                    if any(keyword in room_name.lower() for keyword in all_keywords):
-                        match_score += 5
-                        
-                    # Add score based on number of matching keywords
-                    match_score += sum(1 for keyword in all_keywords if keyword in room_text)
+                    # Category keyword matches (highest priority)
+                    category_matches = [kw for kw in matched_keywords if kw in category_keywords]
+                    match_score += len(category_matches) * 15
                     
-                    # Store match score with the room
+                    # Exact category name matches (high priority)
+                    category_name_matches = [kw for kw in matched_keywords if any(kw in cat.lower() for cat in room_categories)]
+                    match_score += len(category_name_matches) * 10
+                        
+                    # Room name matches (medium priority)
+                    name_matches = [kw for kw in matched_keywords if kw in room_name.lower()]
+                    match_score += len(name_matches) * 5
+                    
+                    # Description matches (lower priority)  
+                    desc_matches = [kw for kw in matched_keywords if kw in room_topic.lower()]
+                    match_score += len(desc_matches) * 2
+                    
+                    # Base score for any match
+                    match_score += len(matched_keywords)
+                    
+                    # Store match score and details with the room
                     room['match_score'] = match_score
+                    room['matched_keywords'] = matched_keywords
+                    
+                    matched_rooms.append(room)
+                    logger.info(f"Matched room: {room_name} (score: {match_score}) - keywords: {', '.join(matched_keywords)}")
             except Exception as e:
                 logger.warning(f"Error matching interests for room {room.get('name', 'Unknown')}: {e}")
                 continue
@@ -513,13 +571,30 @@ async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[D
             # Reorder matched rooms with outdoor rooms first
             matched_rooms = outdoor_rooms + other_rooms
         
-        # Limit number of returned rooms to avoid overwhelming the UI
-        max_recommendations = 10  # Limit to 10 recommended rooms
-        if len(matched_rooms) > max_recommendations:
-            logger.info(f"Limiting recommendations from {len(matched_rooms)} to {max_recommendations} rooms")
-            return matched_rooms[:max_recommendations]
-            
-        return matched_rooms
+        # Apply recommendation settings
+        settings = Config.get_room_recommendation_settings()
+        
+        if not settings['enabled']:
+            logger.info("Room recommendations disabled in configuration")
+            return []
+        
+        # Filter by minimum score if rooms have scores
+        min_score = settings['min_score']
+        if matched_rooms and 'match_score' in matched_rooms[0]:
+            filtered_rooms = [room for room in matched_rooms if room.get('match_score', 0) >= min_score]
+        else:
+            filtered_rooms = matched_rooms
+        
+        # Sort by score if available
+        if filtered_rooms and 'match_score' in filtered_rooms[0]:
+            filtered_rooms.sort(key=lambda room: room.get('match_score', 0), reverse=True)
+        
+        # Limit to maximum recommendations
+        max_recs = settings['max_recommendations']
+        final_rooms = filtered_rooms[:max_recs]
+        
+        logger.info(f"Recommendation results: {len(matched_rooms)} matched, {len(filtered_rooms)} above min score {min_score}, returning top {len(final_rooms)}")
+        return final_rooms
     except Exception as e:
         logger.error(f"Unexpected error in match_interests_with_rooms: {e}")
         logger.error(traceback.format_exc())

@@ -291,6 +291,135 @@ class Config:
         return merge_room_data()
     
     @classmethod
+    def get_configured_categories(cls):
+        """
+        Get all configured categories from environment variables.
+        
+        Returns:
+            Dict[str, Dict]: Dictionary mapping category names to their configuration
+        """
+        categories = {}
+        
+        # Find all CATEGORY_* environment variables
+        for key, value in os.environ.items():
+            if key.startswith('CATEGORY_') and value:
+                category_id = key[9:]  # Remove 'CATEGORY_' prefix
+                
+                # Parse category configuration
+                # Format: Display Name|keyword1,keyword2,keyword3
+                parts = value.split('|')
+                if len(parts) >= 2:
+                    display_name = parts[0].strip()
+                    keywords_str = parts[1].strip()
+                    keywords = [kw.strip().lower() for kw in keywords_str.split(',') if kw.strip()]
+                    
+                    categories[category_id] = {
+                        'display_name': display_name,
+                        'keywords': keywords,
+                        'id': category_id
+                    }
+                else:
+                    logger.warning(f"Invalid category format in {key}: {value}")
+        
+        return categories
+    
+    @classmethod
+    def get_configured_rooms(cls):
+        """
+        Get all configured rooms from environment variables using the new flexible system.
+        
+        Returns:
+            List[Dict]: List of room dictionaries with name, categories, description, and room_id
+        """
+        rooms = []
+        categories_config = cls.get_configured_categories()
+        
+        # Find all ROOM_* environment variables
+        for key, value in os.environ.items():
+            if key.startswith('ROOM_') and value and not key.startswith('ROOM_CONFIG'):
+                room_id = key[5:]  # Remove 'ROOM_' prefix
+                
+                # Parse room configuration
+                # Format: Room Name|Category Name(s)|Description|Matrix Room ID
+                parts = value.split('|')
+                if len(parts) >= 4:
+                    name = parts[0].strip()
+                    category_names_str = parts[1].strip()
+                    description = parts[2].strip()
+                    matrix_room_id = parts[3].strip()
+                    
+                    # Parse category names and resolve to full category info
+                    category_names = [cat.strip() for cat in category_names_str.split(',')]
+                    resolved_categories = []
+                    all_keywords = set()
+                    
+                    for cat_name in category_names:
+                        # Find matching category by display name
+                        for cat_id, cat_config in categories_config.items():
+                            if cat_config['display_name'].lower() == cat_name.lower():
+                                resolved_categories.append(cat_config['display_name'])
+                                all_keywords.update(cat_config['keywords'])
+                                break
+                        else:
+                            # If no exact match, use the name as-is
+                            resolved_categories.append(cat_name)
+                    
+                    rooms.append({
+                        'name': name,
+                        'categories': resolved_categories,
+                        'category': ', '.join(resolved_categories),  # For backward compatibility
+                        'category_keywords': list(all_keywords),  # Keywords from categories
+                        'description': description,
+                        'room_id': matrix_room_id,
+                        'member_count': 0,  # Will be updated from cache if available
+                        'is_direct': False,
+                        'room_type': 'public',
+                        'config_id': room_id  # For debugging
+                    })
+                else:
+                    logger.warning(f"Invalid room entry format in {key}: {value}")
+        
+        return rooms
+    
+    @classmethod
+    def get_interest_keyword_expansions(cls):
+        """
+        Get interest keyword expansions for better room matching.
+        
+        Returns:
+            Dict[str, List[str]]: Dictionary mapping keywords to their synonyms
+        """
+        expansions_str = os.getenv('INTEREST_KEYWORD_EXPANSIONS', '')
+        expansions = {}
+        
+        if expansions_str:
+            # Parse format: keyword1:synonym1,synonym2,synonym3|keyword2:synonym1,synonym2
+            keyword_groups = expansions_str.split('|')
+            
+            for group in keyword_groups:
+                if ':' in group:
+                    keyword, synonyms_str = group.split(':', 1)
+                    keyword = keyword.strip().lower()
+                    synonyms = [s.strip().lower() for s in synonyms_str.split(',') if s.strip()]
+                    expansions[keyword] = synonyms
+        
+        return expansions
+    
+    @classmethod
+    def get_room_recommendation_settings(cls):
+        """
+        Get room recommendation configuration settings.
+        
+        Returns:
+            Dict: Dictionary with recommendation settings
+        """
+        return {
+            'enabled': os.getenv('ROOM_RECOMMENDATIONS_ENABLED', 'True').lower() == 'true',
+            'max_recommendations': int(os.getenv('MAX_ROOM_RECOMMENDATIONS', '5')),
+            'min_score': float(os.getenv('MIN_RECOMMENDATION_SCORE', '0.3'))
+        }
+    
+    @classmethod
     def is_admin(cls, username: str) -> bool:
         """
         Check if a username is in the admin list.

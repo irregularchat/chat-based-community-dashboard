@@ -1,50 +1,59 @@
-# Use the official Python image as the base image
-FROM python:3.11-slim
+# Modern Community Dashboard - Next.js Application
+# Multi-stage build for production optimization
 
-# Set environment variables for non-interactive installation
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PIP_NO_CACHE_DIR=1
+FROM node:18-alpine AS base
 
-# Set the working directory inside the container
+# Install dependencies only when needed
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
-# Install system-level dependencies and clean up
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    build-essential gcc libssl-dev libffi-dev \
-    libxml2-dev libxslt1-dev zlib1g-dev curl dos2unix \
-    postgresql-client netcat-openbsd && \
-    rm -rf /var/lib/apt/lists/*
+# Copy package files
+COPY modern-stack/package.json modern-stack/package-lock.json* ./
+RUN npm ci
 
-# Copy the requirements.txt first to leverage Docker cache
-COPY requirements.txt .
+# Rebuild the source code only when needed
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY modern-stack/ .
 
-# Split pip commands and add verbose logging
-RUN pip install --upgrade pip && \
-    pip install --verbose -r requirements.txt
+# Generate Prisma client
+RUN npx prisma generate
 
-# Copy the entrypoint script first and set it up
-COPY entrypoint.sh /app/
-RUN dos2unix /app/entrypoint.sh && \
-    chmod +x /app/entrypoint.sh
+# Build application
+RUN npm run build
 
-# Copy the rest of the application code into the container
-COPY . .
+# Production image, copy all the files and run next
+FROM base AS runner
+WORKDIR /app
 
-# Create a directory for data if it doesn't exist
-RUN mkdir -p /app/app/data && chmod 777 /app/app/data
+# Install curl for healthchecks
+RUN apk add --no-cache curl
 
-# Ensure the .env file is writable and load it if it exists
-RUN touch /app/.env && chmod 666 /app/.env
+# Create nextjs user
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
 
-# Install the package in development mode
-RUN pip install -e .
+COPY --from=builder /app/public ./public
 
-# Set Python path
-ENV PYTHONPATH=/app
+# Set the correct permission for prerender cache
+RUN mkdir .next
+RUN chown nextjs:nodejs .next
 
-# Set environment variable for Docker detection
-ENV IN_DOCKER=true
+# Automatically leverage output traces to reduce image size
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Use the entrypoint script
-ENTRYPOINT ["/app/entrypoint.sh"]
+# Copy database files for Prisma
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+
+USER nextjs
+
+EXPOSE 3000
+
+ENV PORT 3000
+ENV HOSTNAME "0.0.0.0"
+
+CMD ["node", "server.js"]

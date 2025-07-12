@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { createTRPCRouter, protectedProcedure, adminProcedure, moderatorProcedure } from '../trpc';
+import { matrixService } from '@/lib/matrix';
 
 // Define Matrix-related schemas
 const MatrixUserSchema = z.object({
@@ -28,15 +29,7 @@ const MessageHistorySchema = z.object({
 export const matrixRouter = createTRPCRouter({
   // Get Matrix configuration status
   getConfig: protectedProcedure.query(async ({ ctx }) => {
-    // This would normally come from environment variables or config
-    // For now, return mock data to demonstrate the structure
-    return {
-      isActive: process.env.MATRIX_ACTIVE === 'true',
-      homeserverUrl: process.env.MATRIX_HOMESERVER_URL || '',
-      botUsername: process.env.MATRIX_BOT_USERNAME || '',
-      defaultRoomId: process.env.MATRIX_DEFAULT_ROOM_ID || '',
-      welcomeRoomId: process.env.MATRIX_WELCOME_ROOM_ID || '',
-    };
+    return matrixService.getConfig();
   }),
 
   // Get list of Matrix users
@@ -49,49 +42,11 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .query(async ({ ctx, input }) => {
-      // Mock data for demonstration - in real implementation, this would call Matrix API
-      const mockUsers = [
-        {
-          user_id: '@admin:matrix.irregularchat.com',
-          display_name: 'Admin User',
-          avatar_url: null,
-          is_signal_user: false,
-        },
-        {
-          user_id: '@signal_12345:matrix.irregularchat.com',
-          display_name: 'Signal User',
-          avatar_url: null,
-          is_signal_user: true,
-        },
-        {
-          user_id: '@moderator:matrix.irregularchat.com',
-          display_name: 'Moderator User',
-          avatar_url: null,
-          is_signal_user: false,
-        },
-      ];
-
-      let filteredUsers = mockUsers;
-
-      // Apply user type filters
-      if (!input.includeSignalUsers) {
-        filteredUsers = filteredUsers.filter(user => !user.is_signal_user);
-      }
-      if (!input.includeRegularUsers) {
-        filteredUsers = filteredUsers.filter(user => user.is_signal_user);
-      }
-
-      // Apply search filter
-      if (input.search) {
-        const searchLower = input.search.toLowerCase();
-        filteredUsers = filteredUsers.filter(
-          user =>
-            user.display_name.toLowerCase().includes(searchLower) ||
-            user.user_id.toLowerCase().includes(searchLower)
-        );
-      }
-
-      return filteredUsers;
+      return await matrixService.getUsers({
+        search: input.search,
+        includeSignalUsers: input.includeSignalUsers,
+        includeRegularUsers: input.includeRegularUsers,
+      });
     }),
 
   // Get list of Matrix rooms
@@ -105,59 +60,12 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .query(async ({ ctx, input }) => {
-      // Mock data for demonstration - in real implementation, this would call Matrix API
-      const mockRooms = [
-        {
-          room_id: '!general:matrix.irregularchat.com',
-          name: 'General Chat',
-          topic: 'General discussion room',
-          member_count: 25,
-          category: 'General',
-          configured: true,
-        },
-        {
-          room_id: '!tech:matrix.irregularchat.com',
-          name: 'Tech Discussion',
-          topic: 'Technology and development chat',
-          member_count: 15,
-          category: 'Technology',
-          configured: true,
-        },
-        {
-          room_id: '!random:matrix.irregularchat.com',
-          name: 'Random',
-          topic: 'Random conversations',
-          member_count: 30,
-          category: 'Social',
-          configured: false,
-        },
-      ];
-
-      let filteredRooms = mockRooms;
-
-      // Apply filters
-      if (input.category) {
-        filteredRooms = filteredRooms.filter(room => room.category === input.category);
-      }
-
-      if (!input.includeConfigured) {
-        filteredRooms = filteredRooms.filter(room => !room.configured);
-      }
-      if (!input.includeDiscovered) {
-        filteredRooms = filteredRooms.filter(room => room.configured);
-      }
-
-      if (input.search) {
-        const searchLower = input.search.toLowerCase();
-        filteredRooms = filteredRooms.filter(
-          room =>
-            room.name?.toLowerCase().includes(searchLower) ||
-            room.room_id.toLowerCase().includes(searchLower) ||
-            room.topic?.toLowerCase().includes(searchLower)
-        );
-      }
-
-      return filteredRooms;
+      return await matrixService.getRooms({
+        category: input.category,
+        search: input.search,
+        includeConfigured: input.includeConfigured,
+        includeDiscovered: input.includeDiscovered,
+      });
     }),
 
   // Get room categories
@@ -175,23 +83,18 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Mock implementation - in real implementation, this would call Matrix API
-      console.log(`Sending DM to ${input.userId}: ${input.message}`);
+      const result = await matrixService.sendDirectMessage(input.userId, input.message);
       
       // Log admin event
       await ctx.prisma.adminEvent.create({
         data: {
           eventType: 'matrix_direct_message',
           username: ctx.session.user.username || 'unknown',
-          details: `Sent direct message to ${input.userId}`,
+          details: `Sent direct message to ${input.userId}: ${result.success ? 'Success' : result.error}`,
         },
       });
 
-      return {
-        success: true,
-        roomId: `!dm_${Date.now()}:matrix.irregularchat.com`,
-        eventId: `$event_${Date.now()}`,
-      };
+      return result;
     }),
 
   // Send message to multiple users

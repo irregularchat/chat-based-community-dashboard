@@ -6,15 +6,21 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Seeding database...');
 
-  // Create a test admin user
-  const hashedPassword = await bcrypt.hash('admin123', 12);
+  // Create admin user with your existing credentials
+  const adminPassword = process.env.DEFAULT_ADMIN_PASSWORD || 'shareme314';
+  const hashedPassword = await bcrypt.hash(adminPassword, 12);
   
   const adminUser = await prisma.user.upsert({
     where: { username: 'admin' },
-    update: {},
+    update: {
+      password: hashedPassword,
+      isAdmin: true,
+      isModerator: true,
+      isActive: true,
+    },
     create: {
       username: 'admin',
-      email: 'admin@example.com',
+      email: 'admin@irregularchat.com',
       firstName: 'Admin',
       lastName: 'User',
       password: hashedPassword,
@@ -64,7 +70,7 @@ async function main() {
 
   console.log('\n🎉 Database seeded successfully!');
   console.log('\n👤 Test Users Created:');
-  console.log('   Admin:     username: admin     | password: admin123');
+  console.log(`   Admin:     username: admin     | password: ${adminPassword}`);
   console.log('   Moderator: username: moderator | password: mod123');  
   console.log('   User:      username: user      | password: user123');
 }

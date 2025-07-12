@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { createTRPCRouter, protectedProcedure, adminProcedure, moderatorProcedure } from '../trpc';
+import { authentikService } from '@/lib/authentik';
+import bcrypt from 'bcryptjs';
 
 export const userRouter = createTRPCRouter({
   // Get paginated list of users
@@ -109,6 +111,139 @@ export const userRouter = createTRPCRouter({
       });
 
       return user;
+    }),
+
+  // Create SSO user with Authentik integration
+  createSSOUser: adminProcedure
+    .input(
+      z.object({
+        email: z.string().email(),
+        firstName: z.string().min(1),
+        lastName: z.string().min(1),
+        username: z.string().optional(),
+        phoneNumber: z.string().optional(),
+        attributes: z.record(z.string(), z.any()).optional(),
+        groups: z.array(z.string()).optional(),
+        sendWelcomeEmail: z.boolean().default(true),
+        autoGenerateUsername: z.boolean().default(true),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        // Generate username if not provided
+        let username = input.username;
+        if (!username || input.autoGenerateUsername) {
+          username = await authentikService.generateUsername(input.firstName);
+          
+          // Check if username exists and generate alternatives if needed
+          let attempts = 0;
+          while (await authentikService.checkUsernameExists(username) && attempts < 10) {
+            username = await authentikService.generateUsername(input.firstName);
+            attempts++;
+          }
+        }
+
+        // Prepare attributes including phone number if provided
+        const attributes = {
+          ...input.attributes,
+          ...(input.phoneNumber && { phone_number: input.phoneNumber }),
+          created_by: ctx.session.user.username || 'admin',
+          created_via: 'community_dashboard',
+        };
+
+        // Create user in Authentik SSO
+        const authentikResult = await authentikService.createUser({
+          username,
+          email: input.email,
+          firstName: input.firstName,
+          lastName: input.lastName,
+          attributes,
+          groups: input.groups,
+        });
+
+        if (!authentikResult.success) {
+          throw new Error(`SSO user creation failed: ${authentikResult.error}`);
+        }
+
+        // Create local user record for synchronization
+        const localUser = await ctx.prisma.user.create({
+          data: {
+            username,
+            email: input.email,
+            firstName: input.firstName,
+            lastName: input.lastName,
+            authentikId: authentikResult.user_id,
+            isActive: true,
+          },
+        });
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'sso_user_created',
+            username: ctx.session.user.username || 'unknown',
+            details: `Created SSO user: ${username} (${input.email})`,
+          },
+        });
+
+        return {
+          success: true,
+          user: localUser,
+          ssoUserId: authentikResult.user_id,
+          username: authentikResult.username,
+          tempPassword: authentikResult.temp_password,
+          passwordResetLink: authentikResult.password_reset_link,
+          credentials: {
+            username: authentikResult.username,
+            password: authentikResult.temp_password,
+            resetLink: authentikResult.password_reset_link,
+          }
+        };
+
+      } catch (error) {
+        console.error('Error creating SSO user:', error);
+        throw new Error(error instanceof Error ? error.message : 'Failed to create SSO user');
+      }
+    }),
+
+  // Generate username suggestions
+  generateUsername: moderatorProcedure
+    .input(
+      z.object({
+        firstName: z.string().min(1),
+        count: z.number().default(3),
+      })
+    )
+    .query(async ({ input }) => {
+      const suggestions = [];
+      
+      for (let i = 0; i < input.count; i++) {
+        const username = await authentikService.generateUsername(input.firstName);
+        const exists = await authentikService.checkUsernameExists(username);
+        
+        suggestions.push({
+          username,
+          available: !exists,
+        });
+      }
+      
+      return suggestions;
+    }),
+
+  // Check username availability
+  checkUsername: moderatorProcedure
+    .input(z.object({ username: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      const existsInSSO = await authentikService.checkUsernameExists(input.username);
+      const existsLocally = await ctx.prisma.user.findUnique({
+        where: { username: input.username },
+      });
+      
+      return {
+        available: !existsInSSO && !existsLocally,
+        existsInSSO,
+        existsLocally: !!existsLocally,
+      };
     }),
 
   // Update user

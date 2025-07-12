@@ -498,6 +498,131 @@ class MatrixCacheService:
         except Exception as e:
             logging.error(f"Error getting users in room {room_id}: {str(e)}")
             return []
+    
+    async def lightweight_sync(self, db: Session, max_age_minutes: int = 30) -> Dict:
+        """
+        Perform a lightweight sync that only updates essential data.
+        Used for user creation workflow optimization.
+        
+        Args:
+            db: Database session
+            max_age_minutes: Maximum age in minutes before triggering sync
+            
+        Returns:
+            Dict with sync results
+        """
+        try:
+            # Check if cache is fresh enough for lightweight sync
+            if self.is_cache_fresh(db, max_age_minutes):
+                return {"status": "skipped", "reason": "cache_fresh"}
+            
+            # Check if full sync is already in progress
+            if self.sync_in_progress:
+                return {"status": "skipped", "reason": "sync_in_progress"}
+            
+            from app.utils.matrix_actions import get_matrix_client
+            
+            if not Config.MATRIX_ACTIVE:
+                return {"status": "error", "error": "Matrix not active"}
+            
+            client = await get_matrix_client()
+            if not client:
+                return {"status": "error", "error": "Failed to get Matrix client"}
+            
+            try:
+                # For lightweight sync, only sync users in critical rooms (like welcome room)
+                critical_rooms = []
+                if hasattr(Config, 'MATRIX_WELCOME_ROOM_ID') and Config.MATRIX_WELCOME_ROOM_ID:
+                    critical_rooms.append(Config.MATRIX_WELCOME_ROOM_ID)
+                
+                if not critical_rooms:
+                    logger.info("No critical rooms configured for lightweight sync")
+                    return {"status": "skipped", "reason": "no_critical_rooms"}
+                
+                users_synced = 0
+                
+                # Sync only users in critical rooms for performance
+                for room_id in critical_rooms:
+                    try:
+                        from app.utils.matrix_actions import get_room_members_async
+                        
+                        # Get room members with timeout for performance
+                        members = await asyncio.wait_for(
+                            get_room_members_async(client, room_id), 
+                            timeout=5.0
+                        )
+                        
+                        # Update/insert users
+                        for member in members:
+                            user_id = member.get('user_id')
+                            if not user_id:
+                                continue
+                            
+                            # Check if user exists
+                            existing_user = db.query(MatrixUser).filter(
+                                MatrixUser.user_id == user_id
+                            ).first()
+                            
+                            if not existing_user:
+                                # Create new user
+                                new_user = MatrixUser(
+                                    user_id=user_id,
+                                    display_name=member.get('display_name', user_id.split(':')[0].lstrip('@')),
+                                    last_sync=datetime.utcnow()
+                                )
+                                db.add(new_user)
+                                users_synced += 1
+                            else:
+                                # Update existing user
+                                existing_user.display_name = member.get('display_name', existing_user.display_name)
+                                existing_user.last_sync = datetime.utcnow()
+                                users_synced += 1
+                            
+                            # Update membership
+                            existing_membership = db.query(MatrixRoomMembership).filter(
+                                MatrixRoomMembership.user_id == user_id,
+                                MatrixRoomMembership.room_id == room_id
+                            ).first()
+                            
+                            if not existing_membership:
+                                new_membership = MatrixRoomMembership(
+                                    user_id=user_id,
+                                    room_id=room_id,
+                                    membership_status='join',
+                                    last_sync=datetime.utcnow()
+                                )
+                                db.add(new_membership)
+                    
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Timeout syncing room {room_id} in lightweight sync")
+                        continue
+                    except Exception as room_error:
+                        logger.error(f"Error syncing room {room_id} in lightweight sync: {room_error}")
+                        continue
+                
+                # Update sync status
+                sync_status = MatrixSyncStatus(
+                    sync_type="lightweight",
+                    status="completed",
+                    last_sync=datetime.utcnow(),
+                    processed_items=users_synced
+                )
+                db.add(sync_status)
+                db.commit()
+                
+                logger.info(f"Lightweight sync completed: {users_synced} users updated")
+                return {
+                    "status": "completed",
+                    "sync_type": "lightweight", 
+                    "users_synced": users_synced
+                }
+                
+            finally:
+                await client.close()
+                
+        except Exception as e:
+            logger.error(f"Error in lightweight_sync: {str(e)}")
+            return {"status": "error", "error": str(e)}
 
     def get_sync_status(self, db: Session) -> Optional[Dict]:
         """Get the latest sync status."""

@@ -244,25 +244,68 @@ async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[D
         List[Dict[str, Any]]: List of recommended room dictionaries
     """
     try:
-        # Get all rooms with timeout protection
+        # Get all rooms with optimized cache-first approach
         try:
-            # Set a very short timeout for getting rooms to prevent hanging
-            all_rooms_future = asyncio.ensure_future(get_all_accessible_rooms_with_details())
-            all_rooms = await asyncio.wait_for(all_rooms_future, timeout=2.0)  # Reduced from 3.0 to 2.0 seconds
-            
-            # Quick validation of result
-            if not isinstance(all_rooms, list):
-                logger.warning(f"get_all_accessible_rooms_with_details returned non-list: {type(all_rooms)}")
-                all_rooms = []
-        except asyncio.TimeoutError:
-            logger.error("Timeout while fetching rooms list")
-            # Cancel the future if it's still running
-            if not all_rooms_future.done():
-                all_rooms_future.cancel()
+            # First try to get configured rooms from environment
             all_rooms = []
+            
+            try:
+                # Get configured rooms from .env file (fastest)
+                configured_rooms = Config.get_configured_rooms()
+                if configured_rooms:
+                    all_rooms = configured_rooms
+                    logger.info(f"Using configured rooms for recommendations: {len(all_rooms)} rooms")
+                else:
+                    # Fallback to database cache
+                    db = next(get_db())
+                    try:
+                        # Get rooms from Matrix cache for faster performance
+                        cached_rooms = matrix_cache.get_cached_rooms(db)
+                        if cached_rooms:
+                            # Convert cached rooms to expected format
+                            all_rooms = [
+                                {
+                                    'room_id': room['room_id'],
+                                    'name': room['name'] or room['display_name'] or f"Room {room['room_id']}",
+                                    'description': room['topic'] or '',
+                                    'topic': room['topic'] or '',
+                                    'member_count': room['member_count'],
+                                    'is_direct': room['is_direct'],
+                                    'room_type': room['room_type'],
+                                    'categories': []  # No categories from cache
+                                }
+                                for room in cached_rooms
+                                if not room['is_direct'] and room['member_count'] > 0  # Filter out direct chats and empty rooms
+                            ]
+                            logger.info(f"Using cached rooms for recommendations: {len(all_rooms)} rooms")
+                    finally:
+                        db.close()
+            except Exception as cache_error:
+                logger.warning(f"Failed to get rooms from config/cache: {cache_error}")
+                all_rooms = []
+            
+            # If no configured rooms and cache is empty, fall back to API with shorter timeout
+            if not all_rooms:
+                logger.info("No configured rooms or cache, falling back to Matrix API")
+                all_rooms_future = asyncio.ensure_future(get_all_accessible_rooms_with_details())
+                all_rooms = await asyncio.wait_for(all_rooms_future, timeout=1.5)  # Even shorter timeout
+                
+                # Quick validation of result
+                if not isinstance(all_rooms, list):
+                    logger.warning(f"get_all_accessible_rooms_with_details returned non-list: {type(all_rooms)}")
+                    all_rooms = []
+                    
+        except asyncio.TimeoutError:
+            logger.warning("Timeout while fetching rooms from API, using configured rooms only")
+            # Use configured rooms as fallback
+            all_rooms = Config.get_configured_rooms()
+            # Cancel the future if it's still running
+            if 'all_rooms_future' in locals() and not all_rooms_future.done():
+                all_rooms_future.cancel()
         except Exception as e:
             logger.error(f"Error fetching rooms: {e}")
-            all_rooms = []
+            # Use configured rooms as fallback
+            all_rooms = Config.get_configured_rooms()
         
         # Handle None or empty interests
         if not interests:
@@ -304,39 +347,8 @@ async def match_interests_with_rooms(interests: Union[str, List[str]]) -> List[D
         # Combine original keywords and expanded words, removing duplicates
         all_keywords = list(set(interest_keywords + expanded_keywords))
         
-        # Add related keywords for common interests
-        recommendation_keyword_expansions = {
-            # General interests
-            "outdoor": ["nature", "hiking", "camping", "adventure", "outdoors", "trek", "wilderness", 
-                       "outside", "backpacking", "mountain", "climbing", "trail", "hiking", "biking", 
-                       "fishing", "kayaking", "canoeing", "rafting", "skiing", "snowboarding", "shooting", "guns", "firearms", "firearm safety", "firearm training"],
-            
-            # Tech category
-            "tech": ["general tech", "hardware", "software", "development", "computer", "programming", "coding", "technology"],
-            "hardware": ["electronics", "raspberry pi", "arduino", "microcontroller", "circuit", "pcb", "computer hardware", "tech hardware"],
-            "rf": ["signals", "ew", "electronic warfare", "radio", "sdr", "software defined radio", "dragonos", "ham", "amateur radio"],
-            "ai": ["artificial intelligence", "machine learning", "ml", "data science", "neural networks", "deep learning", "nlp", "gpt", "tech ai", "ai/ml", "ml/ai"],
-            "unmanned": ["drone", "robotics", "uav", "unmanned aerial vehicle", "counter drone", "counter uav", "c-uas", "cuas", "unmanned systems", "drones & robotics", "counter unmanned systems"],
-            "fabrication": ["3d printing", "cnc", "manufacturing", "maker", "diy", "printing", "additive manufacturing", "tech fabrication"],
-            "security": ["cybersecurity", "cyber", "infosec", "information security", "red team", "blue team", "purple team", "pentest", "penetration testing", "purple teaming"],
-            "certification": ["cert", "certs", "certifications", "tech certification", "exam", "training certification"],
-            "fullstack": ["web development", "web dev", "software development", "ctf", "capture the flag", "full stack development", "full-stack", "developer"],
-            "space": ["astronomy", "spacex", "nasa", "satellite", "mars", "moon", "rocket", "spacecraft", "space chat", "space exploration"],
-            
-            # Information & Research
-            "influence": ["psyop", "psychological operations", "information operations", "information warfare", "psyops", "military information", "iwar", "influence chat", "information warfare", "influence operations"],
-            "research": ["academic", "science", "analysis", "intelligence analysis", "studies", "white paper", "research chat", "information research"],
-            
-            # Miscellaneous
-            "business": ["entrepreneurship", "startup", "finance", "investing", "career", "professional", "business chat"],
-            "debate": ["discussion", "philosophy", "politics", "rhetoric", "argument", "critical thinking", "debate group", "debate chat"],
-            "spanish": ["español", "language", "linguistics", "bilingual", "language learning", "spanish chat"],
-            "offtopic": ["general", "random", "misc", "off-topic", "off topic", "casual", "general chat"],
-            "outdoor_misc": ["hiking", "camping", "climbing", "outdoor activities", "outdoor group", "outdoors"],
-            
-            # Locations
-            "location": ["fort liberty", "flnc", "national capital region", "ncr", "knoxville", "tampa", "texas", "central texas", "fort liberty group", "ncr group", "knoxville group", "tampa group", "central texas group"]
-        }
+        # Get keyword expansions from configuration
+        recommendation_keyword_expansions = Config.get_interest_keyword_expansions()
         
         expanded_set = set(all_keywords)
         for keyword in all_keywords.copy():

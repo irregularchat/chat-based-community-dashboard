@@ -524,95 +524,142 @@ async def render_create_user_form():
     if 'recommended_rooms' not in st.session_state:
         st.session_state.recommended_rooms = []
 
-    # Fetch INDOC room users in background if not already fetched
-    if 'fetch_indoc_users_started' not in st.session_state:
+    # Initialize background task states
+    if 'background_tasks_started' not in st.session_state:
+        st.session_state['background_tasks_started'] = False
         st.session_state['fetch_indoc_users_started'] = False
+        st.session_state['room_recommendations_started'] = False
 
-    # Start background fetching of INDOC users - but only if not already in progress
-    if not st.session_state.get('fetch_indoc_users_started', False):
+    # Start concurrent background tasks for Matrix sync and room recommendations
+    if not st.session_state.get('background_tasks_started', False):
         try:
             # Mark as started immediately to prevent multiple starts
+            st.session_state['background_tasks_started'] = True
             st.session_state['fetch_indoc_users_started'] = True
             st.session_state['fetch_indoc_users_finished'] = False
             
-            # Use a simpler approach - just get cached users if available
+            # Initialize session state variables
             if 'matrix_users' not in st.session_state:
                 st.session_state.matrix_users = []
+            if 'recommended_rooms' not in st.session_state:
+                st.session_state.recommended_rooms = []
             
-            # Only start background fetch if we have no users yet
-            if not st.session_state.matrix_users:
-                import threading
-                
-                def fetch_indoc_users_thread():
-                    try:
-                        # Use cached Matrix users instead of slow API calls
-                        from app.services.matrix_cache import matrix_cache
-                        
-                        db = next(get_db())
-                        try:
-                            # Check if cache is fresh, if not trigger background sync
-                            if not matrix_cache.is_cache_fresh(db, max_age_minutes=30):
-                                # Trigger background sync but don't wait for it
-                                import asyncio
+            import threading
+            import concurrent.futures
+            
+            def concurrent_background_tasks():
+                """Run Matrix sync and room recommendations concurrently"""
+                try:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                        # Task 1: Fetch Matrix users
+                        def fetch_matrix_users():
+                            try:
+                                from app.services.matrix_cache import matrix_cache
+                                
+                                db = next(get_db())
                                 try:
-                                    # Create task for background sync
-                                    loop = asyncio.get_event_loop()
-                                    loop.create_task(matrix_cache.background_sync(max_age_minutes=30))
-                                except RuntimeError:
-                                    # If no event loop, start background sync in thread
-                                    import threading
-                                    def bg_sync():
-                                        loop = asyncio.new_event_loop()
-                                        asyncio.set_event_loop(loop)
+                                    # Check if cache is fresh, if not trigger lightweight sync
+                                    if not matrix_cache.is_cache_fresh(db, max_age_minutes=30):
+                                        # Trigger lightweight sync for user creation workflow
+                                        import asyncio
                                         try:
-                                            loop.run_until_complete(matrix_cache.background_sync(max_age_minutes=30))
-                                        finally:
-                                            loop.close()
-                                    threading.Thread(target=bg_sync, daemon=True).start()
-                            
-                            # Get cached users (fast)
-                            cached_users = matrix_cache.get_cached_users(db)
-                            
-                            # Convert to the expected format
-                            fetched_users = [
-                                {
-                                    'user_id': user['user_id'],
-                                    'display_name': user['display_name'],
-                                    'is_admin': False  # We can determine this from user_id if needed
-                                }
-                                for user in cached_users
-                            ]
-                            
-                            # These lines should be INSIDE the try block
+                                            loop = asyncio.get_event_loop()
+                                            loop.create_task(matrix_cache.lightweight_sync(db, max_age_minutes=30))
+                                        except RuntimeError:
+                                            # If no event loop, start lightweight sync in thread
+                                            def lightweight_sync():
+                                                loop = asyncio.new_event_loop()
+                                                asyncio.set_event_loop(loop)
+                                                try:
+                                                    loop.run_until_complete(matrix_cache.lightweight_sync(db, max_age_minutes=30))
+                                                finally:
+                                                    loop.close()
+                                            threading.Thread(target=lightweight_sync, daemon=True).start()
+                                    
+                                    # Get cached users (fast)
+                                    cached_users = matrix_cache.get_cached_users(db)
+                                    
+                                    # Convert to the expected format
+                                    fetched_users = [
+                                        {
+                                            'user_id': user['user_id'],
+                                            'display_name': user['display_name'],
+                                            'is_admin': False
+                                        }
+                                        for user in cached_users
+                                    ]
+                                    
+                                    return fetched_users
+                                finally:
+                                    db.close()
+                            except Exception as e:
+                                logging.error(f"Error fetching Matrix users: {str(e)}")
+                                return []
+                        
+                        # Task 2: Pre-warm room recommendations cache
+                        def prewarm_room_cache():
+                            try:
+                                from app.utils.recommendation import get_all_accessible_rooms_with_details
+                                import asyncio
+                                
+                                # Pre-warm the room cache for faster recommendations later
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                try:
+                                    # Use shorter timeout for pre-warming
+                                    rooms = loop.run_until_complete(
+                                        asyncio.wait_for(get_all_accessible_rooms_with_details(), timeout=3.0)
+                                    )
+                                    logging.info(f"Pre-warmed room cache with {len(rooms) if rooms else 0} rooms")
+                                    return rooms or []
+                                except asyncio.TimeoutError:
+                                    logging.warning("Room cache pre-warming timed out")
+                                    return []
+                                finally:
+                                    loop.close()
+                            except Exception as e:
+                                logging.error(f"Error pre-warming room cache: {str(e)}")
+                                return []
+                        
+                        # Submit both tasks concurrently
+                        matrix_future = executor.submit(fetch_matrix_users)
+                        room_future = executor.submit(prewarm_room_cache)
+                        
+                        # Wait for Matrix users (this is more critical)
+                        try:
+                            fetched_users = matrix_future.result(timeout=10)
                             st.session_state['indoc_users'] = fetched_users or []
                             st.session_state.matrix_users = fetched_users or []
                             st.session_state['fetch_indoc_users_complete'] = True
-                            logging.info(f"Background user fetch completed from cache. Found {len(fetched_users) if fetched_users else 0} users.")
-                        # This finally belongs to the inner try (line 689)
-                        finally:
-                            db.close()
-                            
-                    except Exception as e:
-                        logging.error(f"Error in background user fetch thread: {str(e)}")
-                        st.session_state['fetch_indoc_users_error'] = str(e)
-                        # Set empty list as fallback
-                        st.session_state['indoc_users'] = []
-                        st.session_state.matrix_users = []
-                    finally: # This finally corresponds to the try at line 682
-                        st.session_state['fetch_indoc_users_finished'] = True
-                
-                # Launch thread in daemon mode to avoid blocking
-                thread = threading.Thread(target=fetch_indoc_users_thread, daemon=True)
-                thread.start()
-                logging.info("Started background thread to fetch INDOC room users")
-            else:
-                # Already have users, mark as complete
-                st.session_state['fetch_indoc_users_complete'] = True
-                st.session_state['fetch_indoc_users_finished'] = True
+                            logging.info(f"Background Matrix user fetch completed. Found {len(fetched_users) if fetched_users else 0} users.")
+                        except concurrent.futures.TimeoutError:
+                            logging.error("Matrix user fetch timed out")
+                            st.session_state['indoc_users'] = []
+                            st.session_state.matrix_users = []
+                            st.session_state['fetch_indoc_users_error'] = "Matrix sync timed out"
+                        
+                        # Room pre-warming can complete in background (non-blocking)
+                        try:
+                            room_future.result(timeout=1)  # Very short timeout, it's just pre-warming
+                        except concurrent.futures.TimeoutError:
+                            logging.info("Room pre-warming continuing in background")
+                        
+                except Exception as e:
+                    logging.error(f"Error in concurrent background tasks: {str(e)}")
+                    st.session_state['fetch_indoc_users_error'] = str(e)
+                    st.session_state['indoc_users'] = []
+                    st.session_state.matrix_users = []
+                finally:
+                    st.session_state['fetch_indoc_users_finished'] = True
+            
+            # Launch concurrent tasks in daemon thread
+            thread = threading.Thread(target=concurrent_background_tasks, daemon=True)
+            thread.start()
+            logging.info("Started concurrent background tasks for Matrix sync and room pre-warming")
                 
         except Exception as e:
-            logging.error(f"Error starting background fetch of INDOC users: {str(e)}")
-            # Fallback: set empty list
+            logging.error(f"Error starting background tasks: {str(e)}")
+            # Fallback: set empty lists
             st.session_state['indoc_users'] = []
             st.session_state.matrix_users = []
     
@@ -1505,100 +1552,77 @@ If you have any questions, feel free to reach out to the community admins.
         if matrix_user and interests:
             st.subheader("Recommended Rooms")
             
-            # Get room recommendations
+            # Get room recommendations with optimized async approach
             if "recommended_rooms" not in st.session_state:
                 st.session_state.recommended_rooms = []
-            if not st.session_state.recommended_rooms:
+                
+            # Use session state to track if recommendations are being fetched
+            if 'recommendations_fetching' not in st.session_state:
+                st.session_state.recommendations_fetching = False
+                
+            if not st.session_state.recommended_rooms and not st.session_state.recommendations_fetching:
+                # Start async room recommendations
+                st.session_state.recommendations_fetching = True
+                
                 with st.spinner("Getting room recommendations based on interests..."):
                     try:
-                        # Use a timeout to prevent hanging if the recommendation service is slow
-                        import threading
-                        import queue
-                        import time
-                        from concurrent.futures import ThreadPoolExecutor
+                        import asyncio
+                        import concurrent.futures
                         
-                        result_queue = queue.Queue()
-                        
-                        def get_recommendations_with_timeout():
+                        def get_recommendations_fast():
+                            """Optimized room recommendation function using cached data"""
                             try:
-                                # Ensure the recommendation function is properly imported
-                                from app.utils.recommendation import get_room_recommendations_sync
+                                from app.utils.recommendation import match_interests_with_rooms
                                 
-                                # Ensure matrix_user has a value and use safe get()
-                                matrix_user_id = st.session_state.get('matrix_user_selected')
-                                if matrix_user_id is None:
-                                    # Log the issue but don't raise an exception
-                                    logging.warning("matrix_user_selected is None during recommendation")
-                                    matrix_user_id = ""  # Empty string as fallback
-                                    
-                                # Get room recommendations with defensive checks
-                                logging.info(f"Starting room recommendation request for user: {matrix_user_id}, interests: {interests}")
-                                
-                                # Use a separate thread with timeout to avoid getting stuck
-                                with ThreadPoolExecutor(max_workers=1) as executor:
-                                    future = executor.submit(get_room_recommendations_sync, matrix_user_id, interests or "")
-                                    try:
-                                        # Wait for result with timeout
-                                        rooms = future.result(timeout=8)  # 8 second timeout
-                                        result_queue.put(("success", rooms))
-                                        logging.info(f"Successfully got room recommendations: {len(rooms) if rooms else 0} rooms")
-                                    except TimeoutError:
-                                        logging.error("Room recommendation timed out in ThreadPoolExecutor")
-                                        result_queue.put(("error", "Recommendation request timed out"))
-                                        # Force cancel the future if possible
-                                        future.cancel()
+                                # Use the async function directly with proper event loop management
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                try:
+                                    # Use reduced timeout since room cache should be pre-warmed
+                                    rooms = loop.run_until_complete(
+                                        asyncio.wait_for(match_interests_with_rooms(interests), timeout=3.0)
+                                    )
+                                    logging.info(f"Fast room recommendations completed: {len(rooms) if rooms else 0} rooms")
+                                    return rooms or []
+                                except asyncio.TimeoutError:
+                                    logging.warning("Fast room recommendations timed out, using fallback")
+                                    return []
+                                finally:
+                                    loop.close()
                             except Exception as e:
-                                # Log the full exception details
-                                logging.error(f"Error in get_recommendations_with_timeout: {str(e)}")
-                                logging.error(traceback.format_exc())
-                                result_queue.put(("error", str(e)))
+                                logging.error(f"Error in fast room recommendations: {str(e)}")
+                                return []
                         
-                        # Start the recommendation thread
-                        rec_thread = threading.Thread(target=get_recommendations_with_timeout)
-                        rec_thread.daemon = True
-                        rec_thread.start()
-                        
-                        # Wait for result with a firm timeout
-                        start_time = time.time()
-                    except Exception as e:
-                        # Handle any exceptions in the setup process
-                        logging.error(f"Error setting up recommendation thread: {str(e)}")
-                        logging.error(traceback.format_exc())
-                        st.error(f"Failed to start recommendation search: {str(e)}")
-                        return
-                    max_wait = 5  # Reduced from 8 to 5 seconds maximum wait
-                    
-                    while time.time() - start_time < max_wait:
-                        if not result_queue.empty():
-                            status, result = result_queue.get()
-                            if status == "success":
-                                # Ensure result is not None before assigning to session state
-                                if result is not None:
-                                    st.session_state.recommended_rooms = result
-                                    st.success(f"Found {len(result)} recommended rooms based on your interests!")
-                                    st.rerun()
+                        # Use ThreadPoolExecutor for better control
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                            future = executor.submit(get_recommendations_fast)
+                            try:
+                                rooms = future.result(timeout=4.0)  # Reduced from 8 to 4 seconds
+                                st.session_state.recommended_rooms = rooms or []
+                                if rooms:
+                                    st.success(f"Found {len(rooms)} recommended rooms based on your interests!")
                                 else:
-                                    st.session_state.recommended_rooms = []
                                     st.info("No rooms found matching your interests. You can still create the user without room recommendations.")
-                                    st.rerun()
-                                break
-                            elif status == "timeout":
+                                st.rerun()
+                            except concurrent.futures.TimeoutError:
+                                logging.error("Room recommendation timed out")
                                 st.session_state.recommended_rooms = []
                                 st.warning("⏱️ Room recommendation search timed out. This may be due to network issues. You can still create the user without recommendations.")
                                 st.rerun()
-                                break
-                            elif status == "error":
+                            except Exception as e:
+                                logging.error(f"Error getting room recommendations: {str(e)}")
                                 st.session_state.recommended_rooms = []
-                                error_msg = result if isinstance(result, str) else "Unknown error occurred"
-                                st.error(f"❌ Error getting room recommendations: {error_msg}. You can still create the user.")
+                                st.error(f"❌ Error getting room recommendations: {str(e)}. You can still create the user.")
                                 st.rerun()
-                                break
-                        time.sleep(0.1)  # Short sleep to avoid busy waiting
-                    else:
-                        # Timeout reached
+                            finally:
+                                st.session_state.recommendations_fetching = False
+                    except Exception as e:
+                        # Handle any exceptions in the setup process
+                        logging.error(f"Error setting up recommendation search: {str(e)}")
+                        logging.error(traceback.format_exc())
                         st.session_state.recommended_rooms = []
-                        st.warning("⏱️ Room search timed out after 5 seconds. This may be due to server load. You can still create the user without recommendations.")
-                        st.rerun()
+                        st.session_state.recommendations_fetching = False
+                        st.error(f"Failed to start recommendation search: {str(e)}")
         
         # Display recommended rooms with checkboxes
         if st.session_state.recommended_rooms:

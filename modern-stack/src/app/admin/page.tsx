@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { trpc } from '@/lib/trpc/client';
@@ -55,19 +55,32 @@ export default function AdminDashboard() {
   });
 
   // Export functionality
-  const exportDataMutation = trpc.admin.exportAdminData.useMutation({
-    onSuccess: (data) => {
-      // In a real app, this would trigger a download
+  const [exportType, setExportType] = useState<'users' | 'events' | 'matrix' | 'invites' | null>(null);
+  const { data: exportData, isLoading: isExporting, error: exportError } = trpc.admin.exportAdminData.useQuery(
+    { type: exportType! },
+    {
+      enabled: exportType !== null,
+    }
+  );
+
+  // Handle export success/error
+  useEffect(() => {
+    if (exportData && exportType) {
       toast.success('Data exported successfully');
-      console.log('Exported data:', data);
-    },
-    onError: () => {
+      console.log('Exported data:', exportData);
+      setExportType(null);
+    }
+  }, [exportData, exportType]);
+
+  useEffect(() => {
+    if (exportError) {
       toast.error('Failed to export data');
-    },
-  });
+      setExportType(null);
+    }
+  }, [exportError]);
 
   const handleExport = (type: 'users' | 'events' | 'matrix' | 'invites') => {
-    exportDataMutation.mutate({ type });
+    setExportType(type);
   };
 
   // Access control
@@ -368,7 +381,7 @@ export default function AdminDashboard() {
                   <Button
                     variant="outline"
                     onClick={() => handleExport('users')}
-                    disabled={exportDataMutation.isPending}
+                    disabled={isExporting}
                   >
                     <Download className="w-4 h-4 mr-2" />
                     Export Users
@@ -376,7 +389,7 @@ export default function AdminDashboard() {
                   <Button
                     variant="outline"
                     onClick={() => handleExport('invites')}
-                    disabled={exportDataMutation.isPending}
+                    disabled={isExporting}
                   >
                     <Download className="w-4 h-4 mr-2" />
                     Export Invites
@@ -425,7 +438,7 @@ export default function AdminDashboard() {
                     <Button
                       variant="outline"
                       onClick={() => handleExport('events')}
-                      disabled={exportDataMutation.isPending}
+                      disabled={isExporting}
                     >
                       <Download className="w-4 h-4 mr-2" />
                       Export Events
@@ -433,7 +446,7 @@ export default function AdminDashboard() {
                     <Button
                       variant="outline"
                       onClick={() => handleExport('matrix')}
-                      disabled={exportDataMutation.isPending}
+                      disabled={isExporting}
                     >
                       <Download className="w-4 h-4 mr-2" />
                       Export Matrix Data

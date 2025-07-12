@@ -290,7 +290,6 @@ def clear_parse_data():
         st.session_state.selected_rooms = set()
     
     # Clear group selection - reset to default
-    from app.utils.config import Config
     main_group_id = Config.MAIN_GROUP_ID
     st.session_state.selected_groups = [main_group_id] if main_group_id else []
     st.session_state.group_selection = [main_group_id] if main_group_id else []
@@ -1552,7 +1551,6 @@ If you have any questions, feel free to reach out to the community admins.
     # Load configured rooms
     if 'configured_rooms' not in st.session_state:
         try:
-            from app.utils.config import Config
             configured_rooms = Config.get_configured_rooms()
             st.session_state.configured_rooms = configured_rooms
             logging.info(f"Loaded {len(configured_rooms)} configured rooms")

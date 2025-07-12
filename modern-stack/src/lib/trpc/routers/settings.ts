@@ -254,7 +254,7 @@ export const settingsRouter = createTRPCRouter({
   importSettings: adminProcedure
     .input(
       z.object({
-        settings: z.record(z.any()),
+        settings: z.record(z.string(), z.any()),
         overwrite: z.boolean().default(false),
       })
     )

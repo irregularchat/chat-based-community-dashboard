@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, use } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { trpc } from '@/lib/trpc/client';
@@ -16,15 +16,16 @@ import { ArrowLeft, Edit3, Save, X, Plus, Trash2, Calendar, Mail, User, Shield, 
 import { toast } from 'sonner';
 
 interface UserProfilePageProps {
-  params: {
+  params: Promise<{
     id: string;
-  };
+  }>;
 }
 
 export default function UserProfilePage({ params }: UserProfilePageProps) {
   const { data: session } = useSession();
   const router = useRouter();
-  const userId = parseInt(params.id);
+  const { id } = use(params);
+  const userId = parseInt(id);
   const [isEditing, setIsEditing] = useState(false);
   const [newNote, setNewNote] = useState('');
   const [editingNote, setEditingNote] = useState<number | null>(null);
@@ -92,10 +93,10 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
   const handleEdit = () => {
     if (user) {
       setEditForm({
-        username: user.username,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
+        username: user.username || '',
+        email: user.email || '',
+        firstName: user.firstName || '',
+        lastName: user.lastName || '',
         isActive: user.isActive,
         isAdmin: user.isAdmin,
         isModerator: user.isModerator,
@@ -263,7 +264,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
                           </Button>
                           <Button
                             onClick={handleSave}
-                            disabled={updateUserMutation.isLoading}
+                            disabled={updateUserMutation.isPending}
                             className="flex items-center gap-2"
                           >
                             <Save className="w-4 h-4" />
@@ -421,7 +422,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
                     />
                     <Button
                       onClick={handleAddNote}
-                      disabled={!newNote.trim() || addNoteMutation.isLoading}
+                      disabled={!newNote.trim() || addNoteMutation.isPending}
                       className="flex items-center gap-2"
                     >
                       <Plus className="w-4 h-4" />
@@ -472,7 +473,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
                                   <Button
                                     size="sm"
                                     onClick={() => handleUpdateNote(note.id)}
-                                    disabled={updateNoteMutation.isLoading}
+                                    disabled={updateNoteMutation.isPending}
                                   >
                                     Save
                                   </Button>

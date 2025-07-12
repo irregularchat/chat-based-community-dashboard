@@ -81,8 +81,8 @@ export const authOptions: NextAuthOptions = {
         return {
           id: user.id.toString(),
           email: user.email,
-          name: `${user.firstName} ${user.lastName}`.trim(),
-          username: user.username,
+          name: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
+          username: user.username || undefined,
           isAdmin: user.isAdmin,
           isModerator: user.isModerator,
           groups: user.groups.map((g: any) => g.group.name),

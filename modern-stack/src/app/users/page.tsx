@@ -16,10 +16,10 @@ import { useRouter } from 'next/navigation';
 
 type UserWithRelations = {
   id: number;
-  username: string;
-  email: string;
-  firstName: string;
-  lastName: string;
+  username: string | null;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
   isActive: boolean;
   isAdmin: boolean;
   isModerator: boolean;
@@ -233,14 +233,14 @@ export default function UsersPage() {
                           <TableCell>
                             <div>
                               <div className="font-medium">
-                                {user.firstName} {user.lastName}
+                                {user.firstName || ''} {user.lastName || ''}
                               </div>
                               <div className="text-sm text-muted-foreground">
-                                @{user.username}
+                                @{user.username || 'no-username'}
                               </div>
                             </div>
                           </TableCell>
-                          <TableCell>{user.email}</TableCell>
+                          <TableCell>{user.email || 'No email'}</TableCell>
                           <TableCell>
                             <Badge variant={user.isActive ? 'default' : 'secondary'}>
                               {user.isActive ? 'Active' : 'Inactive'}

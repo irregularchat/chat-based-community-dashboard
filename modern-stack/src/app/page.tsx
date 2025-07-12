@@ -196,6 +196,21 @@ export default function Home() {
                       </div>
                     </div>
                   </Button>
+                  {session.user.isAdmin && (
+                    <Button
+                      variant="outline"
+                      className="h-auto p-4 flex flex-col items-center gap-2"
+                      onClick={() => window.location.href = '/admin'}
+                    >
+                      <div className="text-2xl">📊</div>
+                      <div className="text-center">
+                        <div className="font-medium">Admin Dashboard</div>
+                        <div className="text-sm text-muted-foreground">
+                          Analytics & system health
+                        </div>
+                      </div>
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     className="h-auto p-4 flex flex-col items-center gap-2"

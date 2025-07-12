@@ -159,6 +159,62 @@ export default function Home() {
           </Card>
         </div>
 
+        {(session.user.isAdmin || session.user.isModerator) && (
+          <div className="mt-8">
+            <Card>
+              <CardHeader>
+                <CardTitle>🚀 Quick Actions</CardTitle>
+                <CardDescription>
+                  Access key features and management tools
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <Button
+                    variant="outline"
+                    className="h-auto p-4 flex flex-col items-center gap-2"
+                    onClick={() => window.location.href = '/users'}
+                  >
+                    <div className="text-2xl">👥</div>
+                    <div className="text-center">
+                      <div className="font-medium">User Management</div>
+                      <div className="text-sm text-muted-foreground">
+                        Manage community members
+                      </div>
+                    </div>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-auto p-4 flex flex-col items-center gap-2"
+                    disabled
+                  >
+                    <div className="text-2xl">🔗</div>
+                    <div className="text-center">
+                      <div className="font-medium">Matrix Integration</div>
+                      <div className="text-sm text-muted-foreground">
+                        Coming soon
+                      </div>
+                    </div>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-auto p-4 flex flex-col items-center gap-2"
+                    disabled
+                  >
+                    <div className="text-2xl">📊</div>
+                    <div className="text-center">
+                      <div className="font-medium">Analytics</div>
+                      <div className="text-sm text-muted-foreground">
+                        Coming soon
+                      </div>
+                    </div>
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
         <div className="mt-8">
           <Card>
             <CardHeader>

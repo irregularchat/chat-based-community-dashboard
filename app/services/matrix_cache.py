@@ -76,8 +76,8 @@ class MatrixCacheService:
                 db.add(sync_status)
                 db.commit()
                 
-                # Sync rooms first
-                room_result = await self._sync_rooms(db, client, is_rapid_manual_sync)
+                # Sync rooms first using concurrent processing for speed
+                room_result = await self._sync_rooms_concurrent(db, client, is_rapid_manual_sync)
                 
                 # Sync users and memberships
                 user_result = await self._sync_users_and_memberships(db, client, is_rapid_manual_sync)
@@ -119,7 +119,7 @@ class MatrixCacheService:
 
     async def _sync_rooms(self, db: Session, client, is_rapid_manual_sync: bool = False) -> Dict:
         """
-        Sync Matrix rooms with smart user count comparison.
+        Sync Matrix rooms with smart prioritization for configured and important rooms.
         
         Args:
             db: Database session
@@ -147,7 +147,51 @@ class MatrixCacheService:
             if is_initial_sync:
                 logger.info("Detected initial sync - will populate cache with fresh data from Matrix")
             
-            for room_id in room_ids:
+            # Prioritize rooms for more efficient syncing
+            priority_room_ids = self._get_priority_rooms()
+            configured_room_ids = self._get_configured_room_ids()
+            
+            # Create prioritized room list
+            prioritized_rooms = []
+            
+            # 1. First priority: Critical functional rooms (welcome, moderation)
+            for room_id in priority_room_ids:
+                if room_id in room_ids:
+                    prioritized_rooms.append((room_id, "critical"))
+                    room_ids.remove(room_id)
+            
+            # 2. Second priority: Configured rooms from .env
+            for room_id in configured_room_ids:
+                if room_id in room_ids:
+                    prioritized_rooms.append((room_id, "configured"))
+                    room_ids.remove(room_id)
+            
+            # 3. Third priority: Remaining rooms (sorted by likely member count - larger rooms first)
+            # Get existing rooms to prioritize by cached member count
+            existing_rooms = {room.room_id: room.member_count for room in db.query(MatrixRoom).all()}
+            remaining_rooms = sorted(room_ids, key=lambda r: existing_rooms.get(r, 0), reverse=True)
+            
+            for room_id in remaining_rooms:
+                prioritized_rooms.append((room_id, "standard"))
+            
+            logger.info(f"Prioritized sync order: {len([r for r in prioritized_rooms if r[1] == 'critical'])} critical, "
+                       f"{len([r for r in prioritized_rooms if r[1] == 'configured'])} configured, "
+                       f"{len([r for r in prioritized_rooms if r[1] == 'standard'])} standard rooms")
+            
+            # Set time limits for different priority levels during manual sync
+            sync_start_time = datetime.utcnow()
+            max_sync_time_minutes = 10 if is_rapid_manual_sync else 30  # Limit sync time
+            
+            for room_id, priority_type in prioritized_rooms:
+                # Check time limits for non-critical rooms
+                elapsed_minutes = (datetime.utcnow() - sync_start_time).total_seconds() / 60
+                if priority_type == "standard" and elapsed_minutes > max_sync_time_minutes:
+                    logger.info(f"Time limit reached ({max_sync_time_minutes}min), skipping remaining {len(prioritized_rooms) - prioritized_rooms.index((room_id, priority_type))} standard rooms")
+                    break
+                elif priority_type == "configured" and elapsed_minutes > (max_sync_time_minutes * 0.8):
+                    logger.info(f"Time limit approaching ({elapsed_minutes:.1f}min), skipping remaining standard rooms after configured rooms")
+                    # Continue with configured rooms but skip standard rooms
+                    prioritized_rooms = [r for r in prioritized_rooms if r[1] in ["critical", "configured"] or prioritized_rooms.index(r) <= prioritized_rooms.index((room_id, priority_type))]
                 try:
                     # Get room details from Matrix (skip member count only for efficiency syncs)
                     skip_expensive_calls = not (is_initial_sync or is_rapid_manual_sync)
@@ -194,11 +238,13 @@ class MatrixCacheService:
                                     room_details = await get_room_details_async(client, room_id, skip_member_count=False)
                                 current_member_count = room_details.get("member_count", 0)
                     
-                    # Skip rooms with fewer than minimum members
-                    if current_member_count <= Config.MATRIX_MIN_ROOM_MEMBERS:
+                    # Skip rooms with fewer than minimum members (but not critical/configured rooms)
+                    if current_member_count <= Config.MATRIX_MIN_ROOM_MEMBERS and priority_type == "standard":
                         logger.info(f"Skipping room {room_id} - only {current_member_count} members (minimum: {Config.MATRIX_MIN_ROOM_MEMBERS})")
                         rooms_skipped += 1
                         continue
+                    elif current_member_count <= Config.MATRIX_MIN_ROOM_MEMBERS and priority_type in ["critical", "configured"]:
+                        logger.info(f"Syncing {priority_type} room {room_id} despite low member count ({current_member_count})")
                     
                     # Smart sync logic: skip if member count hasn't changed (unless rapid manual sync)
                     if existing_room and not is_rapid_manual_sync:
@@ -245,6 +291,198 @@ class MatrixCacheService:
             logger.error(f"Error in _sync_rooms: {str(e)}")
             return {"rooms_synced": 0, "error": str(e)}
 
+    async def _sync_single_room(self, client, room_id: str, priority_type: str, db: Session, is_initial_sync: bool, is_rapid_manual_sync: bool) -> Dict:
+        """
+        Sync a single room concurrently.
+        
+        Args:
+            client: Matrix client
+            room_id: Room ID to sync
+            priority_type: Priority type (critical, configured, standard)
+            db: Database session
+            is_initial_sync: Whether this is an initial sync
+            is_rapid_manual_sync: Whether this is a rapid manual sync
+            
+        Returns:
+            Dict with sync results for this room
+        """
+        try:
+            from app.utils.matrix_actions import get_room_details_async
+            
+            # Get room details from Matrix (skip member count only for efficiency syncs)
+            skip_expensive_calls = not (is_initial_sync or is_rapid_manual_sync)
+            room_details = await get_room_details_async(client, room_id, skip_member_count=skip_expensive_calls)
+            
+            # Get current room from database
+            existing_room = db.query(MatrixRoom).filter(
+                MatrixRoom.room_id == room_id
+            ).first()
+            
+            # Handle member count logic based on sync type
+            if is_initial_sync or is_rapid_manual_sync:
+                # During initial sync or manual sync, always get fresh data
+                current_member_count = room_details.get("member_count", 0)
+            else:
+                # For subsequent automatic syncs, try to use cached data for efficiency
+                try:
+                    from app.db.operations import get_matrix_room_member_count
+                    cached_member_count = get_matrix_room_member_count(db, room_id)
+                    if cached_member_count > 0 and existing_room:
+                        # Use cached count if it's reliable and room hasn't changed much
+                        if abs(existing_room.member_count - cached_member_count) < 2:
+                            return {"room_id": room_id, "status": "skipped", "reason": "stable_count"}
+                        else:
+                            # Use the existing room's member count (from previous sync)
+                            current_member_count = existing_room.member_count
+                    else:
+                        # No reliable cached data, need to get fresh member count
+                        if skip_expensive_calls:
+                            # We skipped the expensive call but need member count
+                            room_details = await get_room_details_async(client, room_id, skip_member_count=False)
+                        current_member_count = room_details.get("member_count", 0)
+                except Exception as cache_error:
+                    if existing_room:
+                        current_member_count = existing_room.member_count
+                    else:
+                        if skip_expensive_calls:
+                            room_details = await get_room_details_async(client, room_id, skip_member_count=False)
+                        current_member_count = room_details.get("member_count", 0)
+            
+            # Skip rooms with fewer than minimum members (but not critical/configured rooms)
+            if current_member_count <= Config.MATRIX_MIN_ROOM_MEMBERS and priority_type == "standard":
+                return {"room_id": room_id, "status": "skipped", "reason": "low_member_count", "member_count": current_member_count}
+            elif current_member_count <= Config.MATRIX_MIN_ROOM_MEMBERS and priority_type in ["critical", "configured"]:
+                logger.info(f"Syncing {priority_type} room {room_id} despite low member count ({current_member_count})")
+            
+            # Smart sync logic: skip if member count hasn't changed (unless rapid manual sync)
+            if existing_room and not is_rapid_manual_sync:
+                if existing_room.member_count == current_member_count:
+                    return {"room_id": room_id, "status": "skipped", "reason": "unchanged_count"}
+            
+            # Update or create room
+            if existing_room:
+                existing_room.name = room_details.get("name", "")
+                existing_room.topic = room_details.get("topic", "")
+                existing_room.member_count = current_member_count
+                existing_room.last_synced = datetime.utcnow()
+            else:
+                new_room = MatrixRoom(
+                    room_id=room_id,
+                    name=room_details.get("name", ""),
+                    topic=room_details.get("topic", ""),
+                    member_count=current_member_count,
+                    last_synced=datetime.utcnow()
+                )
+                db.add(new_room)
+            
+            return {"room_id": room_id, "status": "synced", "member_count": current_member_count, "priority": priority_type}
+            
+        except Exception as e:
+            logger.error(f"Error syncing room {room_id}: {str(e)}")
+            return {"room_id": room_id, "status": "error", "error": str(e)}
+
+    async def _sync_rooms_concurrent(self, db: Session, client, is_rapid_manual_sync: bool = False) -> Dict:
+        """
+        Sync Matrix rooms with concurrent processing for speed.
+        
+        Args:
+            db: Database session
+            client: Matrix client
+            is_rapid_manual_sync: Whether this is a rapid manual sync
+            
+        Returns:
+            Dict with sync results
+        """
+        try:
+            from app.utils.matrix_actions import get_joined_rooms_async
+            
+            # Get joined rooms from Matrix
+            room_ids = await get_joined_rooms_async(client)
+            if not room_ids:
+                return {"rooms_synced": 0}
+            
+            # Check if this is an initial sync (no rooms in database yet)
+            total_rooms_in_db = db.query(MatrixRoom).count()
+            is_initial_sync = total_rooms_in_db == 0
+            
+            if is_initial_sync:
+                logger.info("Detected initial sync - will populate cache with fresh data from Matrix")
+            
+            # Prioritize rooms for more efficient syncing
+            priority_room_ids = self._get_priority_rooms()
+            configured_room_ids = self._get_configured_room_ids()
+            
+            # Create prioritized room list
+            critical_rooms = [(room_id, "critical") for room_id in priority_room_ids if room_id in room_ids]
+            configured_rooms = [(room_id, "configured") for room_id in configured_room_ids if room_id in room_ids and room_id not in priority_room_ids]
+            
+            # For standard rooms, only process a limited number concurrently to avoid overwhelming the server
+            remaining_room_ids = [rid for rid in room_ids if rid not in priority_room_ids and rid not in configured_room_ids]
+            existing_rooms = {room.room_id: room.member_count for room in db.query(MatrixRoom).all()}
+            
+            # Sort remaining rooms by cached member count and take only top N for concurrent processing
+            max_standard_rooms = 20 if is_rapid_manual_sync else 50  # Limit concurrent standard rooms
+            sorted_remaining = sorted(remaining_room_ids, key=lambda r: existing_rooms.get(r, 0), reverse=True)[:max_standard_rooms]
+            standard_rooms = [(room_id, "standard") for room_id in sorted_remaining]
+            
+            logger.info(f"Concurrent sync: {len(critical_rooms)} critical, {len(configured_rooms)} configured, "
+                       f"{len(standard_rooms)} standard rooms (limited from {len(remaining_room_ids)} total)")
+            
+            # Process rooms in batches with concurrency limits
+            semaphore = asyncio.Semaphore(10)  # Limit concurrent requests to Matrix server
+            
+            async def sync_room_with_limit(room_id, priority_type):
+                async with semaphore:
+                    return await self._sync_single_room(client, room_id, priority_type, db, is_initial_sync, is_rapid_manual_sync)
+            
+            # Process critical rooms first (small batch, high priority)
+            critical_results = []
+            if critical_rooms:
+                critical_tasks = [sync_room_with_limit(room_id, priority) for room_id, priority in critical_rooms]
+                critical_results = await asyncio.gather(*critical_tasks, return_exceptions=True)
+                # Commit critical rooms immediately
+                db.commit()
+                logger.info(f"Critical rooms synced: {len([r for r in critical_results if isinstance(r, dict) and r.get('status') == 'synced'])}")
+            
+            # Process configured rooms second (medium batch)
+            configured_results = []
+            if configured_rooms:
+                configured_tasks = [sync_room_with_limit(room_id, priority) for room_id, priority in configured_rooms]
+                configured_results = await asyncio.gather(*configured_tasks, return_exceptions=True)
+                # Commit configured rooms
+                db.commit()
+                logger.info(f"Configured rooms synced: {len([r for r in configured_results if isinstance(r, dict) and r.get('status') == 'synced'])}")
+            
+            # Process standard rooms last (larger batch, lower priority)
+            standard_results = []
+            if standard_rooms:
+                standard_tasks = [sync_room_with_limit(room_id, priority) for room_id, priority in standard_rooms]
+                standard_results = await asyncio.gather(*standard_tasks, return_exceptions=True)
+                # Commit standard rooms
+                db.commit()
+                logger.info(f"Standard rooms synced: {len([r for r in standard_results if isinstance(r, dict) and r.get('status') == 'synced'])}")
+            
+            # Count results
+            all_results = critical_results + configured_results + standard_results
+            rooms_synced = len([r for r in all_results if isinstance(r, dict) and r.get('status') == 'synced'])
+            rooms_skipped = len([r for r in all_results if isinstance(r, dict) and r.get('status') == 'skipped'])
+            rooms_error = len([r for r in all_results if isinstance(r, dict) and r.get('status') == 'error'])
+            
+            logger.info(f"Concurrent room sync completed: {rooms_synced} synced, {rooms_skipped} skipped, {rooms_error} errors")
+            
+            return {
+                "rooms_synced": rooms_synced,
+                "rooms_skipped": rooms_skipped,
+                "rooms_error": rooms_error,
+                "critical_synced": len([r for r in critical_results if isinstance(r, dict) and r.get('status') == 'synced']),
+                "configured_synced": len([r for r in configured_results if isinstance(r, dict) and r.get('status') == 'synced']),
+                "standard_synced": len([r for r in standard_results if isinstance(r, dict) and r.get('status') == 'synced'])
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in _sync_rooms_concurrent: {str(e)}")
+            return {"rooms_synced": 0, "error": str(e)}
+
     async def _sync_users_and_memberships(self, db: Session, client, is_rapid_manual_sync: bool = False) -> Dict:
         """
         Sync Matrix users and room memberships with smart logic.
@@ -258,20 +496,53 @@ class MatrixCacheService:
             Dict with sync results
         """
         try:
-            # Get all rooms to sync memberships for
-            rooms = db.query(MatrixRoom).all()
+            # Get all rooms to sync memberships for, with prioritization
+            all_rooms = db.query(MatrixRoom).all()
+            
+            # Prioritize rooms for membership sync too
+            priority_room_ids = self._get_priority_rooms()
+            configured_room_ids = self._get_configured_room_ids()
+            
+            # Create prioritized room list for memberships
+            prioritized_rooms = []
+            
+            # Group rooms by priority
+            rooms_by_id = {room.room_id: room for room in all_rooms}
+            
+            # 1. Critical rooms first
+            for room_id in priority_room_ids:
+                if room_id in rooms_by_id:
+                    prioritized_rooms.append((rooms_by_id[room_id], "critical"))
+                    del rooms_by_id[room_id]
+            
+            # 2. Configured rooms second
+            for room_id in configured_room_ids:
+                if room_id in rooms_by_id:
+                    prioritized_rooms.append((rooms_by_id[room_id], "configured"))
+                    del rooms_by_id[room_id]
+            
+            # 3. Remaining rooms ordered by member count (largest first)
+            remaining_rooms = sorted(rooms_by_id.values(), key=lambda r: r.member_count, reverse=True)
+            for room in remaining_rooms:
+                prioritized_rooms.append((room, "standard"))
+            
+            logger.info(f"Membership sync prioritized: {len([r for r in prioritized_rooms if r[1] == 'critical'])} critical, "
+                       f"{len([r for r in prioritized_rooms if r[1] == 'configured'])} configured, "
+                       f"{len([r for r in prioritized_rooms if r[1] == 'standard'])} standard rooms")
             
             users_synced = 0
             memberships_synced = 0
             rooms_skipped = 0
             
-            for room in rooms:
+            for room, priority_type in prioritized_rooms:
                 try:
-                    # Skip rooms with fewer than minimum members
-                    if room.member_count <= Config.MATRIX_MIN_ROOM_MEMBERS:
+                    # Skip rooms with fewer than minimum members (but not critical/configured rooms)
+                    if room.member_count <= Config.MATRIX_MIN_ROOM_MEMBERS and priority_type == "standard":
                         logger.info(f"Skipping membership sync for {room.room_id} - only {room.member_count} members (minimum: {Config.MATRIX_MIN_ROOM_MEMBERS})")
                         rooms_skipped += 1
                         continue
+                    elif room.member_count <= Config.MATRIX_MIN_ROOM_MEMBERS and priority_type in ["critical", "configured"]:
+                        logger.info(f"Syncing {priority_type} room {room.room_id} membership despite low member count ({room.member_count})")
                     
                     # Get current membership count from database
                     current_db_count = db.query(MatrixRoomMembership).filter(
@@ -499,10 +770,117 @@ class MatrixCacheService:
             logging.error(f"Error getting users in room {room_id}: {str(e)}")
             return []
     
+    async def sync_indoc_room_only(self, db: Session) -> Dict:
+        """
+        Sync only the INDOC/Entry room for immediate user creation needs.
+        This is the fastest possible sync focused on the entry room where new users appear.
+        
+        Args:
+            db: Database session
+            
+        Returns:
+            Dict with sync results
+        """
+        try:
+            from app.utils.matrix_actions import get_matrix_client, get_room_members_async
+            
+            if not Config.MATRIX_ACTIVE:
+                return {"status": "error", "error": "Matrix not active"}
+            
+            # Use the welcome room as the INDOC room
+            indoc_room_id = Config.MATRIX_WELCOME_ROOM_ID
+            if not indoc_room_id:
+                return {"status": "error", "error": "INDOC room (MATRIX_WELCOME_ROOM_ID) not configured"}
+            
+            client = await get_matrix_client()
+            if not client:
+                return {"status": "error", "error": "Failed to get Matrix client"}
+            
+            try:
+                logger.info(f"Fast INDOC room sync: {indoc_room_id}")
+                
+                # Get room members with short timeout for speed
+                try:
+                    members_data = await asyncio.wait_for(
+                        get_room_members_async(client, indoc_room_id), 
+                        timeout=3.0  # Very short timeout for user creation workflow
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("INDOC room sync timeout - using cached data")
+                    return {"status": "timeout", "room_id": indoc_room_id}
+                
+                if not members_data:
+                    return {"status": "no_members", "room_id": indoc_room_id}
+                
+                # Convert to list format
+                members = []
+                for user_id, details in members_data.items():
+                    members.append({
+                        "user_id": user_id,
+                        "display_name": details.get("display_name", ""),
+                        "avatar_url": details.get("avatar_url", "")
+                    })
+                
+                users_synced = 0
+                
+                # Quick batch update of users and memberships
+                for member in members:
+                    user_id = member.get("user_id")
+                    if not user_id:
+                        continue
+                    
+                    # Use merge for atomic upsert
+                    user = MatrixUser(
+                        user_id=user_id,
+                        display_name=member.get("display_name", user_id.split(':')[0].lstrip('@')),
+                        last_seen=datetime.utcnow()
+                    )
+                    db.merge(user)
+                    
+                    # Update membership
+                    membership = MatrixRoomMembership(
+                        user_id=user_id,
+                        room_id=indoc_room_id,
+                        membership_status='join',
+                        joined_at=datetime.utcnow()
+                    )
+                    db.merge(membership)
+                    users_synced += 1
+                
+                # Update room info
+                room = MatrixRoom(
+                    room_id=indoc_room_id,
+                    name="INDOC Entry Room",
+                    display_name="IrregularChat Entry/INDOC",
+                    topic="Entry room for new user verification and processing",
+                    member_count=len(members),
+                    room_type="public",
+                    is_direct=False,
+                    last_synced=datetime.utcnow()
+                )
+                db.merge(room)
+                
+                db.commit()
+                
+                logger.info(f"INDOC room sync completed: {users_synced} users updated in {indoc_room_id}")
+                return {
+                    "status": "completed",
+                    "sync_type": "indoc_only", 
+                    "users_synced": users_synced,
+                    "room_id": indoc_room_id
+                }
+                
+            finally:
+                await client.close()
+                
+        except Exception as e:
+            logger.error(f"Error in sync_indoc_room_only: {str(e)}")
+            return {"status": "error", "error": str(e)}
+
     async def lightweight_sync(self, db: Session, max_age_minutes: int = 30) -> Dict:
         """
-        Perform a lightweight sync that only updates essential data.
-        Used for user creation workflow optimization.
+        Perform a lightweight sync that focuses on the INDOC room for user creation.
+        This is now a wrapper around sync_indoc_room_only for faster user processing.
         
         Args:
             db: Database session
@@ -512,114 +890,11 @@ class MatrixCacheService:
             Dict with sync results
         """
         try:
-            # Check if cache is fresh enough for lightweight sync
-            if self.is_cache_fresh(db, max_age_minutes):
-                return {"status": "skipped", "reason": "cache_fresh"}
+            # For user creation workflow, we only need the INDOC room
+            # Skip cache freshness check since user creation is immediate
+            logger.info("Lightweight sync: focusing on INDOC room only")
+            return await self.sync_indoc_room_only(db)
             
-            # Check if full sync is already in progress
-            if self.sync_in_progress:
-                return {"status": "skipped", "reason": "sync_in_progress"}
-            
-            from app.utils.matrix_actions import get_matrix_client
-            
-            if not Config.MATRIX_ACTIVE:
-                return {"status": "error", "error": "Matrix not active"}
-            
-            client = await get_matrix_client()
-            if not client:
-                return {"status": "error", "error": "Failed to get Matrix client"}
-            
-            try:
-                # For lightweight sync, only sync users in critical rooms (like welcome room)
-                critical_rooms = []
-                if hasattr(Config, 'MATRIX_WELCOME_ROOM_ID') and Config.MATRIX_WELCOME_ROOM_ID:
-                    critical_rooms.append(Config.MATRIX_WELCOME_ROOM_ID)
-                
-                if not critical_rooms:
-                    logger.info("No critical rooms configured for lightweight sync")
-                    return {"status": "skipped", "reason": "no_critical_rooms"}
-                
-                users_synced = 0
-                
-                # Sync only users in critical rooms for performance
-                for room_id in critical_rooms:
-                    try:
-                        from app.utils.matrix_actions import get_room_members_async
-                        
-                        # Get room members with timeout for performance
-                        members = await asyncio.wait_for(
-                            get_room_members_async(client, room_id), 
-                            timeout=5.0
-                        )
-                        
-                        # Update/insert users
-                        for member in members:
-                            user_id = member.get('user_id')
-                            if not user_id:
-                                continue
-                            
-                            # Check if user exists
-                            existing_user = db.query(MatrixUser).filter(
-                                MatrixUser.user_id == user_id
-                            ).first()
-                            
-                            if not existing_user:
-                                # Create new user
-                                new_user = MatrixUser(
-                                    user_id=user_id,
-                                    display_name=member.get('display_name', user_id.split(':')[0].lstrip('@')),
-                                    last_sync=datetime.utcnow()
-                                )
-                                db.add(new_user)
-                                users_synced += 1
-                            else:
-                                # Update existing user
-                                existing_user.display_name = member.get('display_name', existing_user.display_name)
-                                existing_user.last_sync = datetime.utcnow()
-                                users_synced += 1
-                            
-                            # Update membership
-                            existing_membership = db.query(MatrixRoomMembership).filter(
-                                MatrixRoomMembership.user_id == user_id,
-                                MatrixRoomMembership.room_id == room_id
-                            ).first()
-                            
-                            if not existing_membership:
-                                new_membership = MatrixRoomMembership(
-                                    user_id=user_id,
-                                    room_id=room_id,
-                                    membership_status='join',
-                                    last_sync=datetime.utcnow()
-                                )
-                                db.add(new_membership)
-                    
-                    except asyncio.TimeoutError:
-                        logger.warning(f"Timeout syncing room {room_id} in lightweight sync")
-                        continue
-                    except Exception as room_error:
-                        logger.error(f"Error syncing room {room_id} in lightweight sync: {room_error}")
-                        continue
-                
-                # Update sync status
-                sync_status = MatrixSyncStatus(
-                    sync_type="lightweight",
-                    status="completed",
-                    last_sync=datetime.utcnow(),
-                    processed_items=users_synced
-                )
-                db.add(sync_status)
-                db.commit()
-                
-                logger.info(f"Lightweight sync completed: {users_synced} users updated")
-                return {
-                    "status": "completed",
-                    "sync_type": "lightweight", 
-                    "users_synced": users_synced
-                }
-                
-            finally:
-                await client.close()
-                
         except Exception as e:
             logger.error(f"Error in lightweight_sync: {str(e)}")
             return {"status": "error", "error": str(e)}
@@ -691,6 +966,72 @@ class MatrixCacheService:
             if not db_session and db:
                 db.close()
                 logger.debug("Closed new db_session in background_sync.")
+
+    async def background_concurrent_sync(self, db_session: Optional[Session] = None):
+        """
+        Run a fast concurrent background sync of configured and important rooms.
+        This runs after INDOC room sync to populate fallback data without blocking user creation.
+        """
+        db = None
+        try:
+            if db_session:
+                db = db_session
+            else:
+                from app.db.session import get_db
+                db = next(get_db())
+
+            from app.utils.matrix_actions import get_matrix_client
+            
+            if not Config.MATRIX_ACTIVE:
+                return {"status": "error", "error": "Matrix not active"}
+            
+            client = await get_matrix_client()
+            if not client:
+                return {"status": "error", "error": "Failed to get Matrix client"}
+            
+            try:
+                logger.info("Starting background concurrent sync for configured rooms")
+                
+                # Only sync configured rooms in background for faster fallback data
+                configured_room_ids = self._get_configured_room_ids()
+                
+                if not configured_room_ids:
+                    logger.info("No configured rooms to sync in background")
+                    return {"status": "skipped", "reason": "no_configured_rooms"}
+                
+                # Limit to configured rooms only for background sync
+                semaphore = asyncio.Semaphore(5)  # Lower concurrency for background
+                
+                async def sync_room_with_limit(room_id):
+                    async with semaphore:
+                        return await self._sync_single_room(client, room_id, "configured", db, False, False)
+                
+                # Process configured rooms concurrently in background
+                tasks = [sync_room_with_limit(room_id) for room_id in configured_room_ids[:10]]  # Limit to first 10 for speed
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Commit results
+                db.commit()
+                
+                synced_count = len([r for r in results if isinstance(r, dict) and r.get('status') == 'synced'])
+                logger.info(f"Background concurrent sync completed: {synced_count} configured rooms synced")
+                
+                return {
+                    "status": "completed",
+                    "sync_type": "background_concurrent",
+                    "rooms_synced": synced_count
+                }
+                
+            finally:
+                await client.close()
+                
+        except Exception as e:
+            logger.error(f"Error in background concurrent sync: {str(e)}")
+            return {"status": "error", "error": str(e)}
+        finally:
+            # Only close the session if we created it in this function
+            if not db_session and db:
+                db.close()
 
     async def startup_sync(self, db: Session) -> Dict:
         """
@@ -766,6 +1107,33 @@ class MatrixCacheService:
         except Exception as e:
             logger.error(f"Error comparing room user counts: {str(e)}")
             return {}
+
+    def _get_priority_rooms(self) -> List[str]:
+        """Get list of critical/priority room IDs that should be synced first."""
+        priority_rooms = []
+        
+        # Welcome room (critical for user creation)
+        if hasattr(Config, 'MATRIX_WELCOME_ROOM_ID') and Config.MATRIX_WELCOME_ROOM_ID:
+            priority_rooms.append(Config.MATRIX_WELCOME_ROOM_ID)
+        
+        # Default room (often used for general communications)
+        if hasattr(Config, 'MATRIX_DEFAULT_ROOM_ID') and Config.MATRIX_DEFAULT_ROOM_ID:
+            priority_rooms.append(Config.MATRIX_DEFAULT_ROOM_ID)
+        
+        # Signal bridge room (important for Signal integration)
+        if hasattr(Config, 'MATRIX_SIGNAL_BRIDGE_ROOM_ID') and Config.MATRIX_SIGNAL_BRIDGE_ROOM_ID:
+            priority_rooms.append(Config.MATRIX_SIGNAL_BRIDGE_ROOM_ID)
+        
+        return list(set(priority_rooms))  # Remove duplicates
+    
+    def _get_configured_room_ids(self) -> List[str]:
+        """Get list of configured room IDs from environment variables."""
+        try:
+            configured_rooms = Config.get_configured_rooms()
+            return [room.get('room_id') for room in configured_rooms if room.get('room_id')]
+        except Exception as e:
+            logger.error(f"Error getting configured room IDs: {e}")
+            return []
 
 # Create a global instance
 matrix_cache = MatrixCacheService() 

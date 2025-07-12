@@ -334,9 +334,16 @@ class Config:
         rooms = []
         categories_config = cls.get_configured_categories()
         
-        # Find all ROOM_* environment variables
+        # Find all ROOM_* environment variables (excluding settings)
+        excluded_room_vars = {
+            'ROOM_RECOMMENDATIONS_ENABLED',
+            'ROOM_CONFIG',
+            'ROOM_SETTINGS'
+        }
+        
         for key, value in os.environ.items():
-            if key.startswith('ROOM_') and value and not key.startswith('ROOM_CONFIG'):
+            if (key.startswith('ROOM_') and value and 
+                not any(key.startswith(excluded) for excluded in excluded_room_vars)):
                 room_id = key[5:]  # Remove 'ROOM_' prefix
                 
                 # Parse room configuration

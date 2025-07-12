@@ -970,7 +970,7 @@ async def send_matrix_message_to_multiple_rooms(room_ids: List[str], message: st
 
 async def send_welcome_message_async(user_id: str, username: str, full_name: str = None) -> bool:
     """
-    Send a welcome message to a new user asynchronously.
+    Send a 2-stage welcome message to a new user to handle encryption establishment.
     
     Args:
         user_id: The Matrix ID of the user
@@ -991,16 +991,33 @@ async def send_welcome_message_async(user_id: str, username: str, full_name: str
             logger.error(f"Failed to create direct chat with {user_id}")
             return False
         
-        # Prepare the welcome message
         name_to_use = full_name if full_name else username
-        message = f"Welcome to our community, {name_to_use}! 👋\n\n"
-        message += "I'm the community bot, here to help you get started. "
-        message += "Feel free to explore our community rooms and reach out if you have any questions."
         
-        # Send the welcome message
-        return await send_matrix_message(room_id, message)
+        # Stage 1: Send a simple greeting first to establish encryption
+        simple_message = f"Welcome to the community, {name_to_use}! 👋"
+        stage1_success = await send_matrix_message(room_id, simple_message)
+        
+        if not stage1_success:
+            logger.error(f"Failed to send stage 1 welcome message to {user_id}")
+            return False
+        
+        # Stage 2: Wait 2 seconds, then send the full welcome message
+        await asyncio.sleep(2)
+        
+        full_message = f"I'm the community bot, here to help you get started! 🤖\n\n"
+        full_message += "Here's what you can do:\n"
+        full_message += "• Explore our community rooms based on your interests\n"
+        full_message += "• Join conversations and meet other members\n"
+        full_message += "• Reach out if you have any questions\n\n"
+        full_message += "Looking forward to having you in our community! 🎉"
+        
+        stage2_success = await send_matrix_message(room_id, full_message)
+        
+        logger.info(f"2-stage welcome message sent to {user_id}: Stage 1: {stage1_success}, Stage 2: {stage2_success}")
+        return stage1_success and stage2_success
+        
     except Exception as e:
-        logger.error(f"Error sending welcome message: {e}")
+        logger.error(f"Error sending 2-stage welcome message: {e}")
         return False
 
 def send_welcome_message(user_id: str, username: str, full_name: str = None) -> bool:

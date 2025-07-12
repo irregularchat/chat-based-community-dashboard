@@ -409,7 +409,7 @@ export default function MatrixPage() {
                 {/* Send Button */}
                 <Button
                   onClick={handleSendDirectMessage}
-                  disabled={!directMessage.trim() || selectedUsers.length === 0 || sendDirectMessageMutation.isLoading || sendMessageToUsersMutation.isLoading}
+                  disabled={!directMessage.trim() || selectedUsers.length === 0 || sendDirectMessageMutation.isPending || sendMessageToUsersMutation.isPending}
                   className="w-full sm:w-auto"
                 >
                   <Send className="w-4 h-4 mr-2" />
@@ -532,7 +532,7 @@ export default function MatrixPage() {
                 {/* Send Button */}
                 <Button
                   onClick={handleSendRoomMessage}
-                  disabled={!roomMessage.trim() || selectedRooms.length === 0 || sendMessageToRoomsMutation.isLoading}
+                  disabled={!roomMessage.trim() || selectedRooms.length === 0 || sendMessageToRoomsMutation.isPending}
                   className="w-full sm:w-auto"
                 >
                   <Send className="w-4 h-4 mr-2" />
@@ -648,7 +648,7 @@ export default function MatrixPage() {
                 {/* Invite Button */}
                 <Button
                   onClick={handleInviteUser}
-                  disabled={!inviteUserId.trim() || selectedRooms.length === 0 || inviteUserMutation.isLoading}
+                  disabled={!inviteUserId.trim() || selectedRooms.length === 0 || inviteUserMutation.isPending}
                   className="w-full sm:w-auto"
                 >
                   <UserPlus className="w-4 h-4 mr-2" />
@@ -777,7 +777,7 @@ export default function MatrixPage() {
                   </div>
                   <Button
                     onClick={handleRemoveUser}
-                    disabled={!removeUserId.trim() || selectedRooms.length === 0 || removeUserMutation.isLoading}
+                    disabled={!removeUserId.trim() || selectedRooms.length === 0 || removeUserMutation.isPending}
                     variant="destructive"
                     className="mt-3 w-full sm:w-auto"
                   >

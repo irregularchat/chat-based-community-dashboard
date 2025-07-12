@@ -186,13 +186,13 @@ export default function Home() {
                   <Button
                     variant="outline"
                     className="h-auto p-4 flex flex-col items-center gap-2"
-                    disabled
+                    onClick={() => window.location.href = '/matrix'}
                   >
                     <div className="text-2xl">🔗</div>
                     <div className="text-center">
                       <div className="font-medium">Matrix Integration</div>
                       <div className="text-sm text-muted-foreground">
-                        Coming soon
+                        Messaging & room management
                       </div>
                     </div>
                   </Button>

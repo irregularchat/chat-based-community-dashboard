@@ -1567,3 +1567,303 @@ async def render_create_user_form():
 This optimization demonstrates the importance of **concurrent processing**, **cache-first strategies**, and **user-centric design** in building responsive web applications with external API dependencies.
 
 ---
+
+## Room Invitation System and Manual Management Implementation (2025-01-02)
+
+### Problem
+Room invitations were failing during the user creation flow despite users selecting rooms in the UI. The system would show "No rooms were selected" even when checkboxes were checked. Additionally, there was no way to manually add users to rooms if the automatic process failed.
+
+### Root Cause Analysis
+
+#### 1. **Key Mismatch Between UI and Business Logic**
+The room selection UI and invitation logic were using different session state key patterns:
+- **UI Selection**: Used `config_room_{room_id}` for configured rooms
+- **Invitation Logic**: Only checked for `room_{room_id}` pattern
+- **Result**: Selected rooms were never found by the invitation system
+
+#### 2. **Incomplete Data Source Coverage**
+The invitation logic only checked `recommended_rooms` session state but ignored `configured_rooms`, meaning the main Signal group room selections were completely bypassed.
+
+#### 3. **Missing Manual Recovery Option**
+No standalone tool existed for manually adding users to rooms when the automatic process failed, requiring users to restart the entire user creation flow.
+
+### Solution Implementation
+
+#### 1. **Fixed Key Mismatch with Dual Pattern Support**
+```python
+# ✅ Check both room selection patterns
+selected_room_ids = []
+
+# Check configured rooms (config_room_ prefix)
+if 'configured_rooms' in st.session_state:
+    for room in st.session_state.configured_rooms:
+        room_key = f"config_room_{room['room_id']}"
+        if room_key in st.session_state.get('selected_rooms', set()):
+            selected_room_ids.append(room['room_id'])
+
+# Check recommended rooms (room_ prefix)
+if 'recommended_rooms' in st.session_state:
+    for room in st.session_state.recommended_rooms:
+        room_key = f"room_{room['room_id']}"
+        if room_key in st.session_state.get('selected_rooms', set()):
+            selected_room_ids.append(room['room_id'])
+
+# Remove duplicates
+selected_room_ids = list(set(selected_room_ids))
+```
+
+#### 2. **Comprehensive Manual Room Management System**
+Implemented standalone functionality that:
+- **Works independently** of user creation flow
+- **Supports all Matrix users** from dropdown selection
+- **Includes both configured and cached rooms** (⚙️ configured, 💾 cached indicators)
+- **Provides bulk operations** (Select All, Unselect All)
+- **Shows real-time feedback** with progress indicators and detailed results
+- **Handles errors gracefully** with expansion sections for failed operations
+
+#### 3. **Enhanced Error Handling and User Feedback**
+```python
+# ✅ Comprehensive error handling with detailed feedback
+if invitation_results and invitation_results.get('success'):
+    invited_rooms = invitation_results.get('invited_rooms', [])
+    failed_rooms = invitation_results.get('failed_rooms', [])
+    
+    if invited_rooms:
+        st.success(f"✅ Successfully added to {len(invited_rooms)} rooms!")
+        with st.expander("View Added Rooms", expanded=True):
+            for room_id, room_name in invited_rooms:
+                st.info(f"✅ {room_name}")
+    
+    if failed_rooms:
+        st.warning(f"⚠️ Failed to add to {len(failed_rooms)} rooms:")
+        with st.expander("View Failed Rooms"):
+            for room_id in failed_rooms:
+                room_name = next((r['name'] for r in available_rooms if r['room_id'] == room_id), room_id)
+                st.error(f"❌ {room_name}")
+```
+
+### Key Lessons Learned
+
+#### 1. **Session State Key Management**
+**Problem**: Inconsistent naming conventions between UI components and business logic create silent integration failures.
+
+**Best Practices**:
+- **Establish naming conventions early** and document them
+- **Use constants** for session state keys to prevent typos
+- **Create helper functions** for session state access patterns
+- **Always check for multiple key patterns** when integrating different systems
+
+```python
+# ✅ Use constants to prevent key mismatches
+class SessionKeys:
+    CONFIGURED_ROOM_PREFIX = "config_room_"
+    RECOMMENDED_ROOM_PREFIX = "room_"
+    SELECTED_ROOMS = "selected_rooms"
+
+def get_selected_room_ids():
+    """Centralized function to get all selected rooms regardless of source."""
+    selected_ids = []
+    selected_rooms = st.session_state.get(SessionKeys.SELECTED_ROOMS, set())
+    
+    # Check all possible room sources with their respective prefixes
+    for room_key in selected_rooms:
+        if room_key.startswith(SessionKeys.CONFIGURED_ROOM_PREFIX):
+            room_id = room_key.replace(SessionKeys.CONFIGURED_ROOM_PREFIX, "")
+            selected_ids.append(room_id)
+        elif room_key.startswith(SessionKeys.RECOMMENDED_ROOM_PREFIX):
+            room_id = room_key.replace(SessionKeys.RECOMMENDED_ROOM_PREFIX, "")
+            selected_ids.append(room_id)
+    
+    return list(set(selected_ids))
+```
+
+#### 2. **Integration Testing Critical for Complex Workflows**
+**Problem**: Individual components (room selection UI, invitation logic) worked correctly in isolation but failed when integrated.
+
+**Best Practices**:
+- **Test complete workflows** from UI interaction to final result
+- **Log intermediate states** to track data flow between components
+- **Create integration test scripts** that exercise full user scenarios
+- **Verify session state changes** at each step of complex workflows
+
+#### 3. **Standalone Features Improve Reliability**
+**Problem**: Complex workflows can fail at any point, leaving users with no recovery options.
+
+**Benefits of Standalone Manual Tools**:
+- **Independent operation** from complex workflows
+- **Error recovery** when automatic processes fail
+- **Administrative flexibility** for edge cases
+- **Testing capabilities** for system validation
+- **User confidence** knowing they have manual control
+
+#### 4. **Progressive Enhancement Pattern**
+**Implementation Strategy**:
+1. **Build automatic features first** (room invitations during user creation)
+2. **Add manual alternatives** (standalone room management)
+3. **Provide clear feedback** about what happened automatically
+4. **Enable manual correction** when automatic processes fail
+
+#### 5. **Error Handling Should Be User-Centric**
+**Effective Error Communication**:
+- **Show what succeeded** before showing what failed
+- **Provide specific details** about failures (room names, not just IDs)
+- **Offer next steps** or alternatives when operations fail
+- **Use expandable sections** to show details without overwhelming users
+- **Clear session state** after successful operations to prevent confusion
+
+### Technical Implementation Patterns
+
+#### **Session State Management Pattern**
+```python
+# ✅ Robust session state pattern for multiple data sources
+def get_available_rooms():
+    """Get rooms from all available sources with source indicators."""
+    available_rooms = []
+    
+    # Add configured rooms
+    if 'configured_rooms' in st.session_state:
+        for room in st.session_state.configured_rooms:
+            available_rooms.append({
+                'room_id': room['room_id'],
+                'name': room.get('name', room['room_id']),
+                'description': room.get('description', ''),
+                'source': 'configured'
+            })
+    
+    # Add cached rooms (avoid duplicates)
+    try:
+        db = next(get_db())
+        try:
+            cached_rooms = db.query(MatrixRoom).filter(MatrixRoom.member_count >= 5).all()
+            for room in cached_rooms:
+                if not any(r['room_id'] == room.room_id for r in available_rooms):
+                    available_rooms.append({
+                        'room_id': room.room_id,
+                        'name': room.name or room.room_id,
+                        'description': room.topic or '',
+                        'source': 'cached'
+                    })
+        finally:
+            db.close()
+    except Exception as e:
+        logging.error(f"Error loading cached rooms: {e}")
+    
+    return available_rooms
+```
+
+#### **Async Operation Pattern in Streamlit**
+```python
+# ✅ Reusable async pattern with proper error handling
+async def manual_invite_to_rooms_async(user_id, room_ids):
+    """Async function for room invitations with detailed results."""
+    results = []
+    failed_rooms = []
+    
+    for room_id in room_ids:
+        try:
+            from app.utils.matrix_actions import invite_to_matrix_room
+            success = await invite_to_matrix_room(user_id, room_id)
+            
+            if success:
+                room_name = get_room_name_from_available_rooms(room_id)
+                results.append((room_id, room_name))
+            else:
+                failed_rooms.append(room_id)
+        except Exception as e:
+            logging.error(f"Error inviting to room {room_id}: {str(e)}")
+            failed_rooms.append(room_id)
+    
+    return {
+        "success": len(results) > 0,
+        "invited_rooms": results,
+        "failed_rooms": failed_rooms
+    }
+
+# Use with run_async_safely helper
+invitation_results = run_async_safely(manual_invite_to_rooms_async, user_id, room_ids)
+```
+
+### Best Practices Established
+
+#### **For Session State Management**
+1. **Use consistent naming conventions** across all components
+2. **Create constants** for session state keys to prevent typos
+3. **Implement helper functions** for complex session state operations
+4. **Always check multiple data sources** when integrating systems
+5. **Log session state changes** for debugging complex workflows
+
+#### **For Complex Feature Integration**
+1. **Test complete workflows** from UI to final result
+2. **Provide standalone alternatives** for automatic features
+3. **Log intermediate states** to track data flow
+4. **Create integration test scenarios** for critical paths
+5. **Implement graceful degradation** when components fail
+
+#### **For User Experience**
+1. **Show positive results first** before errors
+2. **Provide specific error details** with actionable information
+3. **Use progressive disclosure** (expandable sections) for details
+4. **Clear state after successful operations** to prevent confusion
+5. **Always provide manual alternatives** for automatic processes
+
+#### **For Error Recovery**
+1. **Create standalone tools** for manual intervention
+2. **Preserve user selections** across error states
+3. **Provide clear feedback** about what succeeded and what failed
+4. **Enable retry mechanisms** for failed operations
+5. **Log errors comprehensively** for debugging and improvement
+
+### Testing Strategy
+
+#### **Integration Testing Checklist**
+- [ ] Test room selection in UI updates session state correctly
+- [ ] Verify invitation logic finds selected rooms from all sources
+- [ ] Test manual room management works independently
+- [ ] Verify error handling preserves user selections
+- [ ] Test with both configured and cached room sources
+- [ ] Validate session state cleanup after operations
+
+#### **User Workflow Testing**
+- [ ] Complete user creation with room selection
+- [ ] Manual room addition for existing users
+- [ ] Error recovery when automatic processes fail
+- [ ] Bulk operations (select all, unselect all)
+- [ ] Mixed success/failure scenarios
+
+### Standard Operating Procedures
+
+#### **When Implementing Complex Workflows**
+1. **Document session state keys** and naming conventions
+2. **Create integration test scenarios** early in development
+3. **Build standalone alternatives** alongside automatic features
+4. **Log all state transitions** for debugging
+5. **Test error scenarios** as thoroughly as success scenarios
+
+#### **When Debugging Integration Issues**
+1. **Check session state contents** at each workflow step
+2. **Verify naming conventions** match between components
+3. **Test individual components** in isolation first
+4. **Create minimal reproduction scripts** for complex issues
+5. **Always provide manual workarounds** for critical features
+
+### Results Achieved
+
+✅ **Room Invitations Fixed**: Users are now successfully added to selected rooms during creation
+✅ **Manual Management Added**: Standalone tool for adding any user to any rooms
+✅ **Error Recovery**: Clear feedback and manual alternatives when automatic processes fail
+✅ **Session State Reliability**: Robust handling of multiple room data sources
+✅ **User Experience**: Intuitive interface with bulk operations and detailed feedback
+✅ **Debugging Capability**: Comprehensive logging for troubleshooting workflow issues
+
+### Key Takeaways
+
+1. **Naming convention mismatches** can cause silent integration failures
+2. **Standalone manual tools** are essential for complex automatic workflows
+3. **Session state management** becomes critical with multiple data sources
+4. **Integration testing** catches issues that unit testing misses
+5. **User-centric error handling** builds confidence and provides recovery options
+6. **Progressive enhancement** (automatic + manual) creates robust systems
+
+This implementation demonstrates the importance of **consistent integration patterns**, **comprehensive error handling**, and **user-centric design** in building reliable administrative interfaces.
+
+---

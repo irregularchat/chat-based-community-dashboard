@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { createTRPCRouter, protectedProcedure, moderatorProcedure, adminProcedure } from '../trpc';
 import { authentikService } from '@/lib/authentik';
 import { emailService } from '@/lib/email';
+import { MessageTemplates } from '@/lib/message-templates';
 
 export const inviteRouter = createTRPCRouter({
   // Get available groups for invite assignment
@@ -254,37 +255,16 @@ export const inviteRouter = createTRPCRouter({
     .mutation(async ({ input }) => {
       const { inviteLink, expiryDate, recipientName } = input;
       
+      // Convert to timestamp format for MessageTemplates
       const expiry = new Date(expiryDate);
-      const formattedExpiry = expiry.toLocaleDateString('en-US', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        timeZoneName: 'short'
+      const expiresAt = Math.floor(expiry.getTime() / 1000);
+
+      // Use MessageTemplates to generate the invite message
+      const message = MessageTemplates.createInviteMessage({
+        inviteLink,
+        expiresAt,
+        recipientName,
       });
-
-      const greeting = recipientName ? `Hi ${recipientName}!` : 'Hi there!';
-
-      const message = `${greeting}
-
-🌟 You've been invited to join IrregularChat! 🌟
-
-You're invited to join our community where members connect, share ideas, and collaborate. After joining, you'll have access to our forum, wiki, messaging platforms, and other services.
-
-Your invitation link:
-${inviteLink}
-
-This invite expires on ${formattedExpiry}.
-
-Please click the link above to create your account and join our community!
-
-Best regards,
-The IrregularChat Team
-
----
-This is an automated invitation. If you have any questions, please contact an administrator.`;
 
       return { message };
     }),

@@ -26,6 +26,7 @@ export default function AdminSettingsPage() {
 
   // Dialog states
   const [showBookmarkDialog, setShowBookmarkDialog] = useState(false);
+  const [showRoomCardDialog, setShowRoomCardDialog] = useState(false);
   const [showAnnouncementDialog, setShowAnnouncementDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
 
@@ -47,6 +48,20 @@ export default function AdminSettingsPage() {
     isActive: true,
     priority: 0,
     expiresAt: '',
+  });
+
+  const [roomCardForm, setRoomCardForm] = useState({
+    title: '',
+    description: '',
+    category: 'general',
+    image: '',
+    matrixRoomId: '',
+    directLink: '',
+    forumLink: '',
+    wikiLink: '',
+    memberCount: 0,
+    order: 0,
+    isActive: true,
   });
 
   const [settingsForm, setSettingsForm] = useState({
@@ -146,6 +161,50 @@ export default function AdminSettingsPage() {
     },
   });
 
+  // Room Card Mutations
+  const createRoomCardMutation = trpc.settings.createRoomCard.useMutation({
+    onSuccess: () => {
+      toast.success('Room card created successfully');
+      refetch();
+      setShowRoomCardDialog(false);
+      resetRoomCardForm();
+    },
+    onError: (error) => {
+      toast.error(`Failed to create room card: ${error.message}`);
+    },
+  });
+
+  const updateRoomCardMutation = trpc.settings.updateRoomCard.useMutation({
+    onSuccess: () => {
+      toast.success('Room card updated successfully');
+      refetch();
+      setIsEditing(null);
+    },
+    onError: (error) => {
+      toast.error(`Failed to update room card: ${error.message}`);
+    },
+  });
+
+  const deleteRoomCardMutation = trpc.settings.deleteRoomCard.useMutation({
+    onSuccess: () => {
+      toast.success('Room card deleted successfully');
+      refetch();
+    },
+    onError: (error) => {
+      toast.error(`Failed to delete room card: ${error.message}`);
+    },
+  });
+
+  const reorderRoomCardsMutation = trpc.settings.reorderRoomCards.useMutation({
+    onSuccess: () => {
+      toast.success('Room cards reordered successfully');
+      refetch();
+    },
+    onError: (error) => {
+      toast.error(`Failed to reorder room cards: ${error.message}`);
+    },
+  });
+
   // Form handlers
   const resetBookmarkForm = () => {
     setBookmarkForm({
@@ -177,6 +236,22 @@ export default function AdminSettingsPage() {
     });
   };
 
+  const resetRoomCardForm = () => {
+    setRoomCardForm({
+      title: '',
+      description: '',
+      category: 'general',
+      image: '',
+      matrixRoomId: '',
+      directLink: '',
+      forumLink: '',
+      wikiLink: '',
+      memberCount: 0,
+      order: 0,
+      isActive: true,
+    });
+  };
+
   const handleCreateBookmark = () => {
     createBookmarkMutation.mutate(bookmarkForm);
   };
@@ -191,6 +266,23 @@ export default function AdminSettingsPage() {
   const handleDeleteBookmark = (id: number) => {
     if (confirm('Are you sure you want to delete this bookmark?')) {
       deleteBookmarkMutation.mutate({ id });
+    }
+  };
+
+  const handleCreateRoomCard = () => {
+    createRoomCardMutation.mutate(roomCardForm);
+  };
+
+  const handleUpdateRoomCard = (id: number) => {
+    updateRoomCardMutation.mutate({
+      id,
+      ...roomCardForm,
+    });
+  };
+
+  const handleDeleteRoomCard = (id: number) => {
+    if (confirm('Are you sure you want to delete this room card?')) {
+      deleteRoomCardMutation.mutate({ id });
     }
   };
 
@@ -265,6 +357,20 @@ export default function AdminSettingsPage() {
         order: item.order,
         isActive: item.isActive,
       });
+    } else if (type === 'roomcard' && item) {
+      setRoomCardForm({
+        title: item.title,
+        description: item.description || '',
+        category: item.category,
+        image: item.image || '',
+        matrixRoomId: item.matrixRoomId || '',
+        directLink: item.directLink || '',
+        forumLink: item.forumLink || '',
+        wikiLink: item.wikiLink || '',
+        memberCount: item.memberCount || 0,
+        order: item.order,
+        isActive: item.isActive,
+      });
     } else if (type === 'announcement' && item) {
       setAnnouncementForm({
         title: item.title,
@@ -280,6 +386,7 @@ export default function AdminSettingsPage() {
   const cancelEditing = () => {
     setIsEditing(null);
     resetBookmarkForm();
+    resetRoomCardForm();
     resetAnnouncementForm();
   };
 
@@ -334,10 +441,14 @@ export default function AdminSettingsPage() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="bookmarks" className="flex items-center gap-2">
               <Bookmark className="w-4 h-4" />
               Community Bookmarks
+            </TabsTrigger>
+            <TabsTrigger value="rooms" className="flex items-center gap-2">
+              <MessageSquare className="w-4 h-4" />
+              Room Cards
             </TabsTrigger>
             <TabsTrigger value="announcements" className="flex items-center gap-2">
               <Bell className="w-4 h-4" />

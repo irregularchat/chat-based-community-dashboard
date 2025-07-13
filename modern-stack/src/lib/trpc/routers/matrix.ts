@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { createTRPCRouter, protectedProcedure, adminProcedure, moderatorProcedure } from '../trpc';
 import { matrixService } from '@/lib/matrix';
+import { createMatrixCacheService } from '@/lib/matrix-cache';
 
 // Define Matrix-related schemas
 const MatrixUserSchema = z.object({
@@ -26,6 +27,23 @@ const MessageHistorySchema = z.object({
   event_id: z.string().optional(),
 });
 
+// Helper function to determine room category based on room name/topic
+function getRoomCategory(roomName: string): string {
+  const name = roomName.toLowerCase();
+  if (name.includes('general') || name.includes('main') || name.includes('lobby')) {
+    return 'General';
+  } else if (name.includes('tech') || name.includes('dev') || name.includes('programming') || name.includes('code')) {
+    return 'Technology';
+  } else if (name.includes('social') || name.includes('chat') || name.includes('casual')) {
+    return 'Social';
+  } else if (name.includes('support') || name.includes('help') || name.includes('questions')) {
+    return 'Support';
+  } else if (name.includes('off') || name.includes('random') || name.includes('misc')) {
+    return 'Off-topic';
+  }
+  return 'Uncategorized';
+}
+
 export const matrixRouter = createTRPCRouter({
   // Get Matrix configuration status
   getConfig: moderatorProcedure.query(async ({ ctx }) => {
@@ -48,79 +66,102 @@ export const matrixRouter = createTRPCRouter({
         search: z.string().optional(),
         includeSignalUsers: z.boolean().default(true),
         includeRegularUsers: z.boolean().default(true),
+        limit: z.number().default(100),
+        offset: z.number().default(0),
+        priorityRoomsOnly: z.boolean().default(true), // Default to priority rooms for user selection
       })
     )
     .query(async ({ ctx, input }) => {
       try {
-        // Get Matrix users from cache
-        const cachedUsers = await ctx.prisma.matrixUser.findMany({
-          select: {
-            userId: true,
-            displayName: true,
-            avatarUrl: true,
-            lastSeen: true,
-          },
-          orderBy: {
-            displayName: 'asc',
-          },
-        });
-
-        // Convert to expected format
-        let filteredUsers = cachedUsers.map(user => ({
-          user_id: user.userId,
-          display_name: user.displayName || user.userId,
-          avatar_url: user.avatarUrl || undefined,
-          is_signal_user: user.displayName?.toLowerCase().includes('signal') || false,
-        }));
+        // Import the Matrix sync service for priority room users
+        const { matrixSyncService } = await import('@/lib/matrix-sync');
+        
+        let users: any[] = [];
+        
+        if (input.priorityRoomsOnly) {
+          // Get users from priority rooms (mod, action, entry rooms)
+          users = await matrixSyncService.getUsersFromPriorityRooms();
+        } else {
+          // Get all cached users
+          const cacheService = createMatrixCacheService(ctx.prisma);
+          users = await cacheService.getCachedUsers({
+            search: input.search,
+            includeSignalUsers: input.includeSignalUsers,
+            includeRegularUsers: input.includeRegularUsers,
+            limit: input.limit,
+            offset: input.offset,
+          });
+        }
 
         // Apply filters
         if (!input.includeSignalUsers) {
-          filteredUsers = filteredUsers.filter(user => !user.is_signal_user);
+          users = users.filter(user => !user.is_signal_user);
         }
         if (!input.includeRegularUsers) {
-          filteredUsers = filteredUsers.filter(user => user.is_signal_user);
+          users = users.filter(user => user.is_signal_user);
         }
 
-        // Apply search
+        // Apply search filter
         if (input.search) {
           const searchLower = input.search.toLowerCase();
-          filteredUsers = filteredUsers.filter(user =>
-            user.display_name.toLowerCase().includes(searchLower) ||
-            user.user_id.toLowerCase().includes(searchLower)
+          users = users.filter(user => 
+            user.user_id.toLowerCase().includes(searchLower) ||
+            (user.display_name || '').toLowerCase().includes(searchLower)
           );
         }
 
-        return filteredUsers;
+        // Apply pagination
+        const startIndex = input.offset;
+        const endIndex = startIndex + input.limit;
+        users = users.slice(startIndex, endIndex);
+
+        // Convert to expected format
+        const formattedUsers = users.map(user => ({
+          user_id: user.user_id,
+          display_name: user.display_name || user.user_id,
+          avatar_url: user.avatar_url,
+          is_signal_user: user.is_signal_user,
+        }));
+
+        return formattedUsers;
       } catch (error) {
         console.error('Error fetching Matrix users:', error);
-        // Return empty array if there's an error
         return [];
       }
     }),
 
-  // Sync Matrix users cache
-  syncUsers: moderatorProcedure.mutation(async ({ ctx }) => {
+  // Sync Matrix users to cache
+  syncMatrixUsers: moderatorProcedure.mutation(async ({ ctx }) => {
     try {
-      // This would trigger a sync of the Matrix users cache
-      // For now, we'll just return a success message
-      // In a real implementation, this would call the Matrix cache sync service
-      
+      if (!matrixService.isConfigured()) {
+        throw new Error('Matrix service not configured');
+      }
+
+      const cacheService = createMatrixCacheService(ctx.prisma);
+      const result = await cacheService.incrementalSync();
+
+      // Log admin event
       await ctx.prisma.adminEvent.create({
         data: {
-          eventType: 'matrix_sync_users',
+          eventType: 'matrix_sync',
           username: ctx.session.user.username || 'unknown',
-          details: 'Triggered Matrix users cache sync',
+          details: `Matrix user sync completed. Users: ${result.usersSynced || 0}, Rooms: ${result.roomsSynced || 0}`,
         },
       });
 
-      return { success: true, message: 'Matrix users sync initiated' };
+      return { 
+        success: true, 
+        message: 'Matrix user sync completed',
+        usersSynced: result.usersSynced || 0,
+        roomsSynced: result.roomsSynced || 0,
+      };
     } catch (error) {
       console.error('Error syncing Matrix users:', error);
-      return { success: false, error: 'Failed to sync Matrix users' };
+      throw new Error('Failed to sync Matrix users');
     }
   }),
 
-  // Get list of Matrix rooms (mock implementation for now)
+  // Get list of Matrix rooms from cache and Matrix API
   getRooms: moderatorProcedure
     .input(
       z.object({
@@ -128,60 +169,90 @@ export const matrixRouter = createTRPCRouter({
         search: z.string().optional(),
         includeConfigured: z.boolean().default(true),
         includeDiscovered: z.boolean().default(true),
+        limit: z.number().default(100),
+        offset: z.number().default(0),
       })
     )
     .query(async ({ ctx, input }) => {
-      // Mock rooms - in a real implementation, this would query the Matrix API
-      const mockRooms = [
-        {
-          room_id: '!general:matrix.example.com',
-          name: 'General Chat',
-          topic: 'General discussion room',
-          member_count: 25,
-          category: 'General',
-          configured: true,
-        },
-        {
-          room_id: '!tech:matrix.example.com',
-          name: 'Tech Discussion',
-          topic: 'Technology and development chat',
-          member_count: 15,
-          category: 'Technology',
-          configured: true,
-        },
-        {
-          room_id: '!security:matrix.example.com',
-          name: 'Security',
-          topic: 'Security discussions',
-          member_count: 12,
-          category: 'Technology',
-          configured: true,
-        },
-      ];
+      try {
+        const cacheService = createMatrixCacheService(ctx.prisma);
+        
+        if (matrixService.isConfigured()) {
+          // Get rooms from database cache
+          const cachedRooms = await cacheService.getCachedRooms({
+            search: input.search,
+            includeDirectRooms: false,
+            limit: input.limit,
+            offset: input.offset,
+          });
 
-      let filteredRooms = mockRooms;
+          let rooms = cachedRooms.map(room => ({
+            room_id: room.roomId,
+            name: room.displayName || room.name || room.roomId,
+            topic: room.topic,
+            member_count: room.memberCount,
+            category: getRoomCategory(room.displayName || room.name || ''),
+            configured: true,
+          }));
 
-      // Apply filters
-      if (input.category) {
-        filteredRooms = filteredRooms.filter(room => room.category === input.category);
+          // Apply category filter
+          if (input.category) {
+            rooms = rooms.filter(room => room.category === input.category);
+          }
+
+          // If no cached rooms, return default rooms for demo
+          if (rooms.length === 0) {
+            rooms = [
+              {
+                room_id: '!general:matrix.example.com',
+                name: 'General Chat',
+                topic: 'General discussion room',
+                member_count: 25,
+                category: 'General',
+                configured: true,
+              },
+              {
+                room_id: '!tech:matrix.example.com',
+                name: 'Tech Discussion',
+                topic: 'Technology and development chat',
+                member_count: 15,
+                category: 'Technology',
+                configured: true,
+              },
+            ];
+          }
+
+          return rooms;
+        } else {
+          // Fallback to mock data when Matrix is not configured
+          return [
+            {
+              room_id: '!general:matrix.example.com',
+              name: 'General Chat',
+              topic: 'General discussion room',
+              member_count: 25,
+              category: 'General',
+              configured: true,
+            },
+            {
+              room_id: '!tech:matrix.example.com',
+              name: 'Tech Discussion',
+              topic: 'Technology and development chat',
+              member_count: 15,
+              category: 'Technology',
+              configured: true,
+            },
+          ];
+        }
+      } catch (error) {
+        console.error('Error fetching Matrix rooms:', error);
+        return [];
       }
-
-      if (input.search) {
-        const searchLower = input.search.toLowerCase();
-        filteredRooms = filteredRooms.filter(room =>
-          room.name?.toLowerCase().includes(searchLower) ||
-          room.room_id.toLowerCase().includes(searchLower) ||
-          room.topic?.toLowerCase().includes(searchLower)
-        );
-      }
-
-      return filteredRooms;
     }),
 
   // Get room categories
   getCategories: moderatorProcedure.query(async ({ ctx }) => {
-    // Mock data - in real implementation, this would be derived from room data
-    return ['General', 'Technology', 'Social', 'Support', 'Off-topic'];
+    return ['General', 'Technology', 'Social', 'Support', 'Off-topic', 'Uncategorized'];
   }),
 
   // Send direct message to a user
@@ -207,53 +278,75 @@ export const matrixRouter = createTRPCRouter({
       return result;
     }),
 
-  // Send message to multiple users
+  // Send message to multiple users (enhanced with bulk operations)
   sendMessageToUsers: moderatorProcedure
     .input(
       z.object({
         userIds: z.array(z.string()),
         message: z.string(),
+        batchSize: z.number().default(10),
+        delayMs: z.number().default(500),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const results: Record<string, boolean> = {};
-      
       if (matrixService.isConfigured()) {
-        // Use real Matrix service
-        for (const userId of input.userIds) {
-          try {
-            const result = await matrixService.sendDirectMessage(userId, input.message);
-            results[userId] = result.success;
-          } catch (error) {
-            console.error(`Failed to send message to ${userId}:`, error);
-            results[userId] = false;
-          }
-        }
+        // Use the new bulk operation
+        const result = await matrixService.bulkSendDirectMessages(
+          input.userIds,
+          input.message,
+          input.batchSize,
+          input.delayMs
+        );
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_bulk_message',
+            username: ctx.session.user.username || 'unknown',
+            details: `Bulk sent messages to ${input.userIds.length} users. Success: ${result.totalSuccess}, Failed: ${result.totalFailed}`,
+          },
+        });
+
+        return {
+          results: result.results,
+          errors: result.errors,
+          totalSent: result.totalSuccess,
+          totalFailed: result.totalFailed,
+          batchesProcessed: Math.ceil(input.userIds.length / input.batchSize),
+        };
       } else {
         // Mock implementation when Matrix is not configured
+        const results: Record<string, boolean> = {};
+        const errors: Record<string, string> = {};
+        
         for (const userId of input.userIds) {
           console.log(`[MOCK] Sending message to ${userId}: ${input.message}`);
-          results[userId] = Math.random() > 0.1; // 90% success rate for demo
+          results[userId] = Math.random() > 0.1;
+          if (!results[userId]) {
+            errors[userId] = 'Mock failure for demo';
+          }
         }
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_bulk_message',
+            username: ctx.session.user.username || 'unknown',
+            details: `Mock bulk sent messages to ${input.userIds.length} users`,
+          },
+        });
+
+        return {
+          results,
+          errors,
+          totalSent: Object.values(results).filter(Boolean).length,
+          totalFailed: Object.values(results).filter(success => !success).length,
+          batchesProcessed: Math.ceil(input.userIds.length / input.batchSize),
+        };
       }
-
-      // Log admin event
-      await ctx.prisma.adminEvent.create({
-        data: {
-          eventType: 'matrix_bulk_message',
-          username: ctx.session.user.username || 'unknown',
-          details: `Sent message to ${input.userIds.length} users`,
-        },
-      });
-
-      return {
-        results,
-        totalSent: Object.values(results).filter(Boolean).length,
-        totalFailed: Object.values(results).filter(success => !success).length,
-      };
     }),
 
-  // Send message to rooms
+  // Send message to rooms (enhanced with bulk operations)
   sendMessageToRooms: moderatorProcedure
     .input(
       z.object({
@@ -262,29 +355,54 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Mock implementation - in real implementation, this would call Matrix API for each room
-      const results: Record<string, boolean> = {};
-      
-      for (const roomId of input.roomIds) {
-        console.log(`Sending message to room ${roomId}: ${input.message}`);
-        // Simulate success/failure
-        results[roomId] = Math.random() > 0.05; // 95% success rate for demo
+      if (matrixService.isConfigured()) {
+        // Use the new bulk operation
+        const result = await matrixService.bulkSendRoomMessages(input.roomIds, input.message);
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_room_message',
+            username: ctx.session.user.username || 'unknown',
+            details: `Bulk sent messages to ${input.roomIds.length} rooms. Success: ${result.totalSuccess}, Failed: ${result.totalFailed}`,
+          },
+        });
+
+        return {
+          results: result.results,
+          errors: result.errors,
+          totalSent: result.totalSuccess,
+          totalFailed: result.totalFailed,
+        };
+      } else {
+        // Mock implementation
+        const results: Record<string, boolean> = {};
+        const errors: Record<string, string> = {};
+        
+        for (const roomId of input.roomIds) {
+          console.log(`[MOCK] Sending message to room ${roomId}: ${input.message}`);
+          results[roomId] = Math.random() > 0.05;
+          if (!results[roomId]) {
+            errors[roomId] = 'Mock failure for demo';
+          }
+        }
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_room_message',
+            username: ctx.session.user.username || 'unknown',
+            details: `Mock bulk sent messages to ${input.roomIds.length} rooms`,
+          },
+        });
+
+        return {
+          results,
+          errors,
+          totalSent: Object.values(results).filter(Boolean).length,
+          totalFailed: Object.values(results).filter(success => !success).length,
+        };
       }
-
-      // Log admin event
-      await ctx.prisma.adminEvent.create({
-        data: {
-          eventType: 'matrix_room_message',
-          username: ctx.session.user.username || 'unknown',
-          details: `Sent message to ${input.roomIds.length} rooms`,
-        },
-      });
-
-      return {
-        results,
-        totalSent: Object.values(results).filter(Boolean).length,
-        totalFailed: Object.values(results).filter(success => !success).length,
-      };
     }),
 
   // Invite user to rooms
@@ -298,18 +416,46 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Mock implementation - in real implementation, this would call Matrix API
       const results: Record<string, boolean> = {};
+      const errors: Record<string, string> = {};
       
-      for (const roomId of input.roomIds) {
-        console.log(`Inviting ${input.userId} to room ${roomId}`);
-        // Simulate success/failure
-        results[roomId] = Math.random() > 0.1; // 90% success rate for demo
-      }
+      if (matrixService.isConfigured()) {
+        // Use real Matrix service
+        for (const roomId of input.roomIds) {
+          try {
+            const success = await matrixService.inviteToRoom(roomId, input.userId);
+            results[roomId] = success;
+            if (!success) {
+              errors[roomId] = 'Failed to invite user to room';
+            }
+          } catch (error) {
+            console.error(`Failed to invite ${input.userId} to room ${roomId}:`, error);
+            results[roomId] = false;
+            errors[roomId] = error instanceof Error ? error.message : 'Unknown error';
+          }
+        }
 
-      // Send welcome message if requested
-      if (input.sendWelcome && input.welcomeMessage) {
-        console.log(`Sending welcome message to ${input.userId}: ${input.welcomeMessage}`);
+        // Send welcome message if requested and at least one invitation succeeded
+        if (input.sendWelcome && input.welcomeMessage && Object.values(results).some(Boolean)) {
+          try {
+            await matrixService.sendDirectMessage(input.userId, input.welcomeMessage);
+          } catch (error) {
+            console.error(`Failed to send welcome message to ${input.userId}:`, error);
+          }
+        }
+      } else {
+        // Mock implementation when Matrix is not configured
+        for (const roomId of input.roomIds) {
+          console.log(`[MOCK] Inviting ${input.userId} to room ${roomId}`);
+          results[roomId] = Math.random() > 0.1;
+          if (!results[roomId]) {
+            errors[roomId] = 'Mock failure for demo';
+          }
+        }
+
+        if (input.sendWelcome && input.welcomeMessage) {
+          console.log(`[MOCK] Sending welcome message to ${input.userId}: ${input.welcomeMessage}`);
+        }
       }
 
       // Log admin event
@@ -317,12 +463,13 @@ export const matrixRouter = createTRPCRouter({
         data: {
           eventType: 'matrix_user_invite',
           username: ctx.session.user.username || 'unknown',
-          details: `Invited ${input.userId} to ${input.roomIds.length} rooms`,
+          details: `Invited ${input.userId} to ${input.roomIds.length} rooms. Success: ${Object.values(results).filter(Boolean).length}, Failed: ${Object.values(results).filter(success => !success).length}`,
         },
       });
 
       return {
         results,
+        errors,
         totalInvited: Object.values(results).filter(Boolean).length,
         totalFailed: Object.values(results).filter(success => !success).length,
       };
@@ -340,21 +487,50 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Mock implementation - in real implementation, this would call Matrix API
       const results: Record<string, boolean> = {};
+      const errors: Record<string, string> = {};
       
-      // Send message to rooms before removal if requested
-      if (input.sendMessage && input.message) {
-        for (const roomId of input.roomIds) {
-          console.log(`Sending removal message to room ${roomId}: ${input.message}`);
+      if (matrixService.isConfigured()) {
+        // Send message to rooms before removal if requested
+        if (input.sendMessage && input.message) {
+          for (const roomId of input.roomIds) {
+            try {
+              await matrixService.sendRoomMessage(roomId, input.message);
+            } catch (error) {
+              console.error(`Failed to send removal message to room ${roomId}:`, error);
+            }
+          }
         }
-      }
 
-      // Remove user from rooms
-      for (const roomId of input.roomIds) {
-        console.log(`Removing ${input.userId} from room ${roomId}`);
-        // Simulate success/failure
-        results[roomId] = Math.random() > 0.05; // 95% success rate for demo
+        // Remove user from rooms
+        for (const roomId of input.roomIds) {
+          try {
+            const success = await matrixService.removeFromRoom(roomId, input.userId, input.reason);
+            results[roomId] = success;
+            if (!success) {
+              errors[roomId] = 'Failed to remove user from room';
+            }
+          } catch (error) {
+            console.error(`Failed to remove ${input.userId} from room ${roomId}:`, error);
+            results[roomId] = false;
+            errors[roomId] = error instanceof Error ? error.message : 'Unknown error';
+          }
+        }
+      } else {
+        // Mock implementation when Matrix is not configured
+        if (input.sendMessage && input.message) {
+          for (const roomId of input.roomIds) {
+            console.log(`[MOCK] Sending removal message to room ${roomId}: ${input.message}`);
+          }
+        }
+
+        for (const roomId of input.roomIds) {
+          console.log(`[MOCK] Removing ${input.userId} from room ${roomId}`);
+          results[roomId] = Math.random() > 0.05;
+          if (!results[roomId]) {
+            errors[roomId] = 'Mock failure for demo';
+          }
+        }
       }
 
       // Log admin event
@@ -362,12 +538,13 @@ export const matrixRouter = createTRPCRouter({
         data: {
           eventType: 'matrix_user_removal',
           username: ctx.session.user.username || 'unknown',
-          details: `Removed ${input.userId} from ${input.roomIds.length} rooms`,
+          details: `Removed ${input.userId} from ${input.roomIds.length} rooms. Success: ${Object.values(results).filter(Boolean).length}, Failed: ${Object.values(results).filter(success => !success).length}`,
         },
       });
 
       return {
         results,
+        errors,
         totalRemoved: Object.values(results).filter(Boolean).length,
         totalFailed: Object.values(results).filter(success => !success).length,
       };
@@ -410,7 +587,6 @@ export const matrixRouter = createTRPCRouter({
   // Get user categories (saved user groups)
   getUserCategories: moderatorProcedure.query(async ({ ctx }) => {
     // In real implementation, this would be stored in the database
-    // For now, return mock data
     return {
       'New Members': [
         '@alice:matrix.irregularchat.com',
@@ -427,50 +603,325 @@ export const matrixRouter = createTRPCRouter({
     };
   }),
 
-  // Save user category
-  saveUserCategory: moderatorProcedure
+  // Enhanced bulk operations for Matrix user management
+  bulkInviteToRecommendedRooms: moderatorProcedure
     .input(
       z.object({
-        categoryName: z.string(),
         userIds: z.array(z.string()),
+        interests: z.array(z.string()).optional(),
+        sendWelcome: z.boolean().default(false),
+        welcomeMessage: z.string().optional(),
+        batchSize: z.number().default(5),
+        delayMs: z.number().default(1000),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // In real implementation, this would be stored in the database
-      console.log(`Saving category '${input.categoryName}' with ${input.userIds.length} users`);
+      const results: Record<string, { invitedRooms: string[]; errors: string[] }> = {};
+      
+      if (matrixService.isConfigured()) {
+        // Process in batches to avoid overwhelming the Matrix server
+        const batches = [];
+        for (let i = 0; i < input.userIds.length; i += input.batchSize) {
+          batches.push(input.userIds.slice(i, i + input.batchSize));
+        }
+
+        for (const [batchIndex, batch] of batches.entries()) {
+          // Add delay between batches
+          if (batchIndex > 0) {
+            await new Promise(resolve => setTimeout(resolve, input.delayMs));
+          }
+
+          // Process batch in parallel
+          const batchPromises = batch.map(async (userId) => {
+            try {
+              const result = await matrixService.inviteToRecommendedRooms(userId, input.interests || []);
+              results[userId] = {
+                invitedRooms: result.invitedRooms,
+                errors: result.errors,
+              };
+
+              // Send welcome message if requested and invitations succeeded
+              if (input.sendWelcome && input.welcomeMessage && result.invitedRooms.length > 0) {
+                try {
+                  await matrixService.sendDirectMessage(userId, input.welcomeMessage);
+                } catch (error) {
+                  console.error(`Failed to send welcome message to ${userId}:`, error);
+                  results[userId].errors.push(`Failed to send welcome message: ${error}`);
+                }
+              }
+            } catch (error) {
+              console.error(`Failed to invite ${userId} to recommended rooms:`, error);
+              results[userId] = {
+                invitedRooms: [],
+                errors: [error instanceof Error ? error.message : 'Unknown error'],
+              };
+            }
+          });
+
+          await Promise.all(batchPromises);
+          console.log(`Completed bulk invite batch ${batchIndex + 1}/${batches.length}`);
+        }
+      } else {
+        // Mock implementation
+        for (const userId of input.userIds) {
+          console.log(`[MOCK] Inviting ${userId} to recommended rooms based on interests:`, input.interests);
+          results[userId] = {
+            invitedRooms: ['!general:matrix.example.com', '!tech:matrix.example.com'],
+            errors: [],
+          };
+        }
+      }
 
       // Log admin event
+      const totalInvited = Object.values(results).reduce((sum, result) => sum + result.invitedRooms.length, 0);
+      const totalErrors = Object.values(results).reduce((sum, result) => sum + result.errors.length, 0);
+
       await ctx.prisma.adminEvent.create({
         data: {
-          eventType: 'matrix_category_saved',
+          eventType: 'matrix_bulk_invite_recommended',
           username: ctx.session.user.username || 'unknown',
-          details: `Saved category '${input.categoryName}' with ${input.userIds.length} users`,
+          details: `Bulk invited ${input.userIds.length} users to recommended rooms. Total invitations: ${totalInvited}, Errors: ${totalErrors}`,
         },
       });
 
-      return { success: true };
+      return {
+        results,
+        totalUsers: input.userIds.length,
+        totalInvitations: totalInvited,
+        totalErrors: totalErrors,
+        batchesProcessed: Math.ceil(input.userIds.length / input.batchSize),
+      };
     }),
 
-  // Delete user category
-  deleteUserCategory: moderatorProcedure
+  // Enhanced bulk invite to specific rooms
+  bulkInviteToRooms: moderatorProcedure
     .input(
       z.object({
-        categoryName: z.string(),
+        userIds: z.array(z.string()),
+        roomIds: z.array(z.string()),
+        batchSize: z.number().default(5),
+        delayMs: z.number().default(1000),
+        sendWelcome: z.boolean().default(false),
+        welcomeMessage: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // In real implementation, this would be removed from the database
-      console.log(`Deleting category '${input.categoryName}'`);
+      if (matrixService.isConfigured()) {
+        // Use the new bulk operation
+        const result = await matrixService.bulkInviteToRooms(
+          input.userIds,
+          input.roomIds,
+          input.batchSize,
+          input.delayMs
+        );
+
+        // Send welcome messages if requested
+        if (input.sendWelcome && input.welcomeMessage) {
+          const welcomeResults = await matrixService.bulkSendDirectMessages(
+            input.userIds,
+            input.welcomeMessage,
+            input.batchSize,
+            input.delayMs
+          );
+          console.log('Welcome messages sent:', welcomeResults);
+        }
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_bulk_invite_rooms',
+            username: ctx.session.user.username || 'unknown',
+            details: `Bulk invited ${input.userIds.length} users to ${input.roomIds.length} rooms. Success: ${result.totalSuccess}, Failed: ${result.totalFailed}`,
+          },
+        });
+
+        return {
+          results: result.results,
+          errors: result.errors,
+          totalInvitations: result.totalSuccess,
+          totalFailed: result.totalFailed,
+          batchesProcessed: Math.ceil(input.userIds.length / input.batchSize),
+        };
+      } else {
+        // Mock implementation
+        const results: Record<string, boolean> = {};
+        const errors: Record<string, string> = {};
+        
+        for (const userId of input.userIds) {
+          for (const roomId of input.roomIds) {
+            const key = `${userId}:${roomId}`;
+            console.log(`[MOCK] Inviting ${userId} to room ${roomId}`);
+            results[key] = Math.random() > 0.1;
+            if (!results[key]) {
+              errors[key] = 'Mock failure for demo';
+            }
+          }
+        }
+
+        return {
+          results,
+          errors,
+          totalInvitations: Object.values(results).filter(Boolean).length,
+          totalFailed: Object.values(results).filter(success => !success).length,
+          batchesProcessed: Math.ceil(input.userIds.length / input.batchSize),
+        };
+      }
+    }),
+
+  // Get cache statistics
+  getCacheStats: moderatorProcedure.query(async ({ ctx }) => {
+    try {
+      const cacheService = createMatrixCacheService(ctx.prisma);
+      const stats = await cacheService.getCacheStats();
+      return stats;
+    } catch (error) {
+      console.error('Error getting cache stats:', error);
+      return null;
+    }
+  }),
+
+  // Sync Matrix cache data (full sync)
+  syncMatrixCache: moderatorProcedure
+    .input(
+      z.object({
+        force: z.boolean().default(false),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        if (!matrixService.isConfigured()) {
+          throw new Error('Matrix service not configured');
+        }
+
+        const cacheService = createMatrixCacheService(ctx.prisma);
+        const result = await cacheService.fullSync(input.force);
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_cache_sync',
+            username: ctx.session.user.username || 'unknown',
+            details: `Matrix cache full sync ${result.status}. Users: ${result.usersSynced}, Rooms: ${result.roomsSynced}, Memberships: ${result.membershipsSynced}, Duration: ${result.duration}ms`,
+          },
+        });
+
+        return result;
+      } catch (error) {
+        console.error('Error syncing Matrix cache:', error);
+        throw new Error('Failed to sync Matrix cache');
+      }
+    }),
+
+  // Trigger background cache sync
+  triggerBackgroundSync: moderatorProcedure
+    .input(
+      z.object({
+        maxAgeMinutes: z.number().default(30),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        if (!matrixService.isConfigured()) {
+          throw new Error('Matrix service not configured');
+        }
+
+        const cacheService = createMatrixCacheService(ctx.prisma);
+        
+        // Trigger background sync (non-blocking)
+        cacheService.backgroundSync(input.maxAgeMinutes);
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_background_sync',
+            username: ctx.session.user.username || 'unknown',
+            details: `Triggered Matrix background sync with max age ${input.maxAgeMinutes} minutes`,
+          },
+        });
+
+        return { 
+          success: true, 
+          message: 'Background sync initiated',
+          maxAgeMinutes: input.maxAgeMinutes,
+        };
+      } catch (error) {
+        console.error('Error triggering background sync:', error);
+        throw new Error('Failed to trigger background sync');
+      }
+    }),
+
+  // Matrix health check
+  getHealthStatus: moderatorProcedure.query(async ({ ctx }) => {
+    try {
+      const cacheService = createMatrixCacheService(ctx.prisma);
+      const health = await cacheService.healthCheck();
+      return health;
+    } catch (error) {
+      console.error('Error getting Matrix health status:', error);
+      return {
+        status: 'unhealthy' as const,
+        details: {
+          error: error instanceof Error ? error.message : 'Unknown error',
+        },
+      };
+    }
+  }),
+
+  // Detect and update Signal users
+  detectSignalUsers: moderatorProcedure.mutation(async ({ ctx }) => {
+    try {
+      const cacheService = createMatrixCacheService(ctx.prisma);
+      const updatedCount = await cacheService.detectSignalUsers();
 
       // Log admin event
       await ctx.prisma.adminEvent.create({
         data: {
-          eventType: 'matrix_category_deleted',
+          eventType: 'matrix_signal_detection',
           username: ctx.session.user.username || 'unknown',
-          details: `Deleted category '${input.categoryName}'`,
+          details: `Detected and updated ${updatedCount} Signal users`,
         },
       });
 
-      return { success: true };
+      return {
+        success: true,
+        updatedCount,
+        message: `Updated ${updatedCount} users as Signal users`,
+      };
+    } catch (error) {
+      console.error('Error detecting Signal users:', error);
+      throw new Error('Failed to detect Signal users');
+    }
+  }),
+
+  // Clean up old cache data
+  cleanupCache: moderatorProcedure
+    .input(
+      z.object({
+        maxAgeHours: z.number().default(24),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const cacheService = createMatrixCacheService(ctx.prisma);
+        const deletedCount = await cacheService.cleanupCache(input.maxAgeHours);
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_cache_cleanup',
+            username: ctx.session.user.username || 'unknown',
+            details: `Cleaned up ${deletedCount} old cache records older than ${input.maxAgeHours} hours`,
+          },
+        });
+
+        return {
+          success: true,
+          deletedCount,
+          message: `Cleaned up ${deletedCount} old cache records`,
+        };
+      } catch (error) {
+        console.error('Error cleaning up cache:', error);
+        throw new Error('Failed to clean up cache');
+      }
     }),
 }); 

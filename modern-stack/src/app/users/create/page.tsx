@@ -88,7 +88,7 @@ export default function CreateUserPage() {
     includeRegularUsers: true,
   });
 
-  const syncMatrixUsers = trpc.matrix.syncUsers.useMutation({
+  const syncMatrixUsers = trpc.matrix.syncMatrixUsers.useMutation({
     onSuccess: () => {
       toast.success('Matrix users sync initiated');
       refetchMatrixUsers();

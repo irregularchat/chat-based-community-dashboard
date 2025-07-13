@@ -1,5 +1,5 @@
-import { PrismaClient } from '../src/generated/prisma';
-import bcrypt from 'bcryptjs';
+const { PrismaClient } = require('../src/generated/prisma');
+const bcrypt = require('bcryptjs');
 
 const prisma = new PrismaClient();
 
@@ -93,10 +93,11 @@ async function main() {
 }
 
 main()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
-  .finally(async () => {
+  .then(async () => {
     await prisma.$disconnect();
+  })
+  .catch(async (e) => {
+    console.error(e);
+    await prisma.$disconnect();
+    process.exit(1);
   }); 

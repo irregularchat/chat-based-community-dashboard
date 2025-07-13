@@ -48,8 +48,23 @@ class EmailService {
     const from = process.env.SMTP_FROM;
     const bcc = process.env.SMTP_BCC; // Add BCC from environment
 
+    console.log('SMTP Configuration Check:');
+    console.log(`SMTP_HOST: ${host ? 'configured' : 'missing'}`);
+    console.log(`SMTP_PORT: ${port ? 'configured' : 'missing'}`);
+    console.log(`SMTP_USER: ${user ? 'configured' : 'missing'}`);
+    console.log(`SMTP_PASS: ${pass ? 'configured' : 'missing'}`);
+    console.log(`SMTP_FROM: ${from ? 'configured' : 'missing'}`);
+    console.log(`SMTP_BCC: ${bcc ? 'configured' : 'not set'}`);
+
     if (!host || !port || !user || !pass || !from) {
       console.warn('SMTP not configured. Required: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM');
+      console.warn('Missing variables:', {
+        SMTP_HOST: !host,
+        SMTP_PORT: !port,
+        SMTP_USER: !user,
+        SMTP_PASS: !pass,
+        SMTP_FROM: !from
+      });
       return;
     }
 
@@ -65,9 +80,17 @@ class EmailService {
       bcc, // Store BCC in config
     };
 
-    this.transporter = nodemailer.createTransport(this.config);
-    this.isActive = true;
-    console.log('Email service initialized successfully');
+    try {
+      this.transporter = nodemailer.createTransport(this.config);
+      this.isActive = true;
+      console.log('Email service initialized successfully');
+      console.log(`SMTP Server: ${host}:${port}`);
+      console.log(`From Address: ${from}`);
+      console.log(`BCC Address: ${bcc || 'none'}`);
+    } catch (error) {
+      console.error('Failed to create SMTP transporter:', error);
+      this.isActive = false;
+    }
   }
 
   private substituteVariables(message: string, userData: UserData): string {
@@ -115,20 +138,17 @@ class EmailService {
           </div>
           
           <h3>1️⃣ Step 1:</h3>
-          <p>Use the username and temporary password to log in to <a href="https://sso.irregularchat.com" style="color: #007bff;">https://sso.irregularchat.com</a></p>
+          <p>- Use the username and temporary password to log in to <a href="https://sso.irregularchat.com" style="color: #007bff;">https://sso.irregularchat.com</a></p>
           
           <h3>2️⃣ Step 2:</h3>
-          <ul>
-            <li>Update your email, important to be able to recover your account and verify your identity</li>
-            <li>Save your Login Username and New Password to a Password Manager</li>
-            <li>Visit the welcome page while logged in <a href="https://forum.irregularchat.com/t/84" style="color: #007bff;">https://forum.irregularchat.com/t/84</a></li>
-          </ul>
+          <p>- Update your email, important to be able to recover your account and verify your identity</p>
+          <p>- Save your Login Username and New Password to a Password Manager</p>
+          <p>- Visit the welcome page while logged in <a href="https://forum.irregularchat.com/t/84" style="color: #007bff;">https://forum.irregularchat.com/t/84</a></p>
           
           ${data.discoursePostUrl ? `
             <h3>3️⃣ Step 3:</h3>
-            <p>We posted an intro about you, but you can complete or customize it:<br>
-              <a href="${data.discoursePostUrl}" style="color: #007bff;">View Your Introduction</a>
-            </p>
+            <p>- We posted an intro about you, but you can complete or customize it:</p>
+            <p><a href="${data.discoursePostUrl}" style="color: #007bff;">${data.discoursePostUrl}</a></p>
           ` : ''}
           
           <p style="background-color: #fff3cd; padding: 15px; border-radius: 5px; border-left: 4px solid #ffc107; margin: 20px 0;">
@@ -140,7 +160,6 @@ class EmailService {
           <p><strong>Welcome aboard!</strong></p>
           
           <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6; color: #6c757d; font-size: 12px;">
-            <p>Learn more about our community: <a href="https://irregularpedia.org/index.php/Main_Page">IrregularPedia</a></p>
             <p>This is an automated message. Please do not reply to this email.</p>
           </div>
         </div>
@@ -158,12 +177,25 @@ class EmailService {
         mailOptions.bcc = this.config!.bcc;
       }
 
+      console.log(`Attempting to send welcome email to ${data.to}`);
+      console.log(`SMTP Config: ${this.config!.host}:${this.config!.port}`);
+      console.log(`From: ${this.config!.from}`);
+      console.log(`BCC: ${this.config!.bcc || 'none'}`);
+
       await this.transporter.sendMail(mailOptions);
 
       console.log(`Welcome email sent successfully to ${data.to}`);
       return true;
     } catch (error) {
       console.error('Error sending welcome email:', error);
+      console.error('SMTP Configuration:', {
+        host: this.config?.host,
+        port: this.config?.port,
+        secure: this.config?.secure,
+        from: this.config?.from,
+        user: this.config?.auth?.user,
+        hasPassword: !!this.config?.auth?.pass
+      });
       return false;
     }
   }

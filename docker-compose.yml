@@ -30,6 +30,7 @@ services:
       - SMTP_USER=${SMTP_USER}
       - SMTP_PASS=${SMTP_PASS}
       - SMTP_FROM=${SMTP_FROM}
+      - SMTP_BCC=${SMTP_BCC}
       # Matrix configuration
       - MATRIX_HOMESERVER=${MATRIX_HOMESERVER}
       - MATRIX_ACCESS_TOKEN=${MATRIX_ACCESS_TOKEN}

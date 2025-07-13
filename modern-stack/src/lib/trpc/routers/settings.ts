@@ -346,4 +346,274 @@ export const settingsRouter = createTRPCRouter({
       announcements,
     };
   }),
+
+  // Room Cards Management
+  getRoomCards: publicProcedure
+    .input(z.object({ isActive: z.boolean().optional() }))
+    .query(async ({ ctx, input }) => {
+      const setting = await ctx.prisma.dashboardSettings.findUnique({
+        where: { key: 'room_cards' },
+      });
+      
+      if (!setting?.value) {
+        return [];
+      }
+
+      try {
+        const roomCards = JSON.parse(setting.value as string) || [];
+        if (input.isActive !== undefined) {
+          return roomCards.filter((card: any) => card.isActive === input.isActive);
+        }
+        return roomCards;
+      } catch (error) {
+        console.error('Error parsing room cards:', error);
+        return [];
+      }
+    }),
+
+  createRoomCard: adminProcedure
+    .input(
+      z.object({
+        title: z.string().min(1),
+        description: z.string().optional(),
+        category: z.string().default('general'),
+        image: z.string().optional(),
+        matrixRoomId: z.string().optional(),
+        directLink: z.string().optional(),
+        forumLink: z.string().optional(),
+        wikiLink: z.string().optional(),
+        memberCount: z.number().default(0),
+        order: z.number().default(0),
+        isActive: z.boolean().default(true),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Get existing room cards
+      const setting = await ctx.prisma.dashboardSettings.findUnique({
+        where: { key: 'room_cards' },
+      });
+
+      let roomCards = [];
+      if (setting?.value) {
+        try {
+          roomCards = JSON.parse(setting.value as string) || [];
+        } catch (error) {
+          console.error('Error parsing existing room cards:', error);
+        }
+      }
+
+      // Create new room card with unique ID
+      const newCard = {
+        id: Date.now(), // Simple ID generation
+        ...input,
+        createdAt: new Date().toISOString(),
+        createdBy: ctx.session.user.username || 'unknown',
+      };
+
+      roomCards.push(newCard);
+
+      // Save back to settings
+      await ctx.prisma.dashboardSettings.upsert({
+        where: { key: 'room_cards' },
+        update: { value: JSON.stringify(roomCards) },
+        create: { key: 'room_cards', value: JSON.stringify(roomCards) },
+      });
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'room_card_created',
+          username: ctx.session.user.username || 'unknown',
+          details: `Created room card: ${input.title}`,
+        },
+      });
+
+      return newCard;
+    }),
+
+  updateRoomCard: adminProcedure
+    .input(
+      z.object({
+        id: z.number(),
+        title: z.string().min(1).optional(),
+        description: z.string().optional(),
+        category: z.string().optional(),
+        image: z.string().optional(),
+        matrixRoomId: z.string().optional(),
+        directLink: z.string().optional(),
+        forumLink: z.string().optional(),
+        wikiLink: z.string().optional(),
+        memberCount: z.number().optional(),
+        order: z.number().optional(),
+        isActive: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { id, ...updateData } = input;
+
+      // Get existing room cards
+      const setting = await ctx.prisma.dashboardSettings.findUnique({
+        where: { key: 'room_cards' },
+      });
+
+      if (!setting?.value) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Room card not found',
+        });
+      }
+
+      let roomCards = [];
+      try {
+        roomCards = JSON.parse(setting.value as string) || [];
+      } catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Error parsing room cards data',
+        });
+      }
+
+      // Find and update the card
+      const cardIndex = roomCards.findIndex((card: any) => card.id === id);
+      if (cardIndex === -1) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Room card not found',
+        });
+      }
+
+      roomCards[cardIndex] = {
+        ...roomCards[cardIndex],
+        ...updateData,
+        updatedAt: new Date().toISOString(),
+        updatedBy: ctx.session.user.username || 'unknown',
+      };
+
+      // Save back to settings
+      await ctx.prisma.dashboardSettings.update({
+        where: { key: 'room_cards' },
+        data: { value: JSON.stringify(roomCards) },
+      });
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'room_card_updated',
+          username: ctx.session.user.username || 'unknown',
+          details: `Updated room card: ${roomCards[cardIndex].title}`,
+        },
+      });
+
+      return roomCards[cardIndex];
+    }),
+
+  deleteRoomCard: adminProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      // Get existing room cards
+      const setting = await ctx.prisma.dashboardSettings.findUnique({
+        where: { key: 'room_cards' },
+      });
+
+      if (!setting?.value) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Room card not found',
+        });
+      }
+
+      let roomCards = [];
+      try {
+        roomCards = JSON.parse(setting.value as string) || [];
+      } catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Error parsing room cards data',
+        });
+      }
+
+      // Find and remove the card
+      const cardIndex = roomCards.findIndex((card: any) => card.id === input.id);
+      if (cardIndex === -1) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Room card not found',
+        });
+      }
+
+      const deletedCard = roomCards[cardIndex];
+      roomCards.splice(cardIndex, 1);
+
+      // Save back to settings
+      await ctx.prisma.dashboardSettings.update({
+        where: { key: 'room_cards' },
+        data: { value: JSON.stringify(roomCards) },
+      });
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'room_card_deleted',
+          username: ctx.session.user.username || 'unknown',
+          details: `Deleted room card: ${deletedCard.title}`,
+        },
+      });
+
+      return { success: true };
+    }),
+
+  reorderRoomCards: adminProcedure
+    .input(z.object({ cards: z.array(z.object({ id: z.number(), order: z.number() })) }))
+    .mutation(async ({ ctx, input }) => {
+      // Get existing room cards
+      const setting = await ctx.prisma.dashboardSettings.findUnique({
+        where: { key: 'room_cards' },
+      });
+
+      if (!setting?.value) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'No room cards found',
+        });
+      }
+
+      let roomCards = [];
+      try {
+        roomCards = JSON.parse(setting.value as string) || [];
+      } catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Error parsing room cards data',
+        });
+      }
+
+      // Update order for each card
+      input.cards.forEach(({ id, order }) => {
+        const cardIndex = roomCards.findIndex((card: any) => card.id === id);
+        if (cardIndex !== -1) {
+          roomCards[cardIndex].order = order;
+          roomCards[cardIndex].updatedAt = new Date().toISOString();
+        }
+      });
+
+      // Sort by order
+      roomCards.sort((a: any, b: any) => a.order - b.order);
+
+      // Save back to settings
+      await ctx.prisma.dashboardSettings.update({
+        where: { key: 'room_cards' },
+        data: { value: JSON.stringify(roomCards) },
+      });
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'room_cards_reordered',
+          username: ctx.session.user.username || 'unknown',
+          details: `Reordered ${input.cards.length} room cards`,
+        },
+      });
+
+      return { success: true };
+    }),
 }); 

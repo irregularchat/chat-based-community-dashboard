@@ -671,31 +671,64 @@ export const userRouter = createTRPCRouter({
       }
 
       try {
-        // Note: Password update via Authentik API would require additional implementation
-        // For now, we'll just log the request and inform user to use SSO password reset
+        // Get current user from database
+        const user = await ctx.prisma.user.findUnique({
+          where: { id: parseInt(ctx.session.user.id) },
+        });
+
+        if (!user) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'User not found',
+          });
+        }
+
+        // Check if user is using local authentication (has a password set)
+        if (!user.password && user.authentikId) {
+          // User is using SSO, redirect to SSO password reset
+          await ctx.prisma.adminEvent.create({
+            data: {
+              eventType: 'password_change_requested',
+              username: ctx.session.user.username || 'unknown',
+              details: 'SSO user requested password change from dashboard - redirect to SSO',
+            },
+          });
+
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Please use the SSO password reset feature at https://sso.irregularchat.com to change your password',
+          });
+        }
+
+        // User is using local authentication, update password
+        const hashedPassword = await bcrypt.hash(input.newPassword, 12);
         
-        // Log admin event
-        await ctx.prisma.adminEvent.create({
+        await ctx.prisma.user.update({
+          where: { id: user.id },
           data: {
-            eventType: 'password_change_requested',
-            username: ctx.session.user.username || 'unknown',
-            details: 'User requested password change from dashboard - redirect to SSO',
+            password: hashedPassword,
+            lastLogin: new Date(),
           },
         });
 
-        // Return instruction to use SSO password reset
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Please use the SSO password reset feature at https://sso.irregularchat.com to change your password',
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'password_changed',
+            username: ctx.session.user.username || 'unknown',
+            details: 'User successfully changed password via dashboard',
+          },
         });
+
+        return { success: true, message: 'Password changed successfully' };
       } catch (error) {
-        console.error('Error with password change request:', error);
+        console.error('Error changing password:', error);
         if (error instanceof TRPCError) {
           throw error;
         }
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
-          message: 'Failed to process password change request',
+          message: 'Failed to change password',
         });
       }
     }),
@@ -895,11 +928,11 @@ export const userRouter = createTRPCRouter({
 
         // Also send via Matrix if configured
         if (matrixService.isConfigured()) {
-          const adminMatrixRoom = process.env.MATRIX_ADMIN_ROOM_ID;
-          if (adminMatrixRoom) {
+          const indocRoom = process.env.MATRIX_INDOC_ROOM_ID || process.env.MATRIX_ADMIN_ROOM_ID;
+          if (indocRoom) {
             const matrixMessage = `📨 **Message from User Dashboard**\n\n**User:** ${ctx.session.user.username} (${ctx.session.user.email})\n**Subject:** ${input.subject}\n\n**Message:**\n${input.message}`;
             
-            await matrixService.sendRoomMessage(adminMatrixRoom, matrixMessage);
+            await matrixService.sendRoomMessage(indocRoom, matrixMessage);
           }
         }
 
@@ -912,7 +945,27 @@ export const userRouter = createTRPCRouter({
           },
         });
 
-        return { success: true };
+        let matrixSent = false;
+        let emailSent = false;
+        
+        // Check what was actually sent
+        if (matrixService.isConfigured() && (process.env.MATRIX_INDOC_ROOM_ID || process.env.MATRIX_ADMIN_ROOM_ID)) {
+          matrixSent = true;
+        }
+        
+        if (emailService.isConfigured() && (process.env.ADMIN_EMAIL || process.env.SMTP_FROM_EMAIL)) {
+          emailSent = true;
+        }
+
+        return { 
+          success: true, 
+          matrixSent,
+          emailSent,
+          indocRoom: process.env.MATRIX_INDOC_ROOM_ID ? true : false,
+          message: matrixSent 
+            ? "Message sent to INDOC room. Join #indoc if you need a direct response, as replies won't come back to this dashboard."
+            : "Message sent via email. Check #indoc room for faster responses from moderators."
+        };
       } catch (error) {
         console.error('Error sending admin message:', error);
         throw new TRPCError({

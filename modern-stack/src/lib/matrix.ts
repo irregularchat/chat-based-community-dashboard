@@ -144,7 +144,12 @@ class MatrixService {
     try {
       console.log(`Sending direct message to ${matrixUserId}`);
 
-      // Create or get existing direct message room
+      // Check if this is a Signal bridge user (starts with @signal_)
+      if (matrixUserId.startsWith('@signal_')) {
+        return await this.sendSignalBridgeMessage(matrixUserId, message);
+      }
+
+      // Normal Matrix user - create or get existing direct message room
       const roomId = await this.getOrCreateDirectRoom(matrixUserId);
       if (!roomId) {
         return {
@@ -171,6 +176,144 @@ class MatrixService {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
       };
+    }
+  }
+
+  /**
+   * Send a message to a Signal bridge user using the Signal bridge bot
+   */
+  private async sendSignalBridgeMessage(
+    signalUserId: string,
+    message: string
+  ): Promise<DirectMessageResult> {
+    if (!this.isActive || !this.client) {
+      return {
+        success: false,
+        error: 'Matrix service not configured',
+      };
+    }
+
+    try {
+      console.log(`Sending Signal bridge message to ${signalUserId}`);
+
+      // Get Signal bridge room ID from environment
+      const signalBridgeRoomId = process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID;
+      if (!signalBridgeRoomId) {
+        return {
+          success: false,
+          error: 'MATRIX_SIGNAL_BRIDGE_ROOM_ID not configured',
+        };
+      }
+
+      // Extract Signal UUID from Matrix user ID (format: @signal_UUID:domain.com)
+      const signalUuid = signalUserId.split('_')[1]?.split(':')[0];
+      if (!signalUuid) {
+        return {
+          success: false,
+          error: `Failed to extract Signal UUID from ${signalUserId}`,
+        };
+      }
+
+      // First, send start-chat command to Signal bridge
+      const startChatCommand = `start-chat ${signalUuid}`;
+      console.log(`Sending Signal bridge command: ${startChatCommand}`);
+
+      const commandResponse = await this.client.sendEvent(signalBridgeRoomId, 'm.room.message', {
+        msgtype: MsgType.Text,
+        body: startChatCommand,
+      });
+
+      if (!commandResponse.event_id) {
+        return {
+          success: false,
+          error: 'Failed to send Signal bridge command',
+        };
+      }
+
+      // Wait for bot to respond and create chat room
+      const delay = parseFloat(process.env.SIGNAL_BRIDGE_BOT_RESPONSE_DELAY || '2.0') * 1000;
+      await new Promise(resolve => setTimeout(resolve, delay));
+
+      // Find the Signal chat room
+      const signalChatRoomId = await this.findSignalChatRoom(signalUserId);
+      if (!signalChatRoomId) {
+        return {
+          success: false,
+          error: 'Failed to find Signal chat room after bot command',
+        };
+      }
+
+      // Send the actual message to the Signal chat room
+      const messageResponse = await this.client.sendEvent(signalChatRoomId, 'm.room.message', {
+        msgtype: MsgType.Text,
+        body: message,
+      });
+
+      console.log(`Signal message sent successfully: ${messageResponse.event_id}`);
+      return {
+        success: true,
+        roomId: signalChatRoomId,
+        eventId: messageResponse.event_id,
+      };
+
+    } catch (error) {
+      console.error('Error sending Signal bridge message:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }
+
+  /**
+   * Find the Signal chat room created by the bridge bot
+   */
+  private async findSignalChatRoom(signalUserId: string): Promise<string | null> {
+    if (!this.client) return null;
+
+    try {
+      const joinedRooms = await this.client.getJoinedRooms();
+      
+      for (const roomId of joinedRooms.joined_rooms) {
+        try {
+          const roomState = await this.client.roomState(roomId);
+          const members: string[] = [];
+          let roomName = '';
+          let topic = '';
+
+          for (const event of roomState) {
+            if (event.type === 'm.room.member' && 
+                event.state_key && 
+                event.content?.membership === 'join') {
+              members.push(event.state_key);
+            } else if (event.type === 'm.room.name') {
+              roomName = event.content?.name || '';
+            } else if (event.type === 'm.room.topic') {
+              topic = event.content?.topic || '';
+            }
+          }
+
+          // Check if this room contains both the bot and the Signal user
+          const botUsername = process.env.MATRIX_BOT_USERNAME || '';
+          if (members.includes(botUsername) && members.includes(signalUserId)) {
+            // Verify it's likely a Signal DM room (small member count or Signal-related name/topic)
+            if (members.length <= 3 || 
+                roomName.toLowerCase().includes('signal') || 
+                topic.toLowerCase().includes('signal')) {
+              console.log(`Found Signal chat room: ${roomId} (Name: ${roomName}, Members: ${members.length})`);
+              return roomId;
+            }
+          }
+        } catch (roomError) {
+          console.warn(`Error checking room ${roomId}:`, roomError);
+          continue;
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error finding Signal chat room:', error);
+      return null;
     }
   }
 

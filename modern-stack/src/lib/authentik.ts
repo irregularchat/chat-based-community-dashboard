@@ -35,6 +35,7 @@ interface AuthentikUser {
   is_active: boolean;
   groups: string[];
   attributes?: Record<string, any>;
+  last_login?: string;
 }
 
 class AuthentikService {
@@ -43,6 +44,10 @@ class AuthentikService {
 
   constructor() {
     this.initializeFromEnv();
+  }
+
+  public isConfigured(): boolean {
+    return this.isActive && !!this.config;
   }
 
   private initializeFromEnv() {
@@ -336,6 +341,114 @@ class AuthentikService {
       }));
     } catch (error) {
       console.error('Error searching users in Authentik:', error);
+      return [];
+    }
+  }
+
+  public async listUsers(searchTerm?: string, page: number = 1, pageSize: number = 500): Promise<{
+    users: AuthentikUser[];
+    total: number;
+    page: number;
+    pageSize: number;
+    hasMore: boolean;
+  }> {
+    if (!this.isActive) {
+      return {
+        users: [],
+        total: 0,
+        page: 1,
+        pageSize: 0,
+        hasMore: false,
+      };
+    }
+
+    try {
+      const params = new URLSearchParams({
+        page_size: pageSize.toString(),
+        page: page.toString(),
+      });
+
+      if (searchTerm) {
+        params.append('search', searchTerm);
+      }
+
+      const response = await this.makeRequest(`core/users/?${params.toString()}`);
+      const users = response.results.map((user: any) => ({
+        pk: user.pk,
+        username: user.username,
+        email: user.email,
+        name: user.name,
+        is_active: user.is_active,
+        groups: user.groups || [],
+        attributes: user.attributes || {},
+        last_login: user.last_login,
+      }));
+
+      return {
+        users,
+        total: response.count || 0,
+        page,
+        pageSize,
+        hasMore: !!response.next,
+      };
+    } catch (error) {
+      console.error('Error listing users from Authentik:', error);
+      return {
+        users: [],
+        total: 0,
+        page: 1,
+        pageSize: 0,
+        hasMore: false,
+      };
+    }
+  }
+
+  public async listAllUsers(searchTerm?: string): Promise<AuthentikUser[]> {
+    if (!this.isActive) return [];
+
+    try {
+      let allUsers: AuthentikUser[] = [];
+      let page = 1;
+      let hasMore = true;
+      const pageSize = 500;
+      const maxRetries = 3;
+
+      console.log('Fetching all users from Authentik...');
+
+      while (hasMore) {
+        let retry = 0;
+        let response;
+
+        while (retry < maxRetries) {
+          try {
+            response = await this.listUsers(searchTerm, page, pageSize);
+            break;
+          } catch (error) {
+            retry++;
+            if (retry >= maxRetries) {
+              console.error(`Failed to fetch page ${page} after ${maxRetries} attempts:`, error);
+              throw error;
+            }
+            console.warn(`Error fetching page ${page}, retrying (${retry}/${maxRetries}):`, error);
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
+          }
+        }
+
+        if (!response) {
+          break;
+        }
+
+        allUsers = allUsers.concat(response.users);
+        hasMore = response.hasMore;
+        page++;
+
+        console.log(`Fetched page ${page - 1}: ${response.users.length} users (total: ${allUsers.length})`);
+      }
+
+      console.log(`Fetched ${allUsers.length} total users from Authentik`);
+      return allUsers;
+    } catch (error) {
+      console.error('Error fetching all users from Authentik:', error);
       return [];
     }
   }

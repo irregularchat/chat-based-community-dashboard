@@ -49,3 +49,4 @@ test_env/etc/jupyter/nbconfig/notebook.d/pydeck.json
 .venv/bin/pip3
 .venv/*
 matrix_data_analysis.json
+.env.bak

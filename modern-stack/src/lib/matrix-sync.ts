@@ -1,6 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@/generated/prisma';
 import { matrixService } from './matrix';
-import { MatrixClient } from 'matrix-js-sdk';
+import { MatrixClient, ClientEvent } from 'matrix-js-sdk';
 
 interface SyncResult {
   status: string;
@@ -132,15 +132,66 @@ class MatrixSyncService {
 
   private async getMatrixClient(): Promise<MatrixClient | null> {
     const config = matrixService.getConfig();
-    if (!config) return null;
+    if (!config) {
+      console.warn('Matrix service not configured');
+      return null;
+    }
 
     // Get the Matrix client from the service
-    return matrixService.getClient();
+    const client = matrixService.getClient();
+    if (!client) {
+      console.warn('Matrix client not initialized');
+      return null;
+    }
+
+    // Ensure client is started and synced
+    try {
+      // Check if client is already synced
+      const syncState = client.getSyncState();
+      
+      if (syncState === null || syncState === 'STOPPED') {
+        console.log('Starting Matrix client...');
+        await client.startClient({ initialSyncLimit: 10 });
+        
+        // Wait for initial sync to complete or use existing data
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            console.warn('Matrix client sync timeout, proceeding with partial data');
+            resolve(undefined); // Don't reject, just proceed
+          }, 15000); // 15 second timeout (reduced)
+
+          const handleSync = (state: string) => {
+            if (state === 'PREPARED' || state === 'SYNCING') {
+              clearTimeout(timeout);
+              console.log(`Matrix client sync state: ${state}`);
+              resolve(undefined);
+            }
+          };
+
+          client.once(ClientEvent.Sync, handleSync);
+          
+          // Also check current state immediately
+          const currentState = client.getSyncState();
+          if (currentState === 'PREPARED' || currentState === 'SYNCING') {
+            clearTimeout(timeout);
+            resolve(undefined);
+          }
+        });
+      } else {
+        console.log(`Matrix client already in state: ${syncState}`);
+      }
+      
+      return client;
+    } catch (error) {
+      console.error('Error starting Matrix client:', error);
+      // Return client anyway - it might still work for basic operations
+      return client;
+    }
   }
 
   private async syncRooms(client: MatrixClient | null, isRapidManualSync: boolean): Promise<{ roomsSync?: number }> {
     if (!client) {
-      // Mock implementation for now
+      console.warn('Matrix client not available for room sync');
       return { roomsSync: 0 };
     }
 
@@ -235,49 +286,47 @@ class MatrixSyncService {
 
   private async syncUsersAndMemberships(client: MatrixClient | null, isRapidManualSync: boolean): Promise<{ usersSync?: number; membershipsSync?: number }> {
     if (!client) {
-      // Mock implementation for now
+      console.warn('Matrix client not available for user/membership sync');
       return { usersSync: 0, membershipsSync: 0 };
     }
 
     try {
-      // Get all rooms to sync memberships for
-      const rooms = await this.prisma.matrixRoom.findMany();
+      // Get all Matrix rooms from the client (not database)
+      const matrixRooms = client.getRooms();
       
       let usersSync = 0;
       let membershipsSync = 0;
       let roomsSkipped = 0;
 
-      for (const room of rooms) {
+      for (const matrixRoom of matrixRooms) {
         try {
+          const memberCount = matrixRoom.getJoinedMemberCount();
           const minRoomMembers = parseInt(process.env.MATRIX_MIN_ROOM_MEMBERS || '3');
-          if (room.memberCount <= minRoomMembers) {
-            console.log(`Skipping membership sync for ${room.roomId} - only ${room.memberCount} members`);
+          
+          if (memberCount <= minRoomMembers) {
+            console.log(`Skipping membership sync for ${matrixRoom.roomId} - only ${memberCount} members`);
             roomsSkipped++;
             continue;
           }
 
           // Get current membership count from database
           const currentDbCount = await this.prisma.matrixRoomMembership.count({
-            where: { roomId: room.roomId },
+            where: { roomId: matrixRoom.roomId },
           });
 
           // Smart sync logic: skip if member count matches and not rapid manual sync
-          if (!isRapidManualSync && room.memberCount === currentDbCount) {
-            console.log(`Skipping membership sync for ${room.roomId} - count unchanged`);
+          if (!isRapidManualSync && memberCount === currentDbCount) {
+            console.log(`Skipping membership sync for ${matrixRoom.roomId} - count unchanged`);
             roomsSkipped++;
             continue;
           }
-
-          // Get room from Matrix client
-          const matrixRoom = client.getRoom(room.roomId);
-          if (!matrixRoom) continue;
 
           // Get room members
           const members = matrixRoom.getMembers();
 
           // Clear existing memberships for this room
           await this.prisma.matrixRoomMembership.deleteMany({
-            where: { roomId: room.roomId },
+            where: { roomId: matrixRoom.roomId },
           });
 
           // Process each member
@@ -308,7 +357,7 @@ class MatrixSyncService {
             // Create membership record
             await this.prisma.matrixRoomMembership.create({
               data: {
-                roomId: room.roomId,
+                roomId: matrixRoom.roomId,
                 userId: member.userId,
                 membershipStatus: 'join',
                 joinedAt: new Date(),
@@ -318,11 +367,19 @@ class MatrixSyncService {
             membershipsSync++;
           }
 
-          // Update room member count
-          await this.prisma.matrixRoom.update({
-            where: { roomId: room.roomId },
-            data: {
+          // Update room member count in database (ensure room exists first)
+          await this.prisma.matrixRoom.upsert({
+            where: { roomId: matrixRoom.roomId },
+            update: {
               memberCount: members.length,
+              lastSynced: new Date(),
+            },
+            create: {
+              roomId: matrixRoom.roomId,
+              name: matrixRoom.name,
+              topic: matrixRoom.currentState.getStateEvents('m.room.topic', '')?.getContent()?.topic || '',
+              memberCount: members.length,
+              isDirect: matrixRoom.getMyMembership() === 'join' && members.length === 2,
               lastSynced: new Date(),
             },
           });
@@ -330,7 +387,7 @@ class MatrixSyncService {
           usersSync += members.length;
 
         } catch (error) {
-          console.error(`Error syncing memberships for room ${room.roomId}:`, error);
+          console.error(`Error syncing memberships for room ${matrixRoom.roomId}:`, error);
           continue;
         }
       }

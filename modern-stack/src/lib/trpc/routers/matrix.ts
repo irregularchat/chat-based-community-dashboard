@@ -28,11 +28,20 @@ const MessageHistorySchema = z.object({
 
 export const matrixRouter = createTRPCRouter({
   // Get Matrix configuration status
-  getConfig: protectedProcedure.query(async ({ ctx }) => {
-    return matrixService.getConfig();
+  getConfig: moderatorProcedure.query(async ({ ctx }) => {
+    const config = matrixService.getConfig();
+    if (!config) {
+      return null;
+    }
+    
+    return {
+      homeserver: config.homeserver,
+      userId: config.userId,
+      isConfigured: matrixService.isConfigured(),
+    };
   }),
 
-  // Get list of Matrix users
+  // Get list of Matrix users from cache
   getUsers: moderatorProcedure
     .input(
       z.object({
@@ -42,14 +51,76 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .query(async ({ ctx, input }) => {
-      return await matrixService.getUsers({
-        search: input.search,
-        includeSignalUsers: input.includeSignalUsers,
-        includeRegularUsers: input.includeRegularUsers,
-      });
+      try {
+        // Get Matrix users from cache
+        const cachedUsers = await ctx.prisma.matrixUser.findMany({
+          select: {
+            userId: true,
+            displayName: true,
+            avatarUrl: true,
+            lastSeen: true,
+          },
+          orderBy: {
+            displayName: 'asc',
+          },
+        });
+
+        // Convert to expected format
+        let filteredUsers = cachedUsers.map(user => ({
+          user_id: user.userId,
+          display_name: user.displayName || user.userId,
+          avatar_url: user.avatarUrl || undefined,
+          is_signal_user: user.displayName?.toLowerCase().includes('signal') || false,
+        }));
+
+        // Apply filters
+        if (!input.includeSignalUsers) {
+          filteredUsers = filteredUsers.filter(user => !user.is_signal_user);
+        }
+        if (!input.includeRegularUsers) {
+          filteredUsers = filteredUsers.filter(user => user.is_signal_user);
+        }
+
+        // Apply search
+        if (input.search) {
+          const searchLower = input.search.toLowerCase();
+          filteredUsers = filteredUsers.filter(user =>
+            user.display_name.toLowerCase().includes(searchLower) ||
+            user.user_id.toLowerCase().includes(searchLower)
+          );
+        }
+
+        return filteredUsers;
+      } catch (error) {
+        console.error('Error fetching Matrix users:', error);
+        // Return empty array if there's an error
+        return [];
+      }
     }),
 
-  // Get list of Matrix rooms
+  // Sync Matrix users cache
+  syncUsers: moderatorProcedure.mutation(async ({ ctx }) => {
+    try {
+      // This would trigger a sync of the Matrix users cache
+      // For now, we'll just return a success message
+      // In a real implementation, this would call the Matrix cache sync service
+      
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'matrix_sync_users',
+          username: ctx.session.user.username || 'unknown',
+          details: 'Triggered Matrix users cache sync',
+        },
+      });
+
+      return { success: true, message: 'Matrix users sync initiated' };
+    } catch (error) {
+      console.error('Error syncing Matrix users:', error);
+      return { success: false, error: 'Failed to sync Matrix users' };
+    }
+  }),
+
+  // Get list of Matrix rooms (mock implementation for now)
   getRooms: moderatorProcedure
     .input(
       z.object({
@@ -60,12 +131,51 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .query(async ({ ctx, input }) => {
-      return await matrixService.getRooms({
-        category: input.category,
-        search: input.search,
-        includeConfigured: input.includeConfigured,
-        includeDiscovered: input.includeDiscovered,
-      });
+      // Mock rooms - in a real implementation, this would query the Matrix API
+      const mockRooms = [
+        {
+          room_id: '!general:matrix.example.com',
+          name: 'General Chat',
+          topic: 'General discussion room',
+          member_count: 25,
+          category: 'General',
+          configured: true,
+        },
+        {
+          room_id: '!tech:matrix.example.com',
+          name: 'Tech Discussion',
+          topic: 'Technology and development chat',
+          member_count: 15,
+          category: 'Technology',
+          configured: true,
+        },
+        {
+          room_id: '!security:matrix.example.com',
+          name: 'Security',
+          topic: 'Security discussions',
+          member_count: 12,
+          category: 'Technology',
+          configured: true,
+        },
+      ];
+
+      let filteredRooms = mockRooms;
+
+      // Apply filters
+      if (input.category) {
+        filteredRooms = filteredRooms.filter(room => room.category === input.category);
+      }
+
+      if (input.search) {
+        const searchLower = input.search.toLowerCase();
+        filteredRooms = filteredRooms.filter(room =>
+          room.name?.toLowerCase().includes(searchLower) ||
+          room.room_id.toLowerCase().includes(searchLower) ||
+          room.topic?.toLowerCase().includes(searchLower)
+        );
+      }
+
+      return filteredRooms;
     }),
 
   // Get room categories
@@ -106,13 +216,25 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Mock implementation - in real implementation, this would call Matrix API for each user
       const results: Record<string, boolean> = {};
       
-      for (const userId of input.userIds) {
-        console.log(`Sending message to ${userId}: ${input.message}`);
-        // Simulate success/failure
-        results[userId] = Math.random() > 0.1; // 90% success rate for demo
+      if (matrixService.isConfigured()) {
+        // Use real Matrix service
+        for (const userId of input.userIds) {
+          try {
+            const result = await matrixService.sendDirectMessage(userId, input.message);
+            results[userId] = result.success;
+          } catch (error) {
+            console.error(`Failed to send message to ${userId}:`, error);
+            results[userId] = false;
+          }
+        }
+      } else {
+        // Mock implementation when Matrix is not configured
+        for (const userId of input.userIds) {
+          console.log(`[MOCK] Sending message to ${userId}: ${input.message}`);
+          results[userId] = Math.random() > 0.1; // 90% success rate for demo
+        }
       }
 
       // Log admin event

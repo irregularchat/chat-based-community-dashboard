@@ -11,8 +11,9 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { UserCredentialDisplay } from '@/components/ui/user-credentials';
-import { ArrowLeft, UserPlus, Save, Settings, Phone, Building2, Hash, Users, FileText, Copy, Shuffle, Home } from 'lucide-react';
+import { ArrowLeft, UserPlus, Save, Settings, Phone, Building2, Hash, Users, FileText, Copy, Shuffle, Home, RefreshCw, MessageSquare } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface CreatedUserCredentials {
@@ -20,6 +21,14 @@ interface CreatedUserCredentials {
   password: string;
   resetLink?: string;
   ssoUserId?: string;
+}
+
+// Matrix user interface
+interface MatrixUser {
+  user_id: string;
+  display_name: string;
+  avatar_url?: string;
+  is_signal_user?: boolean;
 }
 
 // Random words for username generation (from legacy implementation)
@@ -57,6 +66,7 @@ export default function CreateUserPage() {
     sendMatrixWelcome: true,
     addToRecommendedRooms: true,
     skipIndocRemoval: false,
+    matrixUserId: '', // Add Matrix user selection
   });
   
   // Text parser data
@@ -67,6 +77,40 @@ export default function CreateUserPage() {
     credentials: CreatedUserCredentials;
     email: string;
   } | null>(null);
+
+  // Matrix user state
+  const [matrixUsers, setMatrixUsers] = useState<MatrixUser[]>([]);
+  const [selectedMatrixUser, setSelectedMatrixUser] = useState<MatrixUser | null>(null);
+
+  // Matrix user queries
+  const { data: matrixUsersData = [], isLoading: matrixUsersLoading, refetch: refetchMatrixUsers } = trpc.matrix.getUsers.useQuery({
+    includeSignalUsers: true,
+    includeRegularUsers: true,
+  });
+
+  const syncMatrixUsers = trpc.matrix.syncUsers.useMutation({
+    onSuccess: () => {
+      toast.success('Matrix users sync initiated');
+      refetchMatrixUsers();
+    },
+    onError: (error) => {
+      toast.error('Failed to sync Matrix users: ' + error.message);
+    },
+  });
+
+  // Update Matrix users when data changes
+  useEffect(() => {
+    if (matrixUsersData) {
+      setMatrixUsers(matrixUsersData);
+    }
+  }, [matrixUsersData]);
+
+  // Handle Matrix user selection
+  const handleMatrixUserSelect = (userId: string) => {
+    const user = matrixUsers.find(u => u.user_id === userId);
+    setSelectedMatrixUser(user || null);
+    setFormData(prev => ({ ...prev, matrixUserId: userId }));
+  };
 
   // Smart username generation
   const generateUsername = (firstName: string, email: string): string => {
@@ -291,6 +335,7 @@ export default function CreateUserPage() {
       sendMatrixWelcome: true,
       addToRecommendedRooms: true,
       skipIndocRemoval: false,
+      matrixUserId: '',
     });
     
     // Clear any form errors
@@ -844,6 +889,85 @@ export default function CreateUserPage() {
                         />
                         <p className="text-xs text-gray-600">
                           Brief introduction for the new user. Organization and interests will be added automatically.
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Matrix User Connection */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <MessageSquare className="w-5 h-5" />
+                        Connect with Matrix User
+                      </CardTitle>
+                      <CardDescription>
+                        Select a Matrix user to connect with this new account
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {/* Sync Matrix Users Button */}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => syncMatrixUsers.mutate()}
+                        disabled={syncMatrixUsers.isPending}
+                        className="w-full"
+                      >
+                        {syncMatrixUsers.isPending ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></div>
+                            Syncing Matrix Users...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="w-4 h-4 mr-2" />
+                            Sync Matrix User Cache
+                          </>
+                        )}
+                      </Button>
+
+                      {/* Matrix User Selection */}
+                      <div className="space-y-2">
+                        <Label htmlFor="matrixUser">Select Matrix User</Label>
+                        {matrixUsersLoading ? (
+                          <div className="flex items-center justify-center p-4 border border-gray-200 rounded-md">
+                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-gray-600"></div>
+                            <span className="ml-2 text-sm text-gray-600">Loading Matrix users...</span>
+                          </div>
+                        ) : (
+                          <Select value={formData.matrixUserId} onValueChange={handleMatrixUserSelect}>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Choose a Matrix user..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {matrixUsers.map((user) => (
+                                <SelectItem key={user.user_id} value={user.user_id}>
+                                  {user.display_name} ({user.user_id})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </div>
+
+                      {/* Selected Matrix User Display */}
+                      {selectedMatrixUser && (
+                        <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-md border border-blue-200 dark:border-blue-800">
+                          <p className="text-sm text-blue-800 dark:text-blue-200">
+                            <strong>Selected Matrix User:</strong> {selectedMatrixUser.display_name}
+                          </p>
+                          <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
+                            {selectedMatrixUser.user_id}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Information about Matrix user selection */}
+                      <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-md">
+                        <p className="text-xs text-gray-600 dark:text-gray-400">
+                          Connecting with a Matrix user allows for automatic welcome messages and room invitations.
+                          The welcome message will be sent to the selected Matrix user if enabled in Integration Options.
                         </p>
                       </div>
                     </CardContent>

@@ -218,7 +218,7 @@ export default function MatrixPage() {
     );
   }
 
-  if (!matrixConfig?.isActive) {
+  if (!matrixConfig) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <Card className="w-full max-w-2xl">
@@ -235,10 +235,9 @@ export default function MatrixPage() {
             <div className="space-y-2 text-sm text-gray-600">
               <p><strong>Configuration needed:</strong></p>
               <ul className="list-disc list-inside space-y-1">
-                <li>MATRIX_ACTIVE=true</li>
-                <li>MATRIX_HOMESERVER_URL</li>
+                <li>MATRIX_HOMESERVER</li>
                 <li>MATRIX_ACCESS_TOKEN</li>
-                <li>MATRIX_BOT_USERNAME</li>
+                <li>MATRIX_USER_ID</li>
               </ul>
             </div>
           </CardContent>
@@ -354,7 +353,7 @@ export default function MatrixPage() {
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixUsers && matrixUsers.length > 0 ? (
                         <div className="space-y-2">
-                          {matrixUsers.map((user) => (
+                          {matrixUsers.map((user: any) => (
                             <div key={user.user_id} className="flex items-center space-x-2">
                               <Checkbox
                                 id={`user-${user.user_id}`}
@@ -469,7 +468,7 @@ export default function MatrixPage() {
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixRooms && matrixRooms.length > 0 ? (
                         <div className="space-y-2">
-                          {matrixRooms.map((room) => (
+                          {matrixRooms.map((room: any) => (
                             <div key={room.room_id} className="flex items-center space-x-2">
                               <Checkbox
                                 id={`room-${room.room_id}`}
@@ -601,7 +600,7 @@ export default function MatrixPage() {
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixRooms && matrixRooms.length > 0 ? (
                         <div className="space-y-2">
-                          {matrixRooms.map((room) => (
+                          {matrixRooms.map((room: any) => (
                             <div key={room.room_id} className="flex items-center space-x-2">
                               <Checkbox
                                 id={`invite-room-${room.room_id}`}
@@ -717,7 +716,7 @@ export default function MatrixPage() {
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixRooms && matrixRooms.length > 0 ? (
                         <div className="space-y-2">
-                          {matrixRooms.map((room) => (
+                          {matrixRooms.map((room: any) => (
                             <div key={room.room_id} className="flex items-center space-x-2">
                               <Checkbox
                                 id={`remove-room-${room.room_id}`}

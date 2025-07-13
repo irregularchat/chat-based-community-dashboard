@@ -937,18 +937,14 @@ export default function CreateUserPage() {
                             <span className="ml-2 text-sm text-gray-600">Loading Matrix users...</span>
                           </div>
                         ) : (
-                          <Select value={formData.matrixUserId} onValueChange={handleMatrixUserSelect}>
-                            <SelectTrigger>
-                              <SelectValue placeholder="Choose a Matrix user..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {matrixUsers.map((user) => (
-                                <SelectItem key={user.user_id} value={user.user_id}>
-                                  {user.display_name} ({user.user_id})
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          <SearchableMatrixUserSelect
+                            users={matrixUsers}
+                            value={formData.matrixUserId}
+                            onValueChange={handleMatrixUserSelect}
+                            placeholder="Search and select a Matrix user..."
+                            emptyText="No Matrix users found. Try syncing the Matrix user cache first."
+                            className="w-full"
+                          />
                         )}
                       </div>
 

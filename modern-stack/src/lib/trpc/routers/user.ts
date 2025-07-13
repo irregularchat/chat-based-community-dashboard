@@ -981,8 +981,10 @@ export const userRouter = createTRPCRouter({
       z.object({
         inviteeEmail: z.string().email('Valid email is required'),
         inviteeName: z.string().min(1, 'Name is required'),
+        inviteePhone: z.string().optional(),
+        roomIds: z.array(z.string()).default([]),
         message: z.string().optional(),
-        expiryDays: z.number().min(1).max(30).default(7),
+        expiryDays: z.number().min(1).max(3).default(1),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1055,6 +1057,8 @@ export const userRouter = createTRPCRouter({
             inviterUserId: parseInt(ctx.session.user.id),
             inviteeEmail: input.inviteeEmail,
             inviteeName: input.inviteeName,
+            inviteePhone: input.inviteePhone,
+            roomIds: input.roomIds,
             message: input.message,
             inviteToken,
             expiresAt: expiryDate,

@@ -472,4 +472,120 @@ export const adminRouter = createTRPCRouter({
           throw new Error('Invalid export type');
       }
     }),
+
+  // Sync users from Authentik SSO
+  syncUsersFromSSO: adminProcedure.mutation(async ({ ctx }) => {
+    const { authentikService } = await import('@/lib/authentik');
+    
+    if (!authentikService.isConfigured()) {
+      throw new Error('Authentik SSO is not configured');
+    }
+
+    try {
+      // Get all users from Authentik
+      const authentikUsers = await authentikService.listAllUsers();
+      
+      let created = 0;
+      let updated = 0;
+      let errors = 0;
+
+      for (const authentikUser of authentikUsers) {
+        try {
+          // Parse name - Authentik provides full name, we need to split it
+          const nameParts = authentikUser.name?.split(' ') || [authentikUser.username];
+          const firstName = nameParts[0] || authentikUser.username;
+          const lastName = nameParts.slice(1).join(' ') || '';
+
+          // Determine user roles based on Authentik groups
+          const isAdmin = authentikUser.groups?.includes('admin') || false;
+          const isModerator = authentikUser.groups?.includes('moderator') || false;
+
+          // Check if user already exists
+          const existingUser = await ctx.prisma.user.findFirst({
+            where: {
+              OR: [
+                { authentikId: authentikUser.pk },
+                { username: authentikUser.username },
+                { email: authentikUser.email },
+              ],
+            },
+          });
+
+          if (existingUser) {
+            // Update existing user
+            await ctx.prisma.user.update({
+              where: { id: existingUser.id },
+              data: {
+                authentikId: authentikUser.pk,
+                username: authentikUser.username,
+                email: authentikUser.email,
+                firstName,
+                lastName,
+                isAdmin,
+                isModerator,
+                isActive: authentikUser.is_active,
+                lastLogin: authentikUser.last_login ? new Date(authentikUser.last_login) : null,
+                // Keep existing local data like phone, but update SSO fields
+                attributes: {
+                  ...(existingUser.attributes as Record<string, any> || {}),
+                  ssoGroups: authentikUser.groups,
+                  lastSyncedFromSSO: new Date().toISOString(),
+                },
+              },
+            });
+            updated++;
+          } else {
+            // Create new user
+            await ctx.prisma.user.create({
+              data: {
+                authentikId: authentikUser.pk,
+                username: authentikUser.username,
+                email: authentikUser.email,
+                firstName,
+                lastName,
+                password: '', // SSO users don't need local password
+                isAdmin,
+                isModerator,
+                isActive: authentikUser.is_active,
+                lastLogin: authentikUser.last_login ? new Date(authentikUser.last_login) : null,
+                dateJoined: new Date(), // Set join date to now for new synced users
+                attributes: {
+                  ssoGroups: authentikUser.groups,
+                  syncedFromSSO: true,
+                  lastSyncedFromSSO: new Date().toISOString(),
+                },
+              },
+            });
+            created++;
+          }
+        } catch (userError) {
+          console.error(`Error syncing user ${authentikUser.username}:`, userError);
+          errors++;
+        }
+      }
+
+      // Log the sync operation
+      const { logCommunityEvent } = await import('@/lib/community-timeline');
+      await logCommunityEvent({
+        eventType: 'user_sync_completed',
+        username: ctx.session.user.username || 'admin',
+        details: `🔄 SSO user sync completed: ${created} created, ${updated} updated, ${errors} errors`,
+        category: 'system',
+        isPublic: false,
+      });
+
+      return {
+        success: true,
+        stats: {
+          totalProcessed: authentikUsers.length,
+          created,
+          updated,
+          errors,
+        },
+      };
+    } catch (error) {
+      console.error('SSO user sync failed:', error);
+      throw new Error(`Failed to sync users from SSO: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }),
 }); 

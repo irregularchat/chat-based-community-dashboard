@@ -4,6 +4,7 @@ import { authentikService } from '@/lib/authentik';
 import { emailService } from '@/lib/email';
 import { matrixService } from '@/lib/matrix';
 import { discourseService } from '@/lib/discourse';
+import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { TRPCError } from '@trpc/server';
@@ -330,6 +331,14 @@ export const userRouter = createTRPCRouter({
           username: ctx.session.user.username || 'unknown',
           details: `Created user: ${user.username}`,
         },
+      });
+
+      // Log community timeline event
+      await logCommunityEvent({
+        eventType: 'user_created',
+        username: ctx.session.user.username || 'unknown',
+        details: `Created user: ${user.username}`,
+        category: getCategoryForEventType('user_created'),
       });
 
       return user;
@@ -1054,6 +1063,14 @@ The invitation email has been sent. You'll be notified when they accept the invi
           },
         });
 
+        // Log community timeline event
+        await logCommunityEvent({
+          eventType: 'user_invitation_created',
+          username: inviter.username || 'unknown',
+          details: `Invited ${input.inviteeName} (${input.inviteeEmail}) to join the community`,
+          category: getCategoryForEventType('user_invitation_created'),
+        });
+
         return {
           success: true,
           invitation,
@@ -1387,14 +1404,22 @@ The invitation email has been sent. You'll be notified when they accept the invi
         }
       }
 
-      // Log admin event
-      await ctx.prisma.adminEvent.create({
-        data: {
+              // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'password_reset',
+            username: ctx.session.user.username || 'unknown',
+            details: `Reset password for user: ${user.username}`,
+          },
+        });
+
+        // Log community timeline event
+        await logCommunityEvent({
           eventType: 'password_reset',
           username: ctx.session.user.username || 'unknown',
           details: `Reset password for user: ${user.username}`,
-        },
-      });
+          category: getCategoryForEventType('password_reset'),
+        });
 
       return {
         success: true,

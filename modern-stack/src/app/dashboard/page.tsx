@@ -189,12 +189,18 @@ export default function UserDashboard() {
       description: 'Get help from administrators',
       icon: '🆘'
     },
-    {
-      name: 'Welcome Guide',
-      url: 'https://forum.irregularchat.com/t/84',
-      description: 'Essential information for new members',
-      icon: '🌟'
-    }
+                {
+              name: 'Welcome Guide',
+              url: 'https://forum.irregularchat.com/t/84',
+              description: 'Essential information for new members',
+              icon: '🌟'
+            },
+            {
+              name: 'Community Timeline',
+              url: '/community',
+              description: 'View recent community events and activities',
+              icon: '🏘️'
+            }
   ];
 
   const copyToClipboard = async (text: string, itemName: string) => {

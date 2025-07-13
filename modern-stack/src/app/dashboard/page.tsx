@@ -10,6 +10,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
 import { 
   Users, 
   Settings, 
@@ -67,6 +69,15 @@ export default function UserDashboard() {
   const [pendingVerification, setPendingVerification] = useState<'phone' | 'email' | null>(null);
   const [copiedItems, setCopiedItems] = useState<Set<string>>(new Set());
   
+  // Quicklinks admin editing state
+  const [isEditingQuicklinks, setIsEditingQuicklinks] = useState(false);
+  const [quicklinkForm, setQuicklinkForm] = useState({
+    title: '',
+    url: '',
+    description: '',
+    icon: '🔗',
+  });
+  
   // Get available Matrix rooms
   const { data: matrixRooms, isLoading: roomsLoading } = trpc.matrix.getRooms.useQuery({});
   
@@ -80,6 +91,8 @@ export default function UserDashboard() {
   const [inviteForm, setInviteForm] = useState({
     inviteeEmail: '',
     inviteeName: '',
+    inviteePhone: '',
+    roomIds: [] as string[],
     message: '',
     expiryDays: 1, // Default fallback
   });
@@ -175,6 +188,8 @@ export default function UserDashboard() {
       setInviteForm({
         inviteeEmail: '',
         inviteeName: '',
+        inviteePhone: '',
+        roomIds: [],
         message: '',
         expiryDays: (dashboardSettings as any)?.default_invite_expiry_days || 1,
       });
@@ -313,8 +328,10 @@ export default function UserDashboard() {
     createInvitationMutation.mutate({
       inviteeEmail: inviteForm.inviteeEmail,
       inviteeName: inviteForm.inviteeName,
+      inviteePhone: inviteForm.inviteePhone || undefined,
+      roomIds: inviteForm.roomIds,
       message: inviteForm.message || undefined,
-      expiryDays: inviteForm.expiryDays,
+      expiryDays: Math.min(Math.max(inviteForm.expiryDays, 1), 3), // Enforce 1-3 days
     });
   };
 
@@ -351,19 +368,31 @@ export default function UserDashboard() {
         </div>
         <div className="flex gap-2">
           {session.user.isAdmin && (
-            <Badge variant="default" className="px-3 py-1 bg-red-600 hover:bg-red-700">
+            <Badge 
+              variant="default" 
+              className="px-3 py-1 bg-red-600 hover:bg-red-700 cursor-pointer transition-colors"
+              onClick={() => setSelectedTab('account')}
+            >
               <User className="w-4 h-4 mr-2" />
               Administrator
             </Badge>
           )}
           {session.user.isModerator && !session.user.isAdmin && (
-            <Badge variant="default" className="px-3 py-1 bg-blue-600 hover:bg-blue-700">
+            <Badge 
+              variant="default" 
+              className="px-3 py-1 bg-blue-600 hover:bg-blue-700 cursor-pointer transition-colors"
+              onClick={() => setSelectedTab('account')}
+            >
               <User className="w-4 h-4 mr-2" />
               Moderator
             </Badge>
           )}
           {!session.user.isAdmin && !session.user.isModerator && (
-            <Badge variant="outline" className="px-3 py-1">
+            <Badge 
+              variant="outline" 
+              className="px-3 py-1 hover:bg-muted cursor-pointer transition-colors"
+              onClick={() => setSelectedTab('account')}
+            >
               <User className="w-4 h-4 mr-2" />
               Member
             </Badge>
@@ -759,6 +788,59 @@ export default function UserDashboard() {
                   />
                 </div>
                 <div className="space-y-2">
+                  <Label htmlFor="invitee-phone">Friend's Phone Number (Optional)</Label>
+                  <Input
+                    id="invitee-phone"
+                    type="tel"
+                    value={inviteForm.inviteePhone}
+                    onChange={(e) => setInviteForm(prev => ({ ...prev, inviteePhone: e.target.value }))}
+                    placeholder="+1 (555) 123-4567"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Matrix Rooms to Add Friend To (Optional)</Label>
+                  <div className="border rounded-md p-3 max-h-32 overflow-y-auto">
+                    {roomsLoading ? (
+                      <p className="text-sm text-muted-foreground">Loading rooms...</p>
+                    ) : matrixRooms && matrixRooms.length > 0 ? (
+                      <div className="space-y-2">
+                        {matrixRooms.map((room: MatrixRoom) => (
+                          <div key={room.room_id} className="flex items-center space-x-2">
+                            <Checkbox
+                              id={`room-${room.room_id}`}
+                              checked={inviteForm.roomIds.includes(room.room_id)}
+                              onCheckedChange={(checked) => {
+                                if (checked) {
+                                  setInviteForm(prev => ({ 
+                                    ...prev, 
+                                    roomIds: [...prev.roomIds, room.room_id] 
+                                  }));
+                                } else {
+                                  setInviteForm(prev => ({ 
+                                    ...prev, 
+                                    roomIds: prev.roomIds.filter(id => id !== room.room_id) 
+                                  }));
+                                }
+                              }}
+                            />
+                            <Label 
+                              htmlFor={`room-${room.room_id}`} 
+                              className="text-sm font-normal cursor-pointer"
+                            >
+                              {room.name} ({room.member_count} members)
+                            </Label>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No rooms available</p>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Select which Matrix rooms your friend should be automatically added to when they accept the invitation.
+                  </p>
+                </div>
+                <div className="space-y-2">
                   <Label htmlFor="invite-message">Personal Message (Optional)</Label>
                   <Textarea
                     id="invite-message"
@@ -774,12 +856,12 @@ export default function UserDashboard() {
                     id="expiry-days"
                     type="number"
                     min="1"
-                    max="30"
+                    max="3"
                     value={inviteForm.expiryDays}
-                    onChange={(e) => setInviteForm(prev => ({ ...prev, expiryDays: parseInt(e.target.value) || 7 }))}
+                    onChange={(e) => setInviteForm(prev => ({ ...prev, expiryDays: parseInt(e.target.value) || 1 }))}
                   />
                   <p className="text-sm text-muted-foreground">
-                    Days until the invitation expires (1-30 days)
+                    Days until the invitation expires (1-3 days max)
                   </p>
                 </div>
                 <Button 
@@ -929,29 +1011,141 @@ export default function UserDashboard() {
         <TabsContent value="links">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <ExternalLink className="w-5 h-5" />
-                Community Quick Links
-              </CardTitle>
-              <CardDescription>
-                Essential community resources and platforms
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <ExternalLink className="w-5 h-5" />
+                    Community Quick Links
+                  </CardTitle>
+                  <CardDescription>
+                    Essential community resources and platforms
+                  </CardDescription>
+                </div>
+                {session.user.isAdmin && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsEditingQuicklinks(!isEditingQuicklinks)}
+                  >
+                    {isEditingQuicklinks ? 'Done Editing' : 'Edit Links'}
+                  </Button>
+                )}
+              </div>
             </CardHeader>
             <CardContent>
+              {/* Admin Quick Link Add Form */}
+              {session.user.isAdmin && isEditingQuicklinks && (
+                <Card className="mb-6">
+                  <CardHeader>
+                    <CardTitle className="text-lg">Add New Quick Link</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="quicklink-title">Title</Label>
+                        <Input
+                          id="quicklink-title"
+                          value={quicklinkForm.title}
+                          onChange={(e) => setQuicklinkForm(prev => ({ ...prev, title: e.target.value }))}
+                          placeholder="Link Title"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="quicklink-icon">Icon (Emoji)</Label>
+                        <Input
+                          id="quicklink-icon"
+                          value={quicklinkForm.icon}
+                          onChange={(e) => setQuicklinkForm(prev => ({ ...prev, icon: e.target.value }))}
+                          placeholder="🔗"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="quicklink-url">URL</Label>
+                      <Input
+                        id="quicklink-url"
+                        value={quicklinkForm.url}
+                        onChange={(e) => setQuicklinkForm(prev => ({ ...prev, url: e.target.value }))}
+                        placeholder="https://example.com"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="quicklink-description">Description</Label>
+                      <Textarea
+                        id="quicklink-description"
+                        value={quicklinkForm.description}
+                        onChange={(e) => setQuicklinkForm(prev => ({ ...prev, description: e.target.value }))}
+                        placeholder="Brief description of this link"
+                        rows={2}
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        onClick={() => {
+                          // TODO: Implement add quicklink mutation
+                          console.log('Adding quicklink:', quicklinkForm);
+                          setQuicklinkForm({ title: '', url: '', description: '', icon: '🔗' });
+                        }}
+                        disabled={!quicklinkForm.title || !quicklinkForm.url}
+                      >
+                        Add Link
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => setQuicklinkForm({ title: '', url: '', description: '', icon: '🔗' })}
+                      >
+                        Clear
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
               <div className="grid gap-4 md:grid-cols-2">
                 {/* Database-managed community bookmarks */}
                 {communityBookmarks && communityBookmarks.length > 0 ? (
                   communityBookmarks.map((bookmark: any) => (
-                    <div key={bookmark.id} className="flex items-start gap-3 p-4 border rounded-lg hover:bg-muted/50 transition-colors">
+                    <div key={bookmark.id} className="flex items-start gap-3 p-4 border rounded-lg hover:bg-muted/50 transition-colors relative">
                       <div className="text-2xl">{bookmark.icon || '🔗'}</div>
                       <div className="flex-1">
                         <h4 className="font-medium">{bookmark.title}</h4>
                         <p className="text-sm text-muted-foreground mt-1">{bookmark.description}</p>
-                        <Button variant="outline" size="sm" className="mt-3" asChild>
-                          <a href={bookmark.url} target="_blank" rel="noopener noreferrer">
-                            Visit <ExternalLink className="w-3 h-3 ml-1" />
-                          </a>
-                        </Button>
+                        <div className="flex gap-2 mt-3">
+                          <Button variant="outline" size="sm" asChild>
+                            <a href={bookmark.url} target="_blank" rel="noopener noreferrer">
+                              Visit <ExternalLink className="w-3 h-3 ml-1" />
+                            </a>
+                          </Button>
+                          {session.user.isAdmin && isEditingQuicklinks && (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  // TODO: Implement edit functionality
+                                  setQuicklinkForm({
+                                    title: bookmark.title,
+                                    url: bookmark.url,
+                                    description: bookmark.description,
+                                    icon: bookmark.icon || '🔗',
+                                  });
+                                }}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => {
+                                  // TODO: Implement delete functionality
+                                  console.log('Deleting bookmark:', bookmark.id);
+                                }}
+                              >
+                                Delete
+                              </Button>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))
@@ -1084,7 +1278,7 @@ export default function UserDashboard() {
                     <Button
                       variant="outline"
                       className="h-auto p-4 flex flex-col items-center gap-2"
-                      onClick={() => window.location.href = '/users/create'}
+                      onClick={() => window.open('/users/create?returnTo=dashboard&tab=admin', '_blank')}
                     >
                       <div className="text-2xl">👤</div>
                       <div className="text-center">
@@ -1137,6 +1331,62 @@ export default function UserDashboard() {
                 </CardContent>
               </Card>
               
+              <Card>
+                <CardHeader>
+                  <CardTitle>Room Management</CardTitle>
+                  <CardDescription>
+                    Manage Matrix rooms and settings
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {/* Add new room form */}
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium mb-3">Create New Room</h4>
+                      <div className="grid gap-3">
+                        <div className="grid grid-cols-2 gap-3">
+                          <Input placeholder="Room name" />
+                          <Input placeholder="Room alias (optional)" />
+                        </div>
+                        <Textarea placeholder="Room description" rows={2} />
+                        <div className="flex gap-2">
+                          <Button size="sm">Create Room</Button>
+                          <Button size="sm" variant="outline">Cancel</Button>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Existing rooms list */}
+                    <div className="space-y-3">
+                      <h4 className="font-medium">Existing Rooms</h4>
+                      {matrixRooms && matrixRooms.length > 0 ? (
+                        <div className="space-y-2 max-h-64 overflow-y-auto">
+                          {matrixRooms.slice(0, 5).map((room: MatrixRoom) => (
+                            <div key={room.room_id} className="flex items-center justify-between p-3 border rounded-md">
+                              <div>
+                                <div className="font-medium">{room.name}</div>
+                                <div className="text-sm text-muted-foreground">
+                                  {room.member_count} members • {room.category || 'General'}
+                                </div>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button size="sm" variant="outline">Edit</Button>
+                                <Button size="sm" variant="outline">Settings</Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No rooms available</p>
+                      )}
+                      <Button variant="outline" size="sm" className="w-full">
+                        View All Rooms
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
               <Card>
                 <CardHeader>
                   <CardTitle>Quick Admin Actions</CardTitle>

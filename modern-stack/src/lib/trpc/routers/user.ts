@@ -733,7 +733,7 @@ export const userRouter = createTRPCRouter({
       }
     }),
 
-  // Request phone verification (simplified version)
+  // Request phone verification with improved parsing and SignalBot integration
   requestPhoneVerification: protectedProcedure
     .input(
       z.object({
@@ -742,9 +742,21 @@ export const userRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        // Generate verification hash
-        const verificationHash = Math.random().toString(36).substring(2, 15) + 
-                                Math.random().toString(36).substring(2, 15);
+        // Import phone utilities
+        const { normalizePhoneNumber } = await import('../../phone-utils');
+        
+        // Normalize and validate the phone number
+        const normalizedPhone = normalizePhoneNumber(input.phoneNumber);
+        
+        if (!normalizedPhone.isValid) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: normalizedPhone.error || 'Invalid phone number format',
+          });
+        }
+
+        // Generate verification hash (6-digit code for easier typing)
+        const verificationHash = Math.floor(100000 + Math.random() * 900000).toString();
 
         // Store verification hash in database with expiration
         const expirationTime = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
@@ -755,26 +767,86 @@ export const userRouter = createTRPCRouter({
             attributes: {
               ...((ctx.session.user as any).attributes || {}),
               pendingPhoneVerification: {
-                phoneNumber: input.phoneNumber,
+                phoneNumber: normalizedPhone.normalized,
+                originalInput: input.phoneNumber,
                 hash: verificationHash,
                 expiresAt: expirationTime.toISOString(),
+                country: normalizedPhone.country,
               },
             },
           },
         });
 
-        // Send verification hash via Matrix
-        if (matrixService.isConfigured()) {
-          const matrixUserId = `@${ctx.session.user.username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
-          
-          const verificationMessage = `🔐 Phone Verification Code\n\nYou requested to update your phone number to: ${input.phoneNumber}\n\nVerification Hash: ${verificationHash}\n\nCopy this hash and paste it into the dashboard to complete verification.\n\nThis code expires in 15 minutes.`;
-          
-          await matrixService.sendDirectMessage(matrixUserId, verificationMessage);
+        // Try to send verification via SignalBot first, fallback to Matrix
+        let verificationSent = false;
+        let method = 'none';
+
+        // Check if user has a Signal identity for SignalBot verification
+        const user = await ctx.prisma.user.findUnique({
+          where: { id: parseInt(ctx.session.user.id) },
+          select: { attributes: true, username: true },
+        });
+
+        const signalIdentity = user?.attributes && typeof user.attributes === 'object' 
+          ? (user.attributes as any).signal_identity || (user.attributes as any).signalIdentity
+          : null;
+
+        if (signalIdentity && matrixService.isConfigured()) {
+          try {
+            // Send via SignalBot (using Matrix-Signal bridge)
+            const signalUserId = signalIdentity.startsWith('@signal_') 
+              ? signalIdentity 
+              : `@signal_${signalIdentity.replace('+', '')}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
+            
+            const verificationMessage = `🔐 Phone Verification Code\n\nYou requested to update your phone number to: ${normalizedPhone.normalized}\n\nVerification Code: ${verificationHash}\n\nEnter this 6-digit code in the dashboard to complete verification.\n\nThis code expires in 15 minutes.`;
+            
+            const result = await matrixService.sendSignalMessage(signalUserId, verificationMessage);
+            if (result.success) {
+              verificationSent = true;
+              method = 'signal';
+            }
+          } catch (signalError) {
+            console.warn('SignalBot verification failed, trying Matrix fallback:', signalError);
+          }
         }
 
-        return { success: true };
+        // Fallback to Matrix direct message if SignalBot failed
+        if (!verificationSent && matrixService.isConfigured()) {
+          try {
+            const matrixUserId = `@${ctx.session.user.username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
+            
+            const verificationMessage = `🔐 Phone Verification Code\n\nYou requested to update your phone number to: ${normalizedPhone.normalized}\n\nVerification Code: ${verificationHash}\n\nEnter this 6-digit code in the dashboard to complete verification.\n\nThis code expires in 15 minutes.`;
+            
+            const result = await matrixService.sendDirectMessage(matrixUserId, verificationMessage);
+            if (result.success) {
+              verificationSent = true;
+              method = 'matrix';
+            }
+          } catch (matrixError) {
+            console.warn('Matrix verification failed:', matrixError);
+          }
+        }
+
+        if (!verificationSent) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Failed to send verification code. Please ensure your Signal or Matrix account is connected.',
+          });
+        }
+
+        return { 
+          success: true, 
+          normalizedPhone: normalizedPhone.normalized,
+          method,
+          message: method === 'signal' 
+            ? 'Verification code sent to your Signal account!' 
+            : 'Verification code sent to your Matrix account!'
+        };
       } catch (error) {
         console.error('Error requesting phone verification:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Failed to send verification code',
@@ -782,7 +854,7 @@ export const userRouter = createTRPCRouter({
       }
     }),
 
-  // Verify phone number (simplified version)
+  // Verify phone number with improved validation
   verifyPhone: protectedProcedure
     .input(
       z.object({
@@ -808,35 +880,49 @@ export const userRouter = createTRPCRouter({
         if (!pendingVerification) {
           throw new TRPCError({
             code: 'BAD_REQUEST',
-            message: 'No pending phone verification found',
+            message: 'No pending phone verification found. Please request a new verification code.',
           });
         }
 
-        // Check if verification hash matches and hasn't expired
-        if (pendingVerification.hash !== input.verificationHash) {
+        // Check if verification code matches and hasn't expired
+        if (pendingVerification.hash !== input.verificationHash.trim()) {
           throw new TRPCError({
             code: 'BAD_REQUEST',
-            message: 'Invalid verification code',
+            message: 'Invalid verification code. Please check the code and try again.',
           });
         }
 
         if (new Date(pendingVerification.expiresAt) < new Date()) {
           throw new TRPCError({
             code: 'BAD_REQUEST',
-            message: 'Verification code has expired',
+            message: 'Verification code has expired. Please request a new code.',
           });
         }
 
-        if (pendingVerification.phoneNumber !== input.phoneNumber) {
+        // Import phone utilities for format validation
+        const { normalizePhoneNumber, formatPhoneForDisplay } = await import('../../phone-utils');
+        
+        // Validate the phone number from the form matches the pending verification
+        const normalizedInput = normalizePhoneNumber(input.phoneNumber);
+        const storedPhone = pendingVerification.phoneNumber;
+        
+        // Allow verification if either the normalized input matches stored phone
+        // or if the original input matches (for backwards compatibility)
+        const phoneMatches = normalizedInput.normalized === storedPhone || 
+                            input.phoneNumber === pendingVerification.originalInput;
+
+        if (!phoneMatches) {
           throw new TRPCError({
             code: 'BAD_REQUEST',
-            message: 'Phone number mismatch',
+            message: 'Phone number mismatch. Please verify the phone number is correct.',
           });
         }
 
-        // Update attributes to store phone and clear pending verification
+        // Update attributes to store the normalized phone and clear pending verification
         const updatedAttributes = { ...(user.attributes as any) };
-        updatedAttributes.phone = input.phoneNumber;
+        updatedAttributes.phoneNumber = storedPhone; // Use the normalized phone from verification
+        updatedAttributes.phone_number = storedPhone; // Legacy field name
+        updatedAttributes.phoneCountry = pendingVerification.country;
         delete updatedAttributes.pendingPhoneVerification;
 
         await ctx.prisma.user.update({
@@ -851,11 +937,16 @@ export const userRouter = createTRPCRouter({
           data: {
             eventType: 'phone_updated',
             username: ctx.session.user.username || 'unknown',
-            details: `Phone number updated to ${input.phoneNumber}`,
+            details: `Phone number updated to ${storedPhone}`,
           },
         });
 
-        return { success: true };
+        return { 
+          success: true, 
+          phoneNumber: storedPhone,
+          formattedPhone: formatPhoneForDisplay(storedPhone),
+          message: 'Phone number verified and updated successfully!'
+        };
       } catch (error) {
         console.error('Error verifying phone:', error);
         if (error instanceof TRPCError) {

@@ -1,91 +1,101 @@
 # Community Dashboard - Modern Stack
 
-A modern Next.js-based community dashboard with user management, Matrix integration, and admin analytics.
+## Quick Start
 
-## Tech Stack
+1. Copy `.env.example` to `.env` and configure your environment variables
+2. Run `docker-compose up -d --build`
+3. Access the dashboard at `http://localhost:8503`
 
-- **Frontend**: Next.js 14 (App Router), React 19, TypeScript
-- **UI**: Shadcn/ui, Tailwind CSS, Lucide Icons
-- **Backend**: tRPC, Prisma ORM
-- **Database**: PostgreSQL
-- **Authentication**: NextAuth.js (OIDC + Local)
-- **Deployment**: Docker, Docker Compose
+## Troubleshooting
 
-## Quick Start with Docker
+### Admin User Not Created
 
-1. **Copy environment file**:
+If the admin user is not created after running `docker-compose up -d --build`, follow these steps:
+
+1. **Check the logs**:
    ```bash
-   cp .env.example .env
+   docker-compose logs app
    ```
 
-2. **Update environment variables** in `.env`:
-   - Set `NEXTAUTH_SECRET` (generate with `openssl rand -base64 32`)
-   - Configure Authentik OIDC settings
-   - Update database, email, and Matrix settings
-
-3. **Start the application**:
-   ```bash
-   docker compose up -d --build
+2. **Verify environment variables**:
+   Ensure your `.env` file contains:
+   ```
+   DEFAULT_ADMIN_USERNAME=admin
+   DEFAULT_ADMIN_PASSWORD=shareme314
+   SEED_DATABASE=true
    ```
 
-4. **Access the application**:
-   - Dashboard: http://localhost:8504
-   - Database: localhost:5436 (external access)
+3. **Manually create admin user**:
+   ```bash
+   # Run the admin creation script
+   docker-compose exec app node create-admin.js
+   
+   # Or run the seeding script
+   docker-compose exec app npm run db:seed
+   ```
 
-## Development Setup
+4. **Reset and rebuild**:
+   ```bash
+   # Stop containers
+   docker-compose down -v
+   
+   # Remove database volume
+   docker volume rm chat-based-community-dashboard_postgres_data
+   
+   # Rebuild and start
+   docker-compose up -d --build
+   ```
 
-For local development without Docker:
+5. **Check database directly**:
+   ```bash
+   # Connect to database
+   docker-compose exec db psql -U postgres -d dashboarddb
+   
+   # Check users table
+   SELECT username, email, "isAdmin", "isActive" FROM "User";
+   ```
 
-```bash
-# Install dependencies
-npm install
+### Default Admin Credentials
 
-# Set up database
-npx prisma generate
-npx prisma db push
-npm run db:seed
+- **Username**: `admin` (or value from `DEFAULT_ADMIN_USERNAME`)
+- **Password**: `shareme314` (or value from `DEFAULT_ADMIN_PASSWORD`)
 
-# Start development server
-npm run dev
-```
+**⚠️ Important**: Change the default password after first login!
 
-## Features
+## Development
 
-- ✅ User management with pagination and search
-- ✅ Matrix integration for messaging and room management
-- ✅ Admin dashboard with analytics
-- ✅ Settings and configuration management
-- ✅ Dual authentication (OIDC + Local)
-- ✅ Role-based access control
-- ✅ Testing framework with Jest
-
-## API Documentation
-
-The application uses tRPC for type-safe API communication. Available routers:
-
-- **auth**: Authentication and session management
-- **user**: User CRUD operations and management
-- **matrix**: Matrix messaging and room integration
-- **admin**: Admin analytics and system management
-- **settings**: Configuration management
-
-## Testing
+### Running Tests
 
 ```bash
-# Run tests
 npm test
-
-# Run tests in watch mode
-npm run test:watch
-
-# Run tests with coverage
-npm run test:coverage
 ```
 
-## Learn More
+### Database Operations
 
-- [Next.js Documentation](https://nextjs.org/docs)
-- [tRPC Documentation](https://trpc.io/docs)
-- [Prisma Documentation](https://www.prisma.io/docs)
-- [NextAuth.js Documentation](https://next-auth.js.org)
-- [Shadcn/ui Documentation](https://ui.shadcn.com)
+```bash
+# Reset database and reseed
+npm run db:reset
+
+# Seed database only
+npm run db:seed
+```
+
+## Environment Variables
+
+See `.env.example` for all available configuration options.
+
+## Docker Commands
+
+```bash
+# Start services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f app
+
+# Stop services
+docker-compose down
+
+# Rebuild and start
+docker-compose up -d --build
+```

@@ -304,77 +304,227 @@ class EmailService {
     fullName: string,
     inviteLink: string
   ): Promise<boolean> {
-    if (!this.isActive || !this.transporter) {
-      console.warn('Email service not configured');
+    if (!this.isActive || !this.transporter || !this.config) {
+      console.error('Email service is not active or transporter not configured');
       return false;
     }
 
     try {
-      console.log(`Sending invite email to ${to}`);
-
-      const emailTemplate = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 8px;">
-          <h1 style="color: #2a6496; border-bottom: 2px solid #eee; padding-bottom: 10px;">
-            🌟 You've Been Invited to IrregularChat! 🌟
-          </h1>
-          
-          <p>Hello ${fullName},</p>
-          
-          <p>You've been invited to join the IrregularChat community. We're excited to welcome you!</p>
-          
-          <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #2a6496;">
-            <p><strong>Your personal invitation link:</strong></p>
-            <p><a href="${inviteLink}" style="color: #2a6496; text-decoration: none; font-weight: bold;">${inviteLink}</a></p>
-            <p style="margin: 10px 0 0 0; color: #666; font-style: italic;">This link will expire after a limited time, so please use it soon.</p>
+      // Create HTML email content
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Community Invitation</title>
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background-color: #4f46e5; color: white; padding: 20px; text-align: center; }
+            .content { background-color: #f8f9fa; padding: 20px; }
+            .footer { background-color: #e5e7eb; padding: 15px; text-align: center; font-size: 12px; }
+            .cta-button { 
+              display: inline-block; 
+              background-color: #4f46e5; 
+              color: white; 
+              padding: 12px 24px; 
+              text-decoration: none; 
+              border-radius: 5px; 
+              margin: 20px 0; 
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>🎉 You're Invited to Join Our Community!</h1>
+            </div>
+            <div class="content">
+              <p>Hello ${fullName},</p>
+              
+              <p>You've been invited to join our community platform! Click the link below to create your account and get started:</p>
+              
+              <p style="text-align: center;">
+                <a href="${inviteLink}" class="cta-button">Accept Invitation</a>
+              </p>
+              
+              <p>If the button doesn't work, you can copy and paste this link into your browser:</p>
+              <p style="word-break: break-all; background-color: #f3f4f6; padding: 10px; border-radius: 4px;">
+                ${inviteLink}
+              </p>
+              
+              <p>We're excited to have you join our community and look forward to your participation!</p>
+              
+              <p>Best regards,<br>The Community Team</p>
+            </div>
+            <div class="footer">
+              <p>This invitation was sent to ${to}. If you didn't expect this invitation, you can safely ignore this email.</p>
+            </div>
           </div>
-          
-          <h3 style="color: #333;">What is IrregularChat?</h3>
-          <p>IrregularChat is a community where members connect, share ideas, and collaborate. After joining, you'll have access to our forum, wiki, messaging platforms, and other services.</p>
-          
-          <h3 style="color: #333;">Getting Started:</h3>
-          <ol style="line-height: 1.8;">
-            <li>Click the invitation link above</li>
-            <li>Create your account with a secure password</li>
-            <li>Complete your profile</li>
-            <li>Explore our community resources</li>
-          </ol>
-          
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${inviteLink}" style="display: inline-block; padding: 12px 24px; background-color: #2a6496; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">
-              Accept Invitation
-            </a>
-          </div>
-          
-          <div style="margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; font-size: 14px; color: #777;">
-            <p>If you have any questions, please contact the person who invited you.</p>
-            <p>If you received this invitation by mistake, you can safely ignore it.</p>
-          </div>
-        </div>
+        </body>
+        </html>
       `;
 
-      const mailOptions: any = {
-        from: this.config!.from,
-        to: to,
-        subject: subject,
-        html: emailTemplate,
+      // Create plain text version
+      const textContent = `
+        You're Invited to Join Our Community!
+        
+        Hello ${fullName},
+        
+        You've been invited to join our community platform! Click the link below to create your account and get started:
+        
+        ${inviteLink}
+        
+        We're excited to have you join our community and look forward to your participation!
+        
+        Best regards,
+        The Community Team
+        
+        This invitation was sent to ${to}. If you didn't expect this invitation, you can safely ignore this email.
+      `;
+
+      const mailOptions = {
+        from: this.config.from,
+        to,
+        subject,
+        html: htmlContent,
+        text: textContent,
+        ...(this.config.bcc && { bcc: this.config.bcc }),
       };
 
-      if (this.config!.bcc) {
-        mailOptions.bcc = this.config!.bcc;
-      }
+      await this.transporter.sendMail(mailOptions);
+      console.log(`Invite email sent successfully to ${to}`);
+      return true;
+    } catch (error) {
+      console.error('Failed to send invite email:', error);
+      return false;
+    }
+  }
+
+  public async sendPasswordResetEmail(data: {
+    to: string;
+    subject: string;
+    fullName: string;
+    username: string;
+    newPassword: string;
+  }): Promise<boolean> {
+    if (!this.isActive || !this.transporter || !this.config) {
+      console.error('Email service is not active or transporter not configured');
+      return false;
+    }
+
+    try {
+      // Create HTML email content
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Password Reset</title>
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background-color: #dc2626; color: white; padding: 20px; text-align: center; }
+            .content { background-color: #f8f9fa; padding: 20px; }
+            .footer { background-color: #e5e7eb; padding: 15px; text-align: center; font-size: 12px; }
+            .password-box { 
+              background-color: #fef3c7; 
+              border: 1px solid #f59e0b; 
+              padding: 15px; 
+              border-radius: 5px; 
+              margin: 20px 0;
+              font-family: monospace;
+              font-size: 16px;
+              text-align: center;
+            }
+            .warning { 
+              background-color: #fee2e2; 
+              border: 1px solid #dc2626; 
+              padding: 15px; 
+              border-radius: 5px; 
+              margin: 20px 0;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>🔒 Password Reset</h1>
+            </div>
+            <div class="content">
+              <p>Hello ${data.fullName},</p>
+              
+              <p>Your password has been reset by an administrator. Here are your new login credentials:</p>
+              
+              <p><strong>Username:</strong> ${data.username}</p>
+              <p><strong>New Password:</strong></p>
+              <div class="password-box">
+                ${data.newPassword}
+              </div>
+              
+              <div class="warning">
+                <strong>⚠️ Important:</strong> Please change this password immediately after your next login for security reasons.
+              </div>
+              
+              <p>If you did not request this password reset, please contact an administrator immediately.</p>
+              
+              <p>Best regards,<br>The Community Team</p>
+            </div>
+            <div class="footer">
+              <p>This password reset was sent to ${data.to}. If you didn't request this reset, please contact support.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `;
+
+      // Create plain text version
+      const textContent = `
+        Password Reset
+        
+        Hello ${data.fullName},
+        
+        Your password has been reset by an administrator. Here are your new login credentials:
+        
+        Username: ${data.username}
+        New Password: ${data.newPassword}
+        
+        ⚠️ Important: Please change this password immediately after your next login for security reasons.
+        
+        If you did not request this password reset, please contact an administrator immediately.
+        
+        Best regards,
+        The Community Team
+        
+        This password reset was sent to ${data.to}. If you didn't request this reset, please contact support.
+      `;
+
+      const mailOptions = {
+        from: this.config.from,
+        to: data.to,
+        subject: data.subject,
+        html: htmlContent,
+        text: textContent,
+        ...(this.config.bcc && { bcc: this.config.bcc }),
+      };
 
       await this.transporter.sendMail(mailOptions);
-      console.log(`Successfully sent invite email to ${to}`);
+      console.log(`Password reset email sent successfully to ${data.to}`);
       return true;
-
     } catch (error) {
-      console.error('Error sending invite email:', error);
+      console.error('Failed to send password reset email:', error);
       return false;
     }
   }
 
   public isConfigured(): boolean {
-    return this.isActive;
+    return this.isActive && this.transporter !== null;
+  }
+
+  public getConfig(): EmailConfig | null {
+    return this.config;
   }
 }
 

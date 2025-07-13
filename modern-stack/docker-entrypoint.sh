@@ -16,7 +16,7 @@ echo "✅ Database connection established"
 
 # Run database migrations and generate Prisma client
 echo "🔄 Running database setup..."
-npx prisma generate
+npx prisma generate --schema=./prisma/schema.prisma || echo "⚠️  Prisma generate failed, continuing..."
 npx prisma db push
 
 # Seed the database if SEED_DATABASE=true

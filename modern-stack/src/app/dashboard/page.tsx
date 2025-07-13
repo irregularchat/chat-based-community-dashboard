@@ -149,8 +149,8 @@ export default function UserDashboard() {
   });
 
   const requestPhoneVerificationMutation = trpc.user.requestPhoneVerification.useMutation({
-    onSuccess: () => {
-      toast.success('Verification code sent! Check your Matrix messages for the hash.');
+    onSuccess: (data) => {
+      toast.success(data.message || 'Verification code sent!');
       setPendingVerification('phone');
     },
     onError: (error) => {
@@ -284,9 +284,18 @@ export default function UserDashboard() {
     });
   };
 
-  const handlePhoneVerification = () => {
+  const handlePhoneVerification = async () => {
     if (!newPhone) {
       toast.error('Please enter a phone number');
+      return;
+    }
+
+    // Import phone utilities for client-side validation
+    const { normalizePhoneNumber } = await import('../../lib/phone-utils');
+    const normalized = normalizePhoneNumber(newPhone);
+    
+    if (!normalized.isValid && normalized.error) {
+      toast.error(normalized.error);
       return;
     }
 
@@ -656,10 +665,11 @@ export default function UserDashboard() {
                         type="tel"
                         value={newPhone}
                         onChange={(e) => setNewPhone(e.target.value)}
-                        placeholder="+1234567890"
+                        placeholder="1234567890 or +1234567890"
                       />
                       <p className="text-sm text-muted-foreground">
-                        Include country code. A verification code will be sent via Matrix bot.
+                        Enter your phone number. If no country code is provided, +1 (US) will be assumed. 
+                        Verification will be sent via Signal or Matrix.
                       </p>
                     </div>
                     <Button 
@@ -678,19 +688,24 @@ export default function UserDashboard() {
                         <span className="font-medium text-blue-900">Verification Required</span>
                       </div>
                       <p className="text-sm text-blue-800">
-                        Check your Matrix messages for a verification hash from the bot. 
-                        Copy and paste it below to verify your phone number.
+                        Check your Signal or Matrix messages for a 6-digit verification code. 
+                        Enter the code below to verify your phone number.
                       </p>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="verification-hash">Verification Hash</Label>
+                      <Label htmlFor="verification-hash">6-Digit Verification Code</Label>
                       <Input
                         id="verification-hash"
                         type="text"
                         value={verificationHash}
-                        onChange={(e) => setVerificationHash(e.target.value)}
-                        placeholder="Paste verification hash here"
+                        onChange={(e) => setVerificationHash(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder="Enter 6-digit code"
+                        maxLength={6}
+                        className="text-center text-lg font-mono tracking-widest"
                       />
+                      <p className="text-xs text-muted-foreground">
+                        Code expires in 15 minutes. If you don't receive it, try requesting a new code.
+                      </p>
                     </div>
                     <div className="flex gap-2">
                       <Button 

@@ -101,6 +101,8 @@ model UserInvitation {
   inviterUserId Int?   @map("inviter_user_id")
   inviteeEmail String @map("invitee_email")
   inviteeName String? @map("invitee_name")
+  inviteePhone String? @map("invitee_phone") // Phone number field
+  roomIds     String[] @map("room_ids") // Array of room IDs to add the user to
   status      String   @default("pending") // pending, accepted, expired, cancelled
   inviteToken String?  @map("invite_token")
   message     String?

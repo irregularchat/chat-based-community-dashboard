@@ -9,6 +9,7 @@ interface EmailConfig {
     pass: string;
   };
   from: string;
+  bcc?: string; // Add BCC support
 }
 
 interface UserData {
@@ -45,6 +46,7 @@ class EmailService {
     const user = process.env.SMTP_USER;
     const pass = process.env.SMTP_PASS;
     const from = process.env.SMTP_FROM;
+    const bcc = process.env.SMTP_BCC; // Add BCC from environment
 
     if (!host || !port || !user || !pass || !from) {
       console.warn('SMTP not configured. Required: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM');
@@ -60,6 +62,7 @@ class EmailService {
         pass,
       },
       from,
+      bcc, // Store BCC in config
     };
 
     this.transporter = nodemailer.createTransport(this.config);
@@ -97,38 +100,44 @@ class EmailService {
       const welcomeTemplate = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
           <h2 style="color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px;">
-            Welcome to IrregularChat!
+            🌟 Your First Step Into the IrregularChat! 🌟
           </h2>
           
-          <p>Hi ${data.fullName},</p>
+          <p>You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans.</p>
           
-          <p>Welcome to our community! Your account has been successfully created.</p>
+          <hr style="border: 1px solid #007bff; margin: 20px 0;">
           
+          <h3 style="color: #495057;">Use This Username and Temporary Password ⬇️</h3>
           <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
-            <h3 style="margin-top: 0; color: #495057;">Your Login Credentials</h3>
             <p><strong>Username:</strong> ${data.username}</p>
             <p><strong>Temporary Password:</strong> ${data.password}</p>
+            <p style="font-size: 14px; color: #6c757d;">Exactly as shown above 👆🏼</p>
           </div>
           
-          <p style="background-color: #fff3cd; padding: 10px; border-radius: 5px; border-left: 4px solid #ffc107;">
-            <strong>Important:</strong> Please change your password after your first login for security.
-          </p>
+          <h3>1️⃣ Step 1:</h3>
+          <p>Use the username and temporary password to log in to <a href="https://sso.irregularchat.com" style="color: #007bff;">https://sso.irregularchat.com</a></p>
+          
+          <h3>2️⃣ Step 2:</h3>
+          <ul>
+            <li>Update your email, important to be able to recover your account and verify your identity</li>
+            <li>Save your Login Username and New Password to a Password Manager</li>
+            <li>Visit the welcome page while logged in <a href="https://forum.irregularchat.com/t/84" style="color: #007bff;">https://forum.irregularchat.com/t/84</a></li>
+          </ul>
           
           ${data.discoursePostUrl ? `
-            <p>Your introduction post has been created in our forum: 
+            <h3>3️⃣ Step 3:</h3>
+            <p>We posted an intro about you, but you can complete or customize it:<br>
               <a href="${data.discoursePostUrl}" style="color: #007bff;">View Your Introduction</a>
             </p>
           ` : ''}
           
-          <div style="margin-top: 30px;">
-            <h3>Next Steps:</h3>
-            <ol>
-              <li>Log in to the community dashboard</li>
-              <li>Complete your profile</li>
-              <li>Join relevant Matrix rooms</li>
-              <li>Introduce yourself to the community</li>
-            </ol>
-          </div>
+          <p style="background-color: #fff3cd; padding: 15px; border-radius: 5px; border-left: 4px solid #ffc107; margin: 20px 0;">
+            <strong>Please take a moment to learn about the community before you jump in.</strong>
+          </p>
+          
+          <p>If you have any questions or need assistance, feel free to reach out to the community admins.</p>
+          
+          <p><strong>Welcome aboard!</strong></p>
           
           <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6; color: #6c757d; font-size: 12px;">
             <p>Learn more about our community: <a href="https://irregularpedia.org/index.php/Main_Page">IrregularPedia</a></p>
@@ -137,12 +146,19 @@ class EmailService {
         </div>
       `;
 
-      await this.transporter.sendMail({
+      const mailOptions: any = {
         from: this.config!.from,
         to: data.to,
         subject: data.subject,
         html: welcomeTemplate,
-      });
+      };
+
+      // Add BCC if configured
+      if (this.config!.bcc) {
+        mailOptions.bcc = this.config!.bcc;
+      }
+
+      await this.transporter.sendMail(mailOptions);
 
       console.log(`Welcome email sent successfully to ${data.to}`);
       return true;
@@ -193,12 +209,19 @@ class EmailService {
         </div>
       `;
 
-      await this.transporter.sendMail({
+      const mailOptions: any = {
         from: this.config!.from,
         to: to,
         subject: subject,
         html: emailTemplate,
-      });
+      };
+
+      // Add BCC if configured
+      if (this.config!.bcc) {
+        mailOptions.bcc = this.config!.bcc;
+      }
+
+      await this.transporter.sendMail(mailOptions);
 
       console.log(`Admin email sent successfully to ${to}`);
       return true;
@@ -220,13 +243,20 @@ class EmailService {
     }
 
     try {
-      await this.transporter.sendMail({
+      const mailOptions: any = {
         from: this.config!.from,
         to: to,
         subject: subject,
         html: htmlContent,
         text: textContent,
-      });
+      };
+
+      // Add BCC if configured
+      if (this.config!.bcc) {
+        mailOptions.bcc = this.config!.bcc;
+      }
+
+      await this.transporter.sendMail(mailOptions);
 
       console.log(`Email sent successfully to ${to}`);
       return true;

@@ -30,12 +30,12 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <TRPCProvider>
-          <AuthSessionProvider>
+        <AuthSessionProvider>
+          <TRPCProvider>
             {children}
             <Toaster />
-          </AuthSessionProvider>
-        </TRPCProvider>
+          </TRPCProvider>
+        </AuthSessionProvider>
       </body>
     </html>
   );

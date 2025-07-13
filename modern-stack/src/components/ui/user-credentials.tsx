@@ -5,7 +5,7 @@ import { Copy, Eye, EyeOff, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { MessageTemplates } from '@/lib/message-templates';
+import { MessageTemplates, WelcomeMessageData } from '@/lib/message-templates';
 
 interface UserCredentials {
   username: string;
@@ -44,12 +44,16 @@ export function UserCredentialDisplay({ credentials, userEmail, onClose }: UserC
   };
 
   const formatMessageForUser = () => {
-    return MessageTemplates.createUserCredentialsMessage(
-      credentials.username,
-      userEmail,
-      credentials.password,
-      credentials.resetLink
-    );
+    // Use the proper legacy-style welcome message template
+    const welcomeData: WelcomeMessageData = {
+      username: credentials.username,
+      fullName: credentials.username, // We don't have fullName in this context
+      tempPassword: credentials.password,
+      discoursePostUrl: undefined, // No discourse post URL in this context
+      passwordResetSuccessful: !!credentials.password,
+    };
+    
+    return MessageTemplates.createWelcomeMessage(welcomeData);
   };
 
   const copyFullMessage = () => {

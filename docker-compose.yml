@@ -16,6 +16,7 @@ services:
       - ENABLE_LOCAL_AUTH=${ENABLE_LOCAL_AUTH:-true}
       # Admin credentials for seeding
       - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD}
+      - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}
       # Authentication provider configuration
       - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID}
       - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET}

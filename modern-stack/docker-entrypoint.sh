@@ -35,7 +35,7 @@ npx prisma generate --schema=./prisma/schema.prisma
 
 # Check if database is initialized
 echo "🔍 Checking database schema..."
-if ! echo "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'User';" | npx prisma db execute --stdin --schema=./prisma/schema.prisma 2>/dev/null | grep -q "User"; then
+if ! echo "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users';" | npx prisma db execute --stdin --schema=./prisma/schema.prisma 2>/dev/null | grep -q "users"; then
   echo "📋 Database not initialized, deploying schema..."
   npx prisma db push --accept-data-loss
 else
@@ -46,14 +46,24 @@ fi
 # Seed the database if SEED_DATABASE=true and no users exist
 if [ "$SEED_DATABASE" = "true" ]; then
   echo "🔍 Checking if database needs seeding..."
-  USER_COUNT=$(echo "SELECT COUNT(*) FROM \"User\";" | npx prisma db execute --stdin --schema=./prisma/schema.prisma 2>/dev/null | tail -n 1 | tr -d ' ' || echo "0")
+  USER_COUNT=$(echo "SELECT COUNT(*) FROM users;" | npx prisma db execute --stdin --schema=./prisma/schema.prisma 2>/dev/null | tail -n 1 | tr -d ' ' || echo "0")
   
   if [ "$USER_COUNT" = "0" ] || [ "$USER_COUNT" = "" ]; then
     echo "🌱 Seeding database..."
-    npm run db:seed || echo "⚠️  Seeding failed, continuing without seed data"
+    if ! npm run db:seed; then
+      echo "❌ Database seeding failed! Cannot start application without admin user."
+      echo "💡 Check the following:"
+      echo "   - DEFAULT_ADMIN_PASSWORD environment variable is set"
+      echo "   - Database connection is working"
+      echo "   - Prisma schema is up to date"
+      exit 1
+    fi
+    echo "✅ Database seeded successfully"
   else
     echo "👥 Database already has $USER_COUNT users, skipping seed"
   fi
+else
+  echo "🔍 Database seeding disabled (SEED_DATABASE != true)"
 fi
 
 echo "✅ Database setup complete"

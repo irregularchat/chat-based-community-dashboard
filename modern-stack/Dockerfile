@@ -52,10 +52,19 @@ RUN chown nextjs:nodejs .next
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Copy Prisma files
+# Copy Prisma files and dependencies needed for seeding
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
+# Copy admin creation scripts
+COPY --from=builder /app/create-admin.js ./create-admin.js
+
+# Install bcryptjs for seeding (before switching to nextjs user)
+RUN npm install bcryptjs@^3.0.2
+
+# Fix ownership and switch to nextjs user
+RUN chown -R nextjs:nodejs /app
 USER nextjs
 
 EXPOSE 3000

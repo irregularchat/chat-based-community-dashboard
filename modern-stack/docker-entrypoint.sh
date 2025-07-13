@@ -12,7 +12,7 @@ wait_for_db() {
   local attempt=1
   
   while [ $attempt -le $max_attempts ]; do
-    if echo "SELECT 1;" | npx prisma db execute --stdin 2>/dev/null; then
+    if echo "SELECT 1;" | npx prisma db execute --stdin --schema=./prisma/schema.prisma 2>/dev/null; then
       echo "✅ Database connection established"
       return 0
     fi
@@ -35,7 +35,7 @@ npx prisma generate --schema=./prisma/schema.prisma
 
 # Check if database is initialized
 echo "🔍 Checking database schema..."
-if ! echo "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'User';" | npx prisma db execute --stdin 2>/dev/null | grep -q "User"; then
+if ! echo "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'User';" | npx prisma db execute --stdin --schema=./prisma/schema.prisma 2>/dev/null | grep -q "User"; then
   echo "📋 Database not initialized, deploying schema..."
   npx prisma db push --accept-data-loss
 else
@@ -46,7 +46,7 @@ fi
 # Seed the database if SEED_DATABASE=true and no users exist
 if [ "$SEED_DATABASE" = "true" ]; then
   echo "🔍 Checking if database needs seeding..."
-  USER_COUNT=$(echo "SELECT COUNT(*) FROM \"User\";" | npx prisma db execute --stdin 2>/dev/null | tail -n 1 | tr -d ' ' || echo "0")
+  USER_COUNT=$(echo "SELECT COUNT(*) FROM \"User\";" | npx prisma db execute --stdin --schema=./prisma/schema.prisma 2>/dev/null | tail -n 1 | tr -d ' ' || echo "0")
   
   if [ "$USER_COUNT" = "0" ] || [ "$USER_COUNT" = "" ]; then
     echo "🌱 Seeding database..."

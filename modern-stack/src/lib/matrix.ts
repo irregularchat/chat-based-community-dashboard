@@ -1,249 +1,165 @@
-import { MatrixClient, createClient, Room, RoomMember } from 'matrix-js-sdk';
+import { MatrixClient, createClient, MsgType } from 'matrix-js-sdk';
 
 interface MatrixConfig {
-  homeserverUrl: string;
+  homeserver: string;
   accessToken: string;
   userId: string;
   welcomeRoomId?: string;
   defaultRoomId?: string;
 }
 
-interface MatrixUser {
-  user_id: string;
-  display_name: string;
-  avatar_url?: string;
-  is_signal_user?: boolean;
+interface WelcomeMessageData {
+  username: string;
+  fullName: string;
+  tempPassword: string;
+  discourseUrl?: string;
 }
 
-interface MatrixRoom {
-  room_id: string;
-  name?: string;
-  topic?: string;
-  member_count?: number;
-  category?: string;
-  configured?: boolean;
-}
-
-interface MessageHistory {
-  sender: string;
-  content: string;
-  timestamp: string;
-  event_id?: string;
+interface DirectMessageResult {
+  success: boolean;
+  roomId?: string;
+  eventId?: string;
+  error?: string;
 }
 
 class MatrixService {
-  private client: MatrixClient | null = null;
   private config: MatrixConfig | null = null;
-  private isActive: boolean = false;
+  private client: MatrixClient | null = null;
+  private isActive = false;
 
   constructor() {
     this.initializeFromEnv();
   }
 
   private initializeFromEnv() {
-    const homeserverUrl = process.env.MATRIX_HOMESERVER;
+    const homeserver = process.env.MATRIX_HOMESERVER;
     const accessToken = process.env.MATRIX_ACCESS_TOKEN;
     const userId = process.env.MATRIX_USER_ID;
-    const isActive = process.env.MATRIX_ACTIVE === 'true';
+    const welcomeRoomId = process.env.MATRIX_WELCOME_ROOM_ID;
+    const defaultRoomId = process.env.MATRIX_DEFAULT_ROOM_ID;
 
-    if (!isActive) {
-      console.warn('Matrix integration is disabled. Set MATRIX_ACTIVE=true to enable.');
-      return;
-    }
-
-    if (!homeserverUrl || !accessToken || !userId) {
-      console.error('Matrix configuration incomplete. Required: MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, MATRIX_USER_ID');
+    if (!homeserver || !accessToken || !userId) {
+      console.warn('Matrix not configured. Required: MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, MATRIX_USER_ID');
       return;
     }
 
     this.config = {
-      homeserverUrl,
+      homeserver,
       accessToken,
       userId,
-      welcomeRoomId: process.env.MATRIX_WELCOME_ROOM_ID,
-      defaultRoomId: process.env.MATRIX_DEFAULT_ROOM_ID,
+      welcomeRoomId,
+      defaultRoomId,
     };
-
-    this.isActive = true;
-    this.initializeClient();
-  }
-
-  private async initializeClient() {
-    if (!this.config) return;
 
     try {
       this.client = createClient({
-        baseUrl: this.config.homeserverUrl,
-        accessToken: this.config.accessToken,
-        userId: this.config.userId,
+        baseUrl: homeserver,
+        accessToken: accessToken,
+        userId: userId,
       });
 
-      console.log('Matrix client initialized successfully');
+      this.isActive = true;
+      console.log('Matrix service initialized successfully');
     } catch (error) {
       console.error('Failed to initialize Matrix client:', error);
-      this.client = null;
     }
   }
 
-  public getConfig() {
-    if (!this.isActive || !this.config) {
+  private generateWelcomeMessage(data: WelcomeMessageData): string {
+    const { username, fullName, tempPassword, discourseUrl } = data;
+
+    let message = `🎉 Welcome to IrregularChat, ${fullName}!
+
+Your account has been successfully created:
+👤 **Username:** ${username}
+🔑 **Temporary Password:** ${tempPassword}
+
+📋 **Next Steps:**
+1. Log in to the community dashboard
+2. Change your password for security
+3. Complete your profile
+4. Join relevant Matrix rooms
+5. Introduce yourself to the community
+
+`;
+
+    if (discourseUrl) {
+      message += `🗣️ **Your Introduction Post:** ${discourseUrl}\n\n`;
+    }
+
+    message += `📚 **Learn More:** https://irregularpedia.org/index.php/Main_Page
+
+Welcome aboard! 🚀`;
+
+    return message;
+  }
+
+  public async sendWelcomeMessage(
+    matrixUserId: string,
+    username: string,
+    fullName: string,
+    tempPassword: string,
+    discourseUrl?: string
+  ): Promise<DirectMessageResult> {
+    if (!this.isActive || !this.client) {
       return {
-        isActive: false,
-        homeserverUrl: '',
-        botUsername: '',
-        defaultRoomId: '',
-        welcomeRoomId: '',
-      };
-    }
-
-    return {
-      isActive: this.isActive,
-      homeserverUrl: this.config.homeserverUrl,
-      botUsername: this.config.userId,
-      defaultRoomId: this.config.defaultRoomId || '',
-      welcomeRoomId: this.config.welcomeRoomId || '',
-    };
-  }
-
-  public async getUsers(options: {
-    search?: string;
-    includeSignalUsers?: boolean;
-    includeRegularUsers?: boolean;
-  }): Promise<MatrixUser[]> {
-    if (!this.client || !this.isActive) {
-      return this.getMockUsers(options);
-    }
-
-    try {
-      // Get all rooms the bot is in
-      const rooms = this.client.getRooms();
-      const users = new Map<string, MatrixUser>();
-
-      for (const room of rooms) {
-        const members = room.getMembers();
-        for (const member of members) {
-          if (!users.has(member.userId)) {
-            const isSignalUser = member.userId.includes('signal_') || 
-                                member.name?.toLowerCase().includes('signal');
-            
-            users.set(member.userId, {
-              user_id: member.userId,
-              display_name: member.name || member.userId,
-              avatar_url: undefined, // TODO: Fix Matrix SDK avatar URL method
-              is_signal_user: isSignalUser,
-            });
-          }
-        }
-      }
-
-      let filteredUsers = Array.from(users.values());
-
-      // Apply filters
-      if (!options.includeSignalUsers) {
-        filteredUsers = filteredUsers.filter(user => !user.is_signal_user);
-      }
-      if (!options.includeRegularUsers) {
-        filteredUsers = filteredUsers.filter(user => user.is_signal_user);
-      }
-
-      // Apply search
-      if (options.search) {
-        const searchLower = options.search.toLowerCase();
-        filteredUsers = filteredUsers.filter(user =>
-          user.display_name.toLowerCase().includes(searchLower) ||
-          user.user_id.toLowerCase().includes(searchLower)
-        );
-      }
-
-      return filteredUsers;
-    } catch (error) {
-      console.error('Error getting Matrix users:', error);
-      return this.getMockUsers(options);
-    }
-  }
-
-  public async getRooms(options: {
-    category?: string;
-    search?: string;
-    includeConfigured?: boolean;
-    includeDiscovered?: boolean;
-  }): Promise<MatrixRoom[]> {
-    if (!this.client || !this.isActive) {
-      return this.getMockRooms(options);
-    }
-
-    try {
-      const rooms = this.client.getRooms();
-      const matrixRooms: MatrixRoom[] = [];
-
-      for (const room of rooms) {
-        const name = room.name || room.roomId;
-        const topic = room.currentState.getStateEvents('m.room.topic', '')?.getContent()?.topic;
-        const memberCount = room.getMembers().length;
-        
-        // Determine category based on room name or topic
-        let category = 'General';
-        if (name.toLowerCase().includes('tech')) category = 'Technology';
-        else if (name.toLowerCase().includes('social')) category = 'Social';
-        else if (name.toLowerCase().includes('support')) category = 'Support';
-
-        matrixRooms.push({
-          room_id: room.roomId,
-          name,
-          topic,
-          member_count: memberCount,
-          category,
-          configured: true, // Assume rooms bot is in are configured
-        });
-      }
-
-      // Apply filters
-      let filteredRooms = matrixRooms;
-
-      if (options.category) {
-        filteredRooms = filteredRooms.filter(room => room.category === options.category);
-      }
-
-      if (options.search) {
-        const searchLower = options.search.toLowerCase();
-        filteredRooms = filteredRooms.filter(room =>
-          room.name?.toLowerCase().includes(searchLower) ||
-          room.room_id.toLowerCase().includes(searchLower) ||
-          room.topic?.toLowerCase().includes(searchLower)
-        );
-      }
-
-      return filteredRooms;
-    } catch (error) {
-      console.error('Error getting Matrix rooms:', error);
-      return this.getMockRooms(options);
-    }
-  }
-
-  public async sendDirectMessage(userId: string, message: string): Promise<{
-    success: boolean;
-    roomId?: string;
-    eventId?: string;
-    error?: string;
-  }> {
-    console.log(`[MATRIX] Sending DM to ${userId}: ${message}`);
-    
-    if (!this.client || !this.isActive) {
-      console.log(`[MOCK] Matrix not configured, using mock response`);
-      return {
-        success: true,
-        roomId: `!dm_${Date.now()}:matrix.irregularchat.com`,
-        eventId: `$event_${Date.now()}`,
+        success: false,
+        error: 'Matrix service not configured',
       };
     }
 
     try {
-      // For now, return mock data until Matrix SDK types are properly configured
-      // TODO: Implement real Matrix API calls once SDK compatibility is resolved
+      const welcomeMessage = this.generateWelcomeMessage({
+        username,
+        fullName,
+        tempPassword,
+        discourseUrl,
+      });
+
+      return await this.sendDirectMessage(matrixUserId, welcomeMessage);
+    } catch (error) {
+      console.error('Error sending welcome message:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }
+
+  public async sendDirectMessage(
+    matrixUserId: string,
+    message: string
+  ): Promise<DirectMessageResult> {
+    if (!this.isActive || !this.client) {
+      return {
+        success: false,
+        error: 'Matrix service not configured',
+      };
+    }
+
+    try {
+      console.log(`Sending direct message to ${matrixUserId}`);
+
+      // Create or get existing direct message room
+      const roomId = await this.getOrCreateDirectRoom(matrixUserId);
+      if (!roomId) {
+        return {
+          success: false,
+          error: 'Failed to create or find direct message room',
+        };
+      }
+
+      // Send the message
+      const response = await this.client.sendEvent(roomId, 'm.room.message', {
+        msgtype: MsgType.Text,
+        body: message,
+      });
+
+      console.log(`Message sent successfully to ${matrixUserId} in room ${roomId}`);
       return {
         success: true,
-        roomId: `!dm_${Date.now()}:${this.config?.homeserverUrl?.split('//')[1] || 'matrix.example.com'}`,
-        eventId: `$event_${Date.now()}`,
+        roomId,
+        eventId: response.event_id,
       };
     } catch (error) {
       console.error('Error sending direct message:', error);
@@ -254,27 +170,54 @@ class MatrixService {
     }
   }
 
-  public async sendMessageToRoom(roomId: string, message: string): Promise<{
-    success: boolean;
-    eventId?: string;
-    error?: string;
-  }> {
-    if (!this.client || !this.isActive) {
-      console.log(`[MOCK] Sending message to room ${roomId}: ${message}`);
+  private async getOrCreateDirectRoom(matrixUserId: string): Promise<string | null> {
+    if (!this.client) return null;
+
+    try {
+      // Try to find existing direct room
+      const rooms = this.client.getRooms();
+      for (const room of rooms) {
+        // Check if room is a direct message room (has exactly 2 members)
+        const members = room.getMembers();
+        if (members.length === 2 && members.some(member => member.userId === matrixUserId)) {
+          return room.roomId;
+        }
+      }
+
+      // Create new direct room
+      const response = await this.client.createRoom({
+        is_direct: true,
+        invite: [matrixUserId],
+      });
+
+      return response.room_id;
+    } catch (error) {
+      console.error('Error getting or creating direct room:', error);
+      return null;
+    }
+  }
+
+  public async sendRoomMessage(roomId: string, message: string): Promise<DirectMessageResult> {
+    if (!this.isActive || !this.client) {
       return {
-        success: true,
-        eventId: `$event_${Date.now()}`,
+        success: false,
+        error: 'Matrix service not configured',
       };
     }
 
     try {
-      const response = await this.client.sendTextMessage(roomId, message);
+      const response = await this.client.sendEvent(roomId, 'm.room.message', {
+        msgtype: MsgType.Text,
+        body: message,
+      });
+
       return {
         success: true,
+        roomId,
         eventId: response.event_id,
       };
     } catch (error) {
-      console.error('Error sending message to room:', error);
+      console.error('Error sending room message:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -282,20 +225,118 @@ class MatrixService {
     }
   }
 
-  public async inviteUserToRoom(userId: string, roomId: string): Promise<{
-    success: boolean;
-    error?: string;
-  }> {
-    if (!this.client || !this.isActive) {
-      console.log(`[MOCK] Inviting ${userId} to room ${roomId}`);
-      return { success: true };
+  public async inviteToRoom(roomId: string, matrixUserId: string): Promise<boolean> {
+    if (!this.isActive || !this.client) {
+      console.warn('Matrix service not configured');
+      return false;
     }
 
     try {
-      await this.client.invite(roomId, userId);
-      return { success: true };
+      await this.client.invite(roomId, matrixUserId);
+      console.log(`Successfully invited ${matrixUserId} to room ${roomId}`);
+      return true;
     } catch (error) {
-      console.error('Error inviting user to room:', error);
+      console.error(`Error inviting ${matrixUserId} to room ${roomId}:`, error);
+      return false;
+    }
+  }
+
+  public async inviteToRecommendedRooms(
+    matrixUserId: string,
+    interests: string[] = []
+  ): Promise<{ success: boolean; invitedRooms: string[]; errors: string[] }> {
+    if (!this.isActive || !this.client) {
+      return {
+        success: false,
+        invitedRooms: [],
+        errors: ['Matrix service not configured'],
+      };
+    }
+
+    const invitedRooms: string[] = [];
+    const errors: string[] = [];
+
+    // Room mapping based on interests - this should be configurable
+    const roomMappings: Record<string, string[]> = {
+      'security': ['!security:example.com', '!cybersecurity:example.com'],
+      'ai': ['!ai:example.com', '!machinelearning:example.com'],
+      'development': ['!dev:example.com', '!programming:example.com'],
+      'general': ['!general:example.com'],
+    };
+
+    // Default rooms everyone should be invited to
+    const defaultRooms = ['!announcements:example.com', '!welcome:example.com'];
+
+    // Collect all relevant rooms
+    const roomsToInvite = new Set(defaultRooms);
+    
+    interests.forEach(interest => {
+      const interestRooms = roomMappings[interest.toLowerCase()];
+      if (interestRooms) {
+        interestRooms.forEach(room => roomsToInvite.add(room));
+      }
+    });
+
+    // Send invitations
+    for (const roomId of roomsToInvite) {
+      try {
+        const success = await this.inviteToRoom(roomId, matrixUserId);
+        if (success) {
+          invitedRooms.push(roomId);
+        } else {
+          errors.push(`Failed to invite to room ${roomId}`);
+        }
+      } catch (error) {
+        errors.push(`Error inviting to room ${roomId}: ${error}`);
+      }
+    }
+
+    return {
+      success: errors.length === 0,
+      invitedRooms,
+      errors,
+    };
+  }
+
+  public async sendINDOCGraduationMessage(
+    roomId: string,
+    matrixUserId: string,
+    displayName: string
+  ): Promise<DirectMessageResult> {
+    if (!this.isActive || !this.client) {
+      return {
+        success: false,
+        error: 'Matrix service not configured',
+      };
+    }
+
+    const graduationTemplate = `@${displayName} Good to go. Thanks for verifying. This is how we keep the community safe.
+1. Please leave this chat
+2. You'll receive a direct message with your IrregularChat Login and a Link to all the chats.
+3. Join all the Chats that interest you when you get your login
+4. Until then, Learn about the community https://irregularpedia.org/index.php/Main_Page
+
+See you out there!`;
+
+    // Create HTML mention link
+    const mentionHtml = `<a href="https://matrix.to/#/${matrixUserId}" data-mention-type="user">@${displayName}</a>`;
+    const htmlMessage = graduationTemplate.replace(`@${displayName}`, mentionHtml);
+
+    try {
+      const response = await this.client.sendEvent(roomId, 'm.room.message', {
+        msgtype: MsgType.Text,
+        body: graduationTemplate,
+        format: 'org.matrix.custom.html',
+        formatted_body: htmlMessage,
+      });
+
+      return {
+        success: true,
+        roomId,
+        eventId: response.event_id,
+      };
+    } catch (error) {
+      console.error('Error sending INDOC graduation message:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -303,116 +344,14 @@ class MatrixService {
     }
   }
 
-  // Fallback mock data methods
-  private getMockUsers(options: any): MatrixUser[] {
-    const mockUsers = [
-      {
-        user_id: '@admin:matrix.irregularchat.com',
-        display_name: 'Admin User',
-        avatar_url: undefined,
-        is_signal_user: false,
-      },
-      {
-        user_id: '@signal_12345:matrix.irregularchat.com',
-        display_name: 'Signal User',
-        avatar_url: undefined,
-        is_signal_user: true,
-      },
-      {
-        user_id: '@moderator:matrix.irregularchat.com',
-        display_name: 'Moderator User',
-        avatar_url: undefined,
-        is_signal_user: false,
-      },
-    ];
-
-    let filteredUsers = mockUsers;
-
-    if (!options.includeSignalUsers) {
-      filteredUsers = filteredUsers.filter(user => !user.is_signal_user);
-    }
-    if (!options.includeRegularUsers) {
-      filteredUsers = filteredUsers.filter(user => user.is_signal_user);
-    }
-
-    if (options.search) {
-      const searchLower = options.search.toLowerCase();
-      filteredUsers = filteredUsers.filter(user =>
-        user.display_name.toLowerCase().includes(searchLower) ||
-        user.user_id.toLowerCase().includes(searchLower)
-      );
-    }
-
-    return filteredUsers;
+  public isConfigured(): boolean {
+    return this.isActive;
   }
 
-  private getMockRooms(options: any): MatrixRoom[] {
-    // Parse MATRIX_ROOM_IDS_NAME_CATEGORY from environment if available
-    const roomsConfig = process.env.MATRIX_ROOM_IDS_NAME_CATEGORY;
-    let mockRooms: MatrixRoom[] = [];
-
-    if (roomsConfig) {
-      const roomEntries = roomsConfig.split(';');
-      for (const entry of roomEntries) {
-        const parts = entry.split('|');
-        if (parts.length === 3) {
-          const [name, categories, roomId] = parts;
-          const categoryList = categories.split(',').map(c => c.trim());
-          
-          mockRooms.push({
-            room_id: roomId.trim(),
-            name: name.trim(),
-            topic: `Discussion room for ${categoryList.join(', ')}`,
-            member_count: Math.floor(Math.random() * 50) + 5,
-            category: categoryList[0] || 'General',
-            configured: true,
-          });
-        }
-      }
-    }
-
-    // Add default rooms if none configured
-    if (mockRooms.length === 0) {
-      mockRooms = [
-        {
-          room_id: '!general:matrix.irregularchat.com',
-          name: 'General Chat',
-          topic: 'General discussion room',
-          member_count: 25,
-          category: 'General',
-          configured: true,
-        },
-        {
-          room_id: '!tech:matrix.irregularchat.com',
-          name: 'Tech Discussion',
-          topic: 'Technology and development chat',
-          member_count: 15,
-          category: 'Technology',
-          configured: true,
-        },
-      ];
-    }
-
-    // Apply filters
-    let filteredRooms = mockRooms;
-
-    if (options.category) {
-      filteredRooms = filteredRooms.filter(room => room.category === options.category);
-    }
-
-    if (options.search) {
-      const searchLower = options.search.toLowerCase();
-      filteredRooms = filteredRooms.filter(room =>
-        room.name?.toLowerCase().includes(searchLower) ||
-        room.room_id.toLowerCase().includes(searchLower) ||
-        room.topic?.toLowerCase().includes(searchLower)
-      );
-    }
-
-    return filteredRooms;
+  public getConfig(): MatrixConfig | null {
+    return this.config;
   }
 }
 
-// Singleton instance
+// Export singleton instance
 export const matrixService = new MatrixService();
-export type { MatrixUser, MatrixRoom, MessageHistory };

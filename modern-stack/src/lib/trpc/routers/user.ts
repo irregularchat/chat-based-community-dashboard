@@ -1,6 +1,8 @@
 import { z } from 'zod';
-import { createTRPCRouter, protectedProcedure, adminProcedure, moderatorProcedure } from '../trpc';
+import { createTRPCRouter, publicProcedure, protectedProcedure, moderatorProcedure, adminProcedure } from '../trpc';
 import { authentikService } from '@/lib/authentik';
+import { emailService } from '@/lib/email';
+import { matrixService } from '@/lib/matrix';
 import bcrypt from 'bcryptjs';
 
 export const userRouter = createTRPCRouter({
@@ -83,8 +85,8 @@ export const userRouter = createTRPCRouter({
       z.object({
         username: z.string().min(1),
         email: z.string().email(),
-        firstName: z.string().min(1),
-        lastName: z.string().min(1),
+        firstName: z.string().transform(val => val.trim() || undefined).optional(),
+        lastName: z.string().transform(val => val.trim() || undefined).optional(),
         password: z.string().min(6).optional(),
         isActive: z.boolean().default(true),
         isAdmin: z.boolean().default(false),
@@ -115,6 +117,8 @@ export const userRouter = createTRPCRouter({
       const user = await ctx.prisma.user.create({
         data: {
           ...userData,
+          firstName: userData.firstName || 'User',
+          lastName: userData.lastName || '',
           ...(password && { password: await hashPassword(password) }),
           // Store additional fields in notes or attributes if your schema supports it
           ...(Object.keys(attributes).length > 0 && { attributes }),
@@ -138,8 +142,8 @@ export const userRouter = createTRPCRouter({
     .input(
       z.object({
         email: z.string().email(),
-        firstName: z.string().min(1),
-        lastName: z.string().min(1),
+        firstName: z.string().transform(val => val.trim() || undefined).optional(),
+        lastName: z.string().transform(val => val.trim() || undefined).optional(),
         username: z.string().optional(),
         phoneNumber: z.string().optional(),
         attributes: z.record(z.string(), z.any()).optional(),
@@ -164,12 +168,14 @@ export const userRouter = createTRPCRouter({
         // Generate username if not provided
         let username = input.username;
         if (!username || input.autoGenerateUsername) {
-          username = await authentikService.generateUsername(input.firstName);
+          // Use firstName if available, otherwise derive from email
+          const nameForUsername = input.firstName || input.email.split('@')[0];
+          username = await authentikService.generateUsername(nameForUsername);
           
           // Check if username exists and generate alternatives if needed
           let attempts = 0;
           while (await authentikService.checkUsernameExists(username) && attempts < 10) {
-            username = await authentikService.generateUsername(input.firstName);
+            username = await authentikService.generateUsername(nameForUsername);
             attempts++;
           }
         }
@@ -197,8 +203,8 @@ export const userRouter = createTRPCRouter({
         const authentikResult = await authentikService.createUser({
           username,
           email: input.email,
-          firstName: input.firstName,
-          lastName: input.lastName,
+          firstName: input.firstName || 'User',
+          lastName: input.lastName || '',
           attributes,
           groups: input.groups,
         });
@@ -212,9 +218,9 @@ export const userRouter = createTRPCRouter({
           data: {
             username,
             email: input.email,
-            firstName: input.firstName,
-            lastName: input.lastName,
-            authentikId: authentikResult.user_id,
+            firstName: input.firstName || 'User',
+            lastName: input.lastName || '',
+            authentikId: String(authentikResult.user_id),
             isActive: true,
             // Store additional data in attributes if schema supports it
             attributes,
@@ -229,6 +235,60 @@ export const userRouter = createTRPCRouter({
             details: `Created SSO user: ${username} (${input.email}) with enhanced profile data`,
           },
         });
+
+        // Send welcome email if requested and email service is configured
+        if (input.sendWelcomeEmail && emailService.isConfigured() && input.email) {
+          try {
+            const fullName = `${input.firstName || 'User'} ${input.lastName || ''}`.trim();
+            await emailService.sendWelcomeEmail({
+              to: input.email,
+              subject: 'Welcome to IrregularChat!',
+              fullName,
+              username,
+              password: authentikResult.temp_password || '',
+              discoursePostUrl: undefined, // TODO: Add Discourse integration
+            });
+            console.log(`Welcome email sent to ${input.email}`);
+          } catch (emailError) {
+            console.error('Error sending welcome email:', emailError);
+            // Don't fail the user creation if email fails
+          }
+        }
+
+        // Send Matrix welcome message if requested and Matrix service is configured
+        if (input.sendMatrixWelcome && matrixService.isConfigured()) {
+          try {
+            // Generate Matrix user ID format (this should be configurable)
+            const matrixUserId = `@${username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
+            const fullName = `${input.firstName || 'User'} ${input.lastName || ''}`.trim();
+            
+            await matrixService.sendWelcomeMessage(
+              matrixUserId,
+              username,
+              fullName,
+              authentikResult.temp_password || '',
+              undefined // TODO: Add Discourse URL when available
+            );
+            console.log(`Matrix welcome message sent to ${matrixUserId}`);
+          } catch (matrixError) {
+            console.error('Error sending Matrix welcome message:', matrixError);
+            // Don't fail the user creation if Matrix fails
+          }
+        }
+
+        // Invite to recommended rooms if requested and Matrix service is configured
+        if (input.addToRecommendedRooms && matrixService.isConfigured() && input.interests) {
+          try {
+            const matrixUserId = `@${username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
+            const interests = input.interests.split(',').map(i => i.trim());
+            
+            const inviteResult = await matrixService.inviteToRecommendedRooms(matrixUserId, interests);
+            console.log(`Room invitations sent: ${inviteResult.invitedRooms.length} successful, ${inviteResult.errors.length} errors`);
+          } catch (inviteError) {
+            console.error('Error inviting to recommended rooms:', inviteError);
+            // Don't fail the user creation if room invitations fail
+          }
+        }
 
         return {
           success: true,

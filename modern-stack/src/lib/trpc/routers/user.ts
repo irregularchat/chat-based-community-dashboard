@@ -891,6 +891,320 @@ export const userRouter = createTRPCRouter({
       }
     }),
 
+  // Create user invitation (for normal users)
+  createUserInvitation: protectedProcedure
+    .input(
+      z.object({
+        inviteeEmail: z.string().email('Valid email is required'),
+        inviteeName: z.string().min(1, 'Name is required'),
+        message: z.string().optional(),
+        expiryDays: z.number().min(1).max(30).default(7),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        // Check if user has phone number (required for Signal integration)
+        const inviter = await ctx.prisma.user.findUnique({
+          where: { id: parseInt(ctx.session.user.id) },
+          select: { 
+            attributes: true,
+            username: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+          },
+        });
+
+        if (!inviter) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Inviter user not found',
+          });
+        }
+
+        // Check if phone number is set (stored in attributes)
+        const phoneNumber = inviter.attributes && typeof inviter.attributes === 'object' 
+          ? (inviter.attributes as any).phoneNumber || (inviter.attributes as any).phone_number
+          : null;
+
+        if (!phoneNumber) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'You must have a phone number on file to invite users. Please update your phone number in Account settings first.',
+          });
+        }
+
+        // Check if email is already invited or exists as user
+        const existingInvitation = await ctx.prisma.userInvitation.findFirst({
+          where: {
+            inviteeEmail: input.inviteeEmail,
+            status: 'pending',
+          },
+        });
+
+        if (existingInvitation) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This email already has a pending invitation',
+          });
+        }
+
+        // Check if user already exists in Authentik
+        const existingUsers = await authentikService.searchUsers(input.inviteeEmail);
+        if (existingUsers.length > 0) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'A user with this email already exists',
+          });
+        }
+
+        // Calculate expiry date
+        const expiryDate = new Date();
+        expiryDate.setDate(expiryDate.getDate() + input.expiryDays);
+
+        // Generate invite token
+        const inviteToken = crypto.randomBytes(32).toString('hex');
+
+        // Create invitation record
+        const invitation = await ctx.prisma.userInvitation.create({
+          data: {
+            inviterUserId: parseInt(ctx.session.user.id),
+            inviteeEmail: input.inviteeEmail,
+            inviteeName: input.inviteeName,
+            message: input.message,
+            inviteToken,
+            expiresAt: expiryDate,
+          },
+        });
+
+        // Create Authentik invite
+        const authentikInvite = await authentikService.createInvite({
+          label: `Invitation for ${input.inviteeName}`,
+          expires: expiryDate,
+          email: input.inviteeEmail,
+          name: input.inviteeName,
+          createdBy: inviter.username || 'unknown',
+        });
+
+        if (authentikInvite.success && authentikInvite.invite_link) {
+          // Update invitation with Authentik invite token
+          await ctx.prisma.userInvitation.update({
+            where: { id: invitation.id },
+            data: { inviteToken: authentikInvite.invite_id || inviteToken },
+          });
+
+          // Send invitation email
+          if (emailService.isConfigured()) {
+            const inviterName = `${inviter.firstName || ''} ${inviter.lastName || ''}`.trim() || inviter.username;
+            
+            const inviteMessage = input.message 
+              ? `\n\nPersonal message from ${inviterName}:\n"${input.message}"`
+              : '';
+
+            const emailContent = `Hi ${input.inviteeName},
+
+${inviterName} has invited you to join the IrregularChat community!
+
+You can accept this invitation by clicking the link below:
+${authentikInvite.invite_link}
+
+This invitation expires on ${expiryDate.toLocaleDateString()}.${inviteMessage}
+
+Welcome to the community!
+
+Best regards,
+The IrregularChat Team`;
+
+            try {
+              await emailService.sendEmail(
+                input.inviteeEmail,
+                `You've been invited to join IrregularChat by ${inviterName}`,
+                emailContent.replace(/\n/g, '<br>')
+              );
+            } catch (emailError) {
+              console.error('Error sending invitation email:', emailError);
+              // Don't fail the invitation if email sending fails
+            }
+          }
+
+          // Send Signal notification to inviter (via Matrix bot)
+          if (matrixService.isConfigured()) {
+            try {
+              const matrixUserId = `@${inviter.username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
+              const signalMessage = `✅ Invitation sent successfully!
+
+You invited: ${input.inviteeName} (${input.inviteeEmail})
+Expires: ${expiryDate.toLocaleDateString()}
+
+The invitation email has been sent. You'll be notified when they accept the invitation.`;
+
+              await matrixService.sendDirectMessage(matrixUserId, signalMessage);
+            } catch (matrixError) {
+              console.error('Error sending Signal notification:', matrixError);
+            }
+          }
+        }
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'user_invitation_created',
+            username: inviter.username || 'unknown',
+            details: `Created invitation for ${input.inviteeName} (${input.inviteeEmail})`,
+          },
+        });
+
+        return {
+          success: true,
+          invitation,
+          inviteLink: authentikInvite.invite_link,
+          expiresAt: expiryDate,
+        };
+      } catch (error) {
+        console.error('Error creating user invitation:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to create invitation',
+        });
+      }
+    }),
+
+  // Get user's sent invitations
+  getMyInvitations: protectedProcedure
+    .input(
+      z.object({
+        page: z.number().default(1),
+        limit: z.number().default(10),
+        status: z.enum(['pending', 'accepted', 'expired', 'cancelled']).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const { page, limit, status } = input;
+      const skip = (page - 1) * limit;
+
+      const where = {
+        inviterUserId: parseInt(ctx.session.user.id),
+        ...(status && { status }),
+      };
+
+      const [invitations, total] = await Promise.all([
+        ctx.prisma.userInvitation.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: { createdAt: 'desc' },
+          include: {
+            inviter: {
+              select: {
+                username: true,
+                firstName: true,
+                lastName: true,
+              },
+            },
+          },
+        }),
+        ctx.prisma.userInvitation.count({ where }),
+      ]);
+
+      return {
+        invitations,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      };
+    }),
+
+  // Get invitation timeline (for admins/moderators)
+  getInvitationTimeline: moderatorProcedure
+    .input(
+      z.object({
+        page: z.number().default(1),
+        limit: z.number().default(20),
+        inviterUserId: z.number().optional(),
+        status: z.enum(['pending', 'accepted', 'expired', 'cancelled']).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const { page, limit, inviterUserId, status } = input;
+      const skip = (page - 1) * limit;
+
+      const where = {
+        ...(inviterUserId && { inviterUserId }),
+        ...(status && { status }),
+      };
+
+      const [invitations, total] = await Promise.all([
+        ctx.prisma.userInvitation.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: { createdAt: 'desc' },
+          include: {
+            inviter: {
+              select: {
+                username: true,
+                firstName: true,
+                lastName: true,
+                email: true,
+              },
+            },
+          },
+        }),
+        ctx.prisma.userInvitation.count({ where }),
+      ]);
+
+      return {
+        invitations,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      };
+    }),
+
+  // Cancel invitation
+  cancelInvitation: protectedProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const invitation = await ctx.prisma.userInvitation.findUnique({
+        where: { id: input.id },
+        include: { inviter: true },
+      });
+
+      if (!invitation) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Invitation not found',
+        });
+      }
+
+      // Check if user can cancel this invitation
+      if (invitation.inviterUserId !== parseInt(ctx.session.user.id) && !ctx.session.user.isAdmin) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You can only cancel your own invitations',
+        });
+      }
+
+      if (invitation.status !== 'pending') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Cannot cancel an invitation that is not pending',
+        });
+      }
+
+      await ctx.prisma.userInvitation.update({
+        where: { id: input.id },
+        data: { status: 'cancelled' },
+      });
+
+      return { success: true };
+    }),
+
   // Delete user
   deleteUser: adminProcedure
     .input(z.object({ id: z.number() }))

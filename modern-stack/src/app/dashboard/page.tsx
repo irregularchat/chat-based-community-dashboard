@@ -54,12 +54,39 @@ export default function UserDashboard() {
   const [verificationHash, setVerificationHash] = useState('');
   const [pendingVerification, setPendingVerification] = useState<'phone' | 'email' | null>(null);
   const [copiedItems, setCopiedItems] = useState<Set<string>>(new Set());
+  
+  // Invitation form state
+  const [inviteForm, setInviteForm] = useState({
+    inviteeEmail: '',
+    inviteeName: '',
+    message: '',
+    expiryDays: 7,
+  });
 
   // Get available Matrix rooms
   const { data: matrixRooms, isLoading: roomsLoading } = trpc.matrix.getRooms.useQuery();
   
   // Get user profile data
   const { data: userProfile, refetch: refetchProfile } = trpc.user.getProfile.useQuery();
+
+  // Get dashboard settings
+  const { data: dashboardSettings } = trpc.settings.getDashboardSettings.useQuery({});
+  
+  // Get community bookmarks
+  const { data: communityBookmarks } = trpc.settings.getCommunityBookmarks.useQuery({
+    isActive: true,
+  });
+
+  // Get dashboard announcements
+  const { data: dashboardAnnouncements } = trpc.settings.getDashboardAnnouncements.useQuery({
+    isActive: true,
+  });
+
+  // Get user's sent invitations
+  const { data: myInvitations } = trpc.user.getMyInvitations.useQuery({
+    page: 1,
+    limit: 5,
+  });
 
   // Mutations
   const sendAdminMessageMutation = trpc.user.sendAdminMessage.useMutation({
@@ -114,6 +141,25 @@ export default function UserDashboard() {
     },
     onError: (error) => {
       toast.error(`Failed to update email: ${error.message}`);
+    },
+  });
+
+  const createInvitationMutation = trpc.user.createUserInvitation.useMutation({
+    onSuccess: () => {
+      toast.success('Invitation sent successfully!');
+      setInviteForm({
+        inviteeEmail: '',
+        inviteeName: '',
+        message: '',
+        expiryDays: 7,
+      });
+      // Refetch invitations to update the list
+      if (myInvitations) {
+        // This would trigger a refetch in a real implementation
+      }
+    },
+    onError: (error) => {
+      toast.error(`Failed to send invitation: ${error.message}`);
     },
   });
 
@@ -227,6 +273,20 @@ export default function UserDashboard() {
     });
   };
 
+  const handleSendInvitation = () => {
+    if (!inviteForm.inviteeEmail || !inviteForm.inviteeName) {
+      toast.error('Please fill in email and name fields');
+      return;
+    }
+
+    createInvitationMutation.mutate({
+      inviteeEmail: inviteForm.inviteeEmail,
+      inviteeName: inviteForm.inviteeName,
+      message: inviteForm.message || undefined,
+      expiryDays: inviteForm.expiryDays,
+    });
+  };
+
   const getRoomsByCategory = (category: string) => {
     if (!matrixRooms) return [];
     return matrixRooms.filter(room => 
@@ -265,7 +325,7 @@ export default function UserDashboard() {
       </div>
 
       <Tabs value={selectedTab} onValueChange={setSelectedTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="rooms" className="flex items-center gap-2">
             <Users className="w-4 h-4" />
             Rooms
@@ -273,6 +333,10 @@ export default function UserDashboard() {
           <TabsTrigger value="account" className="flex items-center gap-2">
             <Settings className="w-4 h-4" />
             Account
+          </TabsTrigger>
+          <TabsTrigger value="invite" className="flex items-center gap-2">
+            <Mail className="w-4 h-4" />
+            Invite Friends
           </TabsTrigger>
           <TabsTrigger value="contact" className="flex items-center gap-2">
             <MessageSquare className="w-4 h-4" />

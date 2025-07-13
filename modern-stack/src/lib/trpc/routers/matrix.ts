@@ -264,18 +264,26 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const result = await matrixService.sendDirectMessage(input.userId, input.message);
-      
-      // Log admin event
-      await ctx.prisma.adminEvent.create({
-        data: {
-          eventType: 'matrix_direct_message',
-          username: ctx.session.user.username || 'unknown',
-          details: `Sent direct message to ${input.userId}: ${result.success ? 'Success' : result.error}`,
-        },
-      });
+      try {
+        const result = await matrixService.sendDirectMessage(input.userId, input.message);
+        
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_direct_message',
+            username: ctx.session.user.username || 'unknown',
+            details: `Sent direct message to ${input.userId}: ${result.success ? 'Success' : result.error}`,
+          },
+        });
 
-      return result;
+        return result;
+      } catch (error) {
+        console.error('Error sending direct message:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error occurred',
+        };
+      }
     }),
 
   // Send message to multiple users (enhanced with bulk operations)

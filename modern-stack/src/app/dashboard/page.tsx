@@ -28,12 +28,12 @@ import { trpc } from '@/lib/trpc/client';
 import { toast } from 'sonner';
 
 interface MatrixRoom {
-  roomId: string;
+  room_id: string;
   name: string;
   topic?: string;
-  memberCount: number;
+  member_count: number;
   category?: string;
-  joinUrl?: string;
+  configured?: boolean;
 }
 
 interface CommunityLink {
@@ -64,7 +64,7 @@ export default function UserDashboard() {
   });
 
   // Get available Matrix rooms
-  const { data: matrixRooms, isLoading: roomsLoading } = trpc.matrix.getRooms.useQuery();
+  const { data: matrixRooms, isLoading: roomsLoading } = trpc.matrix.getRooms.useQuery({});
   
   // Get user profile data
   const { data: userProfile, refetch: refetchProfile } = trpc.user.getProfile.useQuery();
@@ -380,12 +380,12 @@ export default function UserDashboard() {
                     </h3>
                     <div className="grid gap-3">
                       {getRoomsByCategory('tech').map((room) => (
-                        <div key={room.roomId} className="flex items-center justify-between p-3 border rounded-lg">
+                        <div key={room.room_id} className="flex items-center justify-between p-3 border rounded-lg">
                           <div className="flex-1">
                             <div className="flex items-center gap-2">
                               <h4 className="font-medium">{room.name}</h4>
                               <Badge variant="secondary" className="text-xs">
-                                {room.memberCount} members
+                                {room.member_count} members
                               </Badge>
                             </div>
                             {room.topic && (
@@ -398,7 +398,7 @@ export default function UserDashboard() {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => copyToClipboard(room.roomId, `${room.name} Room ID`)}
+                              onClick={() => copyToClipboard(room.room_id, `${room.name} Room ID`)}
                             >
                               {copiedItems.has(`${room.name} Room ID`) ? (
                                 <CheckCircle className="w-4 h-4 text-green-600" />
@@ -406,13 +406,6 @@ export default function UserDashboard() {
                                 <Copy className="w-4 h-4" />
                               )}
                             </Button>
-                            {room.joinUrl && (
-                              <Button size="sm" asChild>
-                                <a href={room.joinUrl} target="_blank" rel="noopener noreferrer">
-                                  Join
-                                </a>
-                              </Button>
-                            )}
                           </div>
                         </div>
                       ))}
@@ -426,12 +419,12 @@ export default function UserDashboard() {
                     </h3>
                     <div className="grid gap-3">
                       {getRoomsByCategory('general').map((room) => (
-                        <div key={room.roomId} className="flex items-center justify-between p-3 border rounded-lg">
+                        <div key={room.room_id} className="flex items-center justify-between p-3 border rounded-lg">
                           <div className="flex-1">
                             <div className="flex items-center gap-2">
                               <h4 className="font-medium">{room.name}</h4>
                               <Badge variant="secondary" className="text-xs">
-                                {room.memberCount} members
+                                {room.member_count} members
                               </Badge>
                             </div>
                             {room.topic && (
@@ -444,7 +437,7 @@ export default function UserDashboard() {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => copyToClipboard(room.roomId, `${room.name} Room ID`)}
+                              onClick={() => copyToClipboard(room.room_id, `${room.name} Room ID`)}
                             >
                               {copiedItems.has(`${room.name} Room ID`) ? (
                                 <CheckCircle className="w-4 h-4 text-green-600" />
@@ -452,13 +445,6 @@ export default function UserDashboard() {
                                 <Copy className="w-4 h-4" />
                               )}
                             </Button>
-                            {room.joinUrl && (
-                              <Button size="sm" asChild>
-                                <a href={room.joinUrl} target="_blank" rel="noopener noreferrer">
-                                  Join
-                                </a>
-                              </Button>
-                            )}
                           </div>
                         </div>
                       ))}
@@ -472,12 +458,12 @@ export default function UserDashboard() {
                     </h3>
                     <div className="grid gap-3">
                       {matrixRooms.map((room) => (
-                        <div key={room.roomId} className="flex items-center justify-between p-3 border rounded-lg">
+                        <div key={room.room_id} className="flex items-center justify-between p-3 border rounded-lg">
                           <div className="flex-1">
                             <div className="flex items-center gap-2">
                               <h4 className="font-medium">{room.name}</h4>
                               <Badge variant="secondary" className="text-xs">
-                                {room.memberCount} members
+                                {room.member_count} members
                               </Badge>
                               {room.category && (
                                 <Badge variant="outline" className="text-xs">
@@ -495,7 +481,7 @@ export default function UserDashboard() {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => copyToClipboard(room.roomId, `${room.name} Room ID`)}
+                              onClick={() => copyToClipboard(room.room_id, `${room.name} Room ID`)}
                             >
                               {copiedItems.has(`${room.name} Room ID`) ? (
                                 <CheckCircle className="w-4 h-4 text-green-600" />
@@ -503,13 +489,6 @@ export default function UserDashboard() {
                                 <Copy className="w-4 h-4" />
                               )}
                             </Button>
-                            {room.joinUrl && (
-                              <Button size="sm" asChild>
-                                <a href={room.joinUrl} target="_blank" rel="noopener noreferrer">
-                                  Join
-                                </a>
-                              </Button>
-                            )}
                           </div>
                         </div>
                       ))}

@@ -118,6 +118,22 @@ model UserInvitation {
   @@map("user_invitations")
 }
 
+// Community timeline events for transparency
+model CommunityEvent {
+  id        Int      @id @default(autoincrement())
+  eventType String   @map("event_type")
+  username  String
+  details   String
+  timestamp DateTime @default(now())
+  isPublic  Boolean  @default(true) @map("is_public") // Whether event should be shown in public timeline
+  category  String?  // Optional category for filtering (user_management, messaging, system, etc.)
+  
+  @@index([timestamp])
+  @@index([eventType])
+  @@index([isPublic])
+  @@map("community_events")
+}
+
 // Email verification codes
 model VerificationCode {
   id        Int      @id @default(autoincrement())

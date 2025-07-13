@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { createTRPCRouter, protectedProcedure, adminProcedure, moderatorProcedure } from '../trpc';
 import { matrixService } from '@/lib/matrix';
 import { createMatrixCacheService } from '@/lib/matrix-cache';
+import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
 
 // Define Matrix-related schemas
 const MatrixUserSchema = z.object({
@@ -275,6 +276,17 @@ export const matrixRouter = createTRPCRouter({
             details: `Sent direct message to ${input.userId}: ${result.success ? 'Success' : result.error}`,
           },
         });
+
+        // Log community timeline event
+        if (result.success) {
+          const displayName = input.userId.split(':')[0].replace('@', '');
+          await logCommunityEvent({
+            eventType: 'direct_message',
+            username: ctx.session.user.username || 'unknown',
+            details: `Sent direct message to ${displayName}`,
+            category: getCategoryForEventType('direct_message'),
+          });
+        }
 
         return result;
       } catch (error) {

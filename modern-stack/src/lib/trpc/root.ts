@@ -5,6 +5,7 @@ import { matrixRouter } from './routers/matrix';
 import { adminRouter } from './routers/admin';
 import { settingsRouter } from './routers/settings';
 import { inviteRouter } from './routers/invite';
+import { communityRouter } from './routers/community';
 
 export const appRouter = createTRPCRouter({
   auth: authRouter,
@@ -13,6 +14,7 @@ export const appRouter = createTRPCRouter({
   admin: adminRouter,
   settings: settingsRouter,
   invite: inviteRouter,
+  community: communityRouter,
 });
 
 export type AppRouter = typeof appRouter; 

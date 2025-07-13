@@ -214,13 +214,13 @@ export default function Home() {
                   <Button
                     variant="outline"
                     className="h-auto p-4 flex flex-col items-center gap-2"
-                    disabled
+                    onClick={() => window.location.href = '/community'}
                   >
-                    <div className="text-2xl">📊</div>
+                    <div className="text-2xl">🏘️</div>
                     <div className="text-center">
-                      <div className="font-medium">Analytics</div>
+                      <div className="font-medium">Community Timeline</div>
                       <div className="text-sm text-muted-foreground">
-                        Coming soon
+                        View community activity
                       </div>
                     </div>
                   </Button>

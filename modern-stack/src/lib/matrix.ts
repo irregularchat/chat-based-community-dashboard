@@ -875,6 +875,17 @@ Welcome to the full community! 🚀`;
     }
   }
 
+  /**
+   * Send a message to a Signal user via the Signal bridge
+   * Public wrapper for sendSignalBridgeMessage method
+   */
+  public async sendSignalMessage(
+    signalUserId: string,
+    message: string
+  ): Promise<DirectMessageResult> {
+    return this.sendSignalBridgeMessage(signalUserId, message);
+  }
+
   public isConfigured(): boolean {
     return this.isActive && this.config !== null;
   }

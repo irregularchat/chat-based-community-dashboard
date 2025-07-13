@@ -339,6 +339,109 @@ class AuthentikService {
       return [];
     }
   }
+
+  // Invite creation functionality
+  public async createInvite(options: {
+    label: string;
+    expires: Date;
+    email?: string;
+    name?: string;
+    groups?: string[];
+    createdBy?: string;
+  }): Promise<{
+    success: boolean;
+    error?: string;
+    invite_link?: string;
+    invite_id?: string;
+    expiry?: string;
+  }> {
+    if (!this.isActive || !this.config) {
+      return {
+        success: false,
+        error: 'Authentik service not configured',
+      };
+    }
+
+    try {
+      // Prepare fixed data for invitation
+      const fixedData: Record<string, any> = {};
+      
+      if (options.email) {
+        fixedData.email = options.email;
+      }
+      
+      if (options.groups && options.groups.length > 0) {
+        fixedData.groups = options.groups;
+      }
+      
+      if (options.createdBy) {
+        fixedData.created_by = options.createdBy;
+      }
+
+      // Sanitize label to ensure it's a valid slug
+      const sanitizedLabel = options.label
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '_')
+        .replace(/[^a-z0-9_-]/g, '');
+
+      const inviteData = {
+        name: sanitizedLabel,
+        expires: options.expires.toISOString(),
+        fixed_data: fixedData,
+        single_use: true,
+        flow: this.config.inviteFlowId || this.config.flowId,
+      };
+
+      console.log('Creating invite with data:', { ...inviteData, fixed_data: '...' });
+
+      const response = await this.makeRequest(
+        '/stages/invitation/invitations/',
+        'POST',
+        inviteData
+      );
+
+      if (!response.pk) {
+        throw new Error('API response missing pk field');
+      }
+
+      // Construct the invite link
+      const baseDomain = process.env.BASE_DOMAIN || 'irregularchat.com';
+      const inviteLabel = process.env.INVITE_LABEL || 'invite-enrollment-flow';
+      const inviteLink = `https://sso.${baseDomain}/if/flow/${inviteLabel}/?itoken=${response.pk}`;
+
+      console.log('Successfully created invite:', response.pk);
+
+      return {
+        success: true,
+        invite_link: inviteLink,
+        invite_id: response.pk,
+        expiry: options.expires.toISOString(),
+      };
+
+    } catch (error) {
+      console.error('Error creating invite:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }
+
+  // Get available groups for invite assignment
+  public async getGroups(): Promise<Array<{ pk: string; name: string }>> {
+    if (!this.isActive || !this.config) {
+      return [];
+    }
+
+    try {
+      const response = await this.makeRequest('/core/groups/');
+      return response.results || [];
+    } catch (error) {
+      console.error('Error fetching groups:', error);
+      return [];
+    }
+  }
 }
 
 // Singleton instance

@@ -298,6 +298,81 @@ class EmailService {
     }
   }
 
+  public async sendInviteEmail(
+    to: string,
+    subject: string,
+    fullName: string,
+    inviteLink: string
+  ): Promise<boolean> {
+    if (!this.isActive || !this.transporter) {
+      console.warn('Email service not configured');
+      return false;
+    }
+
+    try {
+      console.log(`Sending invite email to ${to}`);
+
+      const emailTemplate = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 8px;">
+          <h1 style="color: #2a6496; border-bottom: 2px solid #eee; padding-bottom: 10px;">
+            🌟 You've Been Invited to IrregularChat! 🌟
+          </h1>
+          
+          <p>Hello ${fullName},</p>
+          
+          <p>You've been invited to join the IrregularChat community. We're excited to welcome you!</p>
+          
+          <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #2a6496;">
+            <p><strong>Your personal invitation link:</strong></p>
+            <p><a href="${inviteLink}" style="color: #2a6496; text-decoration: none; font-weight: bold;">${inviteLink}</a></p>
+            <p style="margin: 10px 0 0 0; color: #666; font-style: italic;">This link will expire after a limited time, so please use it soon.</p>
+          </div>
+          
+          <h3 style="color: #333;">What is IrregularChat?</h3>
+          <p>IrregularChat is a community where members connect, share ideas, and collaborate. After joining, you'll have access to our forum, wiki, messaging platforms, and other services.</p>
+          
+          <h3 style="color: #333;">Getting Started:</h3>
+          <ol style="line-height: 1.8;">
+            <li>Click the invitation link above</li>
+            <li>Create your account with a secure password</li>
+            <li>Complete your profile</li>
+            <li>Explore our community resources</li>
+          </ol>
+          
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${inviteLink}" style="display: inline-block; padding: 12px 24px; background-color: #2a6496; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">
+              Accept Invitation
+            </a>
+          </div>
+          
+          <div style="margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; font-size: 14px; color: #777;">
+            <p>If you have any questions, please contact the person who invited you.</p>
+            <p>If you received this invitation by mistake, you can safely ignore it.</p>
+          </div>
+        </div>
+      `;
+
+      const mailOptions: any = {
+        from: this.config!.from,
+        to: to,
+        subject: subject,
+        html: emailTemplate,
+      };
+
+      if (this.config!.bcc) {
+        mailOptions.bcc = this.config!.bcc;
+      }
+
+      await this.transporter.sendMail(mailOptions);
+      console.log(`Successfully sent invite email to ${to}`);
+      return true;
+
+    } catch (error) {
+      console.error('Error sending invite email:', error);
+      return false;
+    }
+  }
+
   public isConfigured(): boolean {
     return this.isActive;
   }

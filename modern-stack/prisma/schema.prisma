@@ -97,6 +97,9 @@ model Invite {
   id        Int       @id @default(autoincrement())
   token     String    @unique
   label     String?
+  email     String?   // Email for personalized invites
+  name      String?   // Full name for personalized invites
+  groups    String?   // JSON array of group IDs to pre-assign
   createdAt DateTime  @default(now()) @map("created_at")
   expiresAt DateTime  @map("expires_at")
   createdBy String?   @map("created_by")

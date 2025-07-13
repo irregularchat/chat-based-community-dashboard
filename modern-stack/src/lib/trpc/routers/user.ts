@@ -3,6 +3,7 @@ import { createTRPCRouter, publicProcedure, protectedProcedure, moderatorProcedu
 import { authentikService } from '@/lib/authentik';
 import { emailService } from '@/lib/email';
 import { matrixService } from '@/lib/matrix';
+import { discourseService } from '@/lib/discourse';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { TRPCError } from '@trpc/server';
@@ -238,6 +239,30 @@ export const userRouter = createTRPCRouter({
           },
         });
 
+        // Create Discourse introduction post if requested
+        let discoursePostUrl: string | undefined;
+        if (input.createDiscoursePost && discourseService.isConfigured()) {
+          try {
+            const discourseResult = await discourseService.createIntroductionPost({
+              username,
+              intro: input.introduction,
+              invitedBy: input.invitedBy,
+              organization: input.organization,
+              interests: input.interests,
+            });
+
+            if (discourseResult.success && discourseResult.postUrl) {
+              discoursePostUrl = discourseResult.postUrl;
+              console.log(`Discourse introduction post created for ${username} at: ${discoursePostUrl}`);
+            } else {
+              console.warn(`Failed to create Discourse post for ${username}: ${discourseResult.error}`);
+            }
+          } catch (discourseError) {
+            console.error('Error creating Discourse post:', discourseError);
+            // Don't fail the user creation if Discourse post fails
+          }
+        }
+
         // Send welcome email if requested and email service is configured
         if (input.sendWelcomeEmail && emailService.isConfigured() && input.email) {
           try {
@@ -248,7 +273,7 @@ export const userRouter = createTRPCRouter({
               fullName,
               username,
               password: authentikResult.temp_password || '',
-              discoursePostUrl: undefined, // TODO: Add Discourse integration
+              discoursePostUrl: discoursePostUrl,
             });
             console.log(`Welcome email sent to ${input.email}`);
           } catch (emailError) {
@@ -269,7 +294,7 @@ export const userRouter = createTRPCRouter({
               username,
               fullName,
               authentikResult.temp_password || '',
-              undefined // TODO: Add Discourse URL when available
+              discoursePostUrl
             );
             console.log(`Matrix welcome message sent to ${matrixUserId}`);
           } catch (matrixError) {

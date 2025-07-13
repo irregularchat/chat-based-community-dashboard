@@ -13,6 +13,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { UserCredentialDisplay } from '@/components/ui/user-credentials';
+import { SearchableMatrixUserSelect } from '@/components/ui/searchable-matrix-user-select';
 import { ArrowLeft, UserPlus, Save, Settings, Phone, Building2, Hash, Users, FileText, Copy, Shuffle, Home, RefreshCw, MessageSquare } from 'lucide-react';
 import { toast } from 'sonner';
 

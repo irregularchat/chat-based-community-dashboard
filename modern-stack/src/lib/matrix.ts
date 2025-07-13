@@ -1,4 +1,5 @@
 import { MatrixClient, createClient, MsgType } from 'matrix-js-sdk';
+import { MessageTemplates, WelcomeMessageData } from './message-templates';
 
 interface MatrixConfig {
   homeserver: string;
@@ -6,13 +7,6 @@ interface MatrixConfig {
   userId: string;
   welcomeRoomId?: string;
   defaultRoomId?: string;
-}
-
-interface WelcomeMessageData {
-  username: string;
-  fullName: string;
-  tempPassword: string;
-  discourseUrl?: string;
 }
 
 interface DirectMessageResult {
@@ -101,42 +95,7 @@ class MatrixService {
   }
 
   private generateWelcomeMessage(data: WelcomeMessageData): string {
-    const { username, fullName, tempPassword, discourseUrl } = data;
-
-    let message = `🌟 Your First Step Into the IrregularChat! 🌟
-You've just joined a community focused on breaking down silos, fostering innovation, 
-and supporting service members and veterans.
----
-Use This Username and Temporary Password ⬇️
-Username: ${username}
-Temporary Password: ${tempPassword}
-Exactly as shown above 👆🏼
-
-1️⃣ Step 1:
-- Use the username and temporary password to log in to https://sso.irregularchat.com
-
-2️⃣ Step 2:
-- Update your email, important to be able to recover your account and verify your identity
-- Save your Login Username and New Password to a Password Manager
-- Visit the welcome page while logged in https://forum.irregularchat.com/t/84`;
-
-    if (discourseUrl) {
-      message += `
-
-3️⃣ Step 3:
-- We posted an intro about you, but you can complete or customize it:
-${discourseUrl}`;
-    }
-
-    message += `
-
-Please take a moment to learn about the community before you jump in.
-
-If you have any questions or need assistance, feel free to reach out to the community admins.
-
-Welcome aboard!`;
-
-    return message;
+    return MessageTemplates.createWelcomeMessage(data);
   }
 
   public async sendWelcomeMessage(
@@ -144,7 +103,7 @@ Welcome aboard!`;
     username: string,
     fullName: string,
     tempPassword: string,
-    discourseUrl?: string
+    discoursePostUrl?: string
   ): Promise<DirectMessageResult> {
     if (!this.isActive || !this.client) {
       return {
@@ -158,7 +117,7 @@ Welcome aboard!`;
         username,
         fullName,
         tempPassword,
-        discourseUrl,
+        discoursePostUrl,
       });
 
       return await this.sendDirectMessage(matrixUserId, welcomeMessage);

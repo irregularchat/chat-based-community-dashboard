@@ -5,6 +5,7 @@ import { Copy, Eye, EyeOff, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
+import { MessageTemplates } from '@/lib/message-templates';
 
 interface UserCredentials {
   username: string;
@@ -43,22 +44,12 @@ export function UserCredentialDisplay({ credentials, userEmail, onClose }: UserC
   };
 
   const formatMessageForUser = () => {
-    return `Your new account has been created successfully!
-
-Account Details:
-• Username: ${credentials.username}
-• Email: ${userEmail}
-• Temporary Password: ${credentials.password}
-
-Next Steps:
-1. Use these credentials to log in to the community portal
-2. You will be prompted to change your password on first login
-3. Complete your profile setup
-4. Join relevant community rooms
-
-${credentials.resetLink ? `Password Reset Link: ${credentials.resetLink}` : ''}
-
-Welcome to the community! If you have any questions, please reach out to the admin team.`;
+    return MessageTemplates.createUserCredentialsMessage(
+      credentials.username,
+      userEmail,
+      credentials.password,
+      credentials.resetLink
+    );
   };
 
   const copyFullMessage = () => {

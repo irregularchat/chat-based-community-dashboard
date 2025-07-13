@@ -7,7 +7,7 @@ echo "🚀 Starting Community Dashboard (Modern Stack)"
 
 # Wait for database to be ready
 echo "⏳ Waiting for database to be ready..."
-until npx prisma db push --accept-data-loss; do
+until npx prisma db push --accept-data-loss 2>/dev/null; do
   echo "Database not ready, waiting 5 seconds..."
   sleep 5
 done

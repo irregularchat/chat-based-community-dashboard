@@ -28,8 +28,8 @@ RUN npm run build
 FROM base AS runner
 WORKDIR /app
 
-# Install curl for healthchecks
-RUN apk add --no-cache curl
+# Install curl and bash for healthchecks and entrypoint script
+RUN apk add --no-cache curl bash
 
 # Create nextjs user
 RUN addgroup --system --gid 1001 nodejs
@@ -49,11 +49,18 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 
-USER nextjs
+# Copy entrypoint script and set permissions
+COPY modern-stack/docker-entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
+
+# Change ownership of necessary files to nextjs user
+RUN chown -R nextjs:nodejs /app
 
 EXPOSE 3000
 
 ENV PORT 3000
 ENV HOSTNAME "0.0.0.0"
 
+# Use entrypoint script for database setup, then start as nextjs user
+ENTRYPOINT ["./entrypoint.sh"]
 CMD ["node", "server.js"]

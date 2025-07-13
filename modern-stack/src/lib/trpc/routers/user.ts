@@ -89,15 +89,35 @@ export const userRouter = createTRPCRouter({
         isActive: z.boolean().default(true),
         isAdmin: z.boolean().default(false),
         isModerator: z.boolean().default(false),
+        // New fields from enhanced form
+        organization: z.string().optional(),
+        interests: z.string().optional(),
+        invitedBy: z.string().optional(),
+        signalUsername: z.string().optional(),
+        linkedinUsername: z.string().optional(),
+        introduction: z.string().optional(),
+        phoneNumber: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const { password, ...userData } = input;
+      const { password, organization, interests, invitedBy, signalUsername, linkedinUsername, introduction, phoneNumber, ...userData } = input;
+
+      // Prepare attributes for additional fields
+      const attributes: Record<string, any> = {};
+      if (organization) attributes.organization = organization;
+      if (interests) attributes.interests = interests;
+      if (invitedBy) attributes.invited_by = invitedBy;
+      if (signalUsername) attributes.signal_username = signalUsername;
+      if (linkedinUsername) attributes.linkedin_username = linkedinUsername;
+      if (introduction) attributes.introduction = introduction;
+      if (phoneNumber) attributes.phone_number = phoneNumber;
 
       const user = await ctx.prisma.user.create({
         data: {
           ...userData,
           ...(password && { password: await hashPassword(password) }),
+          // Store additional fields in notes or attributes if your schema supports it
+          ...(Object.keys(attributes).length > 0 && { attributes }),
         },
       });
 
@@ -126,6 +146,17 @@ export const userRouter = createTRPCRouter({
         groups: z.array(z.string()).optional(),
         sendWelcomeEmail: z.boolean().default(true),
         autoGenerateUsername: z.boolean().default(true),
+        // New fields from enhanced form
+        organization: z.string().optional(),
+        interests: z.string().optional(),
+        invitedBy: z.string().optional(),
+        signalUsername: z.string().optional(),
+        linkedinUsername: z.string().optional(),
+        introduction: z.string().optional(),
+        createDiscoursePost: z.boolean().default(true),
+        sendMatrixWelcome: z.boolean().default(true),
+        addToRecommendedRooms: z.boolean().default(true),
+        skipIndocRemoval: z.boolean().default(false),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -143,12 +174,23 @@ export const userRouter = createTRPCRouter({
           }
         }
 
-        // Prepare attributes including phone number if provided
+        // Prepare attributes including all new fields
         const attributes = {
           ...input.attributes,
           ...(input.phoneNumber && { phone_number: input.phoneNumber }),
+          ...(input.organization && { organization: input.organization }),
+          ...(input.interests && { interests: input.interests }),
+          ...(input.invitedBy && { invited_by: input.invitedBy }),
+          ...(input.signalUsername && { signal_username: input.signalUsername }),
+          ...(input.linkedinUsername && { linkedin_username: input.linkedinUsername }),
+          ...(input.introduction && { introduction: input.introduction }),
           created_by: ctx.session.user.username || 'admin',
           created_via: 'community_dashboard',
+          // Store Matrix integration preferences
+          send_matrix_welcome: input.sendMatrixWelcome,
+          add_to_recommended_rooms: input.addToRecommendedRooms,
+          skip_indoc_removal: input.skipIndocRemoval,
+          create_discourse_post: input.createDiscoursePost,
         };
 
         // Create user in Authentik SSO
@@ -174,6 +216,8 @@ export const userRouter = createTRPCRouter({
             lastName: input.lastName,
             authentikId: authentikResult.user_id,
             isActive: true,
+            // Store additional data in attributes if schema supports it
+            attributes,
           },
         });
 
@@ -182,7 +226,7 @@ export const userRouter = createTRPCRouter({
           data: {
             eventType: 'sso_user_created',
             username: ctx.session.user.username || 'unknown',
-            details: `Created SSO user: ${username} (${input.email})`,
+            details: `Created SSO user: ${username} (${input.email}) with enhanced profile data`,
           },
         });
 
@@ -199,10 +243,9 @@ export const userRouter = createTRPCRouter({
             resetLink: authentikResult.password_reset_link,
           }
         };
-
       } catch (error) {
         console.error('Error creating SSO user:', error);
-        throw new Error(error instanceof Error ? error.message : 'Failed to create SSO user');
+        throw new Error(`Failed to create SSO user: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     }),
 

@@ -18,7 +18,7 @@ export const userRouter = createTRPCRouter({
         limit: z.number().default(25),
         search: z.string().optional(),
         isActive: z.boolean().optional(),
-        source: z.enum(['authentik', 'local', 'both']).default('authentik'),
+        source: z.enum(['authentik', 'local', 'both']).default('local'),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -235,21 +235,43 @@ export const userRouter = createTRPCRouter({
   // Get sync status (compare local vs Authentik user counts)
   getSyncStatus: moderatorProcedure.query(async ({ ctx }) => {
     try {
-      const [localCount, authentikResult] = await Promise.all([
-        ctx.prisma.user.count(),
-        authentikService.listUsers(undefined, 1, 1), // Just get count
-      ]);
+      const localCount = await ctx.prisma.user.count();
+      
+      let authentikCount = 0;
+      let authentikConfigured = authentikService.isConfigured();
+      let authentikError = null;
+      
+      if (authentikConfigured) {
+        try {
+          const authentikResult = await authentikService.listUsers(undefined, 1, 1);
+          authentikCount = authentikResult.total;
+        } catch (error) {
+          console.error('Error getting Authentik user count:', error);
+          authentikError = error instanceof Error ? error.message : 'Unknown error';
+          authentikConfigured = false; // Treat as not configured if we can't connect
+        }
+      }
 
       return {
         localCount,
-        authentikCount: authentikResult.total,
-        inSync: localCount === authentikResult.total,
-        authentikConfigured: authentikService.isConfigured(),
+        authentikCount,
+        inSync: localCount === authentikCount,
+        authentikConfigured,
+        error: authentikError,
       };
     } catch (error) {
       console.error('Error getting sync status:', error);
+      
+      // Try to at least get local count
+      let localCount = 0;
+      try {
+        localCount = await ctx.prisma.user.count();
+      } catch (dbError) {
+        console.error('Error getting local user count:', dbError);
+      }
+      
       return {
-        localCount: 0,
+        localCount,
         authentikCount: 0,
         inSync: false,
         authentikConfigured: false,

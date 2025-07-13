@@ -49,7 +49,7 @@ export default function UsersPage() {
   const [search, setSearch] = useState('');
   const [isActive, setIsActive] = useState<boolean | undefined>(undefined);
   const [limit, setLimit] = useState(25);
-  const [source, setSource] = useState<'authentik' | 'local' | 'both'>('authentik');
+  const [source, setSource] = useState<'authentik' | 'local' | 'both'>('local');
   const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
   const [showBulkActions, setShowBulkActions] = useState(false);
   const [showEmailDialog, setShowEmailDialog] = useState(false);

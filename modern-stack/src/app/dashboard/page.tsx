@@ -373,6 +373,25 @@ export default function UserDashboard() {
 
       <Tabs value={selectedTab} onValueChange={setSelectedTab} className="space-y-4">
         <TabsList className={`grid w-full ${session.user.isAdmin || session.user.isModerator ? 'grid-cols-7' : 'grid-cols-5'}`}>
+          {/* Admin gets Admin tab first */}
+          {session.user.isAdmin && (
+            <TabsTrigger value="admin" className="flex items-center gap-2">
+              <BarChart3 className="w-4 h-4" />
+              Admin
+            </TabsTrigger>
+          )}
+          {/* Moderators get Moderation tab first (after Admin if admin) */}
+          {(session.user.isModerator || session.user.isAdmin) && (
+            <TabsTrigger value="moderation" className="flex items-center gap-2">
+              <Shield className="w-4 h-4" />
+              Moderation
+            </TabsTrigger>
+          )}
+          {/* Quick Links comes first for regular users, earlier for admin/mods */}
+          <TabsTrigger value="links" className="flex items-center gap-2">
+            <ExternalLink className="w-4 h-4" />
+            Quick Links
+          </TabsTrigger>
           <TabsTrigger value="rooms" className="flex items-center gap-2">
             <Users className="w-4 h-4" />
             Rooms
@@ -389,22 +408,6 @@ export default function UserDashboard() {
             <MessageSquare className="w-4 h-4" />
             Contact
           </TabsTrigger>
-          <TabsTrigger value="links" className="flex items-center gap-2">
-            <ExternalLink className="w-4 h-4" />
-            Quick Links
-          </TabsTrigger>
-          {(session.user.isModerator || session.user.isAdmin) && (
-            <TabsTrigger value="moderation" className="flex items-center gap-2">
-              <Shield className="w-4 h-4" />
-              Moderation
-            </TabsTrigger>
-          )}
-          {session.user.isAdmin && (
-            <TabsTrigger value="admin" className="flex items-center gap-2">
-              <BarChart3 className="w-4 h-4" />
-              Admin
-            </TabsTrigger>
-          )}
         </TabsList>
 
         {/* Matrix Rooms Tab */}

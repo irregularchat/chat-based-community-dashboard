@@ -49,7 +49,7 @@ export function normalizePhoneNumber(phoneNumber: string): NormalizedPhone {
     }
   }
 
-  // Check if it looks like a US number (10-11 digits, or starts with 1)
+  // Check if it contains only digits
   const digitMatch = cleaned.match(/^\d+$/);
   if (!digitMatch) {
     return {
@@ -74,11 +74,7 @@ export function normalizePhoneNumber(phoneNumber: string): NormalizedPhone {
         };
       }
     } catch (error) {
-      return {
-        normalized: withCountryCode,
-        isValid: false,
-        error: 'Invalid US phone number'
-      };
+      // If US parsing fails, continue to international logic
     }
   }
 
@@ -95,15 +91,11 @@ export function normalizePhoneNumber(phoneNumber: string): NormalizedPhone {
         };
       }
     } catch (error) {
-      return {
-        normalized: withPlus,
-        isValid: false,
-        error: 'Invalid US phone number'
-      };
+      // If US parsing fails, continue to international logic
     }
   }
 
-  // For other lengths, try common country codes
+  // For other lengths, try common country codes (excluding US since we handled it above)
   const commonCountryCodes = [
     { code: '44', name: 'UK', length: [10, 11] },
     { code: '49', name: 'Germany', length: [10, 11, 12] },
@@ -125,40 +117,32 @@ export function normalizePhoneNumber(phoneNumber: string): NormalizedPhone {
     { code: '55', name: 'Brazil', length: [10, 11] }
   ];
 
-  // Try to match against known country patterns
-  for (const country of commonCountryCodes) {
-    if (country.length.includes(digitsOnly.length)) {
-      const withCountryCode = `+${country.code}${digitsOnly}`;
-      try {
-        const parsed = parsePhoneNumber(withCountryCode);
-        if (parsed && parsed.isValid()) {
-          return {
-            normalized: parsed.format('E.164'),
-            isValid: true,
-            country: parsed.country
-          };
+  // Try to match against known country patterns only if US didn't work
+  if (digitsOnly.length !== 10 && !(digitsOnly.length === 11 && digitsOnly.startsWith('1'))) {
+    for (const country of commonCountryCodes) {
+      if (country.length.includes(digitsOnly.length)) {
+        const withCountryCode = `+${country.code}${digitsOnly}`;
+        try {
+          const parsed = parsePhoneNumber(withCountryCode);
+          if (parsed && parsed.isValid()) {
+            return {
+              normalized: parsed.format('E.164'),
+              isValid: true,
+              country: parsed.country
+            };
+          }
+        } catch (error) {
+          // Continue to next country
         }
-      } catch (error) {
-        // Continue to next country
       }
     }
   }
 
-  // If no country code matches and it's a reasonable length, default to US
-  if (digitsOnly.length >= 10 && digitsOnly.length <= 12) {
-    const withUS = `+1${digitsOnly}`;
-    return {
-      normalized: withUS,
-      isValid: false,
-      country: 'US',
-      error: `Assuming US number, please verify: ${withUS}`
-    };
-  }
-
+  // If no country code worked, return error
   return {
-    normalized: `+${digitsOnly}`,
+    normalized: cleaned,
     isValid: false,
-    error: 'Could not determine country code. Please include country code (e.g., +1 for US)'
+    error: `Unsupported phone number format. Please include country code or use a valid US number (10 digits).`
   };
 }
 

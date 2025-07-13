@@ -1016,7 +1016,7 @@ export const userRouter = createTRPCRouter({
         if (!phoneNumber) {
           throw new TRPCError({
             code: 'PRECONDITION_FAILED',
-            message: 'You must have a phone number on file to invite users. Please update your phone number in Account settings first.',
+            message: 'Phone number required to send invitations. Go to Dashboard → Account tab → "Update Phone Number" to add your phone number, then try again.',
           });
         }
 

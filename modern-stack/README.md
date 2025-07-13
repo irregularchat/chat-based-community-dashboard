@@ -99,3 +99,75 @@ docker-compose down
 # Rebuild and start
 docker-compose up -d --build
 ```
+
+## SignalBot Phone Verification Setup
+
+The modern-stack includes SignalBot integration for phone number verification. This allows users to receive verification codes via Signal when updating their phone numbers.
+
+### Required Environment Variables
+
+Add these to your `.env` file:
+
+```bash
+# Matrix Configuration (required for SignalBot)
+MATRIX_HOMESERVER=https://matrix.irregularchat.com
+MATRIX_ACCESS_TOKEN=your_matrix_bot_access_token
+MATRIX_USER_ID=@bot.irregularchat:irregularchat.com
+MATRIX_DOMAIN=irregularchat.com
+
+# SignalBot Configuration
+MATRIX_SIGNAL_BRIDGE_ROOM_ID=!your_signal_bridge_room_id:irregularchat.com
+MATRIX_SIGNAL_BOT_USERNAME=@signalbot:irregularchat.com
+SIGNAL_BRIDGE_BOT_RESPONSE_DELAY=3.0
+
+# Optional Matrix bot username for room searching
+MATRIX_BOT_USERNAME=@bot.irregularchat:irregularchat.com
+
+# INDOC/Moderator room for notifications
+MATRIX_INDOC_ROOM_ID=!your_indoc_room_id:irregularchat.com
+```
+
+### How Phone Verification Works
+
+1. **User enters phone number** in dashboard
+2. **Phone normalization** - adds country code if missing (defaults to +1 for US)
+3. **SignalBot resolution** - sends `resolve-identifier +phonenumber` to SignalBot
+4. **UUID extraction** - extracts Signal UUID from bot response
+5. **Chat creation** - sends `start-chat UUID` to create bridge room
+6. **Message delivery** - sends 6-digit verification code to Signal user
+7. **Fallback** - if Signal fails, sends to Matrix direct message
+
+### SignalBot Commands
+
+The system uses these SignalBot commands:
+
+- `resolve-identifier +12345678901` - Resolves phone to Signal UUID
+- `start-chat uuid-here` - Creates Matrix room bridged to Signal user
+
+### Troubleshooting
+
+**"Phone number not found on Signal"**
+- User doesn't have Signal installed
+- Phone number not registered with Signal
+- Phone number format invalid (must include country code)
+
+**"Signal bridge not configured"**
+- `MATRIX_SIGNAL_BRIDGE_ROOM_ID` not set
+- Bot doesn't have access to Signal bridge room
+
+**"Failed to send verification code"**
+- Matrix service not configured
+- SignalBot not responding
+- Network connectivity issues
+
+### Testing
+
+To test SignalBot integration:
+
+1. Ensure your phone number is registered with Signal
+2. Go to Dashboard → Account → Update Phone Number
+3. Enter your phone number (with or without country code)
+4. Check Signal for verification code
+5. Enter 6-digit code to complete verification
+
+The system will automatically fall back to Matrix direct messages if SignalBot fails.

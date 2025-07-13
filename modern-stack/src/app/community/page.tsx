@@ -28,7 +28,7 @@ export default function CommunityTimelinePage() {
   const [eventType, setEventType] = useState<string>('');
   const [limit, setLimit] = useState(25);
 
-  const { data: timelineData, isLoading, refetch } = trpc.community.getTimeline.useQuery({
+  const { data: timelineData, isLoading, refetch, error } = trpc.community.getTimeline.useQuery({
     page,
     limit,
     category: category || undefined,
@@ -36,11 +36,11 @@ export default function CommunityTimelinePage() {
     username: search || undefined,
   });
 
-  const { data: stats } = trpc.community.getStats.useQuery({
+  const { data: stats, error: statsError } = trpc.community.getStats.useQuery({
     days: 7,
   });
 
-  const { data: categories } = trpc.community.getCategories.useQuery();
+  const { data: categories, error: categoriesError } = trpc.community.getCategories.useQuery();
 
   const formatDate = (date: Date | string) => {
     return new Date(date).toLocaleDateString('en-US', {
@@ -182,7 +182,17 @@ export default function CommunityTimelinePage() {
                 </div>
 
                 {/* Timeline Events */}
-                {isLoading ? (
+                {error ? (
+                  <div className="text-center py-8 text-red-500">
+                    <p>Error loading timeline: {error.message}</p>
+                    <button 
+                      onClick={() => refetch()}
+                      className="mt-2 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : isLoading ? (
                   <div className="flex items-center justify-center py-8">
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
                   </div>

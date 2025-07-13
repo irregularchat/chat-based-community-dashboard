@@ -67,6 +67,7 @@ export default function UserDashboard() {
   const [newEmail, setNewEmail] = useState('');
   const [verificationHash, setVerificationHash] = useState('');
   const [pendingVerification, setPendingVerification] = useState<'phone' | 'email' | null>(null);
+  const [emailVerificationData, setEmailVerificationData] = useState<{email: string; fromEmail: string} | null>(null);
   const [copiedItems, setCopiedItems] = useState<Set<string>>(new Set());
   
   // Quicklinks admin editing state
@@ -150,11 +151,38 @@ export default function UserDashboard() {
 
   const requestPhoneVerificationMutation = trpc.user.requestPhoneVerification.useMutation({
     onSuccess: (data) => {
-      toast.success(data.message || 'Verification code sent!');
+      toast.success(data.message || 'Signal verification code sent!');
       setPendingVerification('phone');
     },
     onError: (error) => {
-      toast.error(`Failed to send verification: ${error.message}`);
+      let errorMessage = error.message;
+      let showSignalGroupOption = false;
+      
+      // Provide more helpful error messages
+      if (error.message.includes('Failed to resolve phone number')) {
+        errorMessage = 'Phone number not found on Signal. Your number must be registered with Signal Messenger to receive verification codes.';
+        showSignalGroupOption = true;
+      } else if (error.message.includes('Matrix service not configured')) {
+        errorMessage = 'Messaging service not configured. Please contact an administrator.';
+      } else if (error.message.includes('MATRIX_SIGNAL_BRIDGE_ROOM_ID not configured')) {
+        errorMessage = 'Signal bridge not configured. Please contact an administrator.';
+      } else if (error.message.includes('Invalid phone number format')) {
+        errorMessage = 'Invalid phone number format. Please include country code (e.g., +1 for US).';
+      } else if (error.message.includes('Unsupported phone number format')) {
+        errorMessage = 'Invalid phone number format. Please use a valid phone number with country code.';
+      }
+      
+      // Show the error with additional guidance
+      toast.error(errorMessage);
+      
+      // Show additional guidance for Signal-related errors
+      if (showSignalGroupOption) {
+        setTimeout(() => {
+          toast.info('💡 Don\'t have Signal? Join our Signal INDOC group to request manual verification from a moderator.', {
+            duration: 8000,
+          });
+        }, 2000);
+      }
     },
   });
 
@@ -167,7 +195,60 @@ export default function UserDashboard() {
       refetchProfile();
     },
     onError: (error) => {
-      toast.error(`Verification failed: ${error.message}`);
+      let errorMessage = error.message;
+      if (error.message.includes('Verification code expired')) {
+        errorMessage = 'Verification code has expired. Please request a new one.';
+      } else if (error.message.includes('Invalid verification code')) {
+        errorMessage = 'Invalid verification code. Please check your Signal or Matrix messages.';
+      }
+      toast.error(errorMessage);
+    },
+  });
+
+  const requestEmailVerificationMutation = trpc.user.requestEmailVerification.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.message || 'Email verification code sent!');
+      setPendingVerification('email');
+      setEmailVerificationData({
+        email: data.email,
+        fromEmail: data.fromEmail,
+      });
+    },
+    onError: (error) => {
+      let errorMessage = error.message;
+      
+      // Provide more helpful error messages
+      if (error.message.includes('Email service is not configured')) {
+        errorMessage = 'Email service not configured. Please contact an administrator.';
+      } else if (error.message.includes('already in use')) {
+        errorMessage = 'This email address is already in use by another account. Please use a different email.';
+      } else if (error.message.includes('Failed to send verification email')) {
+        errorMessage = 'Failed to send verification email. Please check your email address and try again.';
+      }
+      
+      toast.error(errorMessage);
+    },
+  });
+
+  const verifyEmailMutation = trpc.user.verifyEmail.useMutation({
+    onSuccess: () => {
+      toast.success('Email address verified and updated!');
+      setNewEmail('');
+      setVerificationHash('');
+      setPendingVerification(null);
+      setEmailVerificationData(null);
+      refetchProfile();
+    },
+    onError: (error) => {
+      let errorMessage = error.message;
+      if (error.message.includes('Verification code expired')) {
+        errorMessage = 'Verification code has expired. Please request a new one.';
+      } else if (error.message.includes('Invalid verification code')) {
+        errorMessage = 'Invalid verification code. Please check your email and try again.';
+      } else if (error.message.includes('already in use')) {
+        errorMessage = 'This email address is now in use by another account. Please use a different email.';
+      }
+      toast.error(errorMessage);
     },
   });
 
@@ -310,9 +391,34 @@ export default function UserDashboard() {
       return;
     }
 
-    verifyPhoneMutation.mutate({
-      phoneNumber: newPhone,
-      verificationHash
+    if (pendingVerification === 'phone') {
+      verifyPhoneMutation.mutate({
+        phoneNumber: newPhone,
+        verificationHash
+      });
+    } else if (pendingVerification === 'email') {
+      verifyEmailMutation.mutate({
+        email: newEmail,
+        verificationCode: verificationHash
+      });
+    }
+  };
+
+  const handleEmailVerification = () => {
+    if (!newEmail) {
+      toast.error('Please enter an email address');
+      return;
+    }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(newEmail)) {
+      toast.error('Please enter a valid email address');
+      return;
+    }
+
+    requestEmailVerificationMutation.mutate({
+      email: newEmail
     });
   };
 
@@ -657,29 +763,65 @@ export default function UserDashboard() {
               </CardHeader>
               <CardContent className="space-y-4">
                 {!pendingVerification ? (
-                  <>
+                  <div className="space-y-4">
+                    <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                      <div className="flex items-start space-x-3">
+                        <div className="text-blue-600">
+                          📱
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="font-semibold text-blue-900">Signal Messenger Verification</h4>
+                          <p className="text-sm text-blue-700 mt-1">
+                            This verification is for <strong>Signal Messenger</strong>. Your phone number must be registered with Signal to receive verification codes.
+                          </p>
+                          <p className="text-sm text-blue-700 mt-2">
+                            <strong>Don't have Signal?</strong> You can join our Signal INDOC group to request manual verification from a moderator.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    
                     <div className="space-y-2">
-                      <Label htmlFor="new-phone">New Phone Number</Label>
+                      <Label htmlFor="new-phone">Phone Number (Signal Required)</Label>
                       <Input
                         id="new-phone"
                         type="tel"
                         value={newPhone}
                         onChange={(e) => setNewPhone(e.target.value)}
-                        placeholder="1234567890 or +1234567890"
+                        placeholder="2125551234 or +12125551234"
                       />
                       <p className="text-sm text-muted-foreground">
-                        Enter your phone number. If no country code is provided, +1 (US) will be assumed. 
-                        Verification will be sent via Signal or Matrix.
+                        Enter your <strong>Signal-registered</strong> phone number. If no country code is provided, +1 (US) will be assumed. 
+                        Verification codes will be sent via Signal Messenger.
                       </p>
                     </div>
-                    <Button 
-                      onClick={handlePhoneVerification}
-                      disabled={requestPhoneVerificationMutation.isPending}
-                      className="w-full"
-                    >
-                      {requestPhoneVerificationMutation.isPending ? 'Sending...' : 'Send Verification Code'}
-                    </Button>
-                  </>
+                    
+                    <div className="flex gap-2">
+                      <Button 
+                        onClick={handlePhoneVerification}
+                        disabled={requestPhoneVerificationMutation.isPending}
+                        className="flex-1"
+                      >
+                        {requestPhoneVerificationMutation.isPending ? 'Sending Signal Code...' : 'Send Signal Verification Code'}
+                      </Button>
+                      {process.env.NEXT_PUBLIC_SIGNAL_INDOC_LINK && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-muted-foreground hover:text-foreground whitespace-nowrap"
+                          asChild
+                        >
+                          <a
+                            href={process.env.NEXT_PUBLIC_SIGNAL_INDOC_LINK}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            📲 Manually Verify
+                          </a>
+                        </Button>
+                      )}
+                    </div>
+                  </div>
                 ) : (
                   <>
                     <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
@@ -731,7 +873,7 @@ export default function UserDashboard() {
               </CardContent>
             </Card>
 
-            {/* Update Email */}
+            {/* Update Email with Verification */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -739,30 +881,107 @@ export default function UserDashboard() {
                   Update Email Address
                 </CardTitle>
                 <CardDescription>
-                  Change your email address for account recovery
+                  Change your email address with email verification
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="new-email">New Email Address</Label>
-                  <Input
-                    id="new-email"
-                    type="email"
-                    value={newEmail}
-                    onChange={(e) => setNewEmail(e.target.value)}
-                    placeholder="your.email@example.com"
-                  />
-                  <p className="text-sm text-muted-foreground">
-                    Current: {userProfile?.email || 'Not set'}
-                  </p>
-                </div>
-                <Button 
-                  onClick={() => updateEmailMutation.mutate({ email: newEmail })}
-                  disabled={updateEmailMutation.isPending || !newEmail}
-                  className="w-full"
-                >
-                  {updateEmailMutation.isPending ? 'Updating...' : 'Update Email'}
-                </Button>
+                {pendingVerification !== 'email' ? (
+                  <div className="space-y-4">
+                    <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                      <div className="flex items-start space-x-3">
+                        <div className="text-blue-600">
+                          📧
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="font-semibold text-blue-900">Email Verification Required</h4>
+                          <p className="text-sm text-blue-700 mt-1">
+                            To ensure account security, we'll send a verification code to your new email address before updating it.
+                          </p>
+                          <p className="text-sm text-blue-700 mt-2">
+                            <strong>Verification emails will be sent from:</strong> {process.env.NEXT_PUBLIC_SMTP_FROM || emailVerificationData?.fromEmail || 'noreply@irregularchat.com'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-2">
+                      <Label htmlFor="new-email">New Email Address</Label>
+                      <Input
+                        id="new-email"
+                        type="email"
+                        value={newEmail}
+                        onChange={(e) => setNewEmail(e.target.value)}
+                        placeholder="your.email@example.com"
+                      />
+                      <p className="text-sm text-muted-foreground">
+                        Current: {userProfile?.email || 'Not set'}
+                      </p>
+                    </div>
+                    
+                    <Button 
+                      onClick={handleEmailVerification}
+                      disabled={requestEmailVerificationMutation.isPending}
+                      className="w-full"
+                    >
+                      {requestEmailVerificationMutation.isPending ? 'Sending Verification Code...' : 'Send Email Verification Code'}
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                      <div className="flex items-center gap-2 mb-2">
+                        <AlertCircle className="w-5 h-5 text-blue-600" />
+                        <span className="font-medium text-blue-900">Email Verification Required</span>
+                      </div>
+                      <p className="text-sm text-blue-800">
+                        We've sent a 6-digit verification code to: <strong>{emailVerificationData?.email}</strong>
+                      </p>
+                      <p className="text-sm text-blue-700 mt-1">
+                        Check your email inbox (and spam folder) for the verification code.
+                      </p>
+                      {emailVerificationData?.fromEmail && (
+                        <p className="text-xs text-blue-600 mt-2">
+                          From: {emailVerificationData.fromEmail}
+                        </p>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="verification-hash">6-Digit Verification Code</Label>
+                      <Input
+                        id="verification-hash"
+                        type="text"
+                        value={verificationHash}
+                        onChange={(e) => setVerificationHash(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder="Enter 6-digit code"
+                        maxLength={6}
+                        className="text-center text-lg font-mono tracking-widest"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Code expires in 15 minutes. If you don't receive the email, check your spam folder or request a new code.
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button 
+                        onClick={handleVerifyHash}
+                        disabled={verifyEmailMutation.isPending || verificationHash.length !== 6}
+                        className="flex-1"
+                      >
+                        {verifyEmailMutation.isPending ? 'Verifying...' : 'Verify & Update Email'}
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        onClick={() => {
+                          setPendingVerification(null);
+                          setVerificationHash('');
+                          setEmailVerificationData(null);
+                        }}
+                        className="flex-1"
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
           </div>

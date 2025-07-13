@@ -12,6 +12,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
   env: {
     CUSTOM_KEY: process.env.CUSTOM_KEY,
+    NEXT_PUBLIC_SIGNAL_INDOC_LINK: process.env.SIGNAL_INDOC_LINK,
   },
   webpack: (config, { isServer }) => {
     // Fix matrix-js-sdk bundling issues

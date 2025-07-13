@@ -187,6 +187,7 @@ class MatrixService {
     message: string
   ): Promise<DirectMessageResult> {
     if (!this.isActive || !this.client) {
+      console.error('❌ BRIDGE: Matrix service not configured');
       return {
         success: false,
         error: 'Matrix service not configured',
@@ -194,11 +195,12 @@ class MatrixService {
     }
 
     try {
-      console.log(`Sending Signal bridge message to ${signalUserId}`);
+      console.log(`🔥 BRIDGE: Starting Signal bridge message flow for ${signalUserId}`);
 
       // Get Signal bridge room ID from environment
       const signalBridgeRoomId = process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID;
       if (!signalBridgeRoomId) {
+        console.error('❌ BRIDGE: MATRIX_SIGNAL_BRIDGE_ROOM_ID not configured');
         return {
           success: false,
           error: 'MATRIX_SIGNAL_BRIDGE_ROOM_ID not configured',
@@ -208,15 +210,23 @@ class MatrixService {
       // Extract Signal UUID from Matrix user ID (format: @signal_UUID:domain.com)
       const signalUuid = signalUserId.split('_')[1]?.split(':')[0];
       if (!signalUuid) {
+        console.error(`❌ BRIDGE: Failed to extract Signal UUID from ${signalUserId}`);
         return {
           success: false,
           error: `Failed to extract Signal UUID from ${signalUserId}`,
         };
       }
 
+      // Get the correct bot username from environment
+      const botUsername = process.env.MATRIX_BOT_USERNAME || '@irregular_chat_bot:irregularchat.com';
+      const signalBotUsername = process.env.MATRIX_SIGNAL_BOT_USERNAME || '@signalbot:irregularchat.com';
+      
+      console.log(`🤖 BRIDGE: Bot username: ${botUsername}`);
+      console.log(`📱 BRIDGE: Signal bot username: ${signalBotUsername}`);
+
       // First, send start-chat command to Signal bridge
       const startChatCommand = `start-chat ${signalUuid}`;
-      console.log(`Sending Signal bridge command: ${startChatCommand}`);
+      console.log(`📤 BRIDGE: Sending Signal bridge command: ${startChatCommand} to room ${signalBridgeRoomId}`);
 
       const commandResponse = await this.client.sendEvent(signalBridgeRoomId, 'm.room.message', {
         msgtype: MsgType.Text,
@@ -224,32 +234,81 @@ class MatrixService {
       });
 
       if (!commandResponse.event_id) {
+        console.error('❌ BRIDGE: Failed to send Signal bridge command');
         return {
           success: false,
           error: 'Failed to send Signal bridge command',
         };
       }
 
+      console.log(`✅ BRIDGE: Signal bridge command sent with event ID: ${commandResponse.event_id}`);
+
       // Wait for bot to respond and create chat room
-      const delay = parseFloat(process.env.SIGNAL_BRIDGE_BOT_RESPONSE_DELAY || '2.0') * 1000;
+      const delay = parseFloat(process.env.SIGNAL_BRIDGE_BOT_RESPONSE_DELAY || '3.0') * 1000;
+      console.log(`⏱️ BRIDGE: Waiting ${delay}ms for bot response...`);
       await new Promise(resolve => setTimeout(resolve, delay));
 
-      // Find the Signal chat room
-      const signalChatRoomId = await this.findSignalChatRoom(signalUserId);
+      // Find the Signal chat room - try multiple times with better logging
+      console.log(`🔍 BRIDGE: Searching for Signal chat room for user: ${signalUserId}`);
+      let signalChatRoomId = await this.findSignalChatRoom(signalUserId, botUsername);
+      
+      // If we didn't find it immediately, try waiting longer and search again
       if (!signalChatRoomId) {
-        return {
-          success: false,
-          error: 'Failed to find Signal chat room after bot command',
-        };
+        console.log('⏱️ BRIDGE: Signal chat room not found immediately, waiting additional 2 seconds...');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        signalChatRoomId = await this.findSignalChatRoom(signalUserId, botUsername);
+      }
+
+      // Try one more time with an even longer delay
+      if (!signalChatRoomId) {
+        console.log('⏱️ BRIDGE: Still not found, trying one more time with 3 second delay...');
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        signalChatRoomId = await this.findSignalChatRoom(signalUserId, botUsername);
+      }
+      
+      if (!signalChatRoomId) {
+        console.error(`❌ BRIDGE: Failed to find Signal chat room for ${signalUserId} after multiple attempts`);
+        console.log('🔄 BRIDGE: Attempting fallback: temporary room approach...');
+        
+        // Fallback: Try the temporary room approach from legacy implementation
+        try {
+          return await this.sendSignalMessageViaTempRoom(signalUserId, message);
+        } catch (fallbackError) {
+          console.error('❌ BRIDGE: Fallback approach also failed:', fallbackError);
+          return {
+            success: false,
+            error: `Primary approach failed: Signal chat room not found after bot command. The Signal bridge may not have created the room yet, or the user may not be available on Signal. Fallback also failed: ${fallbackError instanceof Error ? fallbackError.message : 'Unknown error'}`,
+          };
+        }
+      }
+
+      console.log(`✅ BRIDGE: Found Signal chat room: ${signalChatRoomId}`);
+
+      // Send a preparatory message first to help establish encryption (as suggested by user)
+      const preparatoryMessage = '🔐 Securing message...';
+      console.log('📤 BRIDGE: Sending preparatory message to establish encryption...');
+      
+      try {
+        const prepResponse = await this.client.sendEvent(signalChatRoomId, 'm.room.message', {
+          msgtype: MsgType.Text,
+          body: preparatoryMessage,
+        });
+        console.log(`✅ BRIDGE: Preparatory message sent: ${prepResponse.event_id}`);
+        
+        // Small delay to let encryption establish
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (prepError) {
+        console.warn('⚠️ BRIDGE: Failed to send preparatory message, continuing with main message:', prepError);
       }
 
       // Send the actual message to the Signal chat room
+      console.log(`📤 BRIDGE: Sending verification message to room ${signalChatRoomId}`);
       const messageResponse = await this.client.sendEvent(signalChatRoomId, 'm.room.message', {
         msgtype: MsgType.Text,
         body: message,
       });
 
-      console.log(`Signal message sent successfully: ${messageResponse.event_id}`);
+      console.log(`✅ BRIDGE: Signal message sent successfully: ${messageResponse.event_id}`);
       return {
         success: true,
         roomId: signalChatRoomId,
@@ -257,7 +316,319 @@ class MatrixService {
       };
 
     } catch (error) {
-      console.error('Error sending Signal bridge message:', error);
+      console.error('💥 BRIDGE: Error in Signal bridge message flow:', error);
+      
+      // Fallback: Try the temporary room approach from legacy implementation
+      console.log('🔄 BRIDGE: Attempting fallback: temporary room approach...');
+      try {
+        return await this.sendSignalMessageViaTempRoom(signalUserId, message);
+      } catch (fallbackError) {
+        console.error('❌ BRIDGE: Fallback approach also failed:', fallbackError);
+        return {
+          success: false,
+          error: `Primary approach failed: ${error instanceof Error ? error.message : 'Unknown error'}. Fallback also failed: ${fallbackError instanceof Error ? fallbackError.message : 'Unknown error'}`,
+        };
+      }
+    }
+  }
+
+  /**
+   * Fallback method: Send Signal message via temporary room creation
+   * Based on legacy send_signal_message_async implementation
+   */
+  private async sendSignalMessageViaTempRoom(
+    signalUserId: string,
+    message: string
+  ): Promise<DirectMessageResult> {
+    if (!this.client) {
+      return {
+        success: false,
+        error: 'Matrix client not available',
+      };
+    }
+
+    try {
+      console.log(`🔄 Using temporary room fallback approach for Signal user: ${signalUserId}`);
+      
+      // Create a temporary room with a specific name (like legacy implementation)
+      const uniqueId = Math.random().toString(36).substring(2, 10); // 8 characters like legacy
+      const tempRoomName = `Signal Message ${uniqueId}`;
+      
+      console.log(`🏗️ Creating temporary room '${tempRoomName}' for Signal message`);
+      
+      const createResponse = await this.client.createRoom({
+        visibility: 'private' as any,
+        name: tempRoomName,
+        topic: 'Temporary room for Signal message',
+        invite: [signalUserId], // Invite the Signal user directly
+      });
+
+      if (!createResponse.room_id) {
+        throw new Error('Failed to create temporary room');
+      }
+
+      const roomId = createResponse.room_id;
+      console.log(`✅ Created temporary room: ${roomId}`);
+      console.log(`📧 Invited Signal user: ${signalUserId}`);
+
+      // Wait for the Signal user to potentially join (legacy uses 2 seconds)
+      console.log('⏱️ Waiting for Signal bridge to process invitation...');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Send preparatory message for encryption establishment
+      console.log('🔐 Sending preparatory message in temp room...');
+      try {
+        const prepResponse = await this.client.sendEvent(roomId, 'm.room.message', {
+          msgtype: MsgType.Text,
+          body: '🔐 Securing message...',
+        });
+        console.log(`✅ Preparatory message sent: ${prepResponse.event_id}`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (prepError) {
+        console.warn('⚠️ Failed to send preparatory message in temp room:', prepError);
+      }
+
+      // Send the actual message
+      console.log(`📤 Sending verification message to Signal user via temp room ${roomId}`);
+      const sendResponse = await this.client.sendEvent(roomId, 'm.room.message', {
+        msgtype: MsgType.Text,
+        body: message,
+      });
+
+      if (sendResponse.event_id) {
+        console.log(`✅ Message sent to Signal user via temp room: ${sendResponse.event_id}`);
+        
+        // Mark the room as direct chat (like legacy implementation)
+        try {
+          await this.client.sendEvent(roomId, 'm.room.direct', {
+            [signalUserId]: [roomId]
+          });
+          console.log('✅ Room marked as direct chat');
+        } catch (directError) {
+          console.warn('⚠️ Could not mark room as direct chat:', directError);
+        }
+        
+        return {
+          success: true,
+          roomId,
+          eventId: sendResponse.event_id,
+        };
+      } else {
+        throw new Error('Failed to send message to temp room');
+      }
+
+    } catch (error) {
+      console.error('💥 Error in temp room fallback approach:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Temp room approach failed',
+      };
+    }
+  }
+
+  /**
+   * Resolve a phone number to Signal UUID using SignalBot
+   * Uses the resolve-identifier command to convert phone number to UUID
+   */
+  private async resolvePhoneToSignalUuid(phoneNumber: string): Promise<string | null> {
+    if (!this.isActive || !this.client) {
+      console.error('❌ Matrix service not configured for phone resolution');
+      return null;
+    }
+
+    try {
+      console.log(`🔍 RESOLVE: Starting phone resolution for ${phoneNumber}`);
+
+      // Get Signal bridge room ID from environment
+      const signalBridgeRoomId = process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID;
+      if (!signalBridgeRoomId) {
+        console.error('❌ RESOLVE: MATRIX_SIGNAL_BRIDGE_ROOM_ID not configured');
+        return null;
+      }
+
+      // Normalize phone number to ensure it starts with +
+      const normalizedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
+      console.log(`📞 RESOLVE: Normalized phone number: ${normalizedPhone}`);
+
+      // Send resolve-identifier command to Signal bridge
+      const resolveCommand = `resolve-identifier ${normalizedPhone}`;
+      console.log(`📤 RESOLVE: Sending command to bridge room ${signalBridgeRoomId}: ${resolveCommand}`);
+
+      const commandResponse = await this.client.sendEvent(signalBridgeRoomId, 'm.room.message', {
+        msgtype: MsgType.Text,
+        body: resolveCommand,
+      });
+
+      if (!commandResponse.event_id) {
+        console.error('❌ RESOLVE: Failed to send resolve-identifier command');
+        return null;
+      }
+
+      console.log(`✅ RESOLVE: Command sent successfully, event ID: ${commandResponse.event_id}`);
+
+      // Wait for bot response
+      const delay = parseFloat(process.env.SIGNAL_BRIDGE_BOT_RESPONSE_DELAY || '3.0') * 1000;
+      console.log(`⏱️ RESOLVE: Waiting ${delay}ms for Signal bot response...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+
+      // Get recent messages from Signal bridge room to find the bot's response
+      // Try multiple approaches to get the room data
+      let room = this.client.getRoom(signalBridgeRoomId);
+      
+      // If room not found, try to force sync the room
+      if (!room) {
+        console.log('⚠️ RESOLVE: Room not found in client, attempting to fetch messages directly...');
+        
+        try {
+          // Use the Matrix HTTP API to get recent messages directly
+          const messagesResponse = await this.client.createMessagesRequest(
+            signalBridgeRoomId,
+            '', // token
+            10, // limit
+            'b' as any // direction (backwards)
+          );
+          
+          if (messagesResponse && messagesResponse.chunk) {
+            console.log(`✅ RESOLVE: Retrieved ${messagesResponse.chunk.length} messages via HTTP API`);
+            
+            // Look for bot response in the retrieved messages
+            const botUsername = process.env.MATRIX_SIGNAL_BOT_USERNAME || '@signalbot:irregularchat.com';
+            
+            for (const event of messagesResponse.chunk) {
+              if (event.type === 'm.room.message' && event.sender === botUsername) {
+                console.log(`🤖 RESOLVE: Found bot message from ${event.sender}: "${event.content?.body}"`);
+                
+                if (event.content?.body?.includes('Found')) {
+                  // Extract UUID from message like "Found `770b19f5-389e-444e-8976-551a52136cf6` / Sac"
+                  const uuidMatch = event.content.body.match(/Found `([a-f0-9-]+)`/);
+                  if (uuidMatch) {
+                    const uuid = uuidMatch[1];
+                    console.log(`✅ RESOLVE: Successfully resolved ${normalizedPhone} to UUID: ${uuid}`);
+                    return uuid;
+                  }
+                }
+                
+                // Check for failure messages
+                if (event.content?.body?.includes('Failed to resolve') || 
+                    event.content?.body?.includes('phone number must start with')) {
+                  console.error(`❌ RESOLVE: SignalBot resolve failed: ${event.content.body}`);
+                  return null;
+                }
+              }
+            }
+            
+            console.warn(`⚠️ RESOLVE: No UUID found for phone ${normalizedPhone} in HTTP API response`);
+            return null;
+          }
+        } catch (httpError) {
+          console.error('❌ RESOLVE: HTTP API fallback failed:', httpError);
+          return null;
+        }
+      }
+
+      // Original room-based approach (fallback)
+      if (!room) {
+        console.error('❌ RESOLVE: Room still not available after fallback attempts');
+        return null;
+      }
+      
+      const timeline = room.getLiveTimeline();
+      const events = timeline.getEvents();
+      
+      // Look for bot response that contains "Found" and UUID (check last 10 events)
+      const botUsername = process.env.MATRIX_SIGNAL_BOT_USERNAME || '@signalbot:irregularchat.com';
+      const recentEvents = events.slice(-10);
+      
+      console.log(`🔍 RESOLVE: Checking last ${recentEvents.length} events for response from ${botUsername}...`);
+      
+      for (const event of recentEvents) {
+        if (event.getType() === 'm.room.message' && 
+            event.getSender() === botUsername) {
+          
+          const content = event.getContent();
+          console.log(`🤖 RESOLVE: Found bot message from ${event.getSender()}: "${content.body}"`);
+          
+          if (content?.body?.includes('Found')) {
+            // Extract UUID from message like "Found `770b19f5-389e-444e-8976-551a52136cf6` / Sac"
+            const uuidMatch = content.body.match(/Found `([a-f0-9-]+)`/);
+            if (uuidMatch) {
+              const uuid = uuidMatch[1];
+              console.log(`✅ RESOLVE: Successfully resolved ${normalizedPhone} to UUID: ${uuid}`);
+              return uuid;
+            }
+          }
+          
+          // Check for failure messages
+          if (content.body?.includes('Failed to resolve') || 
+              content.body?.includes('phone number must start with')) {
+            console.error(`❌ RESOLVE: SignalBot resolve failed: ${content.body}`);
+            return null;
+          }
+        }
+      }
+
+      console.warn(`⚠️ RESOLVE: No UUID found for phone ${normalizedPhone} in bot responses`);
+      console.log(`🔍 RESOLVE: Recent messages from all users:`, recentEvents.map(e => ({
+        sender: e.getSender(),
+        type: e.getType(),
+        body: e.getContent()?.body?.substring(0, 100)
+      })));
+      return null;
+
+    } catch (error) {
+      console.error('💥 RESOLVE: Error resolving phone to Signal UUID:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Send a message to a Signal user by phone number
+   * This function handles the full phone-to-UUID resolution and messaging flow
+   */
+  public async sendSignalMessageByPhone(
+    phoneNumber: string,
+    message: string
+  ): Promise<DirectMessageResult> {
+    if (!this.isActive || !this.client) {
+      return {
+        success: false,
+        error: 'Matrix service not configured',
+      };
+    }
+
+    try {
+      console.log(`📞 Sending Signal message to phone ${phoneNumber}`);
+
+      // Step 1: Resolve phone number to Signal UUID
+      console.log(`🔍 Step 1: Resolving phone number to Signal UUID...`);
+      const signalUuid = await this.resolvePhoneToSignalUuid(phoneNumber);
+      if (!signalUuid) {
+        console.error(`❌ Step 1 failed: Could not resolve phone ${phoneNumber} to Signal UUID`);
+        return {
+          success: false,
+          error: `Failed to resolve phone number ${phoneNumber} to Signal UUID. User may not have Signal or number may be invalid.`,
+        };
+      }
+      console.log(`✅ Step 1 complete: Resolved phone ${phoneNumber} to UUID: ${signalUuid}`);
+
+      // Step 2: Create Signal user ID from UUID
+      const signalUserId = `@signal_${signalUuid}:${process.env.MATRIX_DOMAIN || 'irregularchat.com'}`;
+      console.log(`🏗️ Step 2: Created Signal user ID: ${signalUserId}`);
+
+      // Step 3: Send message using existing SignalBot integration
+      console.log(`📤 Step 3: Sending message to Signal user ID: ${signalUserId}`);
+      const result = await this.sendSignalBridgeMessage(signalUserId, message);
+      
+      if (result.success) {
+        console.log(`✅ Successfully sent message to ${phoneNumber} via Signal (${signalUserId})`);
+      } else {
+        console.error(`❌ Failed to send message to ${phoneNumber} via Signal (${signalUserId}): ${result.error}`);
+      }
+
+      return result;
+
+    } catch (error) {
+      console.error('💥 Error sending Signal message by phone:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -267,20 +638,30 @@ class MatrixService {
 
   /**
    * Find the Signal chat room created by the bridge bot
+   * Based on legacy implementation patterns
    */
-  private async findSignalChatRoom(signalUserId: string): Promise<string | null> {
-    if (!this.client) return null;
+  private async findSignalChatRoom(signalUserId: string, botUsername: string): Promise<string | null> {
+    if (!this.client) {
+      console.error('❌ FIND: Matrix client not available');
+      return null;
+    }
 
     try {
+      console.log(`🔍 FIND: Searching for Signal chat room with user: ${signalUserId}`);
       const joinedRooms = await this.client.getJoinedRooms();
+      console.log(`📋 FIND: Found ${joinedRooms.joined_rooms.length} joined rooms to search`);
       
+      // Search through all rooms to find the Signal chat room
       for (const roomId of joinedRooms.joined_rooms) {
         try {
+          console.log(`🔍 FIND: Checking room: ${roomId}`);
           const roomState = await this.client.roomState(roomId);
           const members: string[] = [];
           let roomName = '';
           let topic = '';
+          let isDirectFlag = false;
 
+          // Parse room state events
           for (const event of roomState) {
             if (event.type === 'm.room.member' && 
                 event.state_key && 
@@ -290,29 +671,61 @@ class MatrixService {
               roomName = event.content?.name || '';
             } else if (event.type === 'm.room.topic') {
               topic = event.content?.topic || '';
+            } else if (event.type === 'm.room.dm_prompt' && event.state_key === signalUserId) {
+              isDirectFlag = true; // Custom event for prompt (from legacy)
             }
           }
 
-          // Check if this room contains both the bot and the Signal user
-          const botUsername = process.env.MATRIX_BOT_USERNAME || '';
-          if (members.includes(botUsername) && members.includes(signalUserId)) {
-            // Verify it's likely a Signal DM room (small member count or Signal-related name/topic)
-            if (members.length <= 3 || 
-                roomName.toLowerCase().includes('signal') || 
-                topic.toLowerCase().includes('signal')) {
-              console.log(`Found Signal chat room: ${roomId} (Name: ${roomName}, Members: ${members.length})`);
+          console.log(`📊 FIND: Room ${roomId}: "${roomName}", Topic: "${topic}", Members: ${members.length}`);
+          console.log(`👥 FIND: Members: ${members.join(', ')}`);
+
+          // Check if this room contains the Signal user
+          if (members.includes(signalUserId)) {
+            console.log(`✅ FIND: Room ${roomId} contains Signal user ${signalUserId}`);
+            
+            // Check if the bot is also in the room
+            const isBotInRoom = members.includes(botUsername);
+            console.log(`🤖 FIND: Bot (${botUsername}) in room: ${isBotInRoom}`);
+            
+            // Criteria for Signal bridge rooms (based on legacy implementation):
+            // 1. Contains the Signal user
+            // 2. Bot is a member
+            // 3. It's likely a DM (small member count OR Signal-related name/topic OR direct flag)
+            const hasSmallMemberCount = members.length <= 4;
+            const hasSignalInName = roomName.toLowerCase().includes('signal');
+            const hasSignalInTopic = topic.toLowerCase().includes('signal');
+            
+            console.log(`🔍 FIND: Criteria check for room ${roomId}:`);
+            console.log(`  - Bot in room: ${isBotInRoom}`);
+            console.log(`  - Small member count (≤4): ${hasSmallMemberCount} (${members.length})`);
+            console.log(`  - Signal in name: ${hasSignalInName} ("${roomName}")`);
+            console.log(`  - Signal in topic: ${hasSignalInTopic} ("${topic}")`);
+            console.log(`  - Direct flag: ${isDirectFlag}`);
+            
+            if (isBotInRoom && (
+              hasSmallMemberCount || // Small member count (bot, user, Signal user, maybe admin)
+              hasSignalInName || // Signal-related name
+              hasSignalInTopic || // Signal-related topic
+              isDirectFlag // Custom direct flag
+            )) {
+              console.log(`🎯 FIND: Selected Signal chat room: ${roomId} (Name: "${roomName}", Members: ${members.length})`);
               return roomId;
+            } else {
+              console.log(`❌ FIND: Room ${roomId} doesn't meet Signal bridge criteria`);
             }
+          } else {
+            console.log(`❌ FIND: Room ${roomId} does not contain Signal user ${signalUserId}`);
           }
         } catch (roomError) {
-          console.warn(`Error checking room ${roomId}:`, roomError);
+          console.warn(`⚠️ FIND: Error checking room ${roomId}:`, roomError);
           continue;
         }
       }
 
+      console.warn(`❌ FIND: No Signal chat room found for user: ${signalUserId}`);
       return null;
     } catch (error) {
-      console.error('Error finding Signal chat room:', error);
+      console.error('💥 FIND: Error finding Signal chat room:', error);
       return null;
     }
   }
@@ -873,6 +1286,124 @@ Welcome to the full community! 🚀`;
         error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
+  }
+
+  /**
+   * Send a message to moderators in the INDOC room
+   * Based on legacy Streamlit patterns for sending messages to multiple rooms
+   */
+  public async sendMessageToModerators(
+    message: string,
+    roomId?: string
+  ): Promise<DirectMessageResult> {
+    if (!this.isActive || !this.client) {
+      return {
+        success: false,
+        error: 'Matrix service not configured',
+      };
+    }
+
+    try {
+      // Use provided room ID or get from environment
+      const indocRoomId = roomId || process.env.MATRIX_INDOC_ROOM_ID || this.config?.defaultRoomId;
+      
+      if (!indocRoomId) {
+        return {
+          success: false,
+          error: 'INDOC room ID not configured. Set MATRIX_INDOC_ROOM_ID environment variable.',
+        };
+      }
+
+      console.log(`Sending message to moderators in room: ${indocRoomId}`);
+
+      // Send message to the INDOC room
+      const response = await this.client.sendEvent(indocRoomId, 'm.room.message', {
+        msgtype: MsgType.Text,
+        body: message,
+      });
+
+      if (response.event_id) {
+        console.log(`Message sent to moderators: ${response.event_id}`);
+        return {
+          success: true,
+          roomId: indocRoomId,
+          eventId: response.event_id,
+        };
+      } else {
+        return {
+          success: false,
+          error: 'Failed to send message to moderators room',
+        };
+      }
+
+    } catch (error) {
+      console.error('Error sending message to moderators:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }
+
+  /**
+   * Send a message to multiple rooms (moderator notification pattern)
+   * Based on legacy send_matrix_message_to_multiple_rooms pattern
+   */
+  public async sendMessageToMultipleRooms(
+    roomIds: string[],
+    message: string
+  ): Promise<BulkOperationResult> {
+    if (!this.isActive || !this.client) {
+      return {
+        success: false,
+        results: {},
+        errors: {},
+        totalSuccess: 0,
+        totalFailed: roomIds.length,
+      };
+    }
+
+    const results: Record<string, boolean> = {};
+    const errors: Record<string, string> = {};
+    let totalSuccess = 0;
+    let totalFailed = 0;
+
+    console.log(`Sending message to ${roomIds.length} rooms`);
+
+    for (const roomId of roomIds) {
+      try {
+        const response = await this.client.sendEvent(roomId, 'm.room.message', {
+          msgtype: MsgType.Text,
+          body: message,
+        });
+
+        if (response.event_id) {
+          results[roomId] = true;
+          totalSuccess++;
+          console.log(`Message sent to room ${roomId}: ${response.event_id}`);
+        } else {
+          results[roomId] = false;
+          errors[roomId] = 'Failed to send message';
+          totalFailed++;
+        }
+      } catch (error) {
+        results[roomId] = false;
+        errors[roomId] = error instanceof Error ? error.message : 'Unknown error';
+        totalFailed++;
+        console.error(`Error sending message to room ${roomId}:`, error);
+      }
+
+      // Add small delay between messages to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    return {
+      success: totalSuccess > 0,
+      results,
+      errors,
+      totalSuccess,
+      totalFailed,
+    };
   }
 
   /**

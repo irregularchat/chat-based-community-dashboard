@@ -16,7 +16,8 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "test:ci": "jest --ci --coverage --watchAll=false"
+    "test:ci": "jest --ci --coverage --watchAll=false",
+    "test:signal": "node test-signal-debug.mjs"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.10.0",

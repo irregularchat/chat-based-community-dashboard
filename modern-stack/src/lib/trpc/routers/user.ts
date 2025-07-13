@@ -5,6 +5,7 @@ import { emailService } from '@/lib/email';
 import { matrixService } from '@/lib/matrix';
 import { discourseService } from '@/lib/discourse';
 import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
+import { normalizePhoneNumber, formatPhoneForDisplay } from '@/lib/phone-utils';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { TRPCError } from '@trpc/server';
@@ -742,9 +743,6 @@ export const userRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        // Import phone utilities
-        const { normalizePhoneNumber } = await import('../../phone-utils');
-        
         // Normalize and validate the phone number
         const normalizedPhone = normalizePhoneNumber(input.phoneNumber);
         
@@ -781,56 +779,35 @@ export const userRouter = createTRPCRouter({
         let verificationSent = false;
         let method = 'none';
 
-        // Check if user has a Signal identity for SignalBot verification
-        const user = await ctx.prisma.user.findUnique({
-          where: { id: parseInt(ctx.session.user.id) },
-          select: { attributes: true, username: true },
-        });
-
-        const signalIdentity = user?.attributes && typeof user.attributes === 'object' 
-          ? (user.attributes as any).signal_identity || (user.attributes as any).signalIdentity
-          : null;
-
-        if (signalIdentity && matrixService.isConfigured()) {
+        // Send via SignalBot using direct phone number resolution
+        // This will resolve phone -> UUID -> @signal_{UUID}:domain -> send message
+        if (matrixService.isConfigured()) {
           try {
-            // Send via SignalBot (using Matrix-Signal bridge)
-            const signalUserId = signalIdentity.startsWith('@signal_') 
-              ? signalIdentity 
-              : `@signal_${signalIdentity.replace('+', '')}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
-            
             const verificationMessage = `🔐 Phone Verification Code\n\nYou requested to update your phone number to: ${normalizedPhone.normalized}\n\nVerification Code: ${verificationHash}\n\nEnter this 6-digit code in the dashboard to complete verification.\n\nThis code expires in 15 minutes.`;
             
-            const result = await matrixService.sendSignalMessage(signalUserId, verificationMessage);
+            console.log(`📞 Attempting Signal verification for phone: ${normalizedPhone.normalized}`);
+            
+            // Use the phone-to-UUID resolution method which creates @signal_{UUID}:domain
+            const result = await matrixService.sendSignalMessageByPhone(normalizedPhone.normalized, verificationMessage);
             if (result.success) {
               verificationSent = true;
               method = 'signal';
+              console.log(`✅ Phone verification sent via Signal bridge to ${normalizedPhone.normalized}`);
+            } else {
+              console.warn(`❌ Signal verification failed: ${result.error}`);
+              // Don't fall back to regular Matrix user - Signal verification should only go to Signal
             }
           } catch (signalError) {
-            console.warn('SignalBot verification failed, trying Matrix fallback:', signalError);
+            console.warn('❌ Signal verification failed with exception:', signalError);
           }
-        }
-
-        // Fallback to Matrix direct message if SignalBot failed
-        if (!verificationSent && matrixService.isConfigured()) {
-          try {
-            const matrixUserId = `@${ctx.session.user.username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
-            
-            const verificationMessage = `🔐 Phone Verification Code\n\nYou requested to update your phone number to: ${normalizedPhone.normalized}\n\nVerification Code: ${verificationHash}\n\nEnter this 6-digit code in the dashboard to complete verification.\n\nThis code expires in 15 minutes.`;
-            
-            const result = await matrixService.sendDirectMessage(matrixUserId, verificationMessage);
-            if (result.success) {
-              verificationSent = true;
-              method = 'matrix';
-            }
-          } catch (matrixError) {
-            console.warn('Matrix verification failed:', matrixError);
-          }
+        } else {
+          console.warn('⚠️ Matrix service not configured for Signal verification');
         }
 
         if (!verificationSent) {
           throw new TRPCError({
             code: 'INTERNAL_SERVER_ERROR',
-            message: 'Failed to send verification code. Please ensure your Signal or Matrix account is connected.',
+            message: 'Failed to send verification code via Signal. Please ensure your phone number is registered with Signal Messenger and try again.',
           });
         }
 
@@ -838,9 +815,7 @@ export const userRouter = createTRPCRouter({
           success: true, 
           normalizedPhone: normalizedPhone.normalized,
           method,
-          message: method === 'signal' 
-            ? 'Verification code sent to your Signal account!' 
-            : 'Verification code sent to your Matrix account!'
+          message: 'Verification code sent to your Signal account!'
         };
       } catch (error) {
         console.error('Error requesting phone verification:', error);
@@ -899,9 +874,6 @@ export const userRouter = createTRPCRouter({
           });
         }
 
-        // Import phone utilities for format validation
-        const { normalizePhoneNumber, formatPhoneForDisplay } = await import('../../phone-utils');
-        
         // Validate the phone number from the form matches the pending verification
         const normalizedInput = normalizePhoneNumber(input.phoneNumber);
         const storedPhone = pendingVerification.phoneNumber;
@@ -959,7 +931,261 @@ export const userRouter = createTRPCRouter({
       }
     }),
 
-  // Update email (simplified version)
+  // Request email verification with code sent via email
+  requestEmailVerification: protectedProcedure
+    .input(
+      z.object({
+        email: z.string().email('Invalid email address'),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        // Validate email format
+        if (!input.email.trim()) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Email address is required',
+          });
+        }
+
+        // Check if email is already in use by another user
+        const existingUser = await ctx.prisma.user.findFirst({
+          where: {
+            email: input.email,
+            id: { not: parseInt(ctx.session.user.id) },
+          },
+        });
+
+        if (existingUser) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This email address is already in use by another account',
+          });
+        }
+
+        // Generate verification code (6-digit code for easier typing)
+        const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+        // Store verification code in database with expiration (15 minutes)
+        const expirationTime = new Date(Date.now() + 15 * 60 * 1000);
+
+        await ctx.prisma.user.update({
+          where: { id: parseInt(ctx.session.user.id) },
+          data: {
+            attributes: {
+              ...((ctx.session.user as any).attributes || {}),
+              pendingEmailVerification: {
+                email: input.email,
+                code: verificationCode,
+                expiresAt: expirationTime.toISOString(),
+                requestedAt: new Date().toISOString(),
+              },
+            },
+          },
+        });
+
+        // Send verification email
+        if (!emailService.isConfigured()) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Email service is not configured. Please contact an administrator.',
+          });
+        }
+
+        const user = ctx.session.user;
+        const fullName = user.name || user.username || 'User';
+
+        const emailContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Email Verification Code</title>
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin-bottom: 20px; }
+    .code-box { background-color: #e3f2fd; border: 2px solid #2196F3; border-radius: 8px; padding: 20px; text-align: center; margin: 20px 0; }
+    .code { font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #1976D2; font-family: 'Courier New', monospace; }
+    .warning { background-color: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px; padding: 15px; margin: 20px 0; }
+    .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; font-size: 12px; color: #666; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h2>🔐 Email Verification Required</h2>
+    <p>Hello ${fullName},</p>
+    <p>You requested to update your email address to: <strong>${input.email}</strong></p>
+  </div>
+  
+  <p>To complete this email address change, please enter the verification code below in your dashboard:</p>
+  
+  <div class="code-box">
+    <div class="code">${verificationCode}</div>
+    <p style="margin: 10px 0 0 0; font-size: 14px; color: #666;">6-Digit Verification Code</p>
+  </div>
+  
+  <div class="warning">
+    <strong>⏰ Important:</strong> This verification code expires in 15 minutes. If you don't receive this email or the code expires, you can request a new one from your dashboard.
+  </div>
+  
+  <p>If you did not request this email address change, please ignore this email or contact an administrator if you're concerned about your account security.</p>
+  
+  <p>Best regards,<br>The IrregularChat Team</p>
+  
+  <div class="footer">
+    <p>This email verification was sent to ${input.email}. The verification code will only work for the account that requested it.</p>
+  </div>
+</body>
+</html>`;
+
+        const emailSent = await emailService.sendEmail(
+          input.email,
+          'Email Verification Code - IrregularChat',
+          emailContent
+        );
+
+        if (!emailSent) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Failed to send verification email. Please check your email address and try again.',
+          });
+        }
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'email_verification_requested',
+            username: ctx.session.user.username || 'unknown',
+            details: `Email verification requested for ${input.email}`,
+          },
+        });
+
+        return {
+          success: true,
+          email: input.email,
+          fromEmail: process.env.SMTP_FROM || 'noreply@irregularchat.com',
+          message: 'Verification code sent to your email address!',
+        };
+      } catch (error) {
+        console.error('Error requesting email verification:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to send verification email',
+        });
+      }
+    }),
+
+  // Verify email with verification code
+  verifyEmail: protectedProcedure
+    .input(
+      z.object({
+        email: z.string().email('Invalid email address'),
+        verificationCode: z.string().min(6, 'Verification code must be 6 digits').max(6, 'Verification code must be 6 digits'),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const user = await ctx.prisma.user.findUnique({
+          where: { id: parseInt(ctx.session.user.id) },
+        });
+
+        if (!user) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'User not found',
+          });
+        }
+
+        const pendingVerification = (user.attributes as any)?.pendingEmailVerification;
+
+        if (!pendingVerification) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'No pending email verification found. Please request a new verification code.',
+          });
+        }
+
+        // Check if verification code matches
+        if (pendingVerification.code !== input.verificationCode.trim()) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Invalid verification code. Please check your email and try again.',
+          });
+        }
+
+        // Check if verification code hasn't expired
+        if (new Date(pendingVerification.expiresAt) < new Date()) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Verification code has expired. Please request a new code.',
+          });
+        }
+
+        // Validate the email from the form matches the pending verification
+        if (pendingVerification.email !== input.email) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Email address mismatch. Please verify the email address is correct.',
+          });
+        }
+
+        // Check again that email is not in use by another user (race condition protection)
+        const existingUser = await ctx.prisma.user.findFirst({
+          where: {
+            email: input.email,
+            id: { not: parseInt(ctx.session.user.id) },
+          },
+        });
+
+        if (existingUser) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This email address is now in use by another account. Please use a different email.',
+          });
+        }
+
+        // Update user's email and clear pending verification
+        const updatedAttributes = { ...(user.attributes as any) };
+        delete updatedAttributes.pendingEmailVerification;
+
+        await ctx.prisma.user.update({
+          where: { id: parseInt(ctx.session.user.id) },
+          data: {
+            email: input.email,
+            attributes: updatedAttributes,
+          },
+        });
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'email_updated',
+            username: ctx.session.user.username || 'unknown',
+            details: `Email verified and updated to ${input.email}`,
+          },
+        });
+
+        return {
+          success: true,
+          email: input.email,
+          message: 'Email address verified and updated successfully!',
+        };
+      } catch (error) {
+        console.error('Error verifying email:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to verify email address',
+        });
+      }
+    }),
+
+  // Update email (legacy simplified version - deprecated in favor of verification flow)
   updateEmail: protectedProcedure
     .input(
       z.object({
@@ -968,6 +1194,9 @@ export const userRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        // Note: This endpoint is deprecated - use requestEmailVerification + verifyEmail instead
+        // Keeping for backwards compatibility only
+        
         // Update email in database
         await ctx.prisma.user.update({
           where: { id: parseInt(ctx.session.user.id) },
@@ -979,7 +1208,7 @@ export const userRouter = createTRPCRouter({
           data: {
             eventType: 'email_updated',
             username: ctx.session.user.username || 'unknown',
-            details: `Email updated to ${input.email}`,
+            details: `Email updated to ${input.email} (legacy endpoint)`,
           },
         });
 

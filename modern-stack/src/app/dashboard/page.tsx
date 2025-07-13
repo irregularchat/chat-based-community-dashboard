@@ -22,7 +22,10 @@ import {
   Hash,
   Copy,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  Shield,
+  BarChart3,
+  UserPlus
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc/client';
 import { toast } from 'sonner';
@@ -45,7 +48,16 @@ interface CommunityLink {
 
 export default function UserDashboard() {
   const { data: session } = useSession();
-  const [selectedTab, setSelectedTab] = useState('rooms');
+  
+  // Set default tab based on user role
+  const getDefaultTab = () => {
+    if (!session?.user) return 'links';
+    if (session.user.isAdmin) return 'admin';
+    if (session.user.isModerator) return 'moderation';
+    return 'links'; // Regular users land on quick links
+  };
+  
+  const [selectedTab, setSelectedTab] = useState(getDefaultTab());
   const [messageToAdmin, setMessageToAdmin] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -55,14 +67,6 @@ export default function UserDashboard() {
   const [pendingVerification, setPendingVerification] = useState<'phone' | 'email' | null>(null);
   const [copiedItems, setCopiedItems] = useState<Set<string>>(new Set());
   
-  // Invitation form state
-  const [inviteForm, setInviteForm] = useState({
-    inviteeEmail: '',
-    inviteeName: '',
-    message: '',
-    expiryDays: 7,
-  });
-
   // Get available Matrix rooms
   const { data: matrixRooms, isLoading: roomsLoading } = trpc.matrix.getRooms.useQuery({});
   
@@ -71,6 +75,27 @@ export default function UserDashboard() {
 
   // Get dashboard settings
   const { data: dashboardSettings } = trpc.settings.getDashboardSettings.useQuery({});
+  
+  // Invitation form state
+  const [inviteForm, setInviteForm] = useState({
+    inviteeEmail: '',
+    inviteeName: '',
+    message: '',
+    expiryDays: 1, // Default fallback
+  });
+
+  // Update invite form when dashboard settings load
+  useEffect(() => {
+    const defaultInviteExpiry = (dashboardSettings as any)?.default_invite_expiry_days || 1;
+    setInviteForm(prev => ({ ...prev, expiryDays: defaultInviteExpiry }));
+  }, [dashboardSettings]);
+
+  // Update selected tab when session changes (for role-based navigation)
+  useEffect(() => {
+    if (session?.user) {
+      setSelectedTab(getDefaultTab());
+    }
+  }, [session?.user?.isAdmin, session?.user?.isModerator]);
   
   // Get community bookmarks
   const { data: communityBookmarks } = trpc.settings.getCommunityBookmarks.useQuery({
@@ -90,8 +115,8 @@ export default function UserDashboard() {
 
   // Mutations
   const sendAdminMessageMutation = trpc.user.sendAdminMessage.useMutation({
-    onSuccess: () => {
-      toast.success('Message sent to admin successfully!');
+    onSuccess: (result) => {
+      toast.success(result.message || 'Message sent to admin successfully!');
       setMessageToAdmin('');
     },
     onError: (error) => {
@@ -151,7 +176,7 @@ export default function UserDashboard() {
         inviteeEmail: '',
         inviteeName: '',
         message: '',
-        expiryDays: 7,
+        expiryDays: (dashboardSettings as any)?.default_invite_expiry_days || 1,
       });
       // Refetch invitations to update the list
       if (myInvitations) {
@@ -324,14 +349,30 @@ export default function UserDashboard() {
             Welcome back, {session.user.name || session.user.username}!
           </p>
         </div>
-        <Badge variant="outline" className="px-3 py-1">
-          <User className="w-4 h-4 mr-2" />
-          Member
-        </Badge>
+        <div className="flex gap-2">
+          {session.user.isAdmin && (
+            <Badge variant="default" className="px-3 py-1 bg-red-600 hover:bg-red-700">
+              <User className="w-4 h-4 mr-2" />
+              Administrator
+            </Badge>
+          )}
+          {session.user.isModerator && !session.user.isAdmin && (
+            <Badge variant="default" className="px-3 py-1 bg-blue-600 hover:bg-blue-700">
+              <User className="w-4 h-4 mr-2" />
+              Moderator
+            </Badge>
+          )}
+          {!session.user.isAdmin && !session.user.isModerator && (
+            <Badge variant="outline" className="px-3 py-1">
+              <User className="w-4 h-4 mr-2" />
+              Member
+            </Badge>
+          )}
+        </div>
       </div>
 
       <Tabs value={selectedTab} onValueChange={setSelectedTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className={`grid w-full ${session.user.isAdmin || session.user.isModerator ? 'grid-cols-7' : 'grid-cols-5'}`}>
           <TabsTrigger value="rooms" className="flex items-center gap-2">
             <Users className="w-4 h-4" />
             Rooms
@@ -352,6 +393,18 @@ export default function UserDashboard() {
             <ExternalLink className="w-4 h-4" />
             Quick Links
           </TabsTrigger>
+          {(session.user.isModerator || session.user.isAdmin) && (
+            <TabsTrigger value="moderation" className="flex items-center gap-2">
+              <Shield className="w-4 h-4" />
+              Moderation
+            </TabsTrigger>
+          )}
+          {session.user.isAdmin && (
+            <TabsTrigger value="admin" className="flex items-center gap-2">
+              <BarChart3 className="w-4 h-4" />
+              Admin
+            </TabsTrigger>
+          )}
         </TabsList>
 
         {/* Matrix Rooms Tab */}
@@ -668,6 +721,147 @@ export default function UserDashboard() {
           </div>
         </TabsContent>
 
+        {/* Invite Friends Tab */}
+        <TabsContent value="invite">
+          <div className="grid gap-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <UserPlus className="w-5 h-5" />
+                  Invite a Friend
+                </CardTitle>
+                <CardDescription>
+                  Send a personalized invitation to join the community
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="invitee-name">Friend's Name</Label>
+                  <Input
+                    id="invitee-name"
+                    type="text"
+                    value={inviteForm.inviteeName}
+                    onChange={(e) => setInviteForm(prev => ({ ...prev, inviteeName: e.target.value }))}
+                    placeholder="e.g., John Doe"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="invitee-email">Friend's Email</Label>
+                  <Input
+                    id="invitee-email"
+                    type="email"
+                    value={inviteForm.inviteeEmail}
+                    onChange={(e) => setInviteForm(prev => ({ ...prev, inviteeEmail: e.target.value }))}
+                    placeholder="friend@example.com"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="invite-message">Personal Message (Optional)</Label>
+                  <Textarea
+                    id="invite-message"
+                    value={inviteForm.message}
+                    onChange={(e) => setInviteForm(prev => ({ ...prev, message: e.target.value }))}
+                    placeholder="Add a personal note to your invitation..."
+                    rows={3}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="expiry-days">Invitation Expires In</Label>
+                  <Input
+                    id="expiry-days"
+                    type="number"
+                    min="1"
+                    max="30"
+                    value={inviteForm.expiryDays}
+                    onChange={(e) => setInviteForm(prev => ({ ...prev, expiryDays: parseInt(e.target.value) || 7 }))}
+                  />
+                  <p className="text-sm text-muted-foreground">
+                    Days until the invitation expires (1-30 days)
+                  </p>
+                </div>
+                <Button 
+                  onClick={handleSendInvitation}
+                  disabled={createInvitationMutation.isPending || !inviteForm.inviteeEmail || !inviteForm.inviteeName}
+                  className="w-full"
+                >
+                  {createInvitationMutation.isPending ? 'Sending Invitation...' : 'Send Invitation'}
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="w-5 h-5" />
+                  Need Multiple Invites?
+                </CardTitle>
+                <CardDescription>
+                  For bulk invitations or special invite links
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  If you need to invite multiple people or create special invite links for events, 
+                  please contact our moderation team who can help you with bulk invitations.
+                </p>
+                <Button 
+                  variant="outline" 
+                  className="w-full"
+                  onClick={() => setSelectedTab('contact')}
+                >
+                  <MessageSquare className="w-4 h-4 mr-2" />
+                  Request Bulk Invites from Moderators
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Recent Invitations */}
+            {myInvitations && myInvitations.invitations && myInvitations.invitations.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Mail className="w-5 h-5" />
+                    Your Recent Invitations
+                  </CardTitle>
+                  <CardDescription>
+                    Invitations you've sent recently
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {myInvitations.invitations.slice(0, 3).map((invitation: any) => (
+                      <div key={invitation.id} className="flex items-center justify-between p-3 border rounded-lg">
+                        <div className="flex-1">
+                          <p className="font-medium">{invitation.inviteeName || invitation.email}</p>
+                          <p className="text-sm text-muted-foreground">{invitation.email}</p>
+                          <p className="text-xs text-muted-foreground">
+                            Sent {new Date(invitation.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge 
+                            variant={invitation.status === 'accepted' ? 'default' : 
+                                   invitation.status === 'expired' ? 'destructive' : 'secondary'}
+                          >
+                            {invitation.status}
+                          </Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {myInvitations.total > 3 && (
+                    <div className="mt-4 text-center">
+                      <Button variant="outline" size="sm" asChild>
+                        <a href="/users/invitations">View All Invitations</a>
+                      </Button>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </TabsContent>
+
         {/* Contact Admin Tab */}
         <TabsContent value="contact">
           <Card>
@@ -742,24 +936,231 @@ export default function UserDashboard() {
             </CardHeader>
             <CardContent>
               <div className="grid gap-4 md:grid-cols-2">
-                {communityLinks.map((link) => (
-                  <div key={link.name} className="flex items-start gap-3 p-4 border rounded-lg hover:bg-muted/50 transition-colors">
-                    <div className="text-2xl">{link.icon}</div>
-                    <div className="flex-1">
-                      <h4 className="font-medium">{link.name}</h4>
-                      <p className="text-sm text-muted-foreground mt-1">{link.description}</p>
-                      <Button variant="outline" size="sm" className="mt-3" asChild>
-                        <a href={link.url} target="_blank" rel="noopener noreferrer">
-                          Visit <ExternalLink className="w-3 h-3 ml-1" />
-                        </a>
-                      </Button>
+                {/* Database-managed community bookmarks */}
+                {communityBookmarks && communityBookmarks.length > 0 ? (
+                  communityBookmarks.map((bookmark: any) => (
+                    <div key={bookmark.id} className="flex items-start gap-3 p-4 border rounded-lg hover:bg-muted/50 transition-colors">
+                      <div className="text-2xl">{bookmark.icon || '🔗'}</div>
+                      <div className="flex-1">
+                        <h4 className="font-medium">{bookmark.title}</h4>
+                        <p className="text-sm text-muted-foreground mt-1">{bookmark.description}</p>
+                        <Button variant="outline" size="sm" className="mt-3" asChild>
+                          <a href={bookmark.url} target="_blank" rel="noopener noreferrer">
+                            Visit <ExternalLink className="w-3 h-3 ml-1" />
+                          </a>
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  /* Fallback to hardcoded links if no bookmarks are configured */
+                  communityLinks.map((link) => (
+                    <div key={link.name} className="flex items-start gap-3 p-4 border rounded-lg hover:bg-muted/50 transition-colors">
+                      <div className="text-2xl">{link.icon}</div>
+                      <div className="flex-1">
+                        <h4 className="font-medium">{link.name}</h4>
+                        <p className="text-sm text-muted-foreground mt-1">{link.description}</p>
+                        <Button variant="outline" size="sm" className="mt-3" asChild>
+                          <a href={link.url} target="_blank" rel="noopener noreferrer">
+                            Visit <ExternalLink className="w-3 h-3 ml-1" />
+                          </a>
+                        </Button>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </CardContent>
           </Card>
         </TabsContent>
+
+        {/* Moderation Tab */}
+        {(session.user.isModerator || session.user.isAdmin) && (
+          <TabsContent value="moderation">
+            <div className="grid gap-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Shield className="w-5 h-5" />
+                    Moderation Tools
+                  </CardTitle>
+                  <CardDescription>
+                    Quick access to moderation and user management features
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    <Button
+                      variant="outline"
+                      className="h-auto p-4 flex flex-col items-center gap-2"
+                      onClick={() => window.location.href = '/users'}
+                    >
+                      <div className="text-2xl">👥</div>
+                      <div className="text-center">
+                        <div className="font-medium">User Management</div>
+                        <div className="text-sm text-muted-foreground">
+                          Manage community members
+                        </div>
+                      </div>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-auto p-4 flex flex-col items-center gap-2"
+                      onClick={() => window.location.href = '/users/invitations'}
+                    >
+                      <div className="text-2xl">📧</div>
+                      <div className="text-center">
+                        <div className="font-medium">Invitations</div>
+                        <div className="text-sm text-muted-foreground">
+                          Manage user invitations
+                        </div>
+                      </div>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-auto p-4 flex flex-col items-center gap-2"
+                      onClick={() => window.location.href = '/matrix'}
+                    >
+                      <div className="text-2xl">🔗</div>
+                      <div className="text-center">
+                        <div className="font-medium">Matrix Integration</div>
+                        <div className="text-sm text-muted-foreground">
+                          Room & messaging management
+                        </div>
+                      </div>
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+        )}
+
+        {/* Admin Tab */}
+        {session.user.isAdmin && (
+          <TabsContent value="admin">
+            <div className="grid gap-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <BarChart3 className="w-5 h-5" />
+                    Admin Dashboard
+                  </CardTitle>
+                  <CardDescription>
+                    System administration and analytics
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    <Button
+                      variant="outline"
+                      className="h-auto p-4 flex flex-col items-center gap-2"
+                      onClick={() => window.location.href = '/admin'}
+                    >
+                      <div className="text-2xl">📊</div>
+                      <div className="text-center">
+                        <div className="font-medium">Analytics Dashboard</div>
+                        <div className="text-sm text-muted-foreground">
+                          System metrics & reports
+                        </div>
+                      </div>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-auto p-4 flex flex-col items-center gap-2"
+                      onClick={() => window.location.href = '/users'}
+                    >
+                      <div className="text-2xl">👥</div>
+                      <div className="text-center">
+                        <div className="font-medium">User Management</div>
+                        <div className="text-sm text-muted-foreground">
+                          Manage all users & permissions
+                        </div>
+                      </div>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-auto p-4 flex flex-col items-center gap-2"
+                      onClick={() => window.location.href = '/users/create'}
+                    >
+                      <div className="text-2xl">👤</div>
+                      <div className="text-center">
+                        <div className="font-medium">Add User</div>
+                        <div className="text-sm text-muted-foreground">
+                          Create new community members
+                        </div>
+                      </div>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-auto p-4 flex flex-col items-center gap-2"
+                      onClick={() => window.location.href = '/users/invitations'}
+                    >
+                      <div className="text-2xl">📧</div>
+                      <div className="text-center">
+                        <div className="font-medium">Invitation Manager</div>
+                        <div className="text-sm text-muted-foreground">
+                          Track & manage invitations
+                        </div>
+                      </div>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-auto p-4 flex flex-col items-center gap-2"
+                      onClick={() => window.location.href = '/matrix'}
+                    >
+                      <div className="text-2xl">🔗</div>
+                      <div className="text-center">
+                        <div className="font-medium">Matrix Integration</div>
+                        <div className="text-sm text-muted-foreground">
+                          Room & messaging management
+                        </div>
+                      </div>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-auto p-4 flex flex-col items-center gap-2"
+                      onClick={() => window.location.href = '/admin/settings'}
+                    >
+                      <div className="text-2xl">⚙️</div>
+                      <div className="text-center">
+                        <div className="font-medium">System Settings</div>
+                        <div className="text-sm text-muted-foreground">
+                          Configure dashboard settings
+                        </div>
+                      </div>
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardHeader>
+                  <CardTitle>Quick Admin Actions</CardTitle>
+                  <CardDescription>
+                    Frequently used administrative tasks
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid gap-3">
+                    <Button variant="outline" className="justify-start" asChild>
+                      <a href="/community" className="flex items-center gap-2">
+                        🏘️ Community Timeline
+                        <span className="text-sm text-muted-foreground ml-auto">View recent events</span>
+                      </a>
+                    </Button>
+                    <Button variant="outline" className="justify-start" asChild>
+                      <a href="/invites" className="flex items-center gap-2">
+                        🎫 Invite Management
+                        <span className="text-sm text-muted-foreground ml-auto">Create & manage invites</span>
+                      </a>
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

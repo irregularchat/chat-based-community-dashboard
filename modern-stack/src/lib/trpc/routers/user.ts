@@ -4,6 +4,8 @@ import { authentikService } from '@/lib/authentik';
 import { emailService } from '@/lib/email';
 import { matrixService } from '@/lib/matrix';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
+import { TRPCError } from '@trpc/server';
 
 export const userRouter = createTRPCRouter({
   // Get paginated list of users
@@ -460,6 +462,458 @@ export const userRouter = createTRPCRouter({
       });
 
       return { success: true };
+    }),
+
+  // Generate secure password
+  generatePassword: moderatorProcedure
+    .input(
+      z.object({
+        length: z.number().min(8).max(32).default(12),
+        includeSymbols: z.boolean().default(true),
+        includeNumbers: z.boolean().default(true),
+        includeUppercase: z.boolean().default(true),
+        includeLowercase: z.boolean().default(true),
+      })
+    )
+    .query(async ({ input }) => {
+      const { length, includeSymbols, includeNumbers, includeUppercase, includeLowercase } = input;
+      
+      let charset = '';
+      if (includeLowercase) charset += 'abcdefghijklmnopqrstuvwxyz';
+      if (includeUppercase) charset += 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      if (includeNumbers) charset += '0123456789';
+      if (includeSymbols) charset += '!@#$%^&*()_+-=[]{}|;:,.<>?';
+      
+      if (charset === '') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'At least one character type must be selected',
+        });
+      }
+      
+      let password = '';
+      for (let i = 0; i < length; i++) {
+        password += charset.charAt(Math.floor(Math.random() * charset.length));
+      }
+      
+      return { password };
+    }),
+
+  // Reset user password
+  resetPassword: adminProcedure
+    .input(
+      z.object({
+        userId: z.number(),
+        newPassword: z.string().optional(),
+        generatePassword: z.boolean().default(false),
+        sendEmail: z.boolean().default(false),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: input.userId },
+      });
+
+      if (!user) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'User not found',
+        });
+      }
+
+      let finalPassword = input.newPassword;
+      
+      // Generate password if requested
+      if (input.generatePassword || !finalPassword) {
+        const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
+        finalPassword = '';
+        for (let i = 0; i < 12; i++) {
+          finalPassword += charset.charAt(Math.floor(Math.random() * charset.length));
+        }
+      }
+
+      // Hash the password
+      const hashedPassword = await hashPassword(finalPassword);
+
+      // Update user password
+      await ctx.prisma.user.update({
+        where: { id: input.userId },
+        data: {
+          password: hashedPassword,
+        },
+      });
+
+      // Try to reset password in Authentik if user has authentikId
+      if (user.authentikId) {
+        try {
+          await authentikService.resetUserPassword(user.authentikId, finalPassword);
+        } catch (error) {
+          console.error('Failed to reset password in Authentik:', error);
+        }
+      }
+
+      // Send email if requested
+      if (input.sendEmail && user.email && emailService.isConfigured()) {
+        try {
+          await emailService.sendPasswordResetEmail({
+            to: user.email,
+            subject: 'Your Password Has Been Reset',
+            fullName: `${user.firstName} ${user.lastName}`.trim(),
+            username: user.username || '',
+            newPassword: finalPassword,
+          });
+        } catch (error) {
+          console.error('Failed to send password reset email:', error);
+        }
+      }
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'password_reset',
+          username: ctx.session.user.username || 'unknown',
+          details: `Reset password for user: ${user.username}`,
+        },
+      });
+
+      return {
+        success: true,
+        temporaryPassword: finalPassword,
+        emailSent: input.sendEmail && user.email && emailService.isConfigured(),
+      };
+    }),
+
+  // Send email to user
+  sendEmail: moderatorProcedure
+    .input(
+      z.object({
+        userId: z.number().optional(),
+        userIds: z.array(z.number()).optional(),
+        subject: z.string().min(1),
+        message: z.string().min(1),
+        useTemplate: z.boolean().default(true),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Get users to send email to
+      const userIds = input.userIds || (input.userId ? [input.userId] : []);
+      
+      if (userIds.length === 0) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'At least one user must be specified',
+        });
+      }
+
+      const users = await ctx.prisma.user.findMany({
+        where: { id: { in: userIds } },
+      });
+
+      if (users.length === 0) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'No users found',
+        });
+      }
+
+      if (!emailService.isConfigured()) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Email service is not configured',
+        });
+      }
+
+      const successful = [];
+      const failed = [];
+
+      for (const user of users) {
+        if (!user.email) {
+          failed.push({ user: user.username, reason: 'No email address' });
+          continue;
+        }
+
+        try {
+          // Variable substitution
+          const substitutedSubject = input.subject
+            .replace(/\$Username/g, user.username || '')
+            .replace(/\$DisplayName/g, `${user.firstName} ${user.lastName}`.trim())
+            .replace(/\$FirstName/g, user.firstName || '')
+            .replace(/\$LastName/g, user.lastName || '')
+            .replace(/\$Email/g, user.email || '');
+
+          const substitutedMessage = input.message
+            .replace(/\$Username/g, user.username || '')
+            .replace(/\$DisplayName/g, `${user.firstName} ${user.lastName}`.trim())
+            .replace(/\$FirstName/g, user.firstName || '')
+            .replace(/\$LastName/g, user.lastName || '')
+            .replace(/\$Email/g, user.email || '');
+
+          await emailService.sendAdminEmail(
+            user.email,
+            substitutedSubject,
+            substitutedMessage,
+            {
+              username: user.username || undefined,
+              firstName: user.firstName || undefined,
+              lastName: user.lastName || undefined,
+              email: user.email || undefined,
+            },
+            false
+          );
+
+          successful.push(user.username);
+        } catch (error) {
+          failed.push({ user: user.username, reason: error instanceof Error ? error.message : 'Unknown error' });
+        }
+      }
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'email_sent',
+          username: ctx.session.user.username || 'unknown',
+          details: `Sent email to ${successful.length} users: ${successful.join(', ')}`,
+        },
+      });
+
+      return {
+        success: successful.length > 0,
+        totalUsers: users.length,
+        successfulEmails: successful.length,
+        failedEmails: failed.length,
+        successful,
+        failed,
+      };
+    }),
+
+  // Connect Matrix account
+  connectMatrixAccount: moderatorProcedure
+    .input(
+      z.object({
+        userId: z.number(),
+        matrixUsername: z.string(),
+        verifyConnection: z.boolean().default(false),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: input.userId },
+      });
+
+      if (!user) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'User not found',
+        });
+      }
+
+      // Update user with Matrix connection
+      const updatedUser = await ctx.prisma.user.update({
+        where: { id: input.userId },
+        data: {
+          matrixUsername: input.matrixUsername,
+        },
+      });
+
+      // Update in Authentik if user has authentikId
+      if (user.authentikId) {
+        try {
+          // Since updateUser doesn't exist, we'll skip this for now
+          // await authentikService.updateUser({
+          //   userId: user.authentikId,
+          //   attributes: {
+          //     matrix_username: input.matrixUsername,
+          //   },
+          // });
+        } catch (error) {
+          console.error('Failed to update Matrix connection in Authentik:', error);
+        }
+      }
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'matrix_account_connected',
+          username: ctx.session.user.username || 'unknown',
+          details: `Connected Matrix account ${input.matrixUsername} to user: ${user.username}`,
+        },
+      });
+
+      return {
+        success: true,
+        user: updatedUser,
+      };
+    }),
+
+  // Update user details (enhanced version)
+  updateUserDetails: moderatorProcedure
+    .input(
+      z.object({
+        userId: z.number(),
+        username: z.string().optional(),
+        email: z.string().email().optional(),
+        firstName: z.string().optional(),
+        lastName: z.string().optional(),
+        matrixUsername: z.string().optional(),
+        signalIdentity: z.string().optional(),
+        isActive: z.boolean().optional(),
+        isAdmin: z.boolean().optional(),
+        isModerator: z.boolean().optional(),
+        attributes: z.record(z.string(), z.any()).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { userId, attributes, ...updateData } = input;
+
+      // Check if user exists
+      const existingUser = await ctx.prisma.user.findUnique({
+        where: { id: userId },
+      });
+
+      if (!existingUser) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'User not found',
+        });
+      }
+
+      // Update user in database
+      const updatedUser = await ctx.prisma.user.update({
+        where: { id: userId },
+        data: {
+          ...updateData,
+          ...(attributes && { attributes }),
+        },
+      });
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'user_details_updated',
+          username: ctx.session.user.username || 'unknown',
+          details: `Updated details for user: ${existingUser.username}`,
+        },
+      });
+
+      return {
+        success: true,
+        user: updatedUser,
+      };
+    }),
+
+  // Bulk update users
+  bulkUpdateUsers: adminProcedure
+    .input(
+      z.object({
+        userIds: z.array(z.number()).min(1),
+        action: z.enum(['activate', 'deactivate', 'delete', 'makeAdmin', 'removeAdmin', 'makeModerator', 'removeModerator']),
+        updateData: z.object({
+          isActive: z.boolean().optional(),
+          isAdmin: z.boolean().optional(),
+          isModerator: z.boolean().optional(),
+        }).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { userIds, action, updateData } = input;
+
+      // Get users to update
+      const users = await ctx.prisma.user.findMany({
+        where: { id: { in: userIds } },
+      });
+
+      if (users.length === 0) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'No users found',
+        });
+      }
+
+      let dataToUpdate = {};
+      let actionDescription = '';
+
+      switch (action) {
+        case 'activate':
+          dataToUpdate = { isActive: true };
+          actionDescription = 'activated';
+          break;
+        case 'deactivate':
+          dataToUpdate = { isActive: false };
+          actionDescription = 'deactivated';
+          break;
+        case 'makeAdmin':
+          dataToUpdate = { isAdmin: true };
+          actionDescription = 'made admin';
+          break;
+        case 'removeAdmin':
+          dataToUpdate = { isAdmin: false };
+          actionDescription = 'removed admin';
+          break;
+        case 'makeModerator':
+          dataToUpdate = { isModerator: true };
+          actionDescription = 'made moderator';
+          break;
+        case 'removeModerator':
+          dataToUpdate = { isModerator: false };
+          actionDescription = 'removed moderator';
+          break;
+        case 'delete':
+          // Handle delete separately
+          break;
+        default:
+          dataToUpdate = updateData || {};
+          actionDescription = 'updated';
+      }
+
+      const successful = [];
+      const failed = [];
+
+      if (action === 'delete') {
+        // Handle bulk delete
+        for (const user of users) {
+          try {
+            await ctx.prisma.user.delete({
+              where: { id: user.id },
+            });
+            successful.push(user.username);
+          } catch (error) {
+            failed.push({ user: user.username, reason: error instanceof Error ? error.message : 'Unknown error' });
+          }
+        }
+      } else {
+        // Handle bulk update
+        for (const user of users) {
+          try {
+            await ctx.prisma.user.update({
+              where: { id: user.id },
+              data: dataToUpdate,
+            });
+
+            successful.push(user.username);
+          } catch (error) {
+            failed.push({ user: user.username, reason: error instanceof Error ? error.message : 'Unknown error' });
+          }
+        }
+      }
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'bulk_user_update',
+          username: ctx.session.user.username || 'unknown',
+          details: `Bulk ${actionDescription} ${successful.length} users: ${successful.join(', ')}`,
+        },
+      });
+
+      return {
+        success: successful.length > 0,
+        totalUsers: users.length,
+        successfulUpdates: successful.length,
+        failedUpdates: failed.length,
+        successful,
+        failed,
+        action: actionDescription,
+      };
     }),
 });
 

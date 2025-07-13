@@ -11,8 +11,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { MoreHorizontal, Search, UserPlus, Filter, RefreshCw } from 'lucide-react';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { MoreHorizontal, Search, UserPlus, Filter, RefreshCw, Mail, Key, MessageSquare, Edit, Trash2, Users, Send, Copy, AlertTriangle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 
 type UserWithRelations = {
   id: number;
@@ -44,6 +49,19 @@ export default function UsersPage() {
   const [search, setSearch] = useState('');
   const [isActive, setIsActive] = useState<boolean | undefined>(undefined);
   const [limit, setLimit] = useState(25);
+  const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
+  const [showBulkActions, setShowBulkActions] = useState(false);
+  const [showEmailDialog, setShowEmailDialog] = useState(false);
+  const [showPasswordDialog, setShowPasswordDialog] = useState(false);
+  const [showMatrixDialog, setShowMatrixDialog] = useState(false);
+  const [currentAction, setCurrentAction] = useState<string>('');
+  const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+  
+  // Dialog states
+  const [emailForm, setEmailForm] = useState({ subject: '', message: '' });
+  const [passwordForm, setPasswordForm] = useState({ generatePassword: true, sendEmail: true });
+  const [matrixForm, setMatrixForm] = useState({ matrixUsername: '' });
+  const [generatedPassword, setGeneratedPassword] = useState<string>('');
 
   const { data: usersData, isLoading, refetch } = trpc.user.getUsers.useQuery({
     page,
@@ -52,17 +70,174 @@ export default function UsersPage() {
     isActive,
   });
 
+  const { data: matrixUsers } = trpc.matrix.getUsers.useQuery({
+    includeSignalUsers: true,
+    includeRegularUsers: true,
+  });
+
   const deleteUserMutation = trpc.user.deleteUser.useMutation({
     onSuccess: () => {
+      toast.success('User deleted successfully');
       refetch();
+    },
+    onError: (error) => {
+      toast.error('Failed to delete user');
     },
   });
 
   const updateUserMutation = trpc.user.updateUser.useMutation({
     onSuccess: () => {
+      toast.success('User updated successfully');
       refetch();
     },
+    onError: (error) => {
+      toast.error('Failed to update user');
+    },
   });
+
+  const resetPasswordMutation = trpc.user.resetPassword.useMutation({
+    onSuccess: (data) => {
+      toast.success('Password reset successfully');
+      setGeneratedPassword(data.temporaryPassword);
+      setShowPasswordDialog(false);
+      refetch();
+    },
+    onError: (error) => {
+      toast.error('Failed to reset password');
+    },
+  });
+
+  const sendEmailMutation = trpc.user.sendEmail.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Email sent to ${data.successfulEmails} users`);
+      if (data.failedEmails > 0) {
+        toast.warning(`Failed to send to ${data.failedEmails} users`);
+      }
+      setShowEmailDialog(false);
+      setEmailForm({ subject: '', message: '' });
+    },
+    onError: (error) => {
+      toast.error('Failed to send email');
+    },
+  });
+
+  const connectMatrixMutation = trpc.user.connectMatrixAccount.useMutation({
+    onSuccess: () => {
+      toast.success('Matrix account connected successfully');
+      setShowMatrixDialog(false);
+      setMatrixForm({ matrixUsername: '' });
+      refetch();
+    },
+    onError: (error) => {
+      toast.error('Failed to connect Matrix account');
+    },
+  });
+
+  const bulkUpdateMutation = trpc.user.bulkUpdateUsers.useMutation({
+    onSuccess: (data) => {
+      toast.success(`${data.action} ${data.successfulUpdates} users successfully`);
+      if (data.failedUpdates > 0) {
+        toast.warning(`Failed to update ${data.failedUpdates} users`);
+      }
+      setSelectedUsers([]);
+      setShowBulkActions(false);
+      refetch();
+    },
+    onError: (error) => {
+      toast.error('Failed to perform bulk action');
+    },
+  });
+
+  const handleUserAction = (action: string, userId: number) => {
+    setSelectedUserId(userId);
+    setCurrentAction(action);
+    
+    switch (action) {
+      case 'reset_password':
+        setShowPasswordDialog(true);
+        break;
+      case 'send_email':
+        setShowEmailDialog(true);
+        break;
+      case 'connect_matrix':
+        setShowMatrixDialog(true);
+        break;
+      case 'toggle_active':
+        handleToggleActive(userId);
+        break;
+      case 'toggle_admin':
+        handleToggleAdmin(userId);
+        break;
+      case 'toggle_moderator':
+        handleToggleModerator(userId);
+        break;
+      case 'delete':
+        handleDeleteUser(userId);
+        break;
+    }
+  };
+
+  const handleBulkAction = (action: string) => {
+    if (selectedUsers.length === 0) {
+      toast.error('Please select users first');
+      return;
+    }
+
+    switch (action) {
+      case 'send_email':
+        setShowEmailDialog(true);
+        break;
+      case 'activate':
+      case 'deactivate':
+      case 'makeAdmin':
+      case 'removeAdmin':
+      case 'makeModerator':
+      case 'removeModerator':
+      case 'delete':
+        bulkUpdateMutation.mutate({
+          userIds: selectedUsers,
+          action: action as any,
+        });
+        break;
+    }
+  };
+
+  const handleResetPassword = () => {
+    if (!selectedUserId) return;
+    
+    resetPasswordMutation.mutate({
+      userId: selectedUserId,
+      generatePassword: passwordForm.generatePassword,
+      sendEmail: passwordForm.sendEmail,
+    });
+  };
+
+  const handleSendEmail = () => {
+    if (!emailForm.subject || !emailForm.message) {
+      toast.error('Please fill in all fields');
+      return;
+    }
+
+    const userIds = selectedUsers.length > 0 ? selectedUsers : selectedUserId ? [selectedUserId] : [];
+    
+    sendEmailMutation.mutate({
+      userIds,
+      subject: emailForm.subject,
+      message: emailForm.message,
+    });
+  };
+
+  const handleConnectMatrix = () => {
+    if (!selectedUserId || !matrixForm.matrixUsername) {
+      toast.error('Please select a Matrix user');
+      return;
+    }
+    
+    connectMatrixMutation.mutate({
+      userId: selectedUserId,
+      matrixUsername: matrixForm.matrixUsername,
+    });
+  };
 
   const handleDeleteUser = async (userId: number) => {
     if (confirm('Are you sure you want to delete this user?')) {
@@ -70,25 +245,55 @@ export default function UsersPage() {
     }
   };
 
-  const handleToggleActive = async (userId: number, currentActive: boolean) => {
-    await updateUserMutation.mutateAsync({
-      id: userId,
-      isActive: !currentActive,
-    });
+  const handleToggleActive = async (userId: number) => {
+    const user = usersData?.users.find(u => u.id === userId);
+    if (user) {
+      await updateUserMutation.mutateAsync({
+        id: userId,
+        isActive: !user.isActive,
+      });
+    }
   };
 
-  const handleToggleAdmin = async (userId: number, currentAdmin: boolean) => {
-    await updateUserMutation.mutateAsync({
-      id: userId,
-      isAdmin: !currentAdmin,
-    });
+  const handleToggleAdmin = async (userId: number) => {
+    const user = usersData?.users.find(u => u.id === userId);
+    if (user) {
+      await updateUserMutation.mutateAsync({
+        id: userId,
+        isAdmin: !user.isAdmin,
+      });
+    }
   };
 
-  const handleToggleModerator = async (userId: number, currentModerator: boolean) => {
-    await updateUserMutation.mutateAsync({
-      id: userId,
-      isModerator: !currentModerator,
-    });
+  const handleToggleModerator = async (userId: number) => {
+    const user = usersData?.users.find(u => u.id === userId);
+    if (user) {
+      await updateUserMutation.mutateAsync({
+        id: userId,
+        isModerator: !user.isModerator,
+      });
+    }
+  };
+
+  const handleUserSelect = (userId: number, checked: boolean) => {
+    if (checked) {
+      setSelectedUsers([...selectedUsers, userId]);
+    } else {
+      setSelectedUsers(selectedUsers.filter(id => id !== userId));
+    }
+  };
+
+  const handleSelectAll = (checked: boolean) => {
+    if (checked && usersData?.users) {
+      setSelectedUsers(usersData.users.map(user => user.id));
+    } else {
+      setSelectedUsers([]);
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success('Copied to clipboard');
   };
 
   if (!session) {
@@ -157,6 +362,11 @@ export default function UsersPage() {
                   {usersData.total} total
                 </Badge>
               )}
+              {selectedUsers.length > 0 && (
+                <Badge variant="outline">
+                  {selectedUsers.length} selected
+                </Badge>
+              )}
             </CardTitle>
             <CardDescription>
               Search, filter, and manage your community members
@@ -186,20 +396,8 @@ export default function UsersPage() {
                   <SelectItem value="false">Inactive</SelectItem>
                 </SelectContent>
               </Select>
-              <Select value={limit.toString()} onValueChange={(value) => setLimit(parseInt(value))}>
-                <SelectTrigger className="w-[100px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="10">10</SelectItem>
-                  <SelectItem value="25">25</SelectItem>
-                  <SelectItem value="50">50</SelectItem>
-                  <SelectItem value="100">100</SelectItem>
-                </SelectContent>
-              </Select>
               <Button
                 variant="outline"
-                size="sm"
                 onClick={() => refetch()}
                 disabled={isLoading}
               >
@@ -207,6 +405,74 @@ export default function UsersPage() {
                 Refresh
               </Button>
             </div>
+
+            {/* Bulk Actions */}
+            {selectedUsers.length > 0 && (
+              <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-blue-600" />
+                    <span className="text-sm font-medium text-blue-900">
+                      {selectedUsers.length} user(s) selected
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleBulkAction('send_email')}
+                    >
+                      <Mail className="w-4 h-4 mr-2" />
+                      Send Email
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          Bulk Actions
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent>
+                        <DropdownMenuItem onClick={() => handleBulkAction('activate')}>
+                          Activate Users
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleBulkAction('deactivate')}>
+                          Deactivate Users
+                        </DropdownMenuItem>
+                        {session?.user.isAdmin && (
+                          <>
+                            <DropdownMenuItem onClick={() => handleBulkAction('makeAdmin')}>
+                              Make Admin
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleBulkAction('removeAdmin')}>
+                              Remove Admin
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleBulkAction('makeModerator')}>
+                              Make Moderator
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleBulkAction('removeModerator')}>
+                              Remove Moderator
+                            </DropdownMenuItem>
+                            <DropdownMenuItem 
+                              onClick={() => handleBulkAction('delete')}
+                              className="text-red-600"
+                            >
+                              Delete Users
+                            </DropdownMenuItem>
+                          </>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSelectedUsers([])}
+                    >
+                      Clear Selection
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {isLoading ? (
               <div className="text-center py-8">
@@ -219,17 +485,30 @@ export default function UsersPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-12">
+                          <Checkbox
+                            checked={selectedUsers.length === usersData?.users.length && selectedUsers.length > 0}
+                            onCheckedChange={handleSelectAll}
+                          />
+                        </TableHead>
                         <TableHead>User</TableHead>
                         <TableHead>Email</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Roles</TableHead>
+                        <TableHead>Matrix</TableHead>
                         <TableHead>Joined</TableHead>
                         <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {usersData?.users.map((user: UserWithRelations) => (
+                      {usersData?.users.map((user: any) => (
                         <TableRow key={user.id}>
+                          <TableCell>
+                            <Checkbox
+                              checked={selectedUsers.includes(user.id)}
+                              onCheckedChange={(checked) => handleUserSelect(user.id, checked as boolean)}
+                            />
+                          </TableCell>
                           <TableCell>
                             <div>
                               <div className="font-medium">
@@ -266,6 +545,15 @@ export default function UsersPage() {
                             </div>
                           </TableCell>
                           <TableCell>
+                            {user.matrixUsername ? (
+                              <Badge variant="outline" className="text-xs">
+                                {user.matrixUsername}
+                              </Badge>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">Not connected</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
                             {new Date(user.dateJoined).toLocaleDateString()}
                           </TableCell>
                           <TableCell>
@@ -279,29 +567,49 @@ export default function UsersPage() {
                                 <DropdownMenuItem
                                   onClick={() => router.push(`/users/${user.id}`)}
                                 >
+                                  <Edit className="w-4 h-4 mr-2" />
                                   View Details
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
-                                  onClick={() => handleToggleActive(user.id, user.isActive)}
+                                  onClick={() => handleUserAction('reset_password', user.id)}
+                                >
+                                  <Key className="w-4 h-4 mr-2" />
+                                  Reset Password
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => handleUserAction('send_email', user.id)}
+                                >
+                                  <Mail className="w-4 h-4 mr-2" />
+                                  Send Email
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => handleUserAction('connect_matrix', user.id)}
+                                >
+                                  <MessageSquare className="w-4 h-4 mr-2" />
+                                  Connect Matrix
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => handleUserAction('toggle_active', user.id)}
                                 >
                                   {user.isActive ? 'Deactivate' : 'Activate'}
                                 </DropdownMenuItem>
-                                {session.user.isAdmin && (
+                                {session?.user.isAdmin && (
                                   <>
                                     <DropdownMenuItem
-                                      onClick={() => handleToggleModerator(user.id, user.isModerator)}
+                                      onClick={() => handleUserAction('toggle_moderator', user.id)}
                                     >
                                       {user.isModerator ? 'Remove Moderator' : 'Make Moderator'}
                                     </DropdownMenuItem>
                                     <DropdownMenuItem
-                                      onClick={() => handleToggleAdmin(user.id, user.isAdmin)}
+                                      onClick={() => handleUserAction('toggle_admin', user.id)}
                                     >
                                       {user.isAdmin ? 'Remove Admin' : 'Make Admin'}
                                     </DropdownMenuItem>
                                     <DropdownMenuItem
-                                      onClick={() => handleDeleteUser(user.id)}
+                                      onClick={() => handleUserAction('delete', user.id)}
                                       className="text-red-600"
                                     >
+                                      <Trash2 className="w-4 h-4 mr-2" />
                                       Delete User
                                     </DropdownMenuItem>
                                   </>
@@ -315,6 +623,7 @@ export default function UsersPage() {
                   </Table>
                 </div>
 
+                {/* Pagination */}
                 {usersData && (
                   <div className="flex items-center justify-between px-2 py-4">
                     <div className="text-sm text-muted-foreground">
@@ -348,6 +657,174 @@ export default function UsersPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Reset Password Dialog */}
+      <Dialog open={showPasswordDialog} onOpenChange={setShowPasswordDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reset Password</DialogTitle>
+            <DialogDescription>
+              Reset the password for the selected user
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="generate-password"
+                checked={passwordForm.generatePassword}
+                onCheckedChange={(checked) => 
+                  setPasswordForm({...passwordForm, generatePassword: checked as boolean})
+                }
+              />
+              <Label htmlFor="generate-password">Generate secure password</Label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="send-email"
+                checked={passwordForm.sendEmail}
+                onCheckedChange={(checked) => 
+                  setPasswordForm({...passwordForm, sendEmail: checked as boolean})
+                }
+              />
+              <Label htmlFor="send-email">Send password via email</Label>
+            </div>
+            <div className="flex justify-end space-x-2">
+              <Button variant="outline" onClick={() => setShowPasswordDialog(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleResetPassword} disabled={resetPasswordMutation.isPending}>
+                {resetPasswordMutation.isPending ? 'Resetting...' : 'Reset Password'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Generated Password Display */}
+      {generatedPassword && (
+        <Dialog open={!!generatedPassword} onOpenChange={() => setGeneratedPassword('')}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Password Reset Complete</DialogTitle>
+              <DialogDescription>
+                The password has been reset successfully
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <p className="text-sm font-medium text-yellow-800 mb-2">
+                  Temporary Password:
+                </p>
+                <div className="flex items-center space-x-2">
+                  <code className="px-2 py-1 bg-yellow-100 text-yellow-900 rounded text-sm font-mono">
+                    {generatedPassword}
+                  </code>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => copyToClipboard(generatedPassword)}
+                  >
+                    <Copy className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2 text-sm text-amber-600">
+                <AlertTriangle className="w-4 h-4" />
+                <span>Please provide this password to the user securely</span>
+              </div>
+              <div className="flex justify-end">
+                <Button onClick={() => setGeneratedPassword('')}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Send Email Dialog */}
+      <Dialog open={showEmailDialog} onOpenChange={setShowEmailDialog}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Send Email</DialogTitle>
+            <DialogDescription>
+              Send an email to {selectedUsers.length > 0 ? `${selectedUsers.length} selected users` : 'the selected user'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="email-subject">Subject</Label>
+              <Input
+                id="email-subject"
+                value={emailForm.subject}
+                onChange={(e) => setEmailForm({...emailForm, subject: e.target.value})}
+                placeholder="Enter email subject..."
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="email-message">Message</Label>
+              <Textarea
+                id="email-message"
+                value={emailForm.message}
+                onChange={(e) => setEmailForm({...emailForm, message: e.target.value})}
+                placeholder="Enter your message..."
+                rows={6}
+              />
+              <div className="text-xs text-muted-foreground">
+                You can use variables: $Username, $DisplayName, $FirstName, $LastName, $Email
+              </div>
+            </div>
+            <div className="flex justify-end space-x-2">
+              <Button variant="outline" onClick={() => setShowEmailDialog(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleSendEmail} disabled={sendEmailMutation.isPending}>
+                {sendEmailMutation.isPending ? 'Sending...' : 'Send Email'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Connect Matrix Dialog */}
+      <Dialog open={showMatrixDialog} onOpenChange={setShowMatrixDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Connect Matrix Account</DialogTitle>
+            <DialogDescription>
+              Connect a Matrix account to the selected user
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="matrix-username">Matrix Username</Label>
+              <Select
+                value={matrixForm.matrixUsername}
+                onValueChange={(value) => setMatrixForm({...matrixForm, matrixUsername: value})}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a Matrix user" />
+                </SelectTrigger>
+                <SelectContent>
+                  {matrixUsers?.map((user: any) => (
+                    <SelectItem key={user.user_id} value={user.user_id}>
+                      {user.display_name} ({user.user_id})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex justify-end space-x-2">
+              <Button variant="outline" onClick={() => setShowMatrixDialog(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleConnectMatrix} disabled={connectMatrixMutation.isPending}>
+                {connectMatrixMutation.isPending ? 'Connecting...' : 'Connect'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 } 

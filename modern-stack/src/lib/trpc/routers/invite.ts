@@ -251,7 +251,7 @@ export const inviteRouter = createTRPCRouter({
         recipientName: z.string().optional(),
       })
     )
-    .query(async ({ input }) => {
+    .mutation(async ({ input }) => {
       const { inviteLink, expiryDate, recipientName } = input;
       
       const expiry = new Date(expiryDate);
@@ -278,13 +278,13 @@ ${inviteLink}
 
 This invite expires on ${formattedExpiry}.
 
-Getting Started:
-1. Click the invitation link above
-2. Create your account with a secure password  
-3. Complete your profile
-4. Explore our community resources
+Please click the link above to create your account and join our community!
 
-Looking forward to seeing you in the community!`;
+Best regards,
+The IrregularChat Team
+
+---
+This is an automated invitation. If you have any questions, please contact an administrator.`;
 
       return { message };
     }),

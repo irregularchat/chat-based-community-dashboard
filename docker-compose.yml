@@ -24,6 +24,10 @@ services:
       # Legacy Authentik API (still used for user management)
       - AUTHENTIK_API_TOKEN=${AUTHENTIK_API_TOKEN}
       - AUTHENTIK_BASE_URL=${AUTHENTIK_BASE_URL:-}
+      - FLOW_ID=${FLOW_ID}
+      - INVITE_FLOW_ID=${INVITE_FLOW_ID}
+      - INVITE_LABEL=${INVITE_LABEL}
+      - BASE_DOMAIN=${BASE_DOMAIN}
       # Email configuration
       - SMTP_HOST=${SMTP_HOST}
       - SMTP_PORT=${SMTP_PORT}

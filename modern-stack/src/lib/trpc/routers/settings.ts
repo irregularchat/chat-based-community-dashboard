@@ -1,314 +1,349 @@
 import { z } from 'zod';
-import { createTRPCRouter, protectedProcedure, adminProcedure } from '../trpc';
-
-// Schema for application settings
-const SettingsSchema = z.object({
-  // General settings
-  siteName: z.string().min(1),
-  siteDescription: z.string().optional(),
-  siteUrl: z.string().url().optional(),
-  contactEmail: z.string().email().optional(),
-  
-  // Authentication settings
-  enableLocalAuth: z.boolean().default(true),
-  enableRegistration: z.boolean().default(false),
-  requireEmailVerification: z.boolean().default(false),
-  sessionTimeout: z.number().min(1).max(43200).default(1440), // minutes
-  
-  // Matrix settings
-  matrixEnabled: z.boolean().default(false),
-  matrixHomeserver: z.string().optional(),
-  matrixAccessToken: z.string().optional(),
-  matrixBotUsername: z.string().optional(),
-  matrixDefaultRoom: z.string().optional(),
-  matrixWelcomeRoom: z.string().optional(),
-  
-  // Email settings
-  emailEnabled: z.boolean().default(false),
-  smtpHost: z.string().optional(),
-  smtpPort: z.number().min(1).max(65535).optional(),
-  smtpUser: z.string().optional(),
-  smtpPassword: z.string().optional(),
-  smtpFrom: z.string().email().optional(),
-  
-  // UI settings
-  theme: z.enum(['light', 'dark', 'system']).default('light'),
-  primaryColor: z.string().optional(),
-  logoUrl: z.string().url().optional(),
-  
-  // Security settings
-  maxLoginAttempts: z.number().min(1).max(20).default(5),
-  lockoutDuration: z.number().min(1).max(1440).default(15), // minutes
-  passwordMinLength: z.number().min(4).max(128).default(8),
-  requireSpecialChars: z.boolean().default(false),
-  requireNumbers: z.boolean().default(false),
-  requireUppercase: z.boolean().default(false),
-  
-  // Feature flags
-  enableInviteSystem: z.boolean().default(true),
-  enableUserNotes: z.boolean().default(true),
-  enableMatrixIntegration: z.boolean().default(false),
-  enableUserProfiles: z.boolean().default(true),
-  enableAnalytics: z.boolean().default(true),
-  
-  // Rate limiting
-  rateLimitEnabled: z.boolean().default(true),
-  rateLimitRequests: z.number().min(1).max(1000).default(100),
-  rateLimitWindow: z.number().min(1).max(3600).default(60), // seconds
-  
-  // Maintenance
-  maintenanceMode: z.boolean().default(false),
-  maintenanceMessage: z.string().optional(),
-  
-  // Backup settings
-  autoBackupEnabled: z.boolean().default(false),
-  backupFrequency: z.enum(['daily', 'weekly', 'monthly']).default('weekly'),
-  backupRetention: z.number().min(1).max(365).default(30), // days
-});
+import { createTRPCRouter, publicProcedure, protectedProcedure, moderatorProcedure, adminProcedure } from '../trpc';
+import { TRPCError } from '@trpc/server';
 
 export const settingsRouter = createTRPCRouter({
-  // Get all settings
-  getSettings: protectedProcedure.query(async ({ ctx }) => {
-    // In a real implementation, this would come from a settings table
-    // For now, we'll return default values with some from environment variables
+  // Dashboard Settings
+  getDashboardSettings: publicProcedure
+    .input(z.object({ key: z.string().optional() }))
+    .query(async ({ ctx, input }) => {
+      if (input.key) {
+        // Get specific setting
+        const setting = await ctx.prisma.dashboardSettings.findUnique({
+          where: { key: input.key },
+        });
+        return setting?.value || null;
+      }
+      
+      // Get all settings
+      const settings = await ctx.prisma.dashboardSettings.findMany({
+        orderBy: { key: 'asc' },
+      });
+      
+      return settings.reduce((acc, setting) => {
+        acc[setting.key] = setting.value;
+        return acc;
+      }, {} as Record<string, any>);
+    }),
+
+  updateDashboardSetting: adminProcedure
+    .input(
+      z.object({
+        key: z.string(),
+        value: z.any(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const setting = await ctx.prisma.dashboardSettings.upsert({
+        where: { key: input.key },
+        update: { value: input.value },
+        create: { key: input.key, value: input.value },
+      });
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'dashboard_setting_updated',
+          username: ctx.session.user.username || 'unknown',
+          details: `Updated dashboard setting: ${input.key}`,
+        },
+      });
+
+      return setting;
+    }),
+
+  // Community Bookmarks
+  getCommunityBookmarks: publicProcedure
+    .input(
+      z.object({
+        category: z.string().optional(),
+        isActive: z.boolean().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const where = {
+        ...(input.category && { category: input.category }),
+        ...(input.isActive !== undefined && { isActive: input.isActive }),
+      };
+
+      return await ctx.prisma.communityBookmark.findMany({
+        where,
+        orderBy: [
+          { order: 'asc' },
+          { createdAt: 'asc' },
+        ],
+      });
+    }),
+
+  createCommunityBookmark: adminProcedure
+    .input(
+      z.object({
+        title: z.string().min(1),
+        description: z.string().optional(),
+        url: z.string().url(),
+        icon: z.string().optional(),
+        category: z.string().default('general'),
+        order: z.number().default(0),
+        isActive: z.boolean().default(true),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const bookmark = await ctx.prisma.communityBookmark.create({
+        data: input,
+      });
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'community_bookmark_created',
+          username: ctx.session.user.username || 'unknown',
+          details: `Created community bookmark: ${input.title}`,
+        },
+      });
+
+      return bookmark;
+    }),
+
+  updateCommunityBookmark: adminProcedure
+    .input(
+      z.object({
+        id: z.number(),
+        title: z.string().min(1).optional(),
+        description: z.string().optional(),
+        url: z.string().url().optional(),
+        icon: z.string().optional(),
+        category: z.string().optional(),
+        order: z.number().optional(),
+        isActive: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { id, ...updateData } = input;
+
+      const bookmark = await ctx.prisma.communityBookmark.update({
+        where: { id },
+        data: updateData,
+      });
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'community_bookmark_updated',
+          username: ctx.session.user.username || 'unknown',
+          details: `Updated community bookmark: ${bookmark.title}`,
+        },
+      });
+
+      return bookmark;
+    }),
+
+  deleteCommunityBookmark: adminProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const bookmark = await ctx.prisma.communityBookmark.findUnique({
+        where: { id: input.id },
+      });
+
+      if (!bookmark) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Bookmark not found',
+        });
+      }
+
+      await ctx.prisma.communityBookmark.delete({
+        where: { id: input.id },
+      });
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'community_bookmark_deleted',
+          username: ctx.session.user.username || 'unknown',
+          details: `Deleted community bookmark: ${bookmark.title}`,
+        },
+      });
+
+      return { success: true };
+    }),
+
+  // Dashboard Announcements
+  getDashboardAnnouncements: publicProcedure
+    .input(
+      z.object({
+        isActive: z.boolean().optional(),
+        includeExpired: z.boolean().default(false),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const where = {
+        ...(input.isActive !== undefined && { isActive: input.isActive }),
+        ...(!input.includeExpired && {
+          OR: [
+            { expiresAt: null },
+            { expiresAt: { gt: new Date() } },
+          ],
+        }),
+      };
+
+      return await ctx.prisma.dashboardAnnouncement.findMany({
+        where,
+        orderBy: [
+          { priority: 'desc' },
+          { createdAt: 'desc' },
+        ],
+      });
+    }),
+
+  createDashboardAnnouncement: adminProcedure
+    .input(
+      z.object({
+        title: z.string().min(1),
+        content: z.string().min(1),
+        type: z.enum(['info', 'warning', 'success', 'error']).default('info'),
+        isActive: z.boolean().default(true),
+        priority: z.number().default(0),
+        expiresAt: z.date().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const announcement = await ctx.prisma.dashboardAnnouncement.create({
+        data: {
+          ...input,
+          createdBy: ctx.session.user.username || 'unknown',
+        },
+      });
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'dashboard_announcement_created',
+          username: ctx.session.user.username || 'unknown',
+          details: `Created dashboard announcement: ${input.title}`,
+        },
+      });
+
+      return announcement;
+    }),
+
+  updateDashboardAnnouncement: adminProcedure
+    .input(
+      z.object({
+        id: z.number(),
+        title: z.string().min(1).optional(),
+        content: z.string().min(1).optional(),
+        type: z.enum(['info', 'warning', 'success', 'error']).optional(),
+        isActive: z.boolean().optional(),
+        priority: z.number().optional(),
+        expiresAt: z.date().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { id, ...updateData } = input;
+
+      const announcement = await ctx.prisma.dashboardAnnouncement.update({
+        where: { id },
+        data: updateData,
+      });
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'dashboard_announcement_updated',
+          username: ctx.session.user.username || 'unknown',
+          details: `Updated dashboard announcement: ${announcement.title}`,
+        },
+      });
+
+      return announcement;
+    }),
+
+  deleteDashboardAnnouncement: adminProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const announcement = await ctx.prisma.dashboardAnnouncement.findUnique({
+        where: { id: input.id },
+      });
+
+      if (!announcement) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Announcement not found',
+        });
+      }
+
+      await ctx.prisma.dashboardAnnouncement.delete({
+        where: { id: input.id },
+      });
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'dashboard_announcement_deleted',
+          username: ctx.session.user.username || 'unknown',
+          details: `Deleted dashboard announcement: ${announcement.title}`,
+        },
+      });
+
+      return { success: true };
+    }),
+
+  // Bulk operations
+  reorderCommunityBookmarks: adminProcedure
+    .input(
+      z.object({
+        bookmarks: z.array(
+          z.object({
+            id: z.number(),
+            order: z.number(),
+          })
+        ),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Update all bookmarks in a transaction
+      const updates = input.bookmarks.map((bookmark) =>
+        ctx.prisma.communityBookmark.update({
+          where: { id: bookmark.id },
+          data: { order: bookmark.order },
+        })
+      );
+
+      await ctx.prisma.$transaction(updates);
+
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'community_bookmarks_reordered',
+          username: ctx.session.user.username || 'unknown',
+          details: `Reordered ${input.bookmarks.length} community bookmarks`,
+        },
+      });
+
+      return { success: true };
+    }),
+
+  // Get all settings for admin interface
+  getAllSettings: adminProcedure.query(async ({ ctx }) => {
+    const [settings, bookmarks, announcements] = await Promise.all([
+      ctx.prisma.dashboardSettings.findMany({
+        orderBy: { key: 'asc' },
+      }),
+      ctx.prisma.communityBookmark.findMany({
+        orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
+      }),
+      ctx.prisma.dashboardAnnouncement.findMany({
+        orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
+      }),
+    ]);
+
     return {
-      // General settings
-      siteName: process.env.SITE_NAME || 'Community Dashboard',
-      siteDescription: process.env.SITE_DESCRIPTION || 'Modern community management platform',
-      siteUrl: process.env.SITE_URL || 'http://localhost:3000',
-      contactEmail: process.env.CONTACT_EMAIL || 'admin@example.com',
-      
-      // Authentication settings
-      enableLocalAuth: process.env.ENABLE_LOCAL_AUTH === 'true',
-      enableRegistration: process.env.ENABLE_REGISTRATION === 'true',
-      requireEmailVerification: process.env.REQUIRE_EMAIL_VERIFICATION === 'true',
-      sessionTimeout: parseInt(process.env.SESSION_TIMEOUT || '1440', 10),
-      
-      // Matrix settings
-      matrixEnabled: process.env.MATRIX_ENABLED === 'true',
-      matrixHomeserver: process.env.MATRIX_HOMESERVER_URL || '',
-      matrixAccessToken: process.env.MATRIX_ACCESS_TOKEN ? '***' : '',
-      matrixBotUsername: process.env.MATRIX_BOT_USERNAME || '',
-      matrixDefaultRoom: process.env.MATRIX_DEFAULT_ROOM_ID || '',
-      matrixWelcomeRoom: process.env.MATRIX_WELCOME_ROOM_ID || '',
-      
-      // Email settings
-      emailEnabled: process.env.EMAIL_ENABLED === 'true',
-      smtpHost: process.env.SMTP_HOST || '',
-      smtpPort: parseInt(process.env.SMTP_PORT || '587', 10),
-      smtpUser: process.env.SMTP_USER || '',
-      smtpPassword: process.env.SMTP_PASSWORD ? '***' : '',
-      smtpFrom: process.env.SMTP_FROM || '',
-      
-      // UI settings
-      theme: (process.env.DEFAULT_THEME as 'light' | 'dark' | 'system') || 'light',
-      primaryColor: process.env.PRIMARY_COLOR || '#3b82f6',
-      logoUrl: process.env.LOGO_URL || '',
-      
-      // Security settings
-      maxLoginAttempts: parseInt(process.env.MAX_LOGIN_ATTEMPTS || '5', 10),
-      lockoutDuration: parseInt(process.env.LOCKOUT_DURATION || '15', 10),
-      passwordMinLength: parseInt(process.env.PASSWORD_MIN_LENGTH || '8', 10),
-      requireSpecialChars: process.env.REQUIRE_SPECIAL_CHARS === 'true',
-      requireNumbers: process.env.REQUIRE_NUMBERS === 'true',
-      requireUppercase: process.env.REQUIRE_UPPERCASE === 'true',
-      
-      // Feature flags
-      enableInviteSystem: process.env.ENABLE_INVITE_SYSTEM !== 'false',
-      enableUserNotes: process.env.ENABLE_USER_NOTES !== 'false',
-      enableMatrixIntegration: process.env.ENABLE_MATRIX_INTEGRATION === 'true',
-      enableUserProfiles: process.env.ENABLE_USER_PROFILES !== 'false',
-      enableAnalytics: process.env.ENABLE_ANALYTICS !== 'false',
-      
-      // Rate limiting
-      rateLimitEnabled: process.env.RATE_LIMIT_ENABLED !== 'false',
-      rateLimitRequests: parseInt(process.env.RATE_LIMIT_REQUESTS || '100', 10),
-      rateLimitWindow: parseInt(process.env.RATE_LIMIT_WINDOW || '60', 10),
-      
-      // Maintenance
-      maintenanceMode: process.env.MAINTENANCE_MODE === 'true',
-      maintenanceMessage: process.env.MAINTENANCE_MESSAGE || 'System is under maintenance',
-      
-      // Backup settings
-      autoBackupEnabled: process.env.AUTO_BACKUP_ENABLED === 'true',
-      backupFrequency: (process.env.BACKUP_FREQUENCY as 'daily' | 'weekly' | 'monthly') || 'weekly',
-      backupRetention: parseInt(process.env.BACKUP_RETENTION || '30', 10),
+      settings: settings.reduce((acc, setting) => {
+        acc[setting.key] = setting.value;
+        return acc;
+      }, {} as Record<string, any>),
+      bookmarks,
+      announcements,
     };
   }),
-
-  // Update settings (admin only)
-  updateSettings: adminProcedure
-    .input(SettingsSchema.partial())
-    .mutation(async ({ ctx, input }) => {
-      // In a real implementation, this would update the settings in the database
-      // For now, we'll just log the update and return success
-      console.log('Settings update requested:', input);
-
-      // Log admin event
-      await ctx.prisma.adminEvent.create({
-        data: {
-          eventType: 'settings_updated',
-          username: ctx.session.user.username || 'unknown',
-          details: `Updated settings: ${Object.keys(input).join(', ')}`,
-        },
-      });
-
-      return { success: true, message: 'Settings updated successfully' };
-    }),
-
-  // Test email configuration
-  testEmail: adminProcedure
-    .input(
-      z.object({
-        to: z.string().email(),
-        subject: z.string().optional(),
-        message: z.string().optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      // In a real implementation, this would send a test email
-      console.log('Test email requested:', input);
-
-      // Log admin event
-      await ctx.prisma.adminEvent.create({
-        data: {
-          eventType: 'email_test',
-          username: ctx.session.user.username || 'unknown',
-          details: `Test email sent to: ${input.to}`,
-        },
-      });
-
-      return { success: true, message: 'Test email sent successfully' };
-    }),
-
-  // Test Matrix connection
-  testMatrix: adminProcedure.mutation(async ({ ctx }) => {
-    // In a real implementation, this would test the Matrix connection
-    console.log('Matrix connection test requested');
-
-    // Log admin event
-    await ctx.prisma.adminEvent.create({
-      data: {
-        eventType: 'matrix_test',
-        username: ctx.session.user.username || 'unknown',
-        details: 'Matrix connection test performed',
-      },
-    });
-
-    return { success: true, message: 'Matrix connection test successful' };
-  }),
-
-  // Get system information
-  getSystemInfo: adminProcedure.query(async ({ ctx }) => {
-    return {
-      nodeVersion: process.version,
-      platform: process.platform,
-      architecture: process.arch,
-      uptime: process.uptime(),
-      memoryUsage: process.memoryUsage(),
-      environment: process.env.NODE_ENV,
-      databaseUrl: process.env.DATABASE_URL ? 'configured' : 'not configured',
-      timezone: new Intl.DateTimeFormat().resolvedOptions().timeZone,
-    };
-  }),
-
-  // Reset settings to defaults
-  resetSettings: adminProcedure
-    .input(
-      z.object({
-        category: z.enum(['all', 'auth', 'matrix', 'email', 'security', 'ui', 'features']).optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      // In a real implementation, this would reset settings to defaults
-      console.log('Settings reset requested:', input);
-
-      // Log admin event
-      await ctx.prisma.adminEvent.create({
-        data: {
-          eventType: 'settings_reset',
-          username: ctx.session.user.username || 'unknown',
-          details: `Reset settings category: ${input.category || 'all'}`,
-        },
-      });
-
-      return { success: true, message: 'Settings reset to defaults' };
-    }),
-
-  // Export settings
-  exportSettings: adminProcedure.query(async ({ ctx }) => {
-    // In a real implementation, this would export all settings
-    const settings = await ctx.prisma.adminEvent.findMany({
-      where: { eventType: 'settings_updated' },
-      orderBy: { timestamp: 'desc' },
-      take: 100,
-    });
-
-    return {
-      exportedAt: new Date().toISOString(),
-      settings: settings,
-    };
-  }),
-
-  // Import settings
-  importSettings: adminProcedure
-    .input(
-      z.object({
-        settings: z.record(z.string(), z.any()),
-        overwrite: z.boolean().default(false),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      // In a real implementation, this would import settings
-      console.log('Settings import requested:', input);
-
-      // Log admin event
-      await ctx.prisma.adminEvent.create({
-        data: {
-          eventType: 'settings_imported',
-          username: ctx.session.user.username || 'unknown',
-          details: `Imported ${Object.keys(input.settings).length} settings`,
-        },
-      });
-
-      return { success: true, message: 'Settings imported successfully' };
-    }),
-
-  // Get available themes
-  getThemes: protectedProcedure.query(async () => {
-    return [
-      { id: 'light', name: 'Light', description: 'Clean light theme' },
-      { id: 'dark', name: 'Dark', description: 'Dark mode theme' },
-      { id: 'system', name: 'System', description: 'Follow system preference' },
-    ];
-  }),
-
-  // Get available colors
-  getColors: protectedProcedure.query(async () => {
-    return [
-      { id: 'blue', name: 'Blue', value: '#3b82f6' },
-      { id: 'green', name: 'Green', value: '#10b981' },
-      { id: 'purple', name: 'Purple', value: '#8b5cf6' },
-      { id: 'red', name: 'Red', value: '#ef4444' },
-      { id: 'orange', name: 'Orange', value: '#f97316' },
-      { id: 'pink', name: 'Pink', value: '#ec4899' },
-    ];
-  }),
-
-  // Update user preferences (non-admin users can update their own UI preferences)
-  updateUserPreferences: protectedProcedure
-    .input(
-      z.object({
-        theme: z.enum(['light', 'dark', 'system']).optional(),
-        primaryColor: z.string().optional(),
-        language: z.string().optional(),
-        timezone: z.string().optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      // In a real implementation, this would update user preferences
-      console.log('User preferences update requested:', input);
-
-      return { success: true, message: 'Preferences updated successfully' };
-    }),
 }); 

@@ -51,6 +51,49 @@ model AdminEvent {
   @@map("admin_events")
 }
 
+// Dashboard settings
+model DashboardSettings {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     Json
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  
+  @@map("dashboard_settings")
+}
+
+// Community bookmarks
+model CommunityBookmark {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String?
+  url         String
+  icon        String?
+  category    String   @default("general")
+  order       Int      @default(0)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+  
+  @@map("community_bookmarks")
+}
+
+// Dashboard announcements
+model DashboardAnnouncement {
+  id        Int      @id @default(autoincrement())
+  title     String
+  content   String
+  type      String   @default("info") // info, warning, success, error
+  isActive  Boolean  @default(true) @map("is_active")
+  priority  Int      @default(0)
+  expiresAt DateTime? @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  createdBy String   @map("created_by")
+  
+  @@map("dashboard_announcements")
+}
+
 // Email verification codes
 model VerificationCode {
   id        Int      @id @default(autoincrement())

@@ -49,6 +49,7 @@ export default function UsersPage() {
   const [search, setSearch] = useState('');
   const [isActive, setIsActive] = useState<boolean | undefined>(undefined);
   const [limit, setLimit] = useState(25);
+  const [source, setSource] = useState<'authentik' | 'local' | 'both'>('authentik');
   const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
   const [showBulkActions, setShowBulkActions] = useState(false);
   const [showEmailDialog, setShowEmailDialog] = useState(false);
@@ -68,7 +69,10 @@ export default function UsersPage() {
     limit,
     search: search || undefined,
     isActive,
+    source,
   });
+
+  const { data: syncStatus, refetch: refetchSyncStatus } = trpc.user.getSyncStatus.useQuery();
 
   const { data: matrixUsers } = trpc.matrix.getUsers.useQuery({
     includeSignalUsers: true,
@@ -92,6 +96,19 @@ export default function UsersPage() {
     },
     onError: (error) => {
       toast.error('Failed to update user');
+    },
+  });
+
+  const syncUsersMutation = trpc.user.syncUsers.useMutation({
+    onSuccess: (result) => {
+      toast.success(
+        `Sync completed: ${result.created} created, ${result.updated} updated`
+      );
+      refetch();
+      refetchSyncStatus();
+    },
+    onError: (error) => {
+      toast.error(`Sync failed: ${error.message}`);
     },
   });
 
@@ -332,6 +349,28 @@ export default function UsersPage() {
               <p className="text-sm text-gray-600">
                 Manage community members and their permissions
               </p>
+              {syncStatus && (
+                <div className="mt-2 flex items-center gap-2">
+                  {syncStatus.authentikConfigured ? (
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className={`px-2 py-1 rounded-full text-xs ${
+                        syncStatus.inSync 
+                          ? 'bg-green-100 text-green-800' 
+                          : 'bg-yellow-100 text-yellow-800'
+                      }`}>
+                        {syncStatus.inSync ? '✅ In Sync' : '⚠️ Out of Sync'}
+                      </span>
+                      <span className="text-gray-600">
+                        Local: {syncStatus.localCount} | Authentik: {syncStatus.authentikCount}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="px-2 py-1 rounded-full text-xs bg-red-100 text-red-800">
+                      ❌ Authentik Not Configured
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
             <div className="flex items-center space-x-2">
               <Button
@@ -340,6 +379,17 @@ export default function UsersPage() {
               >
                 ← Back to Dashboard
               </Button>
+              {syncStatus?.authentikConfigured && (
+                <Button
+                  variant="outline"
+                  onClick={() => syncUsersMutation.mutate({ forceSync: true })}
+                  disabled={syncUsersMutation.isPending}
+                  className="flex items-center gap-2"
+                >
+                  <RefreshCw className={`w-4 h-4 ${syncUsersMutation.isPending ? 'animate-spin' : ''}`} />
+                  {syncUsersMutation.isPending ? 'Syncing...' : 'Sync Users'}
+                </Button>
+              )}
               <Button
                 onClick={() => router.push('/users/create')}
                 className="flex items-center gap-2"
@@ -358,9 +408,14 @@ export default function UsersPage() {
             <CardTitle className="flex items-center gap-2">
               👥 Users
               {usersData && (
-                <Badge variant="secondary">
-                  {usersData.total} total
-                </Badge>
+                <>
+                  <Badge variant="secondary">
+                    {usersData.total} total
+                  </Badge>
+                  <Badge variant="outline" className="capitalize">
+                    {usersData.source} source
+                  </Badge>
+                </>
               )}
               {selectedUsers.length > 0 && (
                 <Badge variant="outline">
@@ -383,6 +438,18 @@ export default function UsersPage() {
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
+              <Select value={source} onValueChange={(value: 'authentik' | 'local' | 'both') => {
+                setSource(value);
+              }}>
+                <SelectTrigger className="w-[160px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="authentik">Authentik SSO</SelectItem>
+                  <SelectItem value="local">Local DB</SelectItem>
+                  <SelectItem value="both">Both</SelectItem>
+                </SelectContent>
+              </Select>
               <Select value={isActive?.toString() || 'all'} onValueChange={(value) => {
                 setIsActive(value === 'all' ? undefined : value === 'true');
               }}>

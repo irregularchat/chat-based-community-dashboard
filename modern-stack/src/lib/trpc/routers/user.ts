@@ -9,20 +9,94 @@ import crypto from 'crypto';
 import { TRPCError } from '@trpc/server';
 
 export const userRouter = createTRPCRouter({
-  // Get paginated list of users
+  // Get paginated list of users from Authentik SSO
   getUsers: moderatorProcedure
     .input(
       z.object({
         page: z.number().default(1),
-        limit: z.number().default(10),
+        limit: z.number().default(25),
         search: z.string().optional(),
         isActive: z.boolean().optional(),
+        source: z.enum(['authentik', 'local', 'both']).default('authentik'),
       })
     )
     .query(async ({ ctx, input }) => {
-      const { page, limit, search, isActive } = input;
-      const skip = (page - 1) * limit;
+      const { page, limit, search, isActive, source } = input;
 
+      if (source === 'authentik' || source === 'both') {
+        // Fetch users from Authentik SSO
+        try {
+          const authentikResult = await authentikService.listUsers(search, page, limit);
+          
+          // Get local user data for additional info (notes, etc.)
+          const localUsers = await ctx.prisma.user.findMany({
+            where: {
+              authentikId: { in: authentikResult.users.map(u => u.pk) },
+            },
+            include: {
+              groups: {
+                include: {
+                  group: true,
+                },
+              },
+              notes: true,
+            },
+          });
+
+          // Create a map of authentik users to local users
+          const localUserMap = new Map(localUsers.map(u => [u.authentikId, u]));
+
+          // Transform Authentik users to match our UI format
+          const transformedUsers = authentikResult.users
+            .filter(user => {
+              // Apply active filter if specified
+              if (isActive !== undefined && user.is_active !== isActive) {
+                return false;
+              }
+              return true;
+            })
+            .map(user => {
+              const localUser = localUserMap.get(user.pk);
+              const [firstName, ...lastNameParts] = user.name?.split(' ') || [];
+              
+              return {
+                id: parseInt(user.pk),
+                username: user.username,
+                email: user.email,
+                firstName: firstName || '',
+                lastName: lastNameParts.join(' ') || '',
+                isActive: user.is_active,
+                isAdmin: user.groups.includes('admin'),
+                isModerator: user.groups.includes('moderator'),
+                dateJoined: localUser?.dateJoined || new Date(),
+                lastLogin: user.last_login ? new Date(user.last_login) : null,
+                authentikId: user.pk,
+                groups: localUser?.groups || [],
+                notes: localUser?.notes || [],
+                attributes: user.attributes || {},
+              };
+            });
+
+          return {
+            users: transformedUsers,
+            total: authentikResult.total,
+            page: authentikResult.page,
+            limit: authentikResult.pageSize,
+            totalPages: Math.ceil(authentikResult.total / authentikResult.pageSize),
+            source: 'authentik' as const,
+          };
+        } catch (error) {
+          console.error('Error fetching users from Authentik:', error);
+          
+          // Fall back to local database if Authentik fails
+          if (source === 'authentik') {
+            console.log('Falling back to local database users');
+          }
+        }
+      }
+
+      // Fetch from local database (fallback or when source is 'local' or 'both')
+      const skip = (page - 1) * limit;
       const where = {
         ...(search && {
           OR: [
@@ -59,8 +133,129 @@ export const userRouter = createTRPCRouter({
         page,
         limit,
         totalPages: Math.ceil(total / limit),
+        source: 'local' as const,
       };
     }),
+
+  // Sync users from Authentik to local database
+  syncUsers: adminProcedure
+    .input(
+      z.object({
+        forceSync: z.boolean().default(false),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        console.log('Starting user sync from Authentik...');
+        
+        // Fetch all users from Authentik
+        const authentikUsers = await authentikService.listAllUsers();
+        
+        if (authentikUsers.length === 0) {
+          throw new Error('No users found in Authentik or service not configured');
+        }
+
+        let created = 0;
+        let updated = 0;
+        let errors = 0;
+
+        // Process each user
+        for (const authentikUser of authentikUsers) {
+          try {
+            const [firstName, ...lastNameParts] = authentikUser.name?.split(' ') || [];
+            
+            // Check if user exists locally
+            const existingUser = await ctx.prisma.user.findUnique({
+              where: { authentikId: authentikUser.pk },
+            });
+
+            const userData = {
+              username: authentikUser.username,
+              email: authentikUser.email,
+              firstName: firstName || '',
+              lastName: lastNameParts.join(' ') || '',
+              isActive: authentikUser.is_active,
+              isAdmin: authentikUser.groups.includes('admin'),
+              isModerator: authentikUser.groups.includes('moderator'),
+              lastLogin: authentikUser.last_login ? new Date(authentikUser.last_login) : null,
+              attributes: authentikUser.attributes || {},
+            };
+
+            if (existingUser) {
+              // Update existing user
+              await ctx.prisma.user.update({
+                where: { authentikId: authentikUser.pk },
+                data: userData,
+              });
+              updated++;
+            } else {
+              // Create new user
+              await ctx.prisma.user.create({
+                data: {
+                  ...userData,
+                  authentikId: authentikUser.pk,
+                },
+              });
+              created++;
+            }
+          } catch (error) {
+            console.error(`Error syncing user ${authentikUser.username}:`, error);
+            errors++;
+          }
+        }
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'user_sync',
+            username: ctx.session.user.username || 'unknown',
+            details: `Synced ${authentikUsers.length} users from Authentik: ${created} created, ${updated} updated, ${errors} errors`,
+          },
+        });
+
+        console.log(`User sync completed: ${created} created, ${updated} updated, ${errors} errors`);
+
+        return {
+          success: true,
+          total: authentikUsers.length,
+          created,
+          updated,
+          errors,
+        };
+      } catch (error) {
+        console.error('Error syncing users from Authentik:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to sync users: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        });
+      }
+    }),
+
+  // Get sync status (compare local vs Authentik user counts)
+  getSyncStatus: moderatorProcedure.query(async ({ ctx }) => {
+    try {
+      const [localCount, authentikResult] = await Promise.all([
+        ctx.prisma.user.count(),
+        authentikService.listUsers(undefined, 1, 1), // Just get count
+      ]);
+
+      return {
+        localCount,
+        authentikCount: authentikResult.total,
+        inSync: localCount === authentikResult.total,
+        authentikConfigured: authentikService.isConfigured(),
+      };
+    } catch (error) {
+      console.error('Error getting sync status:', error);
+      return {
+        localCount: 0,
+        authentikCount: 0,
+        inSync: false,
+        authentikConfigured: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }),
 
   // Get single user by ID
   getUser: moderatorProcedure
@@ -408,6 +603,292 @@ export const userRouter = createTRPCRouter({
       });
 
       return user;
+    }),
+
+  // Get user profile for dashboard
+  getProfile: protectedProcedure.query(async ({ ctx }) => {
+    const user = await ctx.prisma.user.findUnique({
+      where: { id: parseInt(ctx.session.user.id) },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        matrixUsername: true,
+        attributes: true,
+      },
+    });
+
+    return user;
+  }),
+
+  // Change password
+  changePassword: protectedProcedure
+    .input(
+      z.object({
+        newPassword: z.string().min(8, 'Password must be at least 8 characters'),
+        confirmPassword: z.string(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.newPassword !== input.confirmPassword) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Passwords do not match',
+        });
+      }
+
+      try {
+        // Note: Password update via Authentik API would require additional implementation
+        // For now, we'll just log the request and inform user to use SSO password reset
+        
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'password_change_requested',
+            username: ctx.session.user.username || 'unknown',
+            details: 'User requested password change from dashboard - redirect to SSO',
+          },
+        });
+
+        // Return instruction to use SSO password reset
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Please use the SSO password reset feature at https://sso.irregularchat.com to change your password',
+        });
+      } catch (error) {
+        console.error('Error with password change request:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to process password change request',
+        });
+      }
+    }),
+
+  // Request phone verification (simplified version)
+  requestPhoneVerification: protectedProcedure
+    .input(
+      z.object({
+        phoneNumber: z.string().min(1, 'Phone number is required'),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        // Generate verification hash
+        const verificationHash = Math.random().toString(36).substring(2, 15) + 
+                                Math.random().toString(36).substring(2, 15);
+
+        // Store verification hash in database with expiration
+        const expirationTime = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+        await ctx.prisma.user.update({
+          where: { id: parseInt(ctx.session.user.id) },
+          data: {
+            attributes: {
+              ...((ctx.session.user as any).attributes || {}),
+              pendingPhoneVerification: {
+                phoneNumber: input.phoneNumber,
+                hash: verificationHash,
+                expiresAt: expirationTime.toISOString(),
+              },
+            },
+          },
+        });
+
+        // Send verification hash via Matrix
+        if (matrixService.isConfigured()) {
+          const matrixUserId = `@${ctx.session.user.username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
+          
+          const verificationMessage = `🔐 Phone Verification Code\n\nYou requested to update your phone number to: ${input.phoneNumber}\n\nVerification Hash: ${verificationHash}\n\nCopy this hash and paste it into the dashboard to complete verification.\n\nThis code expires in 15 minutes.`;
+          
+          await matrixService.sendDirectMessage(matrixUserId, verificationMessage);
+        }
+
+        return { success: true };
+      } catch (error) {
+        console.error('Error requesting phone verification:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to send verification code',
+        });
+      }
+    }),
+
+  // Verify phone number (simplified version)
+  verifyPhone: protectedProcedure
+    .input(
+      z.object({
+        phoneNumber: z.string(),
+        verificationHash: z.string(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const user = await ctx.prisma.user.findUnique({
+          where: { id: parseInt(ctx.session.user.id) },
+        });
+
+        if (!user) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'User not found',
+          });
+        }
+
+        const pendingVerification = (user.attributes as any)?.pendingPhoneVerification;
+        
+        if (!pendingVerification) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'No pending phone verification found',
+          });
+        }
+
+        // Check if verification hash matches and hasn't expired
+        if (pendingVerification.hash !== input.verificationHash) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Invalid verification code',
+          });
+        }
+
+        if (new Date(pendingVerification.expiresAt) < new Date()) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Verification code has expired',
+          });
+        }
+
+        if (pendingVerification.phoneNumber !== input.phoneNumber) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Phone number mismatch',
+          });
+        }
+
+        // Update attributes to store phone and clear pending verification
+        const updatedAttributes = { ...(user.attributes as any) };
+        updatedAttributes.phone = input.phoneNumber;
+        delete updatedAttributes.pendingPhoneVerification;
+
+        await ctx.prisma.user.update({
+          where: { id: parseInt(ctx.session.user.id) },
+          data: {
+            attributes: updatedAttributes,
+          },
+        });
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'phone_updated',
+            username: ctx.session.user.username || 'unknown',
+            details: `Phone number updated to ${input.phoneNumber}`,
+          },
+        });
+
+        return { success: true };
+      } catch (error) {
+        console.error('Error verifying phone:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to verify phone number',
+        });
+      }
+    }),
+
+  // Update email (simplified version)
+  updateEmail: protectedProcedure
+    .input(
+      z.object({
+        email: z.string().email('Invalid email address'),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        // Update email in database
+        await ctx.prisma.user.update({
+          where: { id: parseInt(ctx.session.user.id) },
+          data: { email: input.email },
+        });
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'email_updated',
+            username: ctx.session.user.username || 'unknown',
+            details: `Email updated to ${input.email}`,
+          },
+        });
+
+        return { success: true };
+      } catch (error) {
+        console.error('Error updating email:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update email',
+        });
+      }
+    }),
+
+  // Send message to admin
+  sendAdminMessage: protectedProcedure
+    .input(
+      z.object({
+        message: z.string().min(1, 'Message cannot be empty'),
+        subject: z.string().default('User Dashboard Message'),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        // Send email to admin using email service
+        if (emailService.isConfigured()) {
+          const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_FROM_EMAIL;
+          if (adminEmail) {
+            const emailContent = `User: ${ctx.session.user.username} (${ctx.session.user.email})\n\nMessage:\n${input.message}`;
+            
+            await emailService.sendEmail(
+              adminEmail,
+              `${input.subject} - from ${ctx.session.user.username}`,
+              emailContent.replace(/\n/g, '<br>')
+            );
+          }
+        }
+
+        // Also send via Matrix if configured
+        if (matrixService.isConfigured()) {
+          const adminMatrixRoom = process.env.MATRIX_ADMIN_ROOM_ID;
+          if (adminMatrixRoom) {
+            const matrixMessage = `📨 **Message from User Dashboard**\n\n**User:** ${ctx.session.user.username} (${ctx.session.user.email})\n**Subject:** ${input.subject}\n\n**Message:**\n${input.message}`;
+            
+            await matrixService.sendRoomMessage(adminMatrixRoom, matrixMessage);
+          }
+        }
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'user_message_to_admin',
+            username: ctx.session.user.username || 'unknown',
+            details: `User sent message: ${input.subject}`,
+          },
+        });
+
+        return { success: true };
+      } catch (error) {
+        console.error('Error sending admin message:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to send message to admin',
+        });
+      }
     }),
 
   // Delete user

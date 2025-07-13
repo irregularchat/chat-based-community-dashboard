@@ -851,17 +851,22 @@ export default function UserDashboard() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="expiry-days">Invitation Expires In</Label>
-                  <Input
-                    id="expiry-days"
-                    type="number"
-                    min="1"
-                    max="3"
-                    value={inviteForm.expiryDays}
-                    onChange={(e) => setInviteForm(prev => ({ ...prev, expiryDays: parseInt(e.target.value) || 1 }))}
-                  />
+                  <Label>Invitation Expires In</Label>
+                  <div className="flex gap-2">
+                    {[1, 2, 3].map((days) => (
+                      <Button
+                        key={days}
+                        type="button"
+                        variant={inviteForm.expiryDays === days ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setInviteForm(prev => ({ ...prev, expiryDays: days }))}
+                      >
+                        {days} day{days > 1 ? 's' : ''}
+                      </Button>
+                    ))}
+                  </div>
                   <p className="text-sm text-muted-foreground">
-                    Days until the invitation expires (1-3 days max)
+                    Select how long the invitation link remains valid
                   </p>
                 </div>
                 <Button 

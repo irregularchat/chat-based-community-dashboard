@@ -397,6 +397,14 @@ export default function UsersPage() {
                 <UserPlus className="w-4 h-4" />
                 Add User
               </Button>
+              <Button
+                variant="outline"
+                onClick={() => router.push('/users/invitations')}
+                className="flex items-center gap-2"
+              >
+                <Mail className="w-4 h-4" />
+                Invitation Timeline
+              </Button>
             </div>
           </div>
         </div>

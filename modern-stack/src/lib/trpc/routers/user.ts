@@ -6,12 +6,13 @@ import { matrixService } from '@/lib/matrix';
 import { discourseService } from '@/lib/discourse';
 import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
 import { normalizePhoneNumber, formatPhoneForDisplay } from '@/lib/phone-utils';
+import { parseAdvancedSearch } from '@/lib/advanced-search';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { TRPCError } from '@trpc/server';
 
 export const userRouter = createTRPCRouter({
-  // Get paginated list of users from Authentik SSO
+  // Get paginated list of users from Authentik SSO and/or local database
   getUsers: moderatorProcedure
     .input(
       z.object({
@@ -19,21 +20,44 @@ export const userRouter = createTRPCRouter({
         limit: z.number().default(25),
         search: z.string().optional(),
         isActive: z.boolean().optional(),
-        source: z.enum(['authentik', 'local', 'both']).default('local'),
+        source: z.enum(['authentik', 'local', 'both']).default('both'),
       })
     )
     .query(async ({ ctx, input }) => {
       const { page, limit, search, isActive, source } = input;
 
-      if (source === 'authentik' || source === 'both') {
-        // Fetch users from Authentik SSO
+      // Helper function to transform Authentik users to our UI format
+      const transformAuthentikUser = (user: any, localUser?: any) => {
+        const authentikIdString = String(user.pk);
+        const [firstName, ...lastNameParts] = user.name?.split(' ') || [];
+        
+        return {
+          id: parseInt(user.pk),
+          username: user.username,
+          email: user.email,
+          firstName: firstName || '',
+          lastName: lastNameParts.join(' ') || '',
+          isActive: user.is_active,
+          isAdmin: user.groups.includes('admin'),
+          isModerator: user.groups.includes('moderator'),
+          dateJoined: localUser?.dateJoined || new Date(),
+          lastLogin: user.last_login ? new Date(user.last_login) : null,
+          authentikId: authentikIdString,
+          groups: localUser?.groups || [],
+          notes: localUser?.notes || [],
+          attributes: user.attributes || {},
+        };
+      };
+
+      if (source === 'authentik') {
+        // Fetch only from Authentik SSO
         try {
           const authentikResult = await authentikService.listUsers(search, page, limit);
           
           // Get local user data for additional info (notes, etc.)
           const localUsers = await ctx.prisma.user.findMany({
             where: {
-              authentikId: { in: authentikResult.users.map(u => u.pk) },
+              authentikId: { in: authentikResult.users.map(u => String(u.pk)) },
             },
             include: {
               groups: {
@@ -57,27 +81,7 @@ export const userRouter = createTRPCRouter({
               }
               return true;
             })
-            .map(user => {
-              const localUser = localUserMap.get(user.pk);
-              const [firstName, ...lastNameParts] = user.name?.split(' ') || [];
-              
-              return {
-                id: parseInt(user.pk),
-                username: user.username,
-                email: user.email,
-                firstName: firstName || '',
-                lastName: lastNameParts.join(' ') || '',
-                isActive: user.is_active,
-                isAdmin: user.groups.includes('admin'),
-                isModerator: user.groups.includes('moderator'),
-                dateJoined: localUser?.dateJoined || new Date(),
-                lastLogin: user.last_login ? new Date(user.last_login) : null,
-                authentikId: user.pk,
-                groups: localUser?.groups || [],
-                notes: localUser?.notes || [],
-                attributes: user.attributes || {},
-              };
-            });
+            .map(user => transformAuthentikUser(user, localUserMap.get(String(user.pk))));
 
           return {
             users: transformedUsers,
@@ -89,54 +93,165 @@ export const userRouter = createTRPCRouter({
           };
         } catch (error) {
           console.error('Error fetching users from Authentik:', error);
-          
-          // Fall back to local database if Authentik fails
-          if (source === 'authentik') {
-            console.log('Falling back to local database users');
-          }
+          throw new Error('Failed to fetch users from Authentik SSO');
         }
       }
 
-      // Fetch from local database (fallback or when source is 'local' or 'both')
-      const skip = (page - 1) * limit;
-      const where = {
-        ...(search && {
-          OR: [
-            { username: { contains: search, mode: 'insensitive' as const } },
-            { email: { contains: search, mode: 'insensitive' as const } },
-            { firstName: { contains: search, mode: 'insensitive' as const } },
-            { lastName: { contains: search, mode: 'insensitive' as const } },
-          ],
-        }),
-        ...(isActive !== undefined && { isActive }),
-      };
+      if (source === 'local') {
+        // Fetch only from local database
+        const skip = (page - 1) * limit;
+        
+        // Parse advanced search query
+        const { where: searchWhere } = parseAdvancedSearch(search || '');
+        
+        const where = {
+          ...searchWhere,
+          ...(isActive !== undefined && { isActive }),
+        };
 
-      const [users, total] = await Promise.all([
-        ctx.prisma.user.findMany({
-          where,
-          skip,
-          take: limit,
-          orderBy: { dateJoined: 'desc' },
-          include: {
-            groups: {
-              include: {
-                group: true,
+        const [users, total] = await Promise.all([
+          ctx.prisma.user.findMany({
+            where,
+            skip,
+            take: limit,
+            orderBy: { dateJoined: 'desc' },
+            include: {
+              groups: {
+                include: {
+                  group: true,
+                },
               },
+              notes: true,
             },
-            notes: true,
-          },
-        }),
-        ctx.prisma.user.count({ where }),
-      ]);
+          }),
+          ctx.prisma.user.count({ where }),
+        ]);
 
-      return {
-        users,
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-        source: 'local' as const,
-      };
+        return {
+          users,
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+          source: 'local' as const,
+        };
+      }
+
+      if (source === 'both') {
+        // Fetch from both sources and combine results
+        try {
+          // First, get all users from both sources to calculate proper pagination
+          let authentikUsers: any[] = [];
+          let authentikTotal = 0;
+          
+          // Fetch all Authentik users for proper pagination calculation
+          try {
+            const authentikResult = await authentikService.listUsers(search, 1, 1000); // Get a large batch
+            authentikUsers = authentikResult.users.filter(user => {
+              if (isActive !== undefined && user.is_active !== isActive) {
+                return false;
+              }
+              return true;
+            });
+            authentikTotal = authentikResult.total;
+          } catch (authentikError) {
+            console.error('Error fetching users from Authentik:', authentikError);
+            // Continue with local users only if Authentik fails
+          }
+
+          // Get local user data
+          const { where: searchWhere } = parseAdvancedSearch(search || '');
+          const localWhere = {
+            ...searchWhere,
+            ...(isActive !== undefined && { isActive }),
+          };
+
+          const [localUsers, localTotal] = await Promise.all([
+            ctx.prisma.user.findMany({
+              where: localWhere,
+              orderBy: { dateJoined: 'desc' },
+              include: {
+                groups: {
+                  include: {
+                    group: true,
+                  },
+                },
+                notes: true,
+              },
+            }),
+            ctx.prisma.user.count({ where: localWhere }),
+          ]);
+
+          // Create a map of local users by authentikId for merging
+          const localUserMap = new Map(localUsers.map(u => [u.authentikId, u]));
+
+          // Transform Authentik users and merge with local data
+          const transformedAuthentikUsers = authentikUsers.map(user => 
+            transformAuthentikUser(user, localUserMap.get(String(user.pk)))
+          );
+
+          // Get local-only users (those without authentikId)
+          const localOnlyUsers = localUsers.filter(user => !user.authentikId);
+
+          // Combine all users
+          const allUsers = [...transformedAuthentikUsers, ...localOnlyUsers];
+
+          // Calculate pagination
+          const totalUsers = allUsers.length;
+          const totalPages = Math.ceil(totalUsers / limit);
+          const skip = (page - 1) * limit;
+          const paginatedUsers = allUsers.slice(skip, skip + limit);
+
+          return {
+            users: paginatedUsers,
+            total: totalUsers,
+            page,
+            limit,
+            totalPages,
+            source: 'both' as const,
+          };
+        } catch (error) {
+          console.error('Error fetching users from both sources:', error);
+          
+          // Fall back to local database only
+          const skip = (page - 1) * limit;
+          const { where: searchWhere } = parseAdvancedSearch(search || '');
+          const where = {
+            ...searchWhere,
+            ...(isActive !== undefined && { isActive }),
+          };
+
+          const [users, total] = await Promise.all([
+            ctx.prisma.user.findMany({
+              where,
+              skip,
+              take: limit,
+              orderBy: { dateJoined: 'desc' },
+              include: {
+                groups: {
+                  include: {
+                    group: true,
+                  },
+                },
+                notes: true,
+              },
+            }),
+            ctx.prisma.user.count({ where }),
+          ]);
+
+          return {
+            users,
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
+            source: 'local' as const,
+          };
+        }
+      }
+
+      // This should never be reached, but just in case
+      throw new Error('Invalid source specified');
     }),
 
   // Sync users from Authentik to local database
@@ -166,9 +281,10 @@ export const userRouter = createTRPCRouter({
           try {
             const [firstName, ...lastNameParts] = authentikUser.name?.split(' ') || [];
             
-            // Check if user exists locally
+            // Check if user exists locally (convert pk to string)
+            const authentikIdString = String(authentikUser.pk);
             const existingUser = await ctx.prisma.user.findUnique({
-              where: { authentikId: authentikUser.pk },
+              where: { authentikId: authentikIdString },
             });
 
             const userData = {
@@ -183,21 +299,19 @@ export const userRouter = createTRPCRouter({
               attributes: authentikUser.attributes || {},
             };
 
+            // Use upsert to handle both create and update cases, handling duplicate usernames
+            const result = await ctx.prisma.user.upsert({
+              where: { authentikId: authentikIdString },
+              update: userData,
+              create: {
+                ...userData,
+                authentikId: authentikIdString,
+              },
+            });
+            
             if (existingUser) {
-              // Update existing user
-              await ctx.prisma.user.update({
-                where: { authentikId: authentikUser.pk },
-                data: userData,
-              });
               updated++;
             } else {
-              // Create new user
-              await ctx.prisma.user.create({
-                data: {
-                  ...userData,
-                  authentikId: authentikUser.pk,
-                },
-              });
               created++;
             }
           } catch (error) {
@@ -241,11 +355,49 @@ export const userRouter = createTRPCRouter({
       let authentikCount = 0;
       let authentikConfigured = authentikService.isConfigured();
       let authentikError = null;
+      let newUsersCount = 0;
+      let pendingUpdatesCount = 0;
       
       if (authentikConfigured) {
         try {
           const authentikResult = await authentikService.listUsers(undefined, 1, 1);
           authentikCount = authentikResult.total;
+          
+          // Check for new users in Authentik not in local database
+          const authentikUsers = await authentikService.listUsers(undefined, 1, 100);
+          const authentikIds = authentikUsers.users.map(u => String(u.pk));
+          
+          const localUsers = await ctx.prisma.user.findMany({
+            where: {
+              authentikId: { in: authentikIds },
+            },
+            select: {
+              authentikId: true,
+              lastLogin: true,
+              isActive: true,
+              isAdmin: true,
+              isModerator: true,
+            },
+          });
+          
+          const localAuthentikIds = new Set(localUsers.map(u => u.authentikId));
+          newUsersCount = authentikIds.filter(id => !localAuthentikIds.has(id)).length;
+          
+          // Check for users that might need updates
+          pendingUpdatesCount = authentikUsers.users.filter(authentikUser => {
+            const localUser = localUsers.find(u => u.authentikId === String(authentikUser.pk));
+            if (!localUser) return false;
+            
+            // Check if there are differences that need syncing
+            const hasGroupChanges = 
+              (authentikUser.groups?.includes('admin') || false) !== localUser.isAdmin ||
+              (authentikUser.groups?.includes('moderator') || false) !== localUser.isModerator;
+            
+            const hasStatusChange = authentikUser.is_active !== localUser.isActive;
+            
+            return hasGroupChanges || hasStatusChange;
+          }).length;
+          
         } catch (error) {
           console.error('Error getting Authentik user count:', error);
           authentikError = error instanceof Error ? error.message : 'Unknown error';
@@ -256,9 +408,18 @@ export const userRouter = createTRPCRouter({
       return {
         localCount,
         authentikCount,
-        inSync: localCount === authentikCount,
+        inSync: localCount === authentikCount && newUsersCount === 0 && pendingUpdatesCount === 0,
         authentikConfigured,
         error: authentikError,
+        newUsersCount,
+        pendingUpdatesCount,
+        lastSyncTime: await ctx.prisma.adminEvent.findFirst({
+          where: {
+            eventType: { in: ['user_sync', 'user_auto_synced'] },
+          },
+          orderBy: { timestamp: 'desc' },
+          select: { timestamp: true },
+        }),
       };
     } catch (error) {
       console.error('Error getting sync status:', error);
@@ -277,15 +438,231 @@ export const userRouter = createTRPCRouter({
         inSync: false,
         authentikConfigured: false,
         error: error instanceof Error ? error.message : 'Unknown error',
+        newUsersCount: 0,
+        pendingUpdatesCount: 0,
+        lastSyncTime: null,
       };
     }
   }),
 
-  // Get single user by ID
+  // Sync specific user from Authentik
+  syncUser: moderatorProcedure
+    .input(z.object({ authentikId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const authentikUser = await authentikService.getUser(input.authentikId);
+        
+        if (!authentikUser) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'User not found in Authentik',
+          });
+        }
+
+        const [firstName, ...lastNameParts] = authentikUser.name?.split(' ') || [];
+        const authentikIdString = String(authentikUser.pk);
+        
+        // Check if user already exists locally
+        const existingUser = await ctx.prisma.user.findUnique({
+          where: { authentikId: authentikIdString },
+        });
+
+        const userData = {
+          username: authentikUser.username,
+          email: authentikUser.email,
+          firstName: firstName || '',
+          lastName: lastNameParts.join(' ') || '',
+          isActive: authentikUser.is_active,
+          isAdmin: authentikUser.groups?.includes('admin') || false,
+          isModerator: authentikUser.groups?.includes('moderator') || false,
+          lastLogin: authentikUser.last_login ? new Date(authentikUser.last_login) : null,
+          attributes: authentikUser.attributes || {},
+        };
+
+        // Use upsert to handle both create and update cases
+        const syncedUser = await ctx.prisma.user.upsert({
+          where: { authentikId: authentikIdString },
+          update: userData,
+          create: {
+            ...userData,
+            authentikId: authentikIdString,
+          },
+          include: {
+            groups: {
+              include: {
+                group: true,
+              },
+            },
+            notes: {
+              orderBy: { createdAt: 'desc' },
+            },
+            moderatorPermissions: true,
+          },
+        });
+
+        // Log the sync event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: existingUser ? 'user_updated' : 'user_synced',
+            username: ctx.session.user.username || 'unknown',
+            details: `${existingUser ? 'Updated' : 'Synced'} user ${authentikUser.username} from Authentik`,
+          },
+        });
+
+        return {
+          success: true,
+          user: syncedUser,
+          action: existingUser ? 'updated' : 'created',
+        };
+      } catch (error) {
+        console.error('Error syncing user from Authentik:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Failed to sync user: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        });
+      }
+    }),
+
+  // Check for new users and changes from Authentik
+  checkForUpdates: moderatorProcedure.query(async ({ ctx }) => {
+    try {
+      if (!authentikService.isConfigured()) {
+        return {
+          newUsers: [],
+          updatedUsers: [],
+          authentikConfigured: false,
+        };
+      }
+
+      // Get recent Authentik users (last 100 for efficiency)
+      const authentikResult = await authentikService.listUsers(undefined, 1, 100);
+      const authentikUsers = authentikResult.users;
+
+      // Get corresponding local users
+      const authentikIds = authentikUsers.map(u => String(u.pk));
+      const localUsers = await ctx.prisma.user.findMany({
+        where: {
+          authentikId: { in: authentikIds },
+        },
+        select: {
+          id: true,
+          username: true,
+          authentikId: true,
+          lastLogin: true,
+          isActive: true,
+          isAdmin: true,
+          isModerator: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+        },
+      });
+
+      const localUserMap = new Map(localUsers.map(u => [u.authentikId, u]));
+
+      // Find new users (in Authentik but not in local database)
+      const newUsers = authentikUsers
+        .filter(authentikUser => !localUserMap.has(String(authentikUser.pk)))
+        .map(authentikUser => {
+          const [firstName, ...lastNameParts] = authentikUser.name?.split(' ') || [];
+          return {
+            authentikId: String(authentikUser.pk),
+            username: authentikUser.username,
+            email: authentikUser.email,
+            firstName: firstName || '',
+            lastName: lastNameParts.join(' ') || '',
+            isActive: authentikUser.is_active,
+            isAdmin: authentikUser.groups?.includes('admin') || false,
+            isModerator: authentikUser.groups?.includes('moderator') || false,
+            lastLogin: authentikUser.last_login ? new Date(authentikUser.last_login) : null,
+          };
+        });
+
+      // Find users that need updates
+      const updatedUsers = authentikUsers
+        .filter(authentikUser => {
+          const localUser = localUserMap.get(String(authentikUser.pk));
+          if (!localUser) return false;
+
+          // Check for differences
+          const hasGroupChanges = 
+            (authentikUser.groups?.includes('admin') || false) !== localUser.isAdmin ||
+            (authentikUser.groups?.includes('moderator') || false) !== localUser.isModerator;
+          
+          const hasStatusChange = authentikUser.is_active !== localUser.isActive;
+          
+          const [firstName, ...lastNameParts] = authentikUser.name?.split(' ') || [];
+          const hasNameChange = 
+            (firstName || '') !== localUser.firstName ||
+            (lastNameParts.join(' ') || '') !== localUser.lastName;
+          
+          const hasEmailChange = authentikUser.email !== localUser.email;
+
+          return hasGroupChanges || hasStatusChange || hasNameChange || hasEmailChange;
+        })
+        .map(authentikUser => {
+          const localUser = localUserMap.get(String(authentikUser.pk))!;
+          const [firstName, ...lastNameParts] = authentikUser.name?.split(' ') || [];
+          
+          return {
+            authentikId: String(authentikUser.pk),
+            localId: localUser.id,
+            username: authentikUser.username,
+            changes: {
+              isAdmin: {
+                old: localUser.isAdmin,
+                new: authentikUser.groups?.includes('admin') || false,
+              },
+              isModerator: {
+                old: localUser.isModerator,
+                new: authentikUser.groups?.includes('moderator') || false,
+              },
+              isActive: {
+                old: localUser.isActive,
+                new: authentikUser.is_active,
+              },
+              firstName: {
+                old: localUser.firstName,
+                new: firstName || '',
+              },
+              lastName: {
+                old: localUser.lastName,
+                new: lastNameParts.join(' ') || '',
+              },
+              email: {
+                old: localUser.email,
+                new: authentikUser.email,
+              },
+            },
+          };
+        });
+
+      return {
+        newUsers,
+        updatedUsers,
+        authentikConfigured: true,
+        lastChecked: new Date(),
+      };
+    } catch (error) {
+      console.error('Error checking for updates:', error);
+      return {
+        newUsers: [],
+        updatedUsers: [],
+        authentikConfigured: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }),
+
+  // Get single user by ID (with Authentik fallback and auto-sync)
   getUser: moderatorProcedure
     .input(z.object({ id: z.number() }))
     .query(async ({ ctx, input }) => {
-      return await ctx.prisma.user.findUnique({
+      // First, try to find user in local database
+      const localUser = await ctx.prisma.user.findUnique({
         where: { id: input.id },
         include: {
           groups: {
@@ -299,6 +676,86 @@ export const userRouter = createTRPCRouter({
           moderatorPermissions: true,
         },
       });
+
+      if (localUser) {
+        return localUser;
+      }
+
+      // If not found locally, try to find and sync from Authentik
+      try {
+        // Check if this is an Authentik user ID
+        const authentikUser = await authentikService.getUser(String(input.id));
+        
+        if (authentikUser) {
+          // Found in Authentik, sync to local database
+          const [firstName, ...lastNameParts] = authentikUser.name?.split(' ') || [];
+          const authentikIdString = String(authentikUser.pk);
+          
+          // Check if user already exists with different ID (by authentikId)
+          const existingUser = await ctx.prisma.user.findUnique({
+            where: { authentikId: authentikIdString },
+            include: {
+              groups: {
+                include: {
+                  group: true,
+                },
+              },
+              notes: {
+                orderBy: { createdAt: 'desc' },
+              },
+              moderatorPermissions: true,
+            },
+          });
+
+          if (existingUser) {
+            return existingUser;
+          }
+
+          // Create new local user record for this Authentik user
+          const newUser = await ctx.prisma.user.create({
+            data: {
+              username: authentikUser.username,
+              email: authentikUser.email,
+              firstName: firstName || '',
+              lastName: lastNameParts.join(' ') || '',
+              authentikId: authentikIdString,
+              isActive: authentikUser.is_active,
+              isAdmin: authentikUser.groups?.includes('admin') || false,
+              isModerator: authentikUser.groups?.includes('moderator') || false,
+              lastLogin: authentikUser.last_login ? new Date(authentikUser.last_login) : null,
+              attributes: authentikUser.attributes || {},
+            },
+            include: {
+              groups: {
+                include: {
+                  group: true,
+                },
+              },
+              notes: {
+                orderBy: { createdAt: 'desc' },
+              },
+              moderatorPermissions: true,
+            },
+          });
+
+          // Log the auto-sync event
+          await ctx.prisma.adminEvent.create({
+            data: {
+              eventType: 'user_auto_synced',
+              username: ctx.session.user.username || 'unknown',
+              details: `Auto-synced user ${authentikUser.username} from Authentik on access`,
+            },
+          });
+
+          return newUser;
+        }
+      } catch (error) {
+        console.error('Error fetching user from Authentik:', error);
+        // Continue to return null if Authentik fetch fails
+      }
+
+      // User not found in either source
+      return null;
     }),
 
   // Create new user

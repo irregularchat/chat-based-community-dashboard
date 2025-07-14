@@ -155,12 +155,12 @@ export default function AdminDashboard() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="users">Users</TabsTrigger>
-            <TabsTrigger value="activity">Activity</TabsTrigger>
-            <TabsTrigger value="system">System Health</TabsTrigger>
-            <TabsTrigger value="events">Event Logs</TabsTrigger>
+          <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-5 lg:overflow-x-visible">
+            <TabsTrigger value="overview" className="flex-shrink-0">Overview</TabsTrigger>
+            <TabsTrigger value="users" className="flex-shrink-0">Users</TabsTrigger>
+            <TabsTrigger value="activity" className="flex-shrink-0">Activity</TabsTrigger>
+            <TabsTrigger value="system" className="flex-shrink-0">System Health</TabsTrigger>
+            <TabsTrigger value="events" className="flex-shrink-0">Event Logs</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="space-y-6">

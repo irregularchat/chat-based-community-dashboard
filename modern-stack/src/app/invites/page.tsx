@@ -197,10 +197,10 @@ export default function InvitesPage() {
       </div>
 
       <Tabs defaultValue="create" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="create">Create Invite</TabsTrigger>
-          <TabsTrigger value="send">Send Invite</TabsTrigger>
-          <TabsTrigger value="manage">Manage Invites</TabsTrigger>
+        <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-3 lg:overflow-x-visible">
+          <TabsTrigger value="create" className="flex-shrink-0">Create Invite</TabsTrigger>
+          <TabsTrigger value="send" className="flex-shrink-0">Send Invite</TabsTrigger>
+          <TabsTrigger value="manage" className="flex-shrink-0">Manage Invites</TabsTrigger>
         </TabsList>
 
         <TabsContent value="create" className="space-y-6">

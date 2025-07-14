@@ -484,41 +484,41 @@ export default function UserDashboard() {
       </div>
 
       <Tabs value={selectedTab} onValueChange={setSelectedTab} className="space-y-4">
-        <TabsList className={`grid w-full ${session.user.isAdmin || session.user.isModerator ? 'grid-cols-7' : 'grid-cols-5'}`}>
+        <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-7 lg:overflow-x-visible">
           {/* Admin gets Admin tab first */}
           {session.user.isAdmin && (
-            <TabsTrigger value="admin" className="flex items-center gap-2">
-              <BarChart3 className="w-4 h-4" />
-              Admin
+            <TabsTrigger value="admin" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+              <BarChart3 className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Admin</span>
             </TabsTrigger>
           )}
           {/* Moderators get Moderation tab first (after Admin if admin) */}
           {(session.user.isModerator || session.user.isAdmin) && (
-            <TabsTrigger value="moderation" className="flex items-center gap-2">
-              <Shield className="w-4 h-4" />
-              Moderation
+            <TabsTrigger value="moderation" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+              <Shield className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Moderation</span>
             </TabsTrigger>
           )}
           {/* Quick Links comes first for regular users, earlier for admin/mods */}
-          <TabsTrigger value="links" className="flex items-center gap-2">
-            <ExternalLink className="w-4 h-4" />
-            Quick Links
+          <TabsTrigger value="links" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+            <ExternalLink className="w-4 h-4 shrink-0" />
+            <span className="hidden sm:inline">Quick Links</span>
           </TabsTrigger>
-          <TabsTrigger value="rooms" className="flex items-center gap-2">
-            <Users className="w-4 h-4" />
-            Rooms
+          <TabsTrigger value="rooms" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+            <Users className="w-4 h-4 shrink-0" />
+            <span className="hidden sm:inline">Rooms</span>
           </TabsTrigger>
-          <TabsTrigger value="account" className="flex items-center gap-2">
-            <Settings className="w-4 h-4" />
-            Account
+          <TabsTrigger value="account" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+            <Settings className="w-4 h-4 shrink-0" />
+            <span className="hidden sm:inline">Account</span>
           </TabsTrigger>
-          <TabsTrigger value="invite" className="flex items-center gap-2">
-            <Mail className="w-4 h-4" />
-            Invite Friends
+          <TabsTrigger value="invite" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+            <Mail className="w-4 h-4 shrink-0" />
+            <span className="hidden sm:inline">Invite</span>
           </TabsTrigger>
-          <TabsTrigger value="contact" className="flex items-center gap-2">
-            <MessageSquare className="w-4 h-4" />
-            Contact
+          <TabsTrigger value="contact" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+            <MessageSquare className="w-4 h-4 shrink-0" />
+            <span className="hidden sm:inline">Contact</span>
           </TabsTrigger>
         </TabsList>
 

@@ -276,22 +276,22 @@ export default function MatrixPage() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Tabs defaultValue="direct-message" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-4">
-            <TabsTrigger value="direct-message">
-              <MessageCircle className="w-4 h-4 mr-2" />
-              Direct Messages
+          <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-4 lg:overflow-x-visible">
+            <TabsTrigger value="direct-message" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+              <MessageCircle className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Direct Messages</span>
             </TabsTrigger>
-            <TabsTrigger value="room-message">
-              <Users className="w-4 h-4 mr-2" />
-              Room Messages
+            <TabsTrigger value="room-message" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+              <Users className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Room Messages</span>
             </TabsTrigger>
-            <TabsTrigger value="invite-users">
-              <UserPlus className="w-4 h-4 mr-2" />
-              Invite Users
+            <TabsTrigger value="invite-users" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+              <UserPlus className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Invite Users</span>
             </TabsTrigger>
-            <TabsTrigger value="remove-users">
-              <UserMinus className="w-4 h-4 mr-2" />
-              Remove Users
+            <TabsTrigger value="remove-users" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+              <UserMinus className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Remove Users</span>
             </TabsTrigger>
           </TabsList>
 

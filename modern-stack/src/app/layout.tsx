@@ -4,6 +4,7 @@ import "./globals.css";
 import AuthSessionProvider from "@/components/providers/session-provider";
 import TRPCProvider from "@/components/providers/trpc-provider";
 import { Toaster } from "@/components/ui/sonner";
+import NavigationHeader from "@/components/navigation-header";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -32,7 +33,10 @@ export default function RootLayout({
       >
         <AuthSessionProvider>
           <TRPCProvider>
-            {children}
+            <NavigationHeader />
+            <main className="flex-1">
+              {children}
+            </main>
             <Toaster />
           </TRPCProvider>
         </AuthSessionProvider>

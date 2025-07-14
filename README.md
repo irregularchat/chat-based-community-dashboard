@@ -77,7 +77,7 @@ nano .env  # Configure your settings
 docker compose up -d db
 
 # Install dependencies and run development server
-cd modern-stack
+cd chat-based-community-dashboard
 npm install
 npm run dev
 ```
@@ -137,7 +137,7 @@ SMTP_FROM=no-reply@your-domain.com
 5. **Settings** - Configure email, Matrix, and authentication settings
 
 ### For Developers
-- **Modern stack**: `modern-stack/` - Next.js application
+- **Application**: Root directory - Next.js application
 - **Database**: Prisma ORM with PostgreSQL
 - **API routes**: `src/lib/trpc/routers/` - tRPC endpoints
 - **Components**: `src/components/` - React components

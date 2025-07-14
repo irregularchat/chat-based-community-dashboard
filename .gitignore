@@ -1,32 +1,78 @@
+# Environment files
 .env
-environment
-the
-virtual
-\#
-venv
-env
-.idea
-.vscode
-#macos ignores
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Next.js build output
+.next/
+out/
+dist/
+build/
+
+# Prisma
+# Exclude generated client but keep schema and migrations
+src/generated/
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+.cursorignore
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# nyc test coverage
+.nyc_output
+
+# TypeScript
+*.tsbuildinfo
+
+# macOS
 .DS_Store
-#pyc files
+
+# Python (legacy)
 *.pyc
 *.pyo
 *.pyd
-#pycache
-__pycache__
-__pycache__/ 
-#logs
-*.log
-#database
+__pycache__/
+.venv/
+venv/
+env/
+the
+virtual
+\#
+
+# Database files
 *.db
 *.csv
 users.csv
-.cursorignore
-.venv/
-# postgres from /app/db/postgres
 pg_dump.sql
 app/db/postgres/
+
+# Testing
+.coverage
 
 # postgres data directory
 app/db/postgres_data/

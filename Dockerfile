@@ -14,11 +14,20 @@ RUN npm ci
 # Rebuild the source code only when needed
 FROM base AS builder
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
+COPY package*.json ./
+COPY prisma ./prisma/
+
+# Install dependencies fresh in builder
+RUN npm ci
 
 # Generate Prisma client
 RUN npx prisma generate
+
+# Copy configuration files
+COPY next.config.ts tsconfig.json ./
+
+# Copy the rest of the source code
+COPY . .
 
 # Next.js collects completely anonymous telemetry data about general usage.
 # Learn more here: https://nextjs.org/telemetry

@@ -26,11 +26,12 @@ const nextConfig: NextConfig = {
       };
     }
     
-    // Handle matrix-js-sdk properly
-    config.externals = config.externals || {};
-    if (isServer) {
-      config.externals.push('matrix-js-sdk');
-    }
+    // Fix matrix-js-sdk multiple entrypoints issue
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      'matrix-js-sdk': require.resolve('matrix-js-sdk'),
+      '@matrix-org/olm': require.resolve('@matrix-org/olm'),
+    };
     
     return config;
   },

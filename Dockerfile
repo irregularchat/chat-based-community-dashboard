@@ -61,9 +61,9 @@ RUN chmod +x ./entrypoint.sh
 # Change ownership of necessary files to nextjs user
 RUN chown -R nextjs:nodejs /app
 
-EXPOSE 3000
+EXPOSE ${PORT:-8503}
 
-ENV PORT 3000
+ENV PORT=${PORT:-8503}
 ENV HOSTNAME "0.0.0.0"
 
 # Use entrypoint script for database setup, then start as nextjs user

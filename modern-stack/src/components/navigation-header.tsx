@@ -79,12 +79,12 @@ export default function NavigationHeader() {
             className="p-0 hover:bg-transparent"
             onClick={() => handleNavigation('/')}
           >
-            <h1 className="text-xl font-bold">Community Dashboard</h1>
+            <h1 className="text-lg md:text-xl font-bold">Community Dashboard</h1>
           </Button>
         </div>
 
         {/* Desktop Navigation */}
-        <nav className="hidden md:flex items-center space-x-1 text-sm font-medium">
+        <nav className="hidden md:flex items-center space-x-1 text-sm font-medium flex-1">
           <Button
             variant={isActive('/') || isActive('/dashboard') ? 'default' : 'ghost'}
             size="sm"
@@ -158,7 +158,7 @@ export default function NavigationHeader() {
         </nav>
 
         {/* Mobile Menu Button */}
-        <div className="md:hidden flex-1 flex justify-end">
+        <div className="md:hidden flex-1 flex justify-end mr-2">
           <DropdownMenu open={isMenuOpen} onOpenChange={setIsMenuOpen}>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="sm">
@@ -197,7 +197,7 @@ export default function NavigationHeader() {
         </div>
 
         {/* User Menu */}
-        <div className="flex items-center space-x-2 ml-auto">
+        <div className="flex items-center space-x-2">
           {/* User Role Badge */}
           <div className="hidden sm:block">
             {session.user.isAdmin && (

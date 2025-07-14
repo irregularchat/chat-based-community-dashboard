@@ -441,22 +441,22 @@ export default function AdminSettingsPage() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-4">
-            <TabsTrigger value="bookmarks" className="flex items-center gap-2">
-              <Bookmark className="w-4 h-4" />
-              Community Bookmarks
+          <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-4 lg:overflow-x-visible">
+            <TabsTrigger value="bookmarks" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+              <Bookmark className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Community Bookmarks</span>
             </TabsTrigger>
-            <TabsTrigger value="rooms" className="flex items-center gap-2">
-              <MessageSquare className="w-4 h-4" />
-              Room Cards
+            <TabsTrigger value="rooms" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+              <MessageSquare className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Room Cards</span>
             </TabsTrigger>
-            <TabsTrigger value="announcements" className="flex items-center gap-2">
-              <Bell className="w-4 h-4" />
-              Announcements
+            <TabsTrigger value="announcements" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+              <Bell className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Announcements</span>
             </TabsTrigger>
-            <TabsTrigger value="settings" className="flex items-center gap-2">
-              <Settings className="w-4 h-4" />
-              General Settings
+            <TabsTrigger value="settings" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+              <Settings className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">General Settings</span>
             </TabsTrigger>
           </TabsList>
 

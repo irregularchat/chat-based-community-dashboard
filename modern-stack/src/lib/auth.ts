@@ -7,33 +7,35 @@ import bcrypt from 'bcryptjs';
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
   providers: [
-    // Authentik OIDC Provider
-    {
-      id: 'authentik',
-      name: 'Authentik',
-      type: 'oauth',
-      clientId: process.env.AUTHENTIK_CLIENT_ID!,
-      clientSecret: process.env.AUTHENTIK_CLIENT_SECRET!,
-      issuer: process.env.AUTHENTIK_ISSUER!,
-      wellKnown: `${process.env.AUTHENTIK_ISSUER}/.well-known/openid-configuration`,
-      authorization: {
-        params: {
-          scope: 'openid email profile',
-        },
-      },
-      profile(profile) {
-        return {
-          id: profile.sub,
-          email: profile.email,
-          name: profile.name,
-          username: profile.preferred_username,
-          authentikId: profile.sub,
-          firstName: profile.given_name,
-          lastName: profile.family_name,
-          groups: profile.groups || [],
-        };
-      },
-    },
+    // Authentik OIDC Provider (only if configured)
+    ...(process.env.AUTHENTIK_CLIENT_ID && process.env.AUTHENTIK_CLIENT_SECRET && process.env.AUTHENTIK_ISSUER
+      ? [{
+          id: 'authentik',
+          name: 'Authentik',
+          type: 'oauth' as const,
+          clientId: process.env.AUTHENTIK_CLIENT_ID,
+          clientSecret: process.env.AUTHENTIK_CLIENT_SECRET,
+          issuer: process.env.AUTHENTIK_ISSUER,
+          wellKnown: `${process.env.AUTHENTIK_ISSUER}/.well-known/openid-configuration`,
+          authorization: {
+            params: {
+              scope: 'openid email profile',
+            },
+          },
+          profile(profile: any) {
+            return {
+              id: profile.sub,
+              email: profile.email,
+              name: profile.name,
+              username: profile.preferred_username,
+              authentikId: profile.sub,
+              firstName: profile.given_name,
+              lastName: profile.family_name,
+              groups: profile.groups || [],
+            };
+          },
+        }]
+      : []),
     // Local Authentication Provider
     CredentialsProvider({
       id: 'local',

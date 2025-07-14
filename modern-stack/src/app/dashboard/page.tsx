@@ -473,45 +473,13 @@ export default function UserDashboard() {
 
   return (
     <div className="container mx-auto py-6 space-y-6">
-      {/* Header */}
+      {/* Welcome Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Community Dashboard</h1>
+          <h1 className="text-3xl font-bold">Welcome back, {session.user.name || session.user.username}!</h1>
           <p className="text-muted-foreground">
-            Welcome back, {session.user.name || session.user.username}!
+            Here's what's happening with your community
           </p>
-        </div>
-        <div className="flex gap-2">
-          {session.user.isAdmin && (
-            <Badge 
-              variant="default" 
-              className="px-3 py-1 bg-red-600 hover:bg-red-700 cursor-pointer transition-colors"
-              onClick={() => setSelectedTab('account')}
-            >
-              <User className="w-4 h-4 mr-2" />
-              Administrator
-            </Badge>
-          )}
-          {session.user.isModerator && !session.user.isAdmin && (
-            <Badge 
-              variant="default" 
-              className="px-3 py-1 bg-blue-600 hover:bg-blue-700 cursor-pointer transition-colors"
-              onClick={() => setSelectedTab('account')}
-            >
-              <User className="w-4 h-4 mr-2" />
-              Moderator
-            </Badge>
-          )}
-          {!session.user.isAdmin && !session.user.isModerator && (
-            <Badge 
-              variant="outline" 
-              className="px-3 py-1 hover:bg-muted cursor-pointer transition-colors"
-              onClick={() => setSelectedTab('account')}
-            >
-              <User className="w-4 h-4 mr-2" />
-              Member
-            </Badge>
-          )}
         </div>
       </div>
 

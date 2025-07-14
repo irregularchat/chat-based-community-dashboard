@@ -92,32 +92,17 @@ export default function CommunityTimelinePage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                <Activity className="w-6 h-6" />
-                Community Timeline
-              </h1>
-              <p className="text-sm text-gray-600">
-                Public record of community events and administrative actions
-              </p>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Button
-                variant="outline"
-                onClick={() => router.push('/')}
-              >
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Back to Dashboard
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Page Header */}
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
+            <Activity className="w-8 h-8" />
+            Community Timeline
+          </h1>
+          <p className="text-gray-600 mt-2">
+            Public record of community events and administrative actions
+          </p>
+        </div>
         <Tabs defaultValue="timeline" className="space-y-6">
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="timeline" className="flex items-center gap-2">

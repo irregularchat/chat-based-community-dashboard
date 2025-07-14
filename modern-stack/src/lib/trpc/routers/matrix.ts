@@ -177,9 +177,32 @@ export const matrixRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       try {
         const cacheService = createMatrixCacheService(ctx.prisma);
+        let rooms: any[] = [];
         
-        if (matrixService.isConfigured()) {
-          // Get rooms from database cache
+        // Get environment-configured rooms (from .env file)
+        if (input.includeConfigured) {
+          const envRooms = matrixService.parseRooms();
+          const envCategories = matrixService.parseCategories();
+          
+          for (const envRoom of envRooms) {
+            // Map categories to display names
+            const categoryDisplayNames = envRoom.categories.map(cat => 
+              envCategories[cat]?.displayName || cat
+            );
+            
+            rooms.push({
+              room_id: envRoom.matrixRoomId,
+              name: envRoom.name,
+              topic: envRoom.description,
+              member_count: 0, // Unknown member count for env rooms
+              category: categoryDisplayNames.join(', ') || 'General',
+              configured: true,
+            });
+          }
+        }
+        
+        // Get rooms from database cache if Matrix is configured
+        if (matrixService.isConfigured() && input.includeDiscovered) {
           const cachedRooms = await cacheService.getCachedRooms({
             search: input.search,
             includeDirectRooms: false,
@@ -187,64 +210,51 @@ export const matrixRouter = createTRPCRouter({
             offset: input.offset,
           });
 
-          let rooms = cachedRooms.map(room => ({
+          const cacheRoomData = cachedRooms.map(room => ({
             room_id: room.roomId,
             name: room.displayName || room.name || room.roomId,
             topic: room.topic,
             member_count: room.memberCount,
             category: getRoomCategory(room.displayName || room.name || ''),
-            configured: true,
+            configured: false, // These are discovered rooms
           }));
 
-          // Apply category filter
-          if (input.category) {
-            rooms = rooms.filter(room => room.category === input.category);
-          }
-
-          // If no cached rooms, return default rooms for demo
-          if (rooms.length === 0) {
-            rooms = [
-              {
-                room_id: '!general:matrix.example.com',
-                name: 'General Chat',
-                topic: 'General discussion room',
-                member_count: 25,
-                category: 'General',
-                configured: true,
-              },
-              {
-                room_id: '!tech:matrix.example.com',
-                name: 'Tech Discussion',
-                topic: 'Technology and development chat',
-                member_count: 15,
-                category: 'Technology',
-                configured: true,
-              },
-            ];
-          }
-
-          return rooms;
-        } else {
-          // Fallback to mock data when Matrix is not configured
-          return [
-            {
-              room_id: '!general:matrix.example.com',
-              name: 'General Chat',
-              topic: 'General discussion room',
-              member_count: 25,
-              category: 'General',
-              configured: true,
-            },
-            {
-              room_id: '!tech:matrix.example.com',
-              name: 'Tech Discussion',
-              topic: 'Technology and development chat',
-              member_count: 15,
-              category: 'Technology',
-              configured: true,
-            },
-          ];
+          // Merge with env rooms, avoiding duplicates
+          const envRoomIds = new Set(rooms.map(r => r.room_id));
+          const newCacheRooms = cacheRoomData.filter(r => !envRoomIds.has(r.room_id));
+          rooms = [...rooms, ...newCacheRooms];
         }
+
+        // Apply search filter
+        if (input.search) {
+          const searchLower = input.search.toLowerCase();
+          rooms = rooms.filter(room => 
+            room.name.toLowerCase().includes(searchLower) ||
+            (room.topic || '').toLowerCase().includes(searchLower) ||
+            (room.category || '').toLowerCase().includes(searchLower)
+          );
+        }
+
+        // Apply category filter
+        if (input.category) {
+          rooms = rooms.filter(room => 
+            room.category && room.category.toLowerCase().includes(input.category!.toLowerCase())
+          );
+        }
+
+        // Sort by configured status first, then by name
+        rooms.sort((a, b) => {
+          if (a.configured && !b.configured) return -1;
+          if (!a.configured && b.configured) return 1;
+          return a.name.localeCompare(b.name);
+        });
+
+        // Apply pagination
+        const startIndex = input.offset;
+        const endIndex = startIndex + input.limit;
+        rooms = rooms.slice(startIndex, endIndex);
+
+        return rooms;
       } catch (error) {
         console.error('Error fetching Matrix rooms:', error);
         return [];
@@ -253,7 +263,22 @@ export const matrixRouter = createTRPCRouter({
 
   // Get room categories
   getCategories: moderatorProcedure.query(async ({ ctx }) => {
-    return ['General', 'Technology', 'Social', 'Support', 'Off-topic', 'Uncategorized'];
+    try {
+      // Get environment-configured categories
+      const envCategories = matrixService.parseCategories();
+      const categoryNames = Object.values(envCategories).map(cat => cat.displayName);
+      
+      // Add default categories
+      const defaultCategories = ['General', 'Technology', 'Social', 'Support', 'Off-topic', 'Uncategorized'];
+      
+      // Combine and deduplicate
+      const allCategories = [...new Set([...categoryNames, ...defaultCategories])];
+      
+      return allCategories.sort();
+    } catch (error) {
+      console.error('Error fetching categories:', error);
+      return ['General', 'Technology', 'Social', 'Support', 'Off-topic', 'Uncategorized'];
+    }
   }),
 
   // Send direct message to a user
@@ -942,6 +967,221 @@ export const matrixRouter = createTRPCRouter({
       } catch (error) {
         console.error('Error cleaning up cache:', error);
         throw new Error('Failed to clean up cache');
+      }
+    }),
+
+  // Signal verification endpoints with encryption-aware messaging
+  sendSignalVerificationMessage: moderatorProcedure
+    .input(
+      z.object({
+        phoneNumber: z.string(),
+        message: z.string(),
+        encryptionDelaySeconds: z.number().default(5),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        if (!matrixService.isConfigured()) {
+          return {
+            success: false,
+            error: 'Matrix service not configured',
+          };
+        }
+
+        const result = await matrixService.sendSignalMessageByPhone(
+          input.phoneNumber,
+          input.message
+        );
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'signal_verification_message',
+            username: ctx.session.user.username || 'unknown',
+            details: `Sent Signal verification message to ${input.phoneNumber}: ${result.success ? 'Success' : result.error}`,
+          },
+        });
+
+        // Log community timeline event
+        if (result.success) {
+          await logCommunityEvent({
+            eventType: 'signal_verification',
+            username: ctx.session.user.username || 'unknown',
+            details: `Sent Signal verification to ${input.phoneNumber.replace(/\d(?=\d{4})/g, '*')}`, // Mask phone number
+            category: getCategoryForEventType('signal_verification'),
+          });
+        }
+
+        return result;
+      } catch (error) {
+        console.error('Error sending Signal verification message:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error occurred',
+        };
+      }
+    }),
+
+  // Send welcome message with encryption delay for user creation flows
+  sendWelcomeMessageWithEncryptionDelay: moderatorProcedure
+    .input(
+      z.object({
+        matrixUserId: z.string(),
+        username: z.string(),
+        fullName: z.string(),
+        tempPassword: z.string(),
+        discoursePostUrl: z.string().optional(),
+        encryptionDelaySeconds: z.number().default(5),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        if (!matrixService.isConfigured()) {
+          return {
+            success: false,
+            error: 'Matrix service not configured',
+          };
+        }
+
+        const result = await matrixService.sendWelcomeMessageWithEncryptionDelay(
+          input.matrixUserId,
+          input.username,
+          input.fullName,
+          input.tempPassword,
+          input.discoursePostUrl,
+          input.encryptionDelaySeconds
+        );
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'welcome_message_encryption_delay',
+            username: ctx.session.user.username || 'unknown',
+            details: `Sent welcome message with encryption delay to ${input.matrixUserId}: ${result.success ? 'Success' : result.error}`,
+          },
+        });
+
+        // Log community timeline event
+        if (result.success) {
+          const displayName = input.matrixUserId.split(':')[0].replace('@', '');
+          await logCommunityEvent({
+            eventType: 'welcome_message',
+            username: ctx.session.user.username || 'unknown',
+            details: `Sent welcome message to ${displayName}`,
+            category: getCategoryForEventType('welcome_message'),
+          });
+        }
+
+        return result;
+      } catch (error) {
+        console.error('Error sending welcome message with encryption delay:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error occurred',
+        };
+      }
+    }),
+
+  // Bulk send welcome messages with encryption delay for multiple users
+  bulkSendWelcomeMessagesWithEncryptionDelay: moderatorProcedure
+    .input(
+      z.object({
+        users: z.array(z.object({
+          matrixUserId: z.string(),
+          username: z.string(),
+          fullName: z.string(),
+          tempPassword: z.string(),
+          discoursePostUrl: z.string().optional(),
+        })),
+        encryptionDelaySeconds: z.number().default(5),
+        batchSize: z.number().default(5),
+        delayMs: z.number().default(1000),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const results: Record<string, boolean> = {};
+      const errors: Record<string, string> = {};
+
+      if (!matrixService.isConfigured()) {
+        return {
+          success: false,
+          results: {},
+          errors: {},
+          totalSuccess: 0,
+          totalFailed: input.users.length,
+          message: 'Matrix service not configured',
+        };
+      }
+
+      try {
+        // Process in batches to avoid overwhelming the Matrix server
+        const batches = [];
+        for (let i = 0; i < input.users.length; i += input.batchSize) {
+          batches.push(input.users.slice(i, i + input.batchSize));
+        }
+
+        for (const [batchIndex, batch] of batches.entries()) {
+          // Add delay between batches
+          if (batchIndex > 0) {
+            await new Promise(resolve => setTimeout(resolve, input.delayMs));
+          }
+
+          // Process batch in parallel
+          const batchPromises = batch.map(async (user) => {
+            try {
+              const result = await matrixService.sendWelcomeMessageWithEncryptionDelay(
+                user.matrixUserId,
+                user.username,
+                user.fullName,
+                user.tempPassword,
+                user.discoursePostUrl,
+                input.encryptionDelaySeconds
+              );
+              
+              results[user.matrixUserId] = result.success;
+              if (!result.success) {
+                errors[user.matrixUserId] = result.error || 'Unknown error';
+              }
+            } catch (error) {
+              results[user.matrixUserId] = false;
+              errors[user.matrixUserId] = error instanceof Error ? error.message : 'Unknown error';
+            }
+          });
+
+          await Promise.all(batchPromises);
+          console.log(`Completed welcome message batch ${batchIndex + 1}/${batches.length}`);
+        }
+
+        const totalSuccess = Object.values(results).filter(Boolean).length;
+        const totalFailed = Object.values(results).filter(success => !success).length;
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'bulk_welcome_messages_encryption_delay',
+            username: ctx.session.user.username || 'unknown',
+            details: `Bulk sent welcome messages with encryption delay to ${input.users.length} users. Success: ${totalSuccess}, Failed: ${totalFailed}`,
+          },
+        });
+
+        return {
+          success: totalFailed === 0,
+          results,
+          errors,
+          totalSuccess,
+          totalFailed,
+          batchesProcessed: batches.length,
+        };
+      } catch (error) {
+        console.error('Error sending bulk welcome messages:', error);
+        return {
+          success: false,
+          results: {},
+          errors: {},
+          totalSuccess: 0,
+          totalFailed: input.users.length,
+          message: error instanceof Error ? error.message : 'Unknown error occurred',
+        };
       }
     }),
 }); 

@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "${PORT:-8503}:3000"  # Map container's internal port 3000 to host's port (default 8503)
+    env_file:
+      - .env
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
@@ -55,7 +57,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-3000}"]
       interval: 30s
       timeout: 10s
       retries: 3

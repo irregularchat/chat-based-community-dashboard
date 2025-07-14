@@ -37,6 +37,10 @@ RUN adduser --system --uid 1001 nextjs
 
 COPY --from=builder /app/public ./public
 
+# Copy Olm WASM files for Matrix encryption
+COPY --from=builder /app/node_modules/@matrix-org/olm/olm.wasm ./public/olm/olm.wasm
+COPY --from=builder /app/node_modules/@matrix-org/olm/olm.js ./public/olm/olm.js
+
 # Set the correct permission for prerender cache
 RUN mkdir .next
 RUN chown nextjs:nodejs .next

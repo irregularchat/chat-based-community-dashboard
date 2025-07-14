@@ -412,10 +412,11 @@ class AuthentikService {
       let hasMore = true;
       const pageSize = 500;
       const maxRetries = 3;
+      const maxPages = 20; // Safety limit to prevent infinite loops
 
       console.log('Fetching all users from Authentik...');
 
-      while (hasMore) {
+      while (hasMore && page <= maxPages) {
         let retry = 0;
         let response;
 
@@ -434,15 +435,26 @@ class AuthentikService {
           }
         }
 
-        if (!response) {
+        if (!response || !response.users || response.users.length === 0) {
+          console.log(`No more users found on page ${page}, stopping pagination`);
           break;
         }
 
         allUsers = allUsers.concat(response.users);
-        hasMore = response.hasMore;
+        hasMore = response.hasMore && response.users.length === pageSize;
         page++;
 
         console.log(`Fetched page ${page - 1}: ${response.users.length} users (total: ${allUsers.length})`);
+        
+        // If we got fewer users than page size, we've reached the end
+        if (response.users.length < pageSize) {
+          console.log(`Received ${response.users.length} users (less than page size ${pageSize}), reached end`);
+          hasMore = false;
+        }
+      }
+
+      if (page > maxPages) {
+        console.warn(`Reached maximum page limit (${maxPages}), there may be more users`);
       }
 
       console.log(`Fetched ${allUsers.length} total users from Authentik`);

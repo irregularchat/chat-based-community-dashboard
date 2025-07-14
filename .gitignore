@@ -1,9 +1,13 @@
-# Environment files
+# Environment files (NEVER commit these - they contain secrets!)
 .env
+.env.*
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+.env.full
+.env.backup
+.env.bak
 
 # Dependencies
 node_modules/

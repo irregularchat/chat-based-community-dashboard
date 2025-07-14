@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { MoreHorizontal, Search, UserPlus, Filter, RefreshCw, Mail, Key, MessageSquare, Edit, Trash2, Users, Send, Copy, AlertTriangle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
+import SearchHelp from '@/components/ui/search-help';
 
 type UserWithRelations = {
   id: number;
@@ -49,7 +50,7 @@ export default function UsersPage() {
   const [search, setSearch] = useState('');
   const [isActive, setIsActive] = useState<boolean | undefined>(undefined);
   const [limit, setLimit] = useState(25);
-  const [source, setSource] = useState<'authentik' | 'local' | 'both'>('local');
+  const [source, setSource] = useState<'authentik' | 'local' | 'both'>('both');
   const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
   const [showBulkActions, setShowBulkActions] = useState(false);
   const [showEmailDialog, setShowEmailDialog] = useState(false);
@@ -341,16 +342,20 @@ export default function UsersPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Page Header */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
-              <p className="text-sm text-gray-600">
+              <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
+                <Users className="w-8 h-8" />
+                User Management
+              </h1>
+              <p className="text-gray-600 mt-2">
                 Manage community members and their permissions
               </p>
               {syncStatus && (
-                <div className="mt-2 flex items-center gap-2">
+                <div className="mt-3 flex items-center gap-2">
                   {syncStatus.authentikConfigured ? (
                     <div className="flex items-center gap-2 text-sm">
                       <span className={`px-2 py-1 rounded-full text-xs ${
@@ -373,12 +378,6 @@ export default function UsersPage() {
               )}
             </div>
             <div className="flex items-center space-x-2">
-              <Button
-                variant="outline"
-                onClick={() => router.push('/')}
-              >
-                ← Back to Dashboard
-              </Button>
               {syncStatus?.authentikConfigured && (
                 <Button
                   variant="outline"
@@ -408,9 +407,6 @@ export default function UsersPage() {
             </div>
           </div>
         </div>
-      </div>
-
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -440,11 +436,14 @@ export default function UsersPage() {
               <div className="relative flex-1">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search users..."
-                  className="pl-8"
+                  placeholder="Search users... Try: user:admin, email:gmail.com, active:true, gmail OR irregularchat"
+                  className="pl-8 pr-8"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
+                <div className="absolute right-2 top-1.5">
+                  <SearchHelp onSuggestionClick={setSearch} />
+                </div>
               </div>
               <Select value={source} onValueChange={(value: 'authentik' | 'local' | 'both') => {
                 setSource(value);
@@ -702,25 +701,33 @@ export default function UsersPage() {
                 {usersData && (
                   <div className="flex items-center justify-between px-2 py-4">
                     <div className="text-sm text-muted-foreground">
-                      Showing {((page - 1) * limit) + 1} to {Math.min(page * limit, usersData.total)} of {usersData.total} users
+                      {usersData.total === 0 ? (
+                        'No users found'
+                      ) : (
+                        `Showing ${((page - 1) * limit) + 1} to ${Math.min(page * limit, usersData.total)} of ${usersData.total} users`
+                      )}
                     </div>
                     <div className="flex items-center space-x-2">
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => setPage(page - 1)}
-                        disabled={page === 1}
+                        disabled={page === 1 || usersData.total === 0}
                       >
                         Previous
                       </Button>
                       <div className="text-sm">
-                        Page {page} of {usersData.totalPages}
+                        {usersData.total === 0 ? (
+                          'No pages'
+                        ) : (
+                          `Page ${page} of ${usersData.totalPages}`
+                        )}
                       </div>
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => setPage(page + 1)}
-                        disabled={page === usersData.totalPages}
+                        disabled={page === usersData.totalPages || usersData.total === 0}
                       >
                         Next
                       </Button>

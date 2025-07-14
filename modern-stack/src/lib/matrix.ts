@@ -491,8 +491,29 @@ class MatrixService {
           if (messagesResponse && messagesResponse.chunk) {
             console.log(`✅ RESOLVE: Retrieved ${messagesResponse.chunk.length} messages via HTTP API`);
             
+            // Log all messages for debugging
+            console.log('🔍 RESOLVE: All messages in bridge room:');
+            messagesResponse.chunk.forEach((event, index) => {
+              console.log(`  ${index + 1}. ${event.sender}: ${event.content?.body || '[no body]'} (${event.type})`);
+            });
+            
             // Look for bot response in the retrieved messages
             const botUsername = process.env.MATRIX_SIGNAL_BOT_USERNAME || '@signalbot:irregularchat.com';
+            
+            // Check if bot has any messages at all
+            const botMessages = messagesResponse.chunk.filter(event => event.sender === botUsername);
+            console.log(`🤖 RESOLVE: Found ${botMessages.length} messages from ${botUsername}`);
+            
+            // Check if messages are encrypted
+            const encryptedMessages = messagesResponse.chunk.filter(event => 
+              event.type === 'm.room.encrypted' || event.content?.algorithm
+            );
+            
+            if (encryptedMessages.length > 0) {
+              console.error('❌ RESOLVE: Signal bridge room is encrypted - cannot read bot responses');
+              console.error('💡 RESOLVE: Solution: Configure an unencrypted Signal bridge room or enable encryption in Matrix client');
+              return null;
+            }
             
             for (const event of messagesResponse.chunk) {
               if (event.type === 'm.room.message' && event.sender === botUsername) {

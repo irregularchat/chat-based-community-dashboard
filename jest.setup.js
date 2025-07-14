@@ -45,14 +45,13 @@ jest.mock('next/navigation', () => ({
 }))
 
 // Mock tRPC
-jest.mock('@/lib/trpc/react', () => ({
-  api: {
-    useQuery: jest.fn(),
-    useMutation: jest.fn(),
-    useUtils: jest.fn(() => ({
-      invalidate: jest.fn(),
-      setData: jest.fn(),
-    })),
+jest.mock('@/lib/trpc/client', () => ({
+  trpc: {
+    user: {
+      list: {
+        useQuery: jest.fn(),
+      },
+    },
   },
 }))
 

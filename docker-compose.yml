@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "${PORT:-8503}:3000"  # Map container's internal port 3000 to host's port (default 8503)
+      - "${PORT:-8503}:${PORT:-8503}"  # Map container's internal port to host port (both use PORT env var)
     env_file:
       - .env
     environment:

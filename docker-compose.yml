@@ -15,7 +15,7 @@ services:
       # Database seeding (set to true for initial setup)
       - SEED_DATABASE=${SEED_DATABASE:-true}
       # Enable local authentication
-      - ENABLE_LOCAL_AUTH=${ENABLE_LOCAL_AUTH:-true}
+      - ENABLE_LOCAL_AUTH=true
       # Admin credentials for seeding
       - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD}
       - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}

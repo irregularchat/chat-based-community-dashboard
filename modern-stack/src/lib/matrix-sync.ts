@@ -458,20 +458,37 @@ class MatrixSyncService {
     }
   }
 
-  // Get users from priority rooms (mod, action, entry rooms)
+  // Get users from priority rooms (INDOC room is the primary priority room)
   async getUsersFromPriorityRooms(): Promise<MatrixUserData[]> {
     try {
-      const priorityRoomNames = ['mod', 'action', 'entry', 'welcome', 'general', 'main', 'lobby'];
+      // First try to get users from the INDOC room (primary priority room)
+      const indocRoomId = process.env.MATRIX_INDOC_ROOM_ID;
+      let priorityRooms: any[] = [];
       
-      // Get priority rooms
-      const priorityRooms = await this.prisma.matrixRoom.findMany({
-        where: {
-          OR: priorityRoomNames.map(name => ({
-            name: { contains: name, mode: 'insensitive' }
-          }))
-        },
-        orderBy: { memberCount: 'desc' },
-      });
+      if (indocRoomId) {
+        const indocRoom = await this.prisma.matrixRoom.findUnique({
+          where: { roomId: indocRoomId }
+        });
+        
+        if (indocRoom) {
+          priorityRooms = [indocRoom];
+          console.log(`Using INDOC room as priority: ${indocRoom.name || indocRoomId}`);
+        }
+      }
+      
+      // If INDOC room not found, fall back to other priority rooms
+      if (priorityRooms.length === 0) {
+        const priorityRoomNames = ['mod', 'action', 'entry', 'welcome', 'general', 'main', 'lobby'];
+        
+        priorityRooms = await this.prisma.matrixRoom.findMany({
+          where: {
+            OR: priorityRoomNames.map(name => ({
+              name: { contains: name, mode: 'insensitive' }
+            }))
+          },
+          orderBy: { memberCount: 'desc' },
+        });
+      }
 
       if (priorityRooms.length === 0) {
         console.log('No priority rooms found, falling back to all users');

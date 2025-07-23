@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { TimelineSkeleton, DashboardStatsSkeleton, ChartSkeleton } from '@/components/ui/skeleton';
 import { 
   Search, 
   Filter, 
@@ -178,9 +179,7 @@ export default function CommunityTimelinePage() {
                     </button>
                   </div>
                 ) : isLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-                  </div>
+                  <TimelineSkeleton count={5} />
                 ) : (
                   <div className="space-y-4">
                     {timelineData?.events?.length === 0 ? (

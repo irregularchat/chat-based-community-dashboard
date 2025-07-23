@@ -16,6 +16,7 @@ import { UserCredentialDisplay } from '@/components/ui/user-credentials';
 import { SearchableMatrixUserSelect } from '@/components/ui/searchable-matrix-user-select';
 import { ArrowLeft, UserPlus, Save, Settings, Phone, Building2, Hash, Users, FileText, Copy, Shuffle, Home, RefreshCw, MessageSquare } from 'lucide-react';
 import { toast } from 'sonner';
+import { PasswordStrength } from '@/components/ui/password-strength';
 
 interface CreatedUserCredentials {
   username: string;
@@ -479,12 +480,121 @@ export default function CreateUserPage() {
       [field]: value,
     }));
     
-    // Clear error when user starts typing
-    if (errors[field]) {
-      setErrors(prev => ({
-        ...prev,
-        [field]: '',
-      }));
+    // Real-time validation for string fields
+    if (typeof value === 'string') {
+      const newErrors = { ...errors };
+      
+      // Validate field in real-time
+      switch (field) {
+        case 'email':
+          if (!value.trim()) {
+            newErrors.email = 'Email is required';
+          } else if (!/\S+@\S+\.\S+/.test(value)) {
+            newErrors.email = 'Please enter a valid email address';
+          } else {
+            delete newErrors.email;
+          }
+          break;
+          
+        case 'username':
+          if (activeTab === 'local' && !value.trim()) {
+            newErrors.username = 'Username is required';
+          } else if (activeTab === 'sso' && !formData.autoGenerateUsername && !value.trim()) {
+            newErrors.username = 'Username is required when not auto-generating';
+          } else if (value.length > 0 && value.length < 3) {
+            newErrors.username = 'Username must be at least 3 characters';
+          } else if (value.length > 0 && !/^[a-zA-Z0-9_-]+$/.test(value)) {
+            newErrors.username = 'Username can only contain letters, numbers, underscores, and hyphens';
+          } else {
+            delete newErrors.username;
+          }
+          break;
+          
+        case 'password':
+          if (activeTab === 'local' && value && value.length < 6) {
+            newErrors.password = 'Password must be at least 6 characters';
+          } else if (activeTab === 'local' && value && !/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(value)) {
+            newErrors.password = 'Password must contain at least one uppercase letter, one lowercase letter, and one number';
+          } else {
+            delete newErrors.password;
+          }
+          // Also validate confirm password if it exists
+          if (formData.confirmPassword && value !== formData.confirmPassword) {
+            newErrors.confirmPassword = 'Passwords do not match';
+          } else if (formData.confirmPassword) {
+            delete newErrors.confirmPassword;
+          }
+          break;
+          
+        case 'confirmPassword':
+          if (activeTab === 'local' && value !== formData.password) {
+            newErrors.confirmPassword = 'Passwords do not match';
+          } else {
+            delete newErrors.confirmPassword;
+          }
+          break;
+          
+        case 'phoneNumber':
+          if (value && !/^\+?[\d\s\-\(\)]+$/.test(value)) {
+            newErrors.phoneNumber = 'Please enter a valid phone number with country code (e.g., +1234567890)';
+          } else if (value && value.length > 0 && value.length < 10) {
+            newErrors.phoneNumber = 'Phone number seems too short';
+          } else {
+            delete newErrors.phoneNumber;
+          }
+          break;
+          
+        case 'signalUsername':
+          if (value && !value.startsWith('@')) {
+            newErrors.signalUsername = 'Signal username should start with @';
+          } else if (value && value.length > 1 && value.length < 4) {
+            newErrors.signalUsername = 'Signal username must be at least 3 characters after @';
+          } else {
+            delete newErrors.signalUsername;
+          }
+          break;
+          
+        case 'firstName':
+        case 'lastName':
+          if (value && value.length > 0 && value.length < 2) {
+            newErrors[field] = `${field === 'firstName' ? 'First' : 'Last'} name must be at least 2 characters`;
+          } else if (value && !/^[a-zA-Z\s'-]+$/.test(value)) {
+            newErrors[field] = `${field === 'firstName' ? 'First' : 'Last'} name can only contain letters, spaces, apostrophes, and hyphens`;
+          } else {
+            delete newErrors[field];
+          }
+          break;
+          
+        default:
+          // Clear error for other fields when user starts typing
+          if (errors[field]) {
+            delete newErrors[field];
+          }
+          break;
+      }
+      
+      setErrors(newErrors);
+      
+      // Auto-generate username for SSO if enabled
+      if ((field === 'firstName' || field === 'lastName') && activeTab === 'sso' && formData.autoGenerateUsername) {
+        const firstName = field === 'firstName' ? value : formData.firstName;
+        const lastName = field === 'lastName' ? value : formData.lastName;
+        if (firstName && lastName) {
+          const generatedUsername = `${firstName.toLowerCase()}${lastName.toLowerCase()}`.replace(/[^a-zA-Z0-9]/g, '');
+          setFormData(prev => ({ 
+            ...prev, 
+            username: generatedUsername
+          }));
+        }
+      }
+    } else {
+      // For boolean fields, just clear any existing error
+      if (errors[field]) {
+        setErrors(prev => ({
+          ...prev,
+          [field]: '',
+        }));
+      }
     }
   };
 
@@ -1299,6 +1409,9 @@ export default function CreateUserPage() {
                             placeholder="Leave blank for no password"
                             className={errors.password ? 'border-red-500' : ''}
                           />
+                          {formData.password && (
+                            <PasswordStrength password={formData.password} />
+                          )}
                           {errors.password && (
                             <p className="text-sm text-red-500">{errors.password}</p>
                           )}

@@ -15,6 +15,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { TableRowSkeleton, CardSkeleton } from '@/components/ui/skeleton';
 import { MoreHorizontal, Search, UserPlus, Filter, RefreshCw, Mail, Key, MessageSquare, Edit, Trash2, Users, Send, Copy, AlertTriangle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -549,9 +550,25 @@ export default function UsersPage() {
             )}
 
             {isLoading ? (
-              <div className="text-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto mb-4"></div>
-                <p>Loading users...</p>
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-12"></TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Source</TableHead>
+                      <TableHead>Created</TableHead>
+                      <TableHead className="w-12"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {Array.from({ length: 10 }).map((_, i) => (
+                      <TableRowSkeleton key={i} columns={7} />
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
             ) : (
               <>

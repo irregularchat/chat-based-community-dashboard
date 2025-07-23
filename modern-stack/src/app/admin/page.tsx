@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { DashboardStatsSkeleton, ChartSkeleton, TableRowSkeleton } from '@/components/ui/skeleton';
 import { 
   ArrowLeft, 
   Users, 
@@ -165,9 +166,13 @@ export default function AdminDashboard() {
 
           <TabsContent value="overview" className="space-y-6">
             {overviewLoading ? (
-              <div className="text-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto mb-4"></div>
-                <p>Loading overview...</p>
+              <div className="space-y-6">
+                <DashboardStatsSkeleton />
+                <div className="grid gap-6 md:grid-cols-2">
+                  <ChartSkeleton />
+                  <ChartSkeleton />
+                </div>
+                <ChartSkeleton />
               </div>
             ) : (
               <>

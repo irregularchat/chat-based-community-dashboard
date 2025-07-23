@@ -223,10 +223,21 @@ export default function NavigationHeader() {
           {/* User Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="relative h-8 w-8 rounded-full">
+              <Button 
+                variant="ghost" 
+                className="relative h-8 w-8 rounded-full"
+                aria-label={`User menu for ${getUserDisplayName()}`}
+                aria-expanded={false}
+                aria-haspopup="menu"
+              >
                 <Avatar className="h-8 w-8">
-                  <AvatarImage src={session.user.image || undefined} alt={getUserDisplayName()} />
-                  <AvatarFallback>{getInitials(getUserDisplayName())}</AvatarFallback>
+                  <AvatarImage 
+                    src={session.user.image || undefined} 
+                    alt={`Profile picture of ${getUserDisplayName()}`} 
+                  />
+                  <AvatarFallback aria-label={`${getUserDisplayName()} initials`}>
+                    {getInitials(getUserDisplayName())}
+                  </AvatarFallback>
                 </Avatar>
               </Button>
             </DropdownMenuTrigger>

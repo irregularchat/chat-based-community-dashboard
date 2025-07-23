@@ -14,7 +14,8 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
-import { ArrowLeft, Send, MessageCircle, Users, UserPlus, UserMinus, Search, Filter, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
+import { TabsSkeleton, UserListSkeleton, FormSkeleton, CardSkeleton } from '@/components/ui/skeleton';
+import { ArrowLeft, Send, MessageCircle, Users, UserPlus, UserMinus, Search, Filter, AlertTriangle, CheckCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function MatrixPage() {
@@ -51,6 +52,7 @@ export default function MatrixPage() {
   });
 
   const { data: categories } = trpc.matrix.getCategories.useQuery();
+  const { data: roomCategories } = trpc.matrix.getRoomCategories.useQuery();
 
   // Mutations
   const sendDirectMessageMutation = trpc.matrix.sendDirectMessage.useMutation({
@@ -77,6 +79,7 @@ export default function MatrixPage() {
       toast.error('Failed to send messages');
     },
   });
+
 
   const sendMessageToRoomsMutation = trpc.matrix.sendMessageToRooms.useMutation({
     onSuccess: (data) => {
@@ -122,6 +125,7 @@ export default function MatrixPage() {
     },
   });
 
+
   const handleSendDirectMessage = async () => {
     if (!directMessage.trim() || selectedUsers.length === 0) {
       toast.error('Please select users and enter a message');
@@ -140,6 +144,7 @@ export default function MatrixPage() {
       });
     }
   };
+
 
   const handleSendRoomMessage = async () => {
     if (!roomMessage.trim() || selectedRooms.length === 0) {
@@ -181,6 +186,7 @@ export default function MatrixPage() {
     });
   };
 
+
   if (!session) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -209,10 +215,12 @@ export default function MatrixPage() {
 
   if (configLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto mb-4"></div>
-          <p>Loading Matrix configuration...</p>
+      <div className="min-h-screen p-6">
+        <div className="max-w-6xl mx-auto space-y-6">
+          <div className="flex items-center gap-4 mb-6">
+            <CardSkeleton />
+          </div>
+          <TabsSkeleton tabCount={5} />
         </div>
       </div>
     );
@@ -276,24 +284,32 @@ export default function MatrixPage() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Tabs defaultValue="direct-message" className="space-y-6">
-          <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-4 lg:overflow-x-visible">
-            <TabsTrigger value="direct-message" className="flex items-center gap-2 min-w-0 flex-shrink-0">
-              <MessageCircle className="w-4 h-4 shrink-0" />
-              <span className="hidden sm:inline">Direct Messages</span>
-            </TabsTrigger>
-            <TabsTrigger value="room-message" className="flex items-center gap-2 min-w-0 flex-shrink-0">
-              <Users className="w-4 h-4 shrink-0" />
-              <span className="hidden sm:inline">Room Messages</span>
-            </TabsTrigger>
-            <TabsTrigger value="invite-users" className="flex items-center gap-2 min-w-0 flex-shrink-0">
-              <UserPlus className="w-4 h-4 shrink-0" />
-              <span className="hidden sm:inline">Invite Users</span>
-            </TabsTrigger>
-            <TabsTrigger value="remove-users" className="flex items-center gap-2 min-w-0 flex-shrink-0">
-              <UserMinus className="w-4 h-4 shrink-0" />
-              <span className="hidden sm:inline">Remove Users</span>
-            </TabsTrigger>
-          </TabsList>
+          <div className="relative">
+            <TabsList className="flex w-full overflow-x-auto scrollbar-hide lg:grid lg:grid-cols-4 lg:overflow-x-visible bg-muted p-1 rounded-md">
+              <TabsTrigger value="direct-message" className="flex items-center gap-2 min-w-fit flex-shrink-0 px-3 py-2 text-sm whitespace-nowrap">
+                <MessageCircle className="w-4 h-4 shrink-0" />
+                <span className="hidden sm:inline">Direct Messages</span>
+                <span className="sm:hidden">DM</span>
+              </TabsTrigger>
+              <TabsTrigger value="room-message" className="flex items-center gap-2 min-w-fit flex-shrink-0 px-3 py-2 text-sm whitespace-nowrap">
+                <Users className="w-4 h-4 shrink-0" />
+                <span className="hidden sm:inline">Room Messages</span>
+                <span className="sm:hidden">Rooms</span>
+              </TabsTrigger>
+              <TabsTrigger value="invite-users" className="flex items-center gap-2 min-w-fit flex-shrink-0 px-3 py-2 text-sm whitespace-nowrap">
+                <UserPlus className="w-4 h-4 shrink-0" />
+                <span className="hidden sm:inline">Invite Users</span>
+                <span className="sm:hidden">Invite</span>
+              </TabsTrigger>
+              <TabsTrigger value="remove-users" className="flex items-center gap-2 min-w-fit flex-shrink-0 px-3 py-2 text-sm whitespace-nowrap">
+                <UserMinus className="w-4 h-4 shrink-0" />
+                <span className="hidden sm:inline">Remove Users</span>
+                <span className="sm:hidden">Remove</span>
+              </TabsTrigger>
+            </TabsList>
+            {/* Mobile scroll indicator */}
+            <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-background to-transparent pointer-events-none lg:hidden" />
+          </div>
 
           <TabsContent value="direct-message">
             <Card>
@@ -345,10 +361,7 @@ export default function MatrixPage() {
 
                   {/* User List */}
                   {usersLoading ? (
-                    <div className="text-center py-4">
-                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-900 mx-auto mb-2"></div>
-                      <p className="text-sm text-gray-600">Loading users...</p>
-                    </div>
+                    <UserListSkeleton count={3} />
                   ) : (
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixUsers && matrixUsers.length > 0 ? (
@@ -449,7 +462,7 @@ export default function MatrixPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="">All Categories</SelectItem>
-                        {categories?.map((category) => (
+                        {roomCategories?.map((category) => (
                           <SelectItem key={category} value={category}>
                             {category}
                           </SelectItem>
@@ -460,10 +473,7 @@ export default function MatrixPage() {
 
                   {/* Room List */}
                   {roomsLoading ? (
-                    <div className="text-center py-4">
-                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-900 mx-auto mb-2"></div>
-                      <p className="text-sm text-gray-600">Loading rooms...</p>
-                    </div>
+                    <UserListSkeleton count={4} />
                   ) : (
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixRooms && matrixRooms.length > 0 ? (
@@ -582,7 +592,7 @@ export default function MatrixPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="">All Categories</SelectItem>
-                        {categories?.map((category) => (
+                        {roomCategories?.map((category) => (
                           <SelectItem key={category} value={category}>
                             {category}
                           </SelectItem>
@@ -592,10 +602,7 @@ export default function MatrixPage() {
                   </div>
 
                   {roomsLoading ? (
-                    <div className="text-center py-4">
-                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-900 mx-auto mb-2"></div>
-                      <p className="text-sm text-gray-600">Loading rooms...</p>
-                    </div>
+                    <UserListSkeleton count={4} />
                   ) : (
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixRooms && matrixRooms.length > 0 ? (
@@ -698,7 +705,7 @@ export default function MatrixPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="">All Categories</SelectItem>
-                        {categories?.map((category) => (
+                        {roomCategories?.map((category) => (
                           <SelectItem key={category} value={category}>
                             {category}
                           </SelectItem>
@@ -708,10 +715,7 @@ export default function MatrixPage() {
                   </div>
 
                   {roomsLoading ? (
-                    <div className="text-center py-4">
-                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-900 mx-auto mb-2"></div>
-                      <p className="text-sm text-gray-600">Loading rooms...</p>
-                    </div>
+                    <UserListSkeleton count={4} />
                   ) : (
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixRooms && matrixRooms.length > 0 ? (
@@ -787,6 +791,7 @@ export default function MatrixPage() {
               </CardContent>
             </Card>
           </TabsContent>
+
         </Tabs>
       </div>
     </div>

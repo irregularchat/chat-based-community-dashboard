@@ -75,8 +75,12 @@ docker-compose exec app sh -c "
 export SEED_DATABASE=true
 export DEFAULT_ADMIN_PASSWORD=shareme314
 export ADMIN_EMAIL=admin@irregularchat.com
-# Install bcryptjs and generate Prisma client, then run seed
-npm install bcryptjs@^3.0.2 && npx prisma generate && npm run db:seed
+# Ensure bcryptjs is available and run seed
+if ! npm list bcryptjs > /dev/null 2>&1; then
+  echo 'Installing bcryptjs...'
+  npm install bcryptjs@^3.0.2
+fi
+npm run db:seed
 "
 
 # Wait a moment for seeding to complete

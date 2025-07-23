@@ -5,8 +5,8 @@
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
 generator client {
-  provider = "prisma-client-js"
-  output   = "../src/generated/prisma"
+  provider      = "prisma-client-js"
+  output        = "../src/generated/prisma"
 }
 
 datasource db {
@@ -248,6 +248,9 @@ model MatrixUser {
   updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at")
   
   // Relationships
+  categories MatrixUserCategory[]
+  
+  // Relationships
   memberships MatrixRoomMembership[]
   
   @@index([isSignalUser])
@@ -314,6 +317,37 @@ model MatrixSyncStatus {
   @@index([syncType])
   @@index([status])
   @@map("matrix_sync_status")
+}
+
+// Matrix user categories (replaces legacy JSON-based categories)
+model MatrixCategory {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  description String?
+  color       String?  // For UI display
+  keywords    String[] // Room matching keywords
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+  
+  // Relationships
+  users MatrixUserCategory[]
+  
+  @@map("matrix_categories")
+}
+
+// Many-to-many relationship between Matrix users and categories
+model MatrixUserCategory {
+  userId     String @map("user_id")
+  categoryId Int    @map("category_id")
+  assignedAt DateTime @default(now()) @map("assigned_at")
+  assignedBy String? @map("assigned_by") // Who assigned this category
+  
+  // Relationships
+  user     MatrixUser     @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  category MatrixCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  
+  @@id([userId, categoryId])
+  @@map("matrix_user_categories")
 }
 
 // Matrix user cache aggregated

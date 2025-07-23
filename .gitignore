@@ -44,6 +44,10 @@ out/
 build/
 dist/
 
+# Generated files
+src/generated/
+modern-stack/src/generated/
+
 # Logs
 *.log
 
@@ -235,3 +239,12 @@ test-*.js
 debug-*.js
 *.test.js
 *.spec.js
+
+# Build and generated directories
+.next/
+src/generated/
+modern-stack/src/generated/
+modern-stack/.next/
+
+# Example and template directories
+exampleOnly/

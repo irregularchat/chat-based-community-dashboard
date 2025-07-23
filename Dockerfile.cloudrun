@@ -1,0 +1,71 @@
+# Cloud Run optimized multi-stage build for Community Dashboard
+FROM node:18-alpine AS base
+
+# Install dependencies only when needed
+FROM base AS deps
+RUN apk add --no-cache libc6-compat curl netcat-openbsd
+WORKDIR /app
+
+# Copy package files
+COPY modern-stack/package.json modern-stack/package-lock.json* ./
+RUN npm ci --only=production
+
+# Rebuild the source code only when needed
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY modern-stack/ .
+
+# Generate Prisma client
+RUN npx prisma generate
+
+# Build application
+RUN npm run build
+
+# Production image optimized for Cloud Run
+FROM base AS runner
+WORKDIR /app
+
+# Install system dependencies for Cloud Run
+RUN apk add --no-cache curl netcat-openbsd bash
+
+# Create nextjs user
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+COPY --from=builder /app/public ./public
+
+# Copy Olm WASM files for Matrix encryption
+RUN mkdir -p ./public/olm
+COPY --from=builder /app/node_modules/@matrix-org/olm/olm.wasm ./public/olm/olm.wasm
+COPY --from=builder /app/node_modules/@matrix-org/olm/olm.js ./public/olm/olm.js
+
+# Set the correct permission for prerender cache
+RUN mkdir .next
+RUN chown nextjs:nodejs .next
+
+# Automatically leverage output traces to reduce image size
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+# Copy database files for Prisma
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+
+# Copy Cloud Run entrypoint script
+COPY cloud-run-entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
+
+# Change ownership of necessary files to nextjs user
+RUN chown -R nextjs:nodejs /app
+
+# Cloud Run uses PORT environment variable (default 8080)
+EXPOSE $PORT
+
+ENV PORT=${PORT:-8080}
+ENV HOSTNAME "0.0.0.0"
+
+# Use Cloud Run entrypoint for database setup
+ENTRYPOINT ["./entrypoint.sh"]
+CMD ["node", "server.js"]

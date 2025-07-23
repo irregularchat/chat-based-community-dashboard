@@ -1,0 +1,52 @@
+steps:
+  # Build container image optimized for Cloud Run
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '-f', 'Dockerfile.cloudrun',
+      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/community-dashboard/app:$COMMIT_SHA',
+      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/community-dashboard/app:latest',
+      '.'
+    ]
+
+  # Push to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'push',
+      '--all-tags',
+      'us-central1-docker.pkg.dev/$PROJECT_ID/community-dashboard/app'
+    ]
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args: [
+      'run', 'deploy', 'community-dashboard',
+      '--image', 'us-central1-docker.pkg.dev/$PROJECT_ID/community-dashboard/app:$COMMIT_SHA',
+      '--region', 'us-central1',
+      '--platform', 'managed',
+      '--allow-unauthenticated',
+      '--add-cloudsql-instances', '$$PROJECT_ID:us-central1:community-dashboard-db',
+      '--set-env-vars', 'NODE_ENV=production,PORT=8080,INSTANCE_CONNECTION_NAME=$$PROJECT_ID:us-central1:community-dashboard-db,SEED_DATABASE=false',
+      '--set-secrets', 'NEXTAUTH_SECRET=nextauth-secret:latest,MATRIX_ACCESS_TOKEN=matrix-access-token:latest,SMTP_PASS=smtp-password:latest,AUTHENTIK_CLIENT_SECRET=authentik-client-secret:latest',
+      '--max-instances', '10',
+      '--min-instances', '1',
+      '--memory', '2Gi',
+      '--cpu', '2',
+      '--timeout', '300',
+      '--concurrency', '80',
+      '--execution-environment', 'gen2',
+      '--service-account', 'community-dashboard-sa@$$PROJECT_ID.iam.gserviceaccount.com'
+    ]
+
+options:
+  machineType: 'E2_HIGHCPU_8'
+  substitution_option: 'ALLOW_LOOSE'
+  logging: CLOUD_LOGGING_ONLY
+
+# Substitutions for different environments
+substitutions:
+  _REGION: 'us-central1'
+  _SERVICE_NAME: 'community-dashboard'
+
+timeout: '1800s'

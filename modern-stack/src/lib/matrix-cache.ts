@@ -1,4 +1,4 @@
-import { PrismaClient } from '@/generated/prisma';
+import { PrismaClient } from '../generated/prisma';
 import { matrixService } from './matrix';
 
 interface MatrixUserCache {
@@ -336,43 +336,291 @@ class MatrixCacheService {
     try {
       console.log('Starting Matrix cache full sync...');
 
-      // Sync users (mock implementation - would call Matrix API)
+      // Sync users (real Matrix API implementation)
       try {
-        // In a real implementation, this would:
-        // 1. Get all users from Matrix API
-        // 2. Update user cache with latest data
-        // 3. Mark Signal users based on naming patterns
+        console.log('Syncing Matrix users from API...');
         
-        console.log('Syncing Matrix users...');
-        // Mock sync - in reality would fetch from Matrix API
-        usersSynced = 0; // Would be actual count
+        // Get all joined rooms first
+        const joinedRoomsResponse = await fetch(`${process.env.MATRIX_HOMESERVER}/_matrix/client/v3/joined_rooms`, {
+          headers: {
+            'Authorization': `Bearer ${process.env.MATRIX_ACCESS_TOKEN}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (!joinedRoomsResponse.ok) {
+          throw new Error(`Failed to get joined rooms: ${joinedRoomsResponse.statusText}`);
+        }
+        
+        const joinedRooms = await joinedRoomsResponse.json();
+        const allUsers = new Set<string>();
+        
+        // Collect unique users from all rooms
+        for (const roomId of joinedRooms.joined_rooms) {
+          try {
+            const membersResponse = await fetch(`${process.env.MATRIX_HOMESERVER}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/members`, {
+              headers: {
+                'Authorization': `Bearer ${process.env.MATRIX_ACCESS_TOKEN}`,
+                'Content-Type': 'application/json'
+              }
+            });
+            
+            if (membersResponse.ok) {
+              const membersData = await membersResponse.json();
+              membersData.chunk?.forEach((event: any) => {
+                if (event.content?.membership === 'join' && event.state_key) {
+                  allUsers.add(event.state_key);
+                }
+              });
+            }
+          } catch (roomError) {
+            console.warn(`Failed to sync users from room ${roomId}: ${roomError}`);
+          }
+        }
+        
+        // Update user cache in database
+        let syncedCount = 0;
+        for (const userId of allUsers) {
+          try {
+            const isSignalUser = userId.startsWith('@signal_');
+            await this.prisma.matrixUser.upsert({
+              where: { userId },
+              update: { 
+                lastSeen: new Date(),
+                isSignalUser 
+              },
+              create: {
+                userId,
+                displayName: userId.split(':')[0].substring(1), // Extract username part
+                lastSeen: new Date(),
+                isSignalUser
+              }
+            });
+            syncedCount++;
+          } catch (userError) {
+            console.warn(`Failed to sync user ${userId}: ${userError}`);
+          }
+        }
+        
+        usersSynced = syncedCount;
+        console.log(`✅ Synced ${usersSynced} Matrix users from API`);
       } catch (error) {
+        console.error('User sync failed:', error);
         errors.push(`User sync failed: ${error}`);
       }
 
-      // Sync rooms (mock implementation - would call Matrix API)
+      // Sync rooms (real Matrix API implementation)
       try {
-        console.log('Syncing Matrix rooms...');
-        // In a real implementation, this would:
-        // 1. Get all rooms the bot is in
-        // 2. Update room metadata (name, topic, member count)
-        // 3. Categorize rooms based on configuration
+        console.log('Syncing Matrix rooms from API...');
         
-        roomsSynced = 0; // Would be actual count
+        // Get all joined rooms
+        const joinedRoomsResponse = await fetch(`${process.env.MATRIX_HOMESERVER}/_matrix/client/v3/joined_rooms`, {
+          headers: {
+            'Authorization': `Bearer ${process.env.MATRIX_ACCESS_TOKEN}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (!joinedRoomsResponse.ok) {
+          throw new Error(`Failed to get joined rooms: ${joinedRoomsResponse.statusText}`);
+        }
+        
+        const joinedRooms = await joinedRoomsResponse.json();
+        let syncedCount = 0;
+        
+        // Process each room
+        for (const roomId of joinedRooms.joined_rooms) {
+          try {
+            // Get room state to fetch name, topic, and member count
+            const stateResponse = await fetch(`${process.env.MATRIX_HOMESERVER}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state`, {
+              headers: {
+                'Authorization': `Bearer ${process.env.MATRIX_ACCESS_TOKEN}`,
+                'Content-Type': 'application/json'
+              }
+            });
+            
+            if (!stateResponse.ok) {
+              console.warn(`Failed to get state for room ${roomId}: ${stateResponse.statusText}`);
+              continue;
+            }
+            
+            const stateEvents = await stateResponse.json();
+            
+            // Extract room information from state events
+            let roomName = roomId; // fallback to room ID
+            let roomTopic = '';
+            let memberCount = 0;
+            let isDirect = false;
+            
+            stateEvents.forEach((event: any) => {
+              switch (event.type) {
+                case 'm.room.name':
+                  if (event.content?.name) {
+                    roomName = event.content.name;
+                  }
+                  break;
+                case 'm.room.topic':
+                  if (event.content?.topic) {
+                    roomTopic = event.content.topic;
+                  }
+                  break;
+                case 'm.room.member':
+                  if (event.content?.membership === 'join') {
+                    memberCount++;
+                  }
+                  break;
+                case 'm.room.create':
+                  if (event.content?.type === 'm.room.create') {
+                    isDirect = event.content.is_direct === true;
+                  }
+                  break;
+              }
+            });
+            
+            // Determine if this is a priority room
+            const priorityRoomIds = [
+              process.env.MATRIX_DEFAULT_ROOM_ID,
+              process.env.MATRIX_WELCOME_ROOM_ID,
+              process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID,
+              process.env.MATRIX_INDOC_ROOM_ID
+            ].filter(Boolean);
+            
+            // const isPriorityRoom = priorityRoomIds.includes(roomId);
+            
+            // Update room in database
+            await this.prisma.matrixRoom.upsert({
+              where: { roomId },
+              update: {
+                name: roomName,
+                topic: roomTopic,
+                memberCount,
+                isDirect,
+                lastSynced: new Date()
+              },
+              create: {
+                roomId,
+                name: roomName,
+                topic: roomTopic,
+                memberCount,
+                isDirect,
+                lastSynced: new Date()
+              }
+            });
+            
+            syncedCount++;
+          } catch (roomError) {
+            console.warn(`Failed to sync room ${roomId}: ${roomError}`);
+          }
+        }
+        
+        roomsSynced = syncedCount;
+        console.log(`✅ Synced ${roomsSynced} Matrix rooms from API`);
       } catch (error) {
+        console.error('Room sync failed:', error);
         errors.push(`Room sync failed: ${error}`);
       }
 
-      // Sync memberships (mock implementation - would call Matrix API)
+      // Sync memberships (real Matrix API implementation)
       try {
-        console.log('Syncing Matrix memberships...');
-        // In a real implementation, this would:
-        // 1. For each room, get member list
-        // 2. Update membership cache
-        // 3. Track join/leave events
+        console.log('Syncing Matrix memberships from API...');
         
-        membershipsSynced = 0; // Would be actual count
+        // Get all rooms we're tracking
+        const trackedRooms = await this.prisma.matrixRoom.findMany({
+          select: { roomId: true }
+        });
+        
+        let syncedCount = 0;
+        
+        // Process memberships for each tracked room
+        for (const room of trackedRooms) {
+          try {
+            // Get members for this room
+            const membersResponse = await fetch(`${process.env.MATRIX_HOMESERVER}/_matrix/client/v3/rooms/${encodeURIComponent(room.roomId)}/members`, {
+              headers: {
+                'Authorization': `Bearer ${process.env.MATRIX_ACCESS_TOKEN}`,
+                'Content-Type': 'application/json'
+              }
+            });
+            
+            if (!membersResponse.ok) {
+              console.warn(`Failed to get members for room ${room.roomId}: ${membersResponse.statusText}`);
+              continue;
+            }
+            
+            const membersData = await membersResponse.json();
+            const currentMembers = new Set<string>();
+            
+            // Process each membership event
+            for (const event of membersData.chunk || []) {
+              if (event.state_key && event.content) {
+                const userId = event.state_key;
+                const membership = event.content.membership;
+                const displayName = event.content.displayname || userId.split(':')[0].substring(1);
+                const avatarUrl = event.content.avatar_url;
+                
+                currentMembers.add(userId);
+                
+                // Ensure user exists in our cache
+                await this.prisma.matrixUser.upsert({
+                  where: { userId },
+                  update: { 
+                    displayName,
+                    avatarUrl,
+                    lastSeen: new Date(),
+                    isSignalUser: userId.startsWith('@signal_')
+                  },
+                  create: {
+                    userId,
+                    displayName,
+                    avatarUrl,
+                    lastSeen: new Date(),
+                    isSignalUser: userId.startsWith('@signal_')
+                  }
+                });
+                
+                // Update or create membership record
+                await this.prisma.matrixRoomMembership.upsert({
+                  where: {
+                    roomId_userId: {
+                      roomId: room.roomId,
+                      userId: userId
+                    }
+                  },
+                  update: {
+                    membershipStatus: membership
+                  },
+                  create: {
+                    roomId: room.roomId,
+                    userId: userId,
+                    membershipStatus: membership,
+                    joinedAt: membership === 'join' ? new Date() : null
+                  }
+                });
+                
+                syncedCount++;
+              }
+            }
+            
+            // Remove memberships for users no longer in the room
+            await this.prisma.matrixRoomMembership.deleteMany({
+              where: {
+                roomId: room.roomId,
+                userId: {
+                  notIn: Array.from(currentMembers)
+                },
+                membershipStatus: 'join'
+              }
+            });
+            
+          } catch (roomError) {
+            console.warn(`Failed to sync memberships for room ${room.roomId}: ${roomError}`);
+          }
+        }
+        
+        membershipsSynced = syncedCount;
+        console.log(`✅ Synced ${membershipsSynced} Matrix memberships from API`);
       } catch (error) {
+        console.error('Membership sync failed:', error);
         errors.push(`Membership sync failed: ${error}`);
       }
 

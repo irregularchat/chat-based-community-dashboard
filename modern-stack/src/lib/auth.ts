@@ -45,16 +45,23 @@ export const authOptions: NextAuthOptions = {
         password: { label: 'Password', type: 'password' },
       },
       async authorize(credentials) {
+        console.log('NextAuth authorize called with:', { username: credentials?.username, hasPassword: !!credentials?.password });
+        
         if (!credentials?.username || !credentials?.password) {
+          console.log('Missing credentials');
           return null;
         }
 
         // Check if local auth is enabled
         if (process.env.ENABLE_LOCAL_AUTH !== 'true') {
+          console.log('Local auth disabled, ENABLE_LOCAL_AUTH:', process.env.ENABLE_LOCAL_AUTH);
           return null;
         }
+        
+        console.log('Local auth enabled, proceeding with user lookup');
 
         // Find user by username or email
+        console.log('Looking up user with username/email:', credentials.username);
         const user = await prisma.user.findFirst({
           where: {
             OR: [
@@ -67,17 +74,26 @@ export const authOptions: NextAuthOptions = {
           },
         });
 
+        console.log('User lookup result:', user ? { id: user.id, username: user.username, hasPassword: !!user.password } : 'not found');
+
         if (!user) {
+          console.log('User not found');
           return null;
         }
 
         // For local auth, we need to check password
         // In migration, we may need to handle users without passwords
         if (user.password) {
+          console.log('Verifying password...');
           const isValid = await bcrypt.compare(credentials.password, user.password);
+          console.log('Password verification result:', isValid);
           if (!isValid) {
+            console.log('Invalid password');
             return null;
           }
+        } else {
+          console.log('User has no password set');
+          return null;
         }
 
         return {

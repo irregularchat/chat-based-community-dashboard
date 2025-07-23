@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, protectedProcedure, adminProcedure, moderatorProcedure } from '../trpc';
 import { matrixService } from '@/lib/matrix';
 import { createMatrixCacheService } from '@/lib/matrix-cache';
@@ -26,6 +27,16 @@ const MessageHistorySchema = z.object({
   content: z.string(),
   timestamp: z.string(),
   event_id: z.string().optional(),
+});
+
+const MatrixCategorySchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  description: z.string().optional(),
+  color: z.string().optional(),
+  keywords: z.array(z.string()),
+  createdAt: z.date(),
+  updatedAt: z.date(),
 });
 
 // Helper function to determine room category based on room name/topic
@@ -116,12 +127,35 @@ export const matrixRouter = createTRPCRouter({
         const endIndex = startIndex + input.limit;
         users = users.slice(startIndex, endIndex);
 
-        // Convert to expected format
+        // Get category information for users
+        const userIds = users.map(user => user.user_id);
+        const userCategories = await ctx.prisma.matrixUserCategory.findMany({
+          where: { userId: { in: userIds } },
+          include: {
+            category: true,
+          },
+        });
+
+        // Create a map of user categories for quick lookup
+        const categoriesMap = new Map<string, any[]>();
+        userCategories.forEach(uc => {
+          if (!categoriesMap.has(uc.userId)) {
+            categoriesMap.set(uc.userId, []);
+          }
+          categoriesMap.get(uc.userId)!.push({
+            ...uc.category,
+            assignedAt: uc.assignedAt,
+            assignedBy: uc.assignedBy,
+          });
+        });
+
+        // Convert to expected format with categories
         const formattedUsers = users.map(user => ({
           user_id: user.user_id,
           display_name: user.display_name || user.user_id,
           avatar_url: user.avatar_url,
           is_signal_user: user.is_signal_user,
+          categories: categoriesMap.get(user.user_id) || [],
         }));
 
         return formattedUsers;
@@ -262,7 +296,7 @@ export const matrixRouter = createTRPCRouter({
     }),
 
   // Get room categories
-  getCategories: moderatorProcedure.query(async ({ ctx }) => {
+  getRoomCategories: moderatorProcedure.query(async ({ ctx }) => {
     try {
       // Get environment-configured categories
       const envCategories = matrixService.parseCategories();
@@ -360,16 +394,14 @@ export const matrixRouter = createTRPCRouter({
           batchesProcessed: Math.ceil(input.userIds.length / input.batchSize),
         };
       } else {
-        // Mock implementation when Matrix is not configured
+        // Matrix service not configured - cannot send messages
+        console.warn('❌ BULK MESSAGE: Matrix service not configured - cannot send messages');
         const results: Record<string, boolean> = {};
         const errors: Record<string, string> = {};
         
         for (const userId of input.userIds) {
-          console.log(`[MOCK] Sending message to ${userId}: ${input.message}`);
-          results[userId] = Math.random() > 0.1;
-          if (!results[userId]) {
-            errors[userId] = 'Mock failure for demo';
-          }
+          results[userId] = false;
+          errors[userId] = 'Matrix service not configured. Please check MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID environment variables.';
         }
 
         // Log admin event
@@ -377,7 +409,7 @@ export const matrixRouter = createTRPCRouter({
           data: {
             eventType: 'matrix_bulk_message',
             username: ctx.session.user.username || 'unknown',
-            details: `Mock bulk sent messages to ${input.userIds.length} users`,
+            details: `Failed to send bulk messages to ${input.userIds.length} users - Matrix service not configured`,
           },
         });
 
@@ -420,16 +452,14 @@ export const matrixRouter = createTRPCRouter({
           totalFailed: result.totalFailed,
         };
       } else {
-        // Mock implementation
+        // Matrix service not configured - cannot send messages
+        console.warn('❌ BULK ROOM MESSAGE: Matrix service not configured - cannot send messages');
         const results: Record<string, boolean> = {};
         const errors: Record<string, string> = {};
         
         for (const roomId of input.roomIds) {
-          console.log(`[MOCK] Sending message to room ${roomId}: ${input.message}`);
-          results[roomId] = Math.random() > 0.05;
-          if (!results[roomId]) {
-            errors[roomId] = 'Mock failure for demo';
-          }
+          results[roomId] = false;
+          errors[roomId] = 'Matrix service not configured. Please check MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID environment variables.';
         }
 
         // Log admin event
@@ -437,7 +467,7 @@ export const matrixRouter = createTRPCRouter({
           data: {
             eventType: 'matrix_room_message',
             username: ctx.session.user.username || 'unknown',
-            details: `Mock bulk sent messages to ${input.roomIds.length} rooms`,
+            details: `Failed to send bulk messages to ${input.roomIds.length} rooms - Matrix service not configured`,
           },
         });
 
@@ -489,17 +519,15 @@ export const matrixRouter = createTRPCRouter({
           }
         }
       } else {
-        // Mock implementation when Matrix is not configured
+        // Matrix service not configured - cannot invite users
+        console.warn('❌ BULK INVITE: Matrix service not configured - cannot invite users');
         for (const roomId of input.roomIds) {
-          console.log(`[MOCK] Inviting ${input.userId} to room ${roomId}`);
-          results[roomId] = Math.random() > 0.1;
-          if (!results[roomId]) {
-            errors[roomId] = 'Mock failure for demo';
-          }
+          results[roomId] = false;
+          errors[roomId] = 'Matrix service not configured. Please check MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID environment variables.';
         }
 
         if (input.sendWelcome && input.welcomeMessage) {
-          console.log(`[MOCK] Sending welcome message to ${input.userId}: ${input.welcomeMessage}`);
+          console.warn('❌ BULK INVITE: Cannot send welcome message - Matrix service not configured');
         }
       }
 
@@ -562,19 +590,17 @@ export const matrixRouter = createTRPCRouter({
           }
         }
       } else {
-        // Mock implementation when Matrix is not configured
+        // Matrix service not configured - cannot remove users
+        console.warn('❌ BULK REMOVE: Matrix service not configured - cannot remove users');
         if (input.sendMessage && input.message) {
           for (const roomId of input.roomIds) {
-            console.log(`[MOCK] Sending removal message to room ${roomId}: ${input.message}`);
+            console.warn(`❌ BULK REMOVE: Cannot send removal message to room ${roomId} - Matrix service not configured`);
           }
         }
 
         for (const roomId of input.roomIds) {
-          console.log(`[MOCK] Removing ${input.userId} from room ${roomId}`);
-          results[roomId] = Math.random() > 0.05;
-          if (!results[roomId]) {
-            errors[roomId] = 'Mock failure for demo';
-          }
+          results[roomId] = false;
+          errors[roomId] = 'Matrix service not configured. Please check MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID environment variables.';
         }
       }
 
@@ -604,29 +630,12 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .query(async ({ ctx, input }) => {
-      // Mock data for demonstration - in real implementation, this would call Matrix API
-      const mockHistory = [
-        {
-          sender: ctx.session.user.username || 'admin',
-          content: 'Hello! Welcome to the community.',
-          timestamp: new Date(Date.now() - 3600000).toISOString(),
-          event_id: '$event_1',
-        },
-        {
-          sender: input.userId,
-          content: 'Thank you! Happy to be here.',
-          timestamp: new Date(Date.now() - 3000000).toISOString(),
-          event_id: '$event_2',
-        },
-        {
-          sender: ctx.session.user.username || 'admin',
-          content: 'Let me know if you have any questions.',
-          timestamp: new Date(Date.now() - 1800000).toISOString(),
-          event_id: '$event_3',
-        },
-      ];
-
-      return mockHistory.slice(-input.limit);
+      // Matrix service not configured - cannot retrieve message history
+      console.warn('❌ MESSAGE HISTORY: Matrix service not configured - cannot retrieve message history');
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Matrix service not configured. Please check MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID environment variables.',
+      });
     }),
 
   // Get user categories (saved user groups)
@@ -707,12 +716,12 @@ export const matrixRouter = createTRPCRouter({
           console.log(`Completed bulk invite batch ${batchIndex + 1}/${batches.length}`);
         }
       } else {
-        // Mock implementation
+        // Matrix service not configured - cannot invite users
+        console.warn('❌ INVITE BY INTERESTS: Matrix service not configured - cannot invite users');
         for (const userId of input.userIds) {
-          console.log(`[MOCK] Inviting ${userId} to recommended rooms based on interests:`, input.interests);
           results[userId] = {
-            invitedRooms: ['!general:matrix.example.com', '!tech:matrix.example.com'],
-            errors: [],
+            invitedRooms: [],
+            errors: ['Matrix service not configured. Please check MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID environment variables.'],
           };
         }
       }
@@ -788,26 +797,24 @@ export const matrixRouter = createTRPCRouter({
           batchesProcessed: Math.ceil(input.userIds.length / input.batchSize),
         };
       } else {
-        // Mock implementation
+        // Matrix service not configured - cannot invite users
+        console.warn('❌ MULTI-INVITE: Matrix service not configured - cannot invite users');
         const results: Record<string, boolean> = {};
         const errors: Record<string, string> = {};
         
         for (const userId of input.userIds) {
           for (const roomId of input.roomIds) {
             const key = `${userId}:${roomId}`;
-            console.log(`[MOCK] Inviting ${userId} to room ${roomId}`);
-            results[key] = Math.random() > 0.1;
-            if (!results[key]) {
-              errors[key] = 'Mock failure for demo';
-            }
+            results[key] = false;
+            errors[key] = 'Matrix service not configured. Please check MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID environment variables.';
           }
         }
 
         return {
           results,
           errors,
-          totalInvitations: Object.values(results).filter(Boolean).length,
-          totalFailed: Object.values(results).filter(success => !success).length,
+          totalInvitations: 0,
+          totalFailed: input.userIds.length * input.roomIds.length,
           batchesProcessed: Math.ceil(input.userIds.length / input.batchSize),
         };
       }
@@ -1182,6 +1189,402 @@ export const matrixRouter = createTRPCRouter({
           totalFailed: input.users.length,
           message: error instanceof Error ? error.message : 'Unknown error occurred',
         };
+      }
+    }),
+
+  // Remove users from all rooms (legacy feature)
+  removeUsersFromAllRooms: moderatorProcedure
+    .input(
+      z.object({
+        userIds: z.array(z.string()).min(1, 'At least one user ID is required'),
+        reason: z.string().optional(),
+        sendNotification: z.boolean().default(false),
+        notificationMessage: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        if (!matrixService.isConfigured()) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Matrix service is not configured. Please check MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID environment variables.',
+          });
+        }
+
+        const results: Record<string, boolean> = {};
+        const errors: Record<string, string> = {};
+        let totalSuccess = 0;
+        let totalFailed = 0;
+
+        // Get all rooms the bot is in
+        const joinedRoomsResponse = await fetch(`${process.env.MATRIX_HOMESERVER}/_matrix/client/v3/joined_rooms`, {
+          headers: {
+            'Authorization': `Bearer ${process.env.MATRIX_ACCESS_TOKEN}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (!joinedRoomsResponse.ok) {
+          throw new Error(`Failed to get joined rooms: ${joinedRoomsResponse.statusText}`);
+        }
+
+        const joinedRooms = await joinedRoomsResponse.json();
+        const allRooms = joinedRooms.joined_rooms;
+
+        // Process each user
+        for (const userId of input.userIds) {
+          try {
+            let userSuccess = 0;
+            let userFailed = 0;
+
+            // Send notification message if requested
+            if (input.sendNotification && input.notificationMessage) {
+              try {
+                await matrixService.sendDirectMessage(userId, input.notificationMessage);
+                console.log(`📨 Sent notification to ${userId}`);
+              } catch (notificationError) {
+                console.warn(`Failed to send notification to ${userId}:`, notificationError);
+              }
+            }
+
+            // Remove from all rooms
+            for (const roomId of allRooms) {
+              try {
+                const kickResponse = await fetch(`${process.env.MATRIX_HOMESERVER}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/kick`, {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${process.env.MATRIX_ACCESS_TOKEN}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({
+                    user_id: userId,
+                    reason: input.reason || 'Removed from all rooms'
+                  })
+                });
+
+                if (kickResponse.ok) {
+                  userSuccess++;
+                } else {
+                  userFailed++;
+                  console.warn(`Failed to remove ${userId} from room ${roomId}: ${kickResponse.statusText}`);
+                }
+              } catch (roomError) {
+                userFailed++;
+                console.warn(`Error removing ${userId} from room ${roomId}:`, roomError);
+              }
+            }
+
+            results[userId] = userSuccess > 0 && userFailed === 0;
+            if (results[userId]) {
+              totalSuccess++;
+            } else {
+              totalFailed++;
+              errors[userId] = `Removed from ${userSuccess} rooms, failed ${userFailed} rooms`;
+            }
+
+            console.log(`✅ Processed ${userId}: removed from ${userSuccess} rooms, failed ${userFailed} rooms`);
+          } catch (error) {
+            results[userId] = false;
+            errors[userId] = error instanceof Error ? error.message : 'Unknown error';
+            totalFailed++;
+            console.error(`❌ Error processing ${userId}:`, error);
+          }
+        }
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_users_removed_all_rooms',
+            username: ctx.session.user.username || 'unknown',
+            details: `Removed ${input.userIds.length} users from all rooms. Success: ${totalSuccess}, Failed: ${totalFailed}`,
+          },
+        });
+
+        return {
+          success: totalFailed === 0,
+          results,
+          errors,
+          totalSuccess,
+          totalFailed,
+          totalRooms: allRooms.length,
+          processedUsers: input.userIds.length,
+        };
+      } catch (error) {
+        console.error('Error removing users from all rooms:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to remove users from all rooms',
+        });
+      }
+    }),
+
+  // ===== MATRIX USER CATEGORIES API =====
+  
+  // Get all Matrix categories
+  getCategories: moderatorProcedure.query(async ({ ctx }) => {
+    try {
+      const categories = await ctx.prisma.matrixCategory.findMany({
+        orderBy: { name: 'asc' },
+        include: {
+          _count: {
+            select: {
+              users: true,
+            },
+          },
+        },
+      });
+      return categories;
+    } catch (error) {
+      console.error('Error getting Matrix categories:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get Matrix categories',
+      });
+    }
+  }),
+
+  // Create Matrix category
+  createCategory: adminProcedure
+    .input(
+      z.object({
+        name: z.string().min(1, 'Category name is required'),
+        description: z.string().optional(),
+        color: z.string().optional(),
+        keywords: z.array(z.string()).default([]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const category = await ctx.prisma.matrixCategory.create({
+          data: {
+            name: input.name,
+            description: input.description,
+            color: input.color,
+            keywords: input.keywords,
+          },
+        });
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_category_created',
+            username: ctx.session.user.username || 'unknown',
+            details: `Created Matrix category: ${input.name}`,
+          },
+        });
+
+        return category;
+      } catch (error) {
+        console.error('Error creating Matrix category:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to create Matrix category',
+        });
+      }
+    }),
+
+  // Update Matrix category
+  updateCategory: adminProcedure
+    .input(
+      z.object({
+        id: z.number(),
+        name: z.string().min(1, 'Category name is required'),
+        description: z.string().optional(),
+        color: z.string().optional(),
+        keywords: z.array(z.string()).default([]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const category = await ctx.prisma.matrixCategory.update({
+          where: { id: input.id },
+          data: {
+            name: input.name,
+            description: input.description,
+            color: input.color,
+            keywords: input.keywords,
+          },
+        });
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_category_updated',
+            username: ctx.session.user.username || 'unknown',
+            details: `Updated Matrix category: ${input.name}`,
+          },
+        });
+
+        return category;
+      } catch (error) {
+        console.error('Error updating Matrix category:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update Matrix category',
+        });
+      }
+    }),
+
+  // Delete Matrix category
+  deleteCategory: adminProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const category = await ctx.prisma.matrixCategory.delete({
+          where: { id: input.id },
+        });
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_category_deleted',
+            username: ctx.session.user.username || 'unknown',
+            details: `Deleted Matrix category: ${category.name}`,
+          },
+        });
+
+        return { success: true };
+      } catch (error) {
+        console.error('Error deleting Matrix category:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to delete Matrix category',
+        });
+      }
+    }),
+
+  // Assign categories to users
+  assignCategoriesToUsers: moderatorProcedure
+    .input(
+      z.object({
+        userIds: z.array(z.string()).min(1, 'At least one user ID is required'),
+        categoryIds: z.array(z.number()).min(1, 'At least one category ID is required'),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const assignments = [];
+        
+        for (const userId of input.userIds) {
+          for (const categoryId of input.categoryIds) {
+            assignments.push({
+              userId,
+              categoryId,
+              assignedBy: ctx.session.user.username || 'unknown',
+            });
+          }
+        }
+
+        // Use createMany with skipDuplicates to avoid conflicts
+        await ctx.prisma.matrixUserCategory.createMany({
+          data: assignments,
+          skipDuplicates: true,
+        });
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_categories_assigned',
+            username: ctx.session.user.username || 'unknown',
+            details: `Assigned ${input.categoryIds.length} categories to ${input.userIds.length} users`,
+          },
+        });
+
+        return { success: true, assignedCount: assignments.length };
+      } catch (error) {
+        console.error('Error assigning categories to users:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to assign categories to users',
+        });
+      }
+    }),
+
+  // Remove categories from users
+  removeCategoriesFromUsers: moderatorProcedure
+    .input(
+      z.object({
+        userIds: z.array(z.string()).min(1, 'At least one user ID is required'),
+        categoryIds: z.array(z.number()).min(1, 'At least one category ID is required'),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const result = await ctx.prisma.matrixUserCategory.deleteMany({
+          where: {
+            userId: { in: input.userIds },
+            categoryId: { in: input.categoryIds },
+          },
+        });
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'matrix_categories_removed',
+            username: ctx.session.user.username || 'unknown',
+            details: `Removed ${input.categoryIds.length} categories from ${input.userIds.length} users`,
+          },
+        });
+
+        return { success: true, removedCount: result.count };
+      } catch (error) {
+        console.error('Error removing categories from users:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to remove categories from users',
+        });
+      }
+    }),
+
+  // Get users by category
+  getUsersByCategory: moderatorProcedure
+    .input(z.object({ categoryId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      try {
+        const userCategories = await ctx.prisma.matrixUserCategory.findMany({
+          where: { categoryId: input.categoryId },
+          include: {
+            user: true,
+          },
+        });
+
+        return userCategories.map(uc => ({
+          ...uc.user,
+          assignedAt: uc.assignedAt,
+          assignedBy: uc.assignedBy,
+        }));
+      } catch (error) {
+        console.error('Error getting users by category:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get users by category',
+        });
+      }
+    }),
+
+  // Get categories for user
+  getCategoriesForUser: moderatorProcedure
+    .input(z.object({ userId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      try {
+        const userCategories = await ctx.prisma.matrixUserCategory.findMany({
+          where: { userId: input.userId },
+          include: {
+            category: true,
+          },
+        });
+
+        return userCategories.map(uc => ({
+          ...uc.category,
+          assignedAt: uc.assignedAt,
+          assignedBy: uc.assignedBy,
+        }));
+      } catch (error) {
+        console.error('Error getting categories for user:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get categories for user',
+        });
       }
     }),
 }); 

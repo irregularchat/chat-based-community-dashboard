@@ -1766,15 +1766,47 @@ class MatrixService {
 
   // Cache management methods
   public async getCacheStats(): Promise<CacheStats> {
-    // This would integrate with Prisma to get cache statistics
-    // For now, return mock data
-    return {
-      userCount: 0,
-      roomCount: 0,
-      membershipCount: 0,
-      lastSyncTime: undefined,
-      cacheAge: 0,
-    };
+    if (!this.client) {
+      return {
+        userCount: 0,
+        roomCount: 0,
+        membershipCount: 0,
+        lastSyncTime: undefined,
+        cacheAge: 0,
+      };
+    }
+
+    try {
+      const rooms = this.client.getVisibleRooms();
+      const userIds = new Set<string>();
+      let membershipCount = 0;
+
+      // Count unique users across all rooms
+      for (const room of rooms) {
+        const members = room.getMembers();
+        membershipCount += members.length;
+        for (const member of members) {
+          userIds.add(member.userId);
+        }
+      }
+
+      return {
+        userCount: userIds.size,
+        roomCount: rooms.length,
+        membershipCount,
+        lastSyncTime: new Date(),
+        cacheAge: 0, // Matrix client keeps real-time sync
+      };
+    } catch (error) {
+      console.error('❌ CACHE: Error getting cache stats:', error);
+      return {
+        userCount: 0,
+        roomCount: 0,
+        membershipCount: 0,
+        lastSyncTime: undefined,
+        cacheAge: 0,
+      };
+    }
   }
 
   public async isCacheFresh(maxAgeMinutes: number = 30): Promise<boolean> {

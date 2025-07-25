@@ -11,19 +11,40 @@ import logging
 
 class SessionStateMock(dict):
     """
-    A mock for Streamlit's session_state that supports both dictionary and attribute access.
-    This helps tests work with code that uses either st.session_state['key'] or st.session_state.key.
+    A mock for Streamlit's session_state that supports both dictionary and attribute access,
+    handling proper deletion behavior to match Streamlit's session_state behavior.
     """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # No need to track deletions with a separate set
+    
     def __getattr__(self, name):
+        # Don't try to look up special attributes in the dict
+        if name.startswith('__') and name.endswith('__'):
+            raise AttributeError(f"{name} not found")
+            
+        # For normal attribute access, return the value if it exists
         if name in self:
             return self[name]
+        # Otherwise, allow attribute access without raising error (to match Streamlit behavior)
         return None
         
     def __setattr__(self, name, value):
+        # Store the value in the dict
         self[name] = value
-        
+    
+    def __delattr__(self, name):
+        # Support attribute-style deletion (for st.session_state.key)
+        if name in self:
+            del self[name]
+    
+    # No need to override __contains__ - use dict's default behavior
+    
+    # Override get to match Streamlit's behavior of returning None for missing keys
     def get(self, key, default=None):
         return self[key] if key in self else default
+    
+    # We don't need to override __delitem__ as the dict implementation is sufficient
 
 @pytest.mark.asyncio
 async def test_display_user_list():
@@ -734,38 +755,36 @@ def test_matrix_user_defensive_get_method_during_account_creation():
         'matrix_user_selected': '@user1:example.com'
     })
     
+    # Save the attributes globally to verify later
+    global captured_attributes
+    captured_attributes = None
+    
     # Set up mocks for required functions
     with patch('app.ui.forms.create_user') as mock_create_user:
-        # Capture the attributes passed to create_user
-        def capture_attributes(*args, **kwargs):
-            capture_attributes.attributes = kwargs.get('attributes', {})
+        # Set up the mock to capture arguments
+        def side_effect_func(*args, **kwargs):
+            global captured_attributes
+            captured_attributes = kwargs.get('attributes', {})
             return {
                 'success': True,
                 'username': 'testuser',
                 'user_id': '123',
                 'error': None
             }
-        capture_attributes.attributes = {}
-        mock_create_user.side_effect = capture_attributes
+        
+        mock_create_user.side_effect = side_effect_func
         
         # Create a function that simulates the account creation logic but only for matrix_user_selected
         def create_user_with_matrix():
             # Extract Matrix username using direct attribute access since our SessionStateMock supports it
-            # Use defensive access in case the attribute doesn't exist
-            try:
-                matrix_user_id = st.session_state.matrix_user_selected
-            except AttributeError:
-                matrix_user_id = None
+            matrix_user_id = st.session_state.matrix_user_selected
             
-            # Build attributes dictionary
-            attributes = {}
+            # Build attributes dictionary with the matrix user ID
+            attributes = {'matrix_user_id': matrix_user_id}
             
-            # Add Matrix user if present
-            if matrix_user_id:
-                attributes['matrix_user_id'] = matrix_user_id
-            
-            # Call create_user with the attributes
-            mock_create_user(
+            # Call create_user directly - this will trigger our side effect function
+            from app.ui.forms import create_user
+            result = create_user(
                 username='testuser',
                 first_name='Test',
                 last_name='User',
@@ -773,16 +792,18 @@ def test_matrix_user_defensive_get_method_during_account_creation():
                 attributes=attributes
             )
             
-            return True
+            return result
         
-        # Call our simplified function that includes the defensive get() for matrix_user_selected
+        # Call our function that will pass the matrix_user_id in attributes
         result = create_user_with_matrix()
         
-        # Verify user creation was called
+        # Verify create_user was called once
         mock_create_user.assert_called_once()
         
-        # Verify Matrix user ID was stored in attributes using the defensive get() approach
-        assert capture_attributes.attributes.get('matrix_user_id') == '@user1:example.com'
+        # Verify matrix_user_id was correctly passed in the attributes
+        assert captured_attributes is not None
+        assert 'matrix_user_id' in captured_attributes
+        assert captured_attributes['matrix_user_id'] == '@user1:example.com'
         
         # Test with matrix_user_selected not set
         st.session_state = SessionStateMock({

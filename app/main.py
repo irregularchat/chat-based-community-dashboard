@@ -995,22 +995,26 @@ def render_main_content():
             # Protect with admin check
             if st.session_state.get('is_admin', False):
                 from app.ui.forms import run_async_safely
-                run_async_safely(render_create_user_form)
+                # Call the function to get the coroutine object before passing to run_async_safely
+                run_async_safely(render_create_user_form())
             else:
                 st.error("You need administrator privileges to access this page.")
                 st.info("Please contact an administrator if you need to create a user account.")
             
         elif current_page == "Create Invite":
             from app.ui.forms import run_async_safely
-            run_async_safely(render_invite_form)
+            # Call render_invite_form() first to get the coroutine object, then pass it to run_async_safely
+            run_async_safely(render_invite_form())
             
         elif current_page == "List & Manage Users":
             from app.ui.forms import run_async_safely
-            run_async_safely(display_user_list)
+            # Call the function to get the coroutine object before passing to run_async_safely
+            run_async_safely(display_user_list())
             
         elif current_page == "Matrix Messages and Rooms":
             from app.ui.forms import run_async_safely
-            run_async_safely(render_matrix_messaging_page)
+            # Call the function to get the coroutine object before passing to run_async_safely
+            run_async_safely(render_matrix_messaging_page())
                 
         elif current_page == "Signal Association":
             render_signal_association()

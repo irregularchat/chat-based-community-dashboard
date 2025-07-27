@@ -582,7 +582,7 @@ export default function AdminSettingsPage() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {allSettings?.bookmarks?.map((bookmark, index) => (
+                          {allSettings?.bookmarks?.map((bookmark: any, index: number) => (
                             <TableRow key={bookmark.id}>
                               <TableCell>
                                 <div className="flex items-center space-x-1">
@@ -789,7 +789,7 @@ export default function AdminSettingsPage() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {allSettings?.announcements?.map((announcement) => (
+                          {allSettings?.announcements?.map((announcement: any) => (
                             <TableRow key={announcement.id}>
                               <TableCell className="font-medium">{announcement.title}</TableCell>
                               <TableCell>

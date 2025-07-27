@@ -187,7 +187,7 @@ export default function CommunityTimelinePage() {
                         No events found matching the current filters.
                       </div>
                     ) : (
-                      timelineData?.events?.map((event) => (
+                      timelineData?.events?.map((event: any) => (
                         <div key={event.id} className="border rounded-lg p-4 bg-white hover:bg-gray-50 transition-colors">
                           <div className="flex items-start justify-between">
                             <div className="flex-1">
@@ -313,13 +313,13 @@ export default function CommunityTimelinePage() {
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {stats?.eventsByType?.map((item, index) => (
+                      {stats?.eventsByType?.map((item: any, index: number) => (
                         <div key={item.eventType} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                           <div className="flex items-center gap-3">
                             <div className="text-lg">{item.emoji}</div>
                             <div>
                               <div className="font-medium">
-                                {item.eventType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                {item.eventType.replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())}
                               </div>
                               <div className="text-sm text-gray-600">
                                 {item.count} event{item.count !== 1 ? 's' : ''}

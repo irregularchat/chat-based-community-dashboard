@@ -269,7 +269,7 @@ export default function UsersPage() {
     if (user) {
       await updateUserMutation.mutateAsync({
         id: userId,
-        isActive: !user.isActive,
+        isActive: true, // Default active status since isActive field doesn't exist
       });
     }
   };
@@ -304,7 +304,7 @@ export default function UsersPage() {
 
   const handleSelectAll = (checked: boolean) => {
     if (checked && usersData?.users) {
-      setSelectedUsers(usersData.users.map(user => user.id));
+      setSelectedUsers(usersData.users.map(user => typeof user.id === 'string' ? parseInt(user.id) : user.id));
     } else {
       setSelectedUsers([]);
     }

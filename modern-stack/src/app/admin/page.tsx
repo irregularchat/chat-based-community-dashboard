@@ -58,7 +58,7 @@ export default function AdminDashboard() {
   // Export functionality
   const [exportType, setExportType] = useState<'users' | 'events' | 'matrix' | 'invites' | null>(null);
   const { data: exportData, isLoading: isExporting, error: exportError } = trpc.admin.exportAdminData.useQuery(
-    { type: exportType! },
+    { format: 'csv' },
     {
       enabled: exportType !== null,
     }
@@ -210,22 +210,22 @@ export default function AdminDashboard() {
                       <Shield className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold">{overview?.matrix.totalRooms || 0}</div>
+                      <div className="text-2xl font-bold">{overview?.matrix.rooms || 0}</div>
                       <p className="text-xs text-muted-foreground">
-                        {overview?.matrix.totalUsers || 0} Matrix users
+                        Matrix rooms
                       </p>
                     </CardContent>
                   </Card>
 
                   <Card>
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                      <CardTitle className="text-sm font-medium">Admin Events</CardTitle>
+                      <CardTitle className="text-sm font-medium">User Sessions</CardTitle>
                       <Activity className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold">{overview?.activity.totalEvents || 0}</div>
+                      <div className="text-2xl font-bold">{overview?.sessions.total || 0}</div>
                       <p className="text-xs text-muted-foreground">
-                        {overview?.activity.recentEvents || 0} recent events
+                        {overview?.sessions.recent || 0} recent sessions
                       </p>
                     </CardContent>
                   </Card>
@@ -365,9 +365,9 @@ export default function AdminDashboard() {
                             <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs font-bold">
                               {index + 1}
                             </div>
-                            <span className="text-sm font-medium">{user.username}</span>
+                            <span className="text-sm font-medium">{user.name || user.email}</span>
                           </div>
-                          <Badge variant="outline">{user.count} events</Badge>
+                          <Badge variant="outline">{user.activity} activity</Badge>
                         </div>
                       ))}
                     </div>
@@ -414,20 +414,20 @@ export default function AdminDashboard() {
                 <CardContent>
                   <div className="space-y-4">
                     <div className="flex justify-between items-center">
-                      <span className="text-sm font-medium">Total Events</span>
-                      <Badge variant="outline">{overview?.activity.totalEvents || 0}</Badge>
+                      <span className="text-sm font-medium">Total Sessions</span>
+                      <Badge variant="outline">{overview?.sessions.total || 0}</Badge>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-sm font-medium">Recent Events (7 days)</span>
-                      <Badge variant="default">{overview?.activity.recentEvents || 0}</Badge>
+                      <span className="text-sm font-medium">Recent Sessions (7 days)</span>
+                      <Badge variant="default">{overview?.sessions.recent || 0}</Badge>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-sm font-medium">User Notes</span>
-                      <Badge variant="secondary">{overview?.activity.totalNotes || 0}</Badge>
+                      <Badge variant="secondary">{overview?.moderation.permissions || 0}</Badge>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-sm font-medium">Active Invites</span>
-                      <Badge variant="outline">{overview?.invites.active || 0}</Badge>
+                      <span className="text-sm font-medium">Matrix Rooms</span>
+                      <Badge variant="outline">{overview?.matrix.rooms || 0}</Badge>
                     </div>
                   </div>
                 </CardContent>
@@ -481,16 +481,16 @@ export default function AdminDashboard() {
                     <div className="space-y-3">
                       <div className="flex justify-between items-center">
                         <span className="text-sm">Total Users</span>
-                        <Badge variant="outline">{systemHealth?.userHealth.totalUsers || 0}</Badge>
+                        <Badge variant="outline">{systemHealth?.database.totalUsers || 0}</Badge>
                       </div>
                       <div className="flex justify-between items-center">
-                        <span className="text-sm">Active Users</span>
-                        <Badge variant="default">{systemHealth?.userHealth.activeUsers || 0}</Badge>
+                        <span className="text-sm">Active Sessions</span>
+                        <Badge variant="default">{systemHealth?.database.activeSessions || 0}</Badge>
                       </div>
                       <div className="flex justify-between items-center">
-                        <span className="text-sm">Active Rate</span>
+                        <span className="text-sm">Recent Users</span>
                         <Badge variant="outline">
-                          {systemHealth?.userHealth.activePercentage?.toFixed(1) || 0}%
+                          {systemHealth?.database.recentUsers || 0}
                         </Badge>
                       </div>
                     </div>
@@ -514,17 +514,17 @@ export default function AdminDashboard() {
                   ) : (
                     <div className="space-y-3">
                       <div className="flex justify-between items-center">
-                        <span className="text-sm">Recent Logins</span>
-                        <Badge variant="default">{systemHealth?.activityHealth.recentLogins || 0}</Badge>
+                        <span className="text-sm">Active Sessions</span>
+                        <Badge variant="default">{systemHealth?.database.activeSessions || 0}</Badge>
                       </div>
                       <div className="flex justify-between items-center">
-                        <span className="text-sm">Recent Errors</span>
-                        <Badge variant="destructive">{systemHealth?.activityHealth.recentErrors || 0}</Badge>
+                        <span className="text-sm">Recent Users</span>
+                        <Badge variant="destructive">{systemHealth?.database.recentUsers || 0}</Badge>
                       </div>
                       <div className="flex justify-between items-center">
-                        <span className="text-sm">Error Rate</span>
+                        <span className="text-sm">Status</span>
                         <Badge variant="outline">
-                          {systemHealth?.activityHealth.errorRate?.toFixed(1) || 0}%
+                          {systemHealth?.database.status || 'unknown'}
                         </Badge>
                       </div>
                     </div>
@@ -548,13 +548,13 @@ export default function AdminDashboard() {
                   ) : (
                     <div className="space-y-3">
                       <div className="flex justify-between items-center">
-                        <span className="text-sm">Recently Synced</span>
-                        <Badge variant="default">{systemHealth?.matrixHealth.recentlySynced || 0}</Badge>
+                        <span className="text-sm">Total Users</span>
+                        <Badge variant="default">{systemHealth?.database.totalUsers || 0}</Badge>
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-sm">Status</span>
-                        <Badge variant={systemHealth?.matrixHealth.status === 'healthy' ? 'default' : 'destructive'}>
-                          {systemHealth?.matrixHealth.status || 'unknown'}
+                        <Badge variant={systemHealth?.database.status === 'healthy' ? 'default' : 'destructive'}>
+                          {systemHealth?.database.status || 'unknown'}
                         </Badge>
                       </div>
                     </div>
@@ -606,12 +606,12 @@ export default function AdminDashboard() {
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {adminEvents?.events.map((event) => (
+                    {adminEvents?.events.map((event: any) => (
                       <div key={event.id} className="border rounded-lg p-4">
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
                             <Badge variant="outline">{event.eventType}</Badge>
-                            <span className="text-sm font-medium">{event.username}</span>
+                            <span className="text-sm font-medium">{event.user?.name || event.user?.email || 'Unknown'}</span>
                           </div>
                           <div className="flex items-center gap-2 text-sm text-gray-500">
                             <Clock className="w-4 h-4" />

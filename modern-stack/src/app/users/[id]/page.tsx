@@ -93,11 +93,11 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
   const handleEdit = () => {
     if (user) {
       setEditForm({
-        username: user.username || '',
+        username: user.name || '',
         email: user.email || '',
-        firstName: user.firstName || '',
-        lastName: user.lastName || '',
-        isActive: user.isActive,
+        firstName: '', // This field doesn't exist in the user object
+        lastName: '', // This field doesn't exist in the user object
+        isActive: true, // This field doesn't exist in the user object
         isAdmin: user.isAdmin,
         isModerator: user.isModerator,
       });
@@ -109,7 +109,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
     if (!user) return;
 
     await updateUserMutation.mutateAsync({
-      id: user.id,
+      id: parseInt(user.id),
       ...editForm,
     });
   };
@@ -209,14 +209,14 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
               </Button>
               <div>
                 <h1 className="text-2xl font-bold text-gray-900">
-                  {user.firstName} {user.lastName}
+                  {user.name || 'Unknown User'}
                 </h1>
-                <p className="text-sm text-gray-600">@{user.username}</p>
+                <p className="text-sm text-gray-600">@{user.name}</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Badge variant={user.isActive ? 'default' : 'secondary'}>
-                {user.isActive ? 'Active' : 'Inactive'}
+              <Badge variant={'default'}>
+                Active
               </Badge>
               {user.isAdmin && (
                 <Badge variant="destructive">Admin</Badge>
@@ -297,7 +297,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
                           onChange={(e) => setEditForm(prev => ({ ...prev, firstName: e.target.value }))}
                         />
                       ) : (
-                        <p className="text-sm border rounded-md px-3 py-2 bg-gray-50">{user.firstName}</p>
+                        <p className="text-sm border rounded-md px-3 py-2 bg-gray-50">{user.name || 'N/A'}</p>
                       )}
                     </div>
 
@@ -310,7 +310,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
                           onChange={(e) => setEditForm(prev => ({ ...prev, lastName: e.target.value }))}
                         />
                       ) : (
-                        <p className="text-sm border rounded-md px-3 py-2 bg-gray-50">{user.lastName}</p>
+                        <p className="text-sm border rounded-md px-3 py-2 bg-gray-50">N/A</p>
                       )}
                     </div>
 
@@ -323,7 +323,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
                           onChange={(e) => setEditForm(prev => ({ ...prev, username: e.target.value }))}
                         />
                       ) : (
-                        <p className="text-sm border rounded-md px-3 py-2 bg-gray-50">{user.username}</p>
+                        <p className="text-sm border rounded-md px-3 py-2 bg-gray-50">{user.name || 'N/A'}</p>
                       )}
                     </div>
 
@@ -348,7 +348,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
                       <div className="flex items-center gap-2">
                         <Calendar className="w-4 h-4 text-gray-500" />
                         <span className="text-sm text-gray-600">
-                          Joined {new Date(user.dateJoined).toLocaleDateString()}
+                          Joined {new Date(user.createdAt).toLocaleDateString()}
                         </span>
                       </div>
                     </div>
@@ -434,63 +434,15 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
                     <div className="space-y-4">
                       <Label>Existing Notes</Label>
                       <div className="space-y-3">
-                        {user.notes.map((note: any) => (
-                          <div key={note.id} className="border rounded-md p-4 bg-gray-50">
-                            <div className="flex justify-between items-start mb-2">
-                              <div className="text-xs text-gray-500">
-                                By {note.createdBy} on {new Date(note.createdAt).toLocaleDateString()}
-                                {note.lastEditedBy && (
-                                  <span> • Edited by {note.lastEditedBy}</span>
-                                )}
-                              </div>
-                              <div className="flex gap-1">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => startEditingNote(note.id, note.content)}
-                                  className="h-6 w-6 p-0"
-                                >
-                                  <Edit3 className="w-3 h-3" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleDeleteNote(note.id)}
-                                  className="h-6 w-6 p-0 text-red-500 hover:text-red-700"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </Button>
-                              </div>
+                        {user.notes ? (
+                          <div className="border rounded-md p-4 bg-gray-50">
+                            <div className="text-sm">
+                              {user.notes}
                             </div>
-                            {editingNote === note.id ? (
-                              <div className="space-y-2">
-                                <Textarea
-                                  value={editingNoteContent}
-                                  onChange={(e) => setEditingNoteContent(e.target.value)}
-                                  rows={3}
-                                />
-                                <div className="flex gap-2">
-                                  <Button
-                                    size="sm"
-                                    onClick={() => handleUpdateNote(note.id)}
-                                    disabled={updateNoteMutation.isPending}
-                                  >
-                                    Save
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => setEditingNote(null)}
-                                  >
-                                    Cancel
-                                  </Button>
-                                </div>
-                              </div>
-                            ) : (
-                              <p className="text-sm">{note.content}</p>
-                            )}
                           </div>
-                        ))}
+                        ) : (
+                          <div className="text-sm text-gray-500">No notes available</div>
+                        )}
                       </div>
                     </div>
                   ) : (

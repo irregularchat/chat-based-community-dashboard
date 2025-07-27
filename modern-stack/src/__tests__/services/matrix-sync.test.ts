@@ -1,8 +1,8 @@
 import { matrixSyncService } from '@/lib/matrix-sync';
-import { PrismaClient } from '@/generated/prisma';
+import { PrismaClient } from '@prisma/client';
 
 // Mock Prisma
-jest.mock('@/generated/prisma', () => ({
+jest.mock('@prisma/client', () => ({
   PrismaClient: jest.fn().mockImplementation(() => ({
     matrixUser: {
       count: jest.fn(),

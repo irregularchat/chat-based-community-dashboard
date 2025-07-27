@@ -1,0 +1,80 @@
+# Community Dashboard - Cloud Run Optimized Dockerfile
+FROM node:18-alpine AS base
+
+# Install dependencies only when needed
+FROM base AS deps
+RUN apk add --no-cache libc6-compat curl netcat-openbsd
+WORKDIR /app
+
+# Copy package files for caching
+COPY modern-stack/package.json modern-stack/package-lock.json* ./
+RUN npm ci && npm cache clean --force
+
+# Build stage
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY modern-stack/ .
+
+# Generate Prisma client
+ENV PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
+RUN npx prisma generate
+
+# Build application
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+# Production runtime stage optimized for Cloud Run
+FROM base AS runner
+WORKDIR /app
+
+# Install runtime dependencies for Cloud Run
+RUN apk add --no-cache curl netcat-openbsd bash postgresql-client
+
+# Cloud Run environment variables
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=8080
+
+# Create nextjs user for security
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+# Copy built application with correct ownership
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+# Copy Matrix Olm WASM files for encryption
+RUN mkdir -p ./public/olm
+COPY --from=builder /app/node_modules/@matrix-org/olm/olm.wasm ./public/olm/olm.wasm
+COPY --from=builder /app/node_modules/@matrix-org/olm/olm.js ./public/olm/olm.js
+
+# Copy Prisma files and dependencies
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+
+# Copy admin scripts
+COPY --from=builder /app/create-admin.js ./create-admin.js
+
+# Install bcryptjs for admin user creation
+RUN npm install bcryptjs@^3.0.2
+
+# Copy Cloud Run entrypoint script
+COPY cloud-deployment/docker/cloud-run-entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
+
+# Set correct ownership for all files
+RUN chown -R nextjs:nodejs /app
+
+# Health check for Cloud Run
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/api/health || exit 1
+
+# Expose port for Cloud Run
+EXPOSE $PORT
+
+# Use Cloud Run entrypoint
+ENTRYPOINT ["./entrypoint.sh"]
+CMD ["node", "server.js"]

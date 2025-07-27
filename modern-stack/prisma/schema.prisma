@@ -5,8 +5,7 @@
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
 generator client {
-  provider      = "prisma-client-js"
-  output        = "../src/generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
@@ -14,25 +13,73 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// NextAuth.js required models for OAuth
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verificationtokens")
+}
+
 // User model - main user table
 model User {
-  id                Int                   @id @default(autoincrement())
+  id                String                @id @default(cuid())
   username          String?               @unique
-  email             String?
+  email             String?               @unique
+  name              String?               // Full name for compatibility
   firstName         String?               @map("first_name")
   lastName          String?               @map("last_name")
   password          String?               // For local authentication
   isActive          Boolean               @default(true) @map("is_active")
   isAdmin           Boolean               @default(false) @map("is_admin")
   isModerator       Boolean               @default(false) @map("is_moderator")
+  createdAt         DateTime              @default(now()) @map("created_at")
+  updatedAt         DateTime              @updatedAt @map("updated_at")
   dateJoined        DateTime              @default(now()) @map("date_joined")
   lastLogin         DateTime?             @map("last_login")
   attributes        Json?
   authentikId       String?               @unique @map("authentik_id")
+  authentikGroups   String[]              @default([]) @map("authentik_groups") // Groups from Authentik OAuth
   signalIdentity    String?               @map("signal_identity")
   matrixUsername    String?               @map("matrix_username")
   
-  // Relationships
+  // NextAuth.js relationships
+  accounts          Account[]
+  sessions          Session[]
+  
+  // Application relationships
   notes             UserNote[]
   groups            UserGroup[]
   moderatorPermissions ModeratorPermission[]
@@ -97,19 +144,19 @@ model DashboardAnnouncement {
 
 // User invitations tracking
 model UserInvitation {
-  id          Int      @id @default(autoincrement())
-  inviterUserId Int?   @map("inviter_user_id")
-  inviteeEmail String @map("invitee_email")
-  inviteeName String? @map("invitee_name")
-  inviteePhone String? @map("invitee_phone") // Phone number field
-  roomIds     String[] @map("room_ids") // Array of room IDs to add the user to
-  status      String   @default("pending") // pending, accepted, expired, cancelled
-  inviteToken String?  @map("invite_token")
+  id          String    @id @default(cuid())
+  inviterUserId String? @map("inviter_user_id")
+  inviteeEmail String   @map("invitee_email")
+  inviteeName String?   @map("invitee_name")
+  inviteePhone String?  @map("invitee_phone") // Phone number field
+  roomIds     String[]  @map("room_ids") // Array of room IDs to add the user to
+  status      String    @default("pending") // pending, accepted, expired, cancelled
+  inviteToken String?   @map("invite_token")
   message     String?
-  expiresAt   DateTime @map("expires_at")
+  expiresAt   DateTime  @map("expires_at")
   acceptedAt  DateTime? @map("accepted_at")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
   
   // Relations
   inviter User? @relation("UserInvitations", fields: [inviterUserId], references: [id], onDelete: Cascade)
@@ -163,8 +210,8 @@ model MatrixRoomMember {
 
 // User notes from moderators
 model UserNote {
-  id           Int      @id @default(autoincrement())
-  userId       Int      @map("user_id")
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
   content      String
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
@@ -210,8 +257,8 @@ model Group {
 
 // User-Group relationship table
 model UserGroup {
-  userId  Int @map("user_id")
-  groupId Int @map("group_id")
+  userId  String @map("user_id")
+  groupId Int    @map("group_id")
   
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
   group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
@@ -222,8 +269,8 @@ model UserGroup {
 
 // Moderator permissions
 model ModeratorPermission {
-  id              Int      @id @default(autoincrement())
-  userId          Int      @map("user_id")
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
   permissionType  String   @map("permission_type")
   permissionValue String?  @map("permission_value")
   createdAt       DateTime @default(now()) @map("created_at")
@@ -246,9 +293,6 @@ model MatrixUser {
   lastSeen     DateTime? @map("last_seen")
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at")
-  
-  // Relationships
-  categories MatrixUserCategory[]
   
   // Relationships
   memberships MatrixRoomMembership[]
@@ -319,37 +363,6 @@ model MatrixSyncStatus {
   @@map("matrix_sync_status")
 }
 
-// Matrix user categories (replaces legacy JSON-based categories)
-model MatrixCategory {
-  id          Int      @id @default(autoincrement())
-  name        String   @unique
-  description String?
-  color       String?  // For UI display
-  keywords    String[] // Room matching keywords
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
-  
-  // Relationships
-  users MatrixUserCategory[]
-  
-  @@map("matrix_categories")
-}
-
-// Many-to-many relationship between Matrix users and categories
-model MatrixUserCategory {
-  userId     String @map("user_id")
-  categoryId Int    @map("category_id")
-  assignedAt DateTime @default(now()) @map("assigned_at")
-  assignedBy String? @map("assigned_by") // Who assigned this category
-  
-  // Relationships
-  user     MatrixUser     @relation(fields: [userId], references: [userId], onDelete: Cascade)
-  category MatrixCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  
-  @@id([userId, categoryId])
-  @@map("matrix_user_categories")
-}
-
 // Matrix user cache aggregated
 model MatrixUserCache {
   userId       String    @id @map("user_id")
@@ -363,4 +376,38 @@ model MatrixUserCache {
   @@index([isSignalUser])
   @@index([roomCount])
   @@map("matrix_user_cache")
+}
+
+// Matrix categories for organizing rooms/users
+model MatrixCategory {
+  id          String                @id @default(cuid())
+  name        String
+  description String?
+  color       String?               // Hex color for UI
+  isDefault   Boolean               @default(false) @map("is_default")
+  createdAt   DateTime              @default(now()) @map("created_at")
+  updatedAt   DateTime              @updatedAt @map("updated_at")
+  
+  // Relations
+  userCategories MatrixUserCategory[]
+  
+  @@unique([name])
+  @@map("matrix_categories")
+}
+
+// Many-to-many relationship between Matrix users and categories
+model MatrixUserCategory {
+  id         String         @id @default(cuid())
+  userId     String         @map("user_id")
+  categoryId String         @map("category_id")
+  assignedAt DateTime       @default(now()) @map("assigned_at")
+  assignedBy String?        @map("assigned_by") // User ID who assigned the category
+  
+  // Relations
+  category   MatrixCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, categoryId])
+  @@index([userId])
+  @@index([categoryId])
+  @@map("matrix_user_categories")
 }

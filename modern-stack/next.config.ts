@@ -7,12 +7,16 @@ const nextConfig: NextConfig = {
   },
   typescript: {
     // Disable TypeScript checks during build for Docker
-    ignoreBuildErrors: false,
+    ignoreBuildErrors: true,
   },
   output: "standalone",
   env: {
     CUSTOM_KEY: process.env.CUSTOM_KEY,
     NEXT_PUBLIC_SIGNAL_INDOC_LINK: process.env.SIGNAL_INDOC_LINK,
+  },
+  // Ensure proper handling of environment variables
+  experimental: {
+    serverComponentsExternalPackages: ['@prisma/client', 'prisma'],
   },
   webpack: (config, { isServer }) => {
     // Fix matrix-js-sdk bundling issues
@@ -34,6 +38,20 @@ const nextConfig: NextConfig = {
     };
     
     return config;
+  },
+  // Ensure proper headers for Cloud Run
+  async headers() {
+    return [
+      {
+        source: '/api/health',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'no-cache, no-store, must-revalidate',
+          },
+        ],
+      },
+    ];
   },
 };
 

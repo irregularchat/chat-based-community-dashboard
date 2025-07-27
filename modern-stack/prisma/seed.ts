@@ -1,4 +1,4 @@
-import { PrismaClient } from '../src/generated/prisma';
+import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
@@ -18,73 +18,62 @@ async function main() {
     const hashedPassword = await bcrypt.hash(adminPassword, 12);
     
     const adminUser = await prisma.user.upsert({
-      where: { username: adminUsername },
+      where: { email: 'admin@irregularchat.com' },
       update: {
-        password: hashedPassword,
         isAdmin: true,
         isModerator: true,
-        isActive: true,
-        email: 'admin@irregularchat.com', // Ensure email is set on update too
+        firstName: 'Admin',
+        lastName: 'User',
       },
       create: {
-        username: adminUsername,
         email: 'admin@irregularchat.com',
         firstName: 'Admin',
         lastName: 'User',
-        password: hashedPassword,
         isAdmin: true,
         isModerator: true,
-        isActive: true,
       },
     });
 
-    console.log('✅ Created admin user:', adminUser.username);
+    console.log('✅ Created admin user:', `${adminUser.firstName} ${adminUser.lastName}`);
     console.log('✅ Admin user email:', adminUser.email);
     console.log('✅ Admin user ID:', adminUser.id);
     console.log('✅ Is Admin:', adminUser.isAdmin);
-    console.log('✅ Is Active:', adminUser.isActive);
+    console.log('✅ Is Moderator:', adminUser.isModerator);
 
     // Create a test regular user
     const regularUser = await prisma.user.upsert({
-      where: { username: 'user' },
+      where: { email: 'user@example.com' },
       update: {},
       create: {
-        username: 'user',
         email: 'user@example.com',
         firstName: 'Test',
         lastName: 'User',
-        password: await bcrypt.hash('user123', 12),
         isAdmin: false,
         isModerator: false,
-        isActive: true,
       },
     });
 
-    console.log('✅ Created regular user:', regularUser.username);
+    console.log('✅ Created regular user:', regularUser.name);
 
     // Create a test moderator user
     const moderatorUser = await prisma.user.upsert({
-      where: { username: 'moderator' },
+      where: { email: 'moderator@example.com' },
       update: {},
       create: {
-        username: 'moderator',
         email: 'moderator@example.com',
-        firstName: 'Moderator',
-        lastName: 'User',
-        password: await bcrypt.hash('mod123', 12),
+        name: 'Moderator User',
         isAdmin: false,
         isModerator: true,
-        isActive: true,
       },
     });
 
-    console.log('✅ Created moderator user:', moderatorUser.username);
+    console.log('✅ Created moderator user:', moderatorUser.name);
 
     console.log('\n🎉 Database seeded successfully!');
     console.log('\n👤 Test Users Created:');
-    console.log(`   Admin:     username: ${adminUsername}     | password: ${adminPassword}`);
-    console.log('   Moderator: username: moderator | password: mod123');  
-    console.log('   User:      username: user      | password: user123');
+    console.log(`   Admin:     email: admin@irregularchat.com`);
+    console.log('   Moderator: email: moderator@example.com');  
+    console.log('   User:      email: user@example.com');
     
   } catch (error) {
     console.error('❌ Error during seeding:', error);

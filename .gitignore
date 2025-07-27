@@ -248,3 +248,5 @@ modern-stack/.next/
 
 # Example and template directories
 exampleOnly/
+example-cloud/*
+

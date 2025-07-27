@@ -146,7 +146,7 @@ export const userRouter = createTRPCRouter({
           
           // Fetch all Authentik users for proper pagination calculation
           try {
-            const authentikResult = await authentikService.listUsers(search, 1, 1000); // Get a large batch
+            const authentikResult = await authentikService.listUsers(search, 1, 100); // Get a reasonable batch size to avoid timeouts
             authentikUsers = authentikResult.users.filter(user => {
               if (isActive !== undefined && user.is_active !== isActive) {
                 return false;

@@ -14,14 +14,19 @@ export const authRouter = createTRPCRouter({
     }
 
     const user = await ctx.prisma.user.findUnique({
-      where: { id: parseInt(ctx.session.user.id) },
-      include: {
-        groups: {
-          include: {
-            group: true,
-          },
-        },
+      where: { id: ctx.session.user.id },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        image: true,
+        isAdmin: true,
+        isModerator: true,
+        matrixUsername: true,
+        signalIdentity: true,
         notes: true,
+        createdAt: true,
+        updatedAt: true,
       },
     });
 
@@ -45,7 +50,7 @@ export const authRouter = createTRPCRouter({
       }
 
       const user = await ctx.prisma.user.update({
-        where: { id: parseInt(ctx.session.user.id) },
+        where: { id: ctx.session.user.id },
         data: {
           ...input,
         },

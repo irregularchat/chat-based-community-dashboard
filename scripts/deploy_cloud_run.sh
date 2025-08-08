@@ -112,8 +112,8 @@ if [[ -n "$ENV_FILE" ]]; then
   echo "Processing env file: $ENV_FILE"
   TMP_DIR="$(mktemp -d)"
   YAML_FILE="$TMP_DIR/env.yaml"
-  # Always ensure PORT is 8080 on Cloud Run
-  echo "PORT: \"8080\"" > "$YAML_FILE"
+  # Start a fresh YAML file. Do NOT set PORT; Cloud Run sets it.
+  : > "$YAML_FILE"
   while IFS= read -r line || [[ -n "$line" ]]; do
     # Skip comments and empty lines
     [[ "$line" =~ ^[[:space:]]*#.*$ || -z "$line" ]] && continue
@@ -161,7 +161,8 @@ if [[ -n "$ENV_FILE" ]]; then
       --remove-secrets "$REMOVE_KEYS_CSV" || true
   fi
 else
-  ENV_VARS_ARGS=(--set-env-vars "PORT=8080")
+  # No env file provided; do not set env vars here. Cloud Run sets PORT automatically.
+  ENV_VARS_ARGS=()
 fi
 
 # Deploy to Cloud Run

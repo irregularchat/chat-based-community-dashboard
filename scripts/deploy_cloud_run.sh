@@ -153,6 +153,12 @@ if [[ -n "$ENV_FILE" ]]; then
       fi
     done
     REMOVE_SECRETS_ARGS=(--remove-secrets "$REMOVE_KEYS_CSV")
+    # Pre-clear any conflicting secret mappings on the existing service (if present)
+    echo "Pre-clearing secret mappings for keys (if any exist): $REMOVE_KEYS_CSV"
+    gcloud run services update "$SERVICE_NAME" \
+      --region="$REGION" \
+      --project="$PROJECT_ID" \
+      --remove-secrets "$REMOVE_KEYS_CSV" || true
   fi
 else
   ENV_VARS_ARGS=(--set-env-vars "PORT=8080")

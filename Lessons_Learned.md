@@ -19,6 +19,8 @@ This document captures key lessons learned during the development and debugging 
 14. [Docker Package Dependency Resolution](#docker-package-dependency-resolution-2025-05-31)
 15. [Streamlit DataFrame Display Limitations](#streamlit-dataframe-display-limitations-2025-05-31)
 16. [Test Organization and Structure](#test-organization-and-structure-2025-05-31)
+17. [Cloud Run Deployment with Multiple Applications](#cloud-run-deployment-with-multiple-applications-2025-08-08)
+18. [Matrix Integration Configuration](#matrix-integration-configuration-2025-08-08)
 
 ---
 
@@ -1270,3 +1272,194 @@ def display_user_list_optimized():
 This experience reinforces the importance of understanding platform limitations and designing around them rather than trying to force large amounts of data through a system not designed for it.
 
 ---
+
+---
+
+## Cloud Run Deployment with Multiple Applications (2025-08-08)
+
+### ❌ What Didn't Work
+
+**Problem**: Cloud Run deployment script deployed the Streamlit application instead of the Next.js modern-stack application.
+
+**Root Cause**: Repository contains both Streamlit (Python) and Next.js (TypeScript) applications. The deploy script ran from repository root where there is a Dockerfile for the Streamlit app, not the modern-stack subdirectory.
+
+**Symptoms**:
+- Deploy script completes successfully 
+- Service returns Streamlit HTML instead of Next.js pages
+- Health endpoint returns HTML instead of JSON
+- Service logs show "Starting Streamlit app on port 8080"
+- Admin/configure page returns Streamlit interface instead of Next.js interface
+
+### ✅ What Worked
+
+**Solution**: Always deploy from the correct application subdirectory.
+
+**Steps to Fix**:
+1. Delete the incorrect service deployment:
+   ```bash
+   gcloud run services delete community-dashboard --region=us-central1 --project=speech-memorization --quiet
+   ```
+
+2. Navigate to the correct application directory:
+   ```bash
+   cd modern-stack  # For Next.js application
+   # NOT from repository root (which has Streamlit Dockerfile)
+   ```
+
+3. Deploy from the application directory:
+   ```bash
+   ../scripts/deploy_cloud_run.sh -p speech-memorization -e ../deploy.env --allow-unauthenticated
+   ```
+
+**Key Insight**: The deploy script uses the Dockerfile in the current working directory. Multi-application repositories must specify the correct context.
+
+### 🔧 Prevention Strategy
+
+**Repository Structure Awareness**:
+- Always check `pwd` before deployment
+- Verify Dockerfile contents with `head -5 Dockerfile`
+- Check package.json for application type identification
+- Use explicit paths in deployment scripts
+
+**Verification Steps**:
+1. Confirm application type: `head package.json` (Next.js) vs `head requirements.txt` (Python)
+2. Verify build output: Next.js shows route list vs Python shows module installation
+3. Test health endpoint response type: JSON (Next.js) vs HTML (Streamlit)
+
+**Deployment Checklist**:
+- [ ] Navigate to correct application directory 
+- [ ] Verify Dockerfile is for intended application
+- [ ] Check build output matches expected application type
+- [ ] Test deployed service returns expected response format
+- [ ] Verify admin interfaces show correct framework
+
+This prevents deploying the wrong application stack and saves debugging time.
+
+---
+
+## Matrix Integration Configuration (2025-08-08)
+
+### ❌ What Didn't Work
+
+**Problem**: `Matrix Integration Disabled` error shown to users with message "Matrix integration is not currently active. Please contact your administrator to enable Matrix functionality."
+
+**Root Cause**: Missing required Matrix environment variables in deployment configuration. The Next.js Matrix service requires three essential environment variables:
+- `MATRIX_HOMESERVER` - Matrix homeserver URL
+- `MATRIX_ACCESS_TOKEN` - Bot user access token  
+- `MATRIX_USER_ID` - Bot Matrix user ID
+
+**Problem**: Database error `The table 'public.matrix_user_cache' does not exist in the current database`
+
+**Root Cause**: Prisma schema contains Matrix-related tables but migrations haven't been run on the production database to create these tables.
+
+### ✅ What Worked
+
+**Admin Configuration Interface**:
+```typescript
+// Added Matrix Configuration tab to admin settings
+<TabsTrigger value="matrix" className="flex items-center gap-2">
+  <MessageCircle className="w-4 h-4" />
+  <span>Matrix Config</span>
+</TabsTrigger>
+```
+
+**Environment Variable Structure**:
+```env
+# Matrix Integration Configuration
+MATRIX_HOMESERVER=https://matrix.irregularchat.com
+MATRIX_ACCESS_TOKEN=syt_...
+MATRIX_USER_ID=@dashboard_bot:irregularchat.com  
+MATRIX_WELCOME_ROOM_ID=!roomid:irregularchat.com
+MATRIX_ENABLE_ENCRYPTION=false
+```
+
+**Database Settings Storage**:
+```javascript
+// Store Matrix config in dashboard_settings table
+const matrixConfig = {
+  homeserver: matrixForm.homeserver,
+  accessToken: matrixForm.accessToken,
+  userId: matrixForm.userId,
+  welcomeRoomId: matrixForm.welcomeRoomId,
+  enableEncryption: matrixForm.enableEncryption,
+};
+
+await updateSettingMutation.mutate({
+  key: 'matrix_config', 
+  value: matrixConfig
+});
+```
+
+### 🔧 Complete Resolution Process
+
+**Phase 1: Admin Configuration UI**
+1. Add Matrix Configuration tab to `/admin/settings`
+2. Create form for Matrix credentials (homeserver, token, user ID)
+3. Store configuration in `dashboard_settings` table
+4. Show current status and validation
+
+**Phase 2: Deployment Configuration**  
+1. Add Matrix environment variables to `deploy.env`
+2. Update deployment with new environment variables:
+   ```bash
+   cd modern-stack
+   gcloud run deploy community-dashboard \
+     --image=IMAGE_URI \
+     --set-env-vars="MATRIX_HOMESERVER=...,MATRIX_ACCESS_TOKEN=...,MATRIX_USER_ID=..."
+   ```
+
+**Phase 3: Database Migration**
+1. Generate Prisma client: `npx prisma generate`  
+2. Run database migrations: `npx prisma db push`
+3. Verify tables created: `matrix_user_cache`, `matrix_rooms`, etc.
+
+**Phase 4: Testing**
+1. Verify Matrix service initialization in logs
+2. Test Matrix endpoints return configuration
+3. Confirm admin UI shows "Matrix Configuration Found" status
+
+### 🚨 Key Insights
+
+**Configuration Flow**:
+- Admin UI stores config in database for reference
+- Environment variables provide runtime configuration  
+- Both are needed: UI for management, env vars for service operation
+
+**Database Dependencies**:
+- Matrix functionality requires specific database schema
+- Prisma migrations must be run before Matrix features work
+- Database and environment configuration must be synchronized
+
+**Security Considerations**:
+- Access tokens stored as password fields in admin UI
+- Environment variables contain sensitive credentials
+- Database settings provide non-sensitive configuration display
+
+### 🔧 Prevention Strategy
+
+**Matrix Setup Checklist**:
+- [ ] Configure Matrix credentials in admin settings UI
+- [ ] Add Matrix environment variables to deployment configuration  
+- [ ] Run Prisma migrations to create Matrix database tables
+- [ ] Deploy service with updated environment variables
+- [ ] Verify Matrix service initialization in logs
+- [ ] Test Matrix functionality through admin interface
+
+**Configuration Validation**:
+```javascript
+// Check Matrix service initialization
+const isConfigured = homeserver && accessToken && userId;
+if (!isConfigured) {
+  console.warn('Matrix not configured. Required: MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, MATRIX_USER_ID');
+  return;
+}
+```
+
+**Deployment Integration**:
+```bash
+# Always redeploy after Matrix configuration changes
+cd modern-stack
+../scripts/deploy_cloud_run.sh -p PROJECT_ID -e ../deploy.env --allow-unauthenticated
+```
+
+This ensures Matrix integration is properly configured and functional before users attempt to access Matrix features.

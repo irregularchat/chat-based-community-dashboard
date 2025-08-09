@@ -52,7 +52,6 @@ export default function MatrixPage() {
   });
 
   const { data: categories } = trpc.matrix.getCategories.useQuery();
-  const { data: roomCategories } = trpc.matrix.getRoomCategories.useQuery();
 
   // Mutations
   const sendDirectMessageMutation = trpc.matrix.sendDirectMessage.useMutation({
@@ -462,7 +461,7 @@ export default function MatrixPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="">All Categories</SelectItem>
-                        {roomCategories?.map((category) => (
+                        {categories?.map((category) => (
                           <SelectItem key={category} value={category}>
                             {category}
                           </SelectItem>
@@ -592,7 +591,7 @@ export default function MatrixPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="">All Categories</SelectItem>
-                        {roomCategories?.map((category) => (
+                        {categories?.map((category) => (
                           <SelectItem key={category} value={category}>
                             {category}
                           </SelectItem>
@@ -705,7 +704,7 @@ export default function MatrixPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="">All Categories</SelectItem>
-                        {roomCategories?.map((category) => (
+                        {categories?.map((category) => (
                           <SelectItem key={category} value={category}>
                             {category}
                           </SelectItem>

@@ -21,6 +21,7 @@ This document captures key lessons learned during the development and debugging 
 16. [Test Organization and Structure](#test-organization-and-structure-2025-05-31)
 17. [Cloud Run Deployment with Multiple Applications](#cloud-run-deployment-with-multiple-applications-2025-08-08)
 18. [Matrix Integration Configuration](#matrix-integration-configuration-2025-08-08)
+19. [Directory Context Critical for Deployments](#directory-context-critical-for-deployments-2025-08-09)
 
 ---
 
@@ -1463,3 +1464,61 @@ cd modern-stack
 ```
 
 This ensures Matrix integration is properly configured and functional before users attempt to access Matrix features.
+
+---
+
+## Directory Context Critical for Deployments (2025-08-09)
+
+### ❌ What Didn't Work
+
+**Problem**: Deployed the wrong codebase - old Streamlit version instead of modern Next.js stack.
+
+**Root Cause**: Running deployment script from the wrong directory context. The repository contains both:
+- Root directory: Legacy Streamlit application (archived)
+- `modern-stack/` subdirectory: Current Next.js application
+
+When deployment script was run from root directory (`/chat-based-community-dashboard/`), it deployed the old Streamlit Dockerfile instead of the modern Next.js application.
+
+```bash
+# ❌ WRONG - Deploys old Streamlit code
+cd /Users/admin/Documents/Git/chat-based-community-dashboard
+./scripts/deploy_cloud_run.sh -p speech-memorization -e deploy.env
+
+# This uses the root Dockerfile which builds the Streamlit app
+```
+
+**Result**: 
+- Service URL served old Streamlit interface
+- Lost modern Next.js features (admin configuration consolidation)
+- Wasted deployment time and resources
+- Confused users expecting modern interface
+
+### ✅ What Worked
+
+**Solution**: Always run deployment from the correct application directory.
+
+```bash
+# ✅ CORRECT - Deploys modern Next.js code
+cd /Users/admin/Documents/Git/chat-based-community-dashboard/modern-stack
+../scripts/deploy_cloud_run.sh -p speech-memorization -e ../deploy.env
+
+# This uses modern-stack/Dockerfile which builds the Next.js app
+```
+
+**Best Practices**:
+1. **Always check working directory** before deployment: `pwd`
+2. **Verify Dockerfile contents** to ensure correct application build
+3. **Repository structure awareness**: Know which directories contain which applications
+4. **Update scripts** to include directory context validation
+5. **Create deployment aliases** to prevent directory mistakes
+
+**Script Enhancement Recommendation**:
+```bash
+# Add to deployment script header
+if [[ ! -f "package.json" ]] || [[ ! -f "next.config.ts" ]]; then
+  echo "Error: Not in Next.js application directory. Run from modern-stack/" >&2
+  exit 2
+fi
+```
+
+This prevents accidental deployment of wrong application stacks and ensures consistency.

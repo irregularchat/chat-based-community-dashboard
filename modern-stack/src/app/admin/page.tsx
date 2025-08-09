@@ -27,7 +27,8 @@ import {
   PieChart,
   Calendar,
   Search,
-  Filter
+  Filter,
+  Settings
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -131,6 +132,19 @@ export default function AdminDashboard() {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => router.push('/admin/configuration')}
+              >
+                <Settings className="w-4 h-4 mr-2" />
+                Configuration
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => router.push('/admin/settings')}
+              >
+                Dashboard Settings
+              </Button>
               <Button
                 variant="outline"
                 onClick={() => refetchOverview()}

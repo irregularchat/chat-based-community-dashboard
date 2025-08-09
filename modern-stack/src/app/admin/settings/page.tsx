@@ -29,7 +29,6 @@ export default function AdminSettingsPage() {
   const [showRoomCardDialog, setShowRoomCardDialog] = useState(false);
   const [showAnnouncementDialog, setShowAnnouncementDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
-  const [showMatrixDialog, setShowMatrixDialog] = useState(false);
 
   // Form states
   const [bookmarkForm, setBookmarkForm] = useState({
@@ -68,14 +67,6 @@ export default function AdminSettingsPage() {
   const [settingsForm, setSettingsForm] = useState({
     key: '',
     value: '',
-  });
-
-  const [matrixForm, setMatrixForm] = useState({
-    homeserver: '',
-    accessToken: '',
-    userId: '',
-    welcomeRoomId: '',
-    enableEncryption: false,
   });
 
   // Fetch data
@@ -245,16 +236,6 @@ export default function AdminSettingsPage() {
     });
   };
 
-  const resetMatrixForm = () => {
-    setMatrixForm({
-      homeserver: '',
-      accessToken: '',
-      userId: '',
-      welcomeRoomId: '',
-      enableEncryption: false,
-    });
-  };
-
   const resetRoomCardForm = () => {
     setRoomCardForm({
       title: '',
@@ -342,25 +323,6 @@ export default function AdminSettingsPage() {
       key: settingsForm.key,
       value,
     });
-  };
-
-  const handleSaveMatrixConfig = () => {
-    // Save Matrix configuration to dashboard settings
-    const matrixConfig = {
-      homeserver: matrixForm.homeserver,
-      accessToken: matrixForm.accessToken, 
-      userId: matrixForm.userId,
-      welcomeRoomId: matrixForm.welcomeRoomId,
-      enableEncryption: matrixForm.enableEncryption,
-    };
-
-    updateSettingMutation.mutate({
-      key: 'matrix_config',
-      value: matrixConfig,
-    });
-
-    setShowMatrixDialog(false);
-    toast.success('Matrix configuration saved! Please redeploy the service with environment variables.');
   };
 
   const handleReorderBookmarks = (direction: 'up' | 'down', bookmark: any) => {
@@ -462,7 +424,10 @@ export default function AdminSettingsPage() {
             <div>
               <h1 className="text-2xl font-bold text-gray-900">Dashboard Settings</h1>
               <p className="text-sm text-gray-600">
-                Manage user dashboard content and configuration
+                Manage user dashboard content and display settings
+              </p>
+              <p className="text-xs text-blue-600 mt-1">
+                ℹ️ Service integrations (Matrix, Authentik, SMTP) are now configured in the <strong>Configuration</strong> tab
               </p>
             </div>
             <div className="flex items-center space-x-2">
@@ -479,7 +444,7 @@ export default function AdminSettingsPage() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-5 lg:overflow-x-visible">
+          <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-4 lg:overflow-x-visible">
             <TabsTrigger value="bookmarks" className="flex items-center gap-2 min-w-0 flex-shrink-0">
               <Bookmark className="w-4 h-4 shrink-0" />
               <span className="hidden sm:inline">Community Bookmarks</span>
@@ -491,10 +456,6 @@ export default function AdminSettingsPage() {
             <TabsTrigger value="announcements" className="flex items-center gap-2 min-w-0 flex-shrink-0">
               <Bell className="w-4 h-4 shrink-0" />
               <span className="hidden sm:inline">Announcements</span>
-            </TabsTrigger>
-            <TabsTrigger value="matrix" className="flex items-center gap-2 min-w-0 flex-shrink-0">
-              <MessageCircle className="w-4 h-4 shrink-0" />
-              <span className="hidden sm:inline">Matrix Config</span>
             </TabsTrigger>
             <TabsTrigger value="settings" className="flex items-center gap-2 min-w-0 flex-shrink-0">
               <Settings className="w-4 h-4 shrink-0" />
@@ -893,181 +854,6 @@ export default function AdminSettingsPage() {
             </Card>
           </TabsContent>
 
-          {/* Matrix Configuration Tab */}
-          <TabsContent value="matrix" className="space-y-4">
-            <Card>
-              <CardHeader>
-                <div className="flex justify-between items-center">
-                  <div>
-                    <CardTitle>Matrix Integration Configuration</CardTitle>
-                    <CardDescription>
-                      Configure Matrix homeserver connection and settings. These will be deployed as environment variables.
-                    </CardDescription>
-                  </div>
-                  <Dialog open={showMatrixDialog} onOpenChange={setShowMatrixDialog}>
-                    <DialogTrigger asChild>
-                      <Button>
-                        <Plus className="w-4 h-4 mr-2" />
-                        Configure Matrix
-                      </Button>
-                    </DialogTrigger>
-                    <DialogContent className="max-w-2xl">
-                      <DialogHeader>
-                        <DialogTitle>Matrix Configuration</DialogTitle>
-                        <DialogDescription>
-                          Set up your Matrix homeserver connection details
-                        </DialogDescription>
-                      </DialogHeader>
-                      <div className="space-y-4">
-                        <div>
-                          <Label htmlFor="matrix-homeserver">Homeserver URL</Label>
-                          <Input
-                            id="matrix-homeserver"
-                            value={matrixForm.homeserver}
-                            onChange={(e) => setMatrixForm({ ...matrixForm, homeserver: e.target.value })}
-                            placeholder="https://matrix.example.com"
-                          />
-                          <p className="text-xs text-gray-500 mt-1">The Matrix homeserver URL (e.g., https://matrix.org)</p>
-                        </div>
-                        <div>
-                          <Label htmlFor="matrix-access-token">Access Token</Label>
-                          <Input
-                            id="matrix-access-token"
-                            type="password"
-                            value={matrixForm.accessToken}
-                            onChange={(e) => setMatrixForm({ ...matrixForm, accessToken: e.target.value })}
-                            placeholder="syt_..."
-                          />
-                          <p className="text-xs text-gray-500 mt-1">Bot user access token for Matrix API</p>
-                        </div>
-                        <div>
-                          <Label htmlFor="matrix-user-id">Bot User ID</Label>
-                          <Input
-                            id="matrix-user-id"
-                            value={matrixForm.userId}
-                            onChange={(e) => setMatrixForm({ ...matrixForm, userId: e.target.value })}
-                            placeholder="@botuser:example.com"
-                          />
-                          <p className="text-xs text-gray-500 mt-1">Matrix user ID of the bot account</p>
-                        </div>
-                        <div>
-                          <Label htmlFor="matrix-welcome-room">Welcome Room ID (Optional)</Label>
-                          <Input
-                            id="matrix-welcome-room"
-                            value={matrixForm.welcomeRoomId}
-                            onChange={(e) => setMatrixForm({ ...matrixForm, welcomeRoomId: e.target.value })}
-                            placeholder="!roomid:example.com"
-                          />
-                          <p className="text-xs text-gray-500 mt-1">Default room for welcoming new users</p>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                          <Switch
-                            id="matrix-encryption"
-                            checked={matrixForm.enableEncryption}
-                            onCheckedChange={(checked) => setMatrixForm({ ...matrixForm, enableEncryption: checked })}
-                          />
-                          <Label htmlFor="matrix-encryption">Enable End-to-End Encryption</Label>
-                        </div>
-                        <div className="bg-yellow-50 p-4 rounded-md border border-yellow-200">
-                          <div className="flex">
-                            <div className="text-yellow-800 text-sm">
-                              <strong>Important:</strong> After saving these settings, you'll need to update the deployment with the corresponding environment variables and restart the service for Matrix integration to work.
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex justify-end space-x-2">
-                          <Button variant="outline" onClick={() => setShowMatrixDialog(false)}>
-                            Cancel
-                          </Button>
-                          <Button onClick={handleSaveMatrixConfig} disabled={updateSettingMutation.isPending}>
-                            {updateSettingMutation.isPending ? 'Saving...' : 'Save Configuration'}
-                          </Button>
-                        </div>
-                      </div>
-                    </DialogContent>
-                  </Dialog>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {isLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {!allSettings?.settings?.matrix_config ? (
-                      <div className="text-center py-8">
-                        <div className="mx-auto flex items-center justify-center w-12 h-12 bg-red-100 rounded-full mb-4">
-                          <MessageCircle className="w-6 h-6 text-red-600" />
-                        </div>
-                        <h3 className="text-lg font-medium text-gray-900 mb-2">Matrix Not Configured</h3>
-                        <p className="text-gray-500 mb-4">
-                          Matrix integration is not currently active. Click "Configure Matrix" to set up your Matrix homeserver connection.
-                        </p>
-                        <div className="text-sm text-gray-600">
-                          <p className="font-medium">Required configuration:</p>
-                          <ul className="list-disc list-inside mt-2 space-y-1">
-                            <li>MATRIX_HOMESERVER - Your Matrix homeserver URL</li>
-                            <li>MATRIX_ACCESS_TOKEN - Bot user access token</li>
-                            <li>MATRIX_USER_ID - Bot Matrix user ID</li>
-                          </ul>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        <div className="bg-green-50 p-4 rounded-md border border-green-200">
-                          <div className="flex items-center">
-                            <MessageCircle className="w-5 h-5 text-green-600 mr-2" />
-                            <span className="text-green-800 font-medium">Matrix Configuration Found</span>
-                          </div>
-                          <p className="text-green-700 text-sm mt-1">
-                            Matrix integration settings are configured. Make sure the environment variables are deployed.
-                          </p>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="border rounded-lg p-4">
-                            <h4 className="font-medium text-gray-900 mb-2">Homeserver</h4>
-                            <p className="text-sm text-gray-600">{allSettings.settings.matrix_config.homeserver || 'Not configured'}</p>
-                          </div>
-                          <div className="border rounded-lg p-4">
-                            <h4 className="font-medium text-gray-900 mb-2">Bot User ID</h4>
-                            <p className="text-sm text-gray-600">{allSettings.settings.matrix_config.userId || 'Not configured'}</p>
-                          </div>
-                          <div className="border rounded-lg p-4">
-                            <h4 className="font-medium text-gray-900 mb-2">Welcome Room</h4>
-                            <p className="text-sm text-gray-600">{allSettings.settings.matrix_config.welcomeRoomId || 'Not configured'}</p>
-                          </div>
-                          <div className="border rounded-lg p-4">
-                            <h4 className="font-medium text-gray-900 mb-2">Encryption</h4>
-                            <p className="text-sm text-gray-600">{allSettings.settings.matrix_config.enableEncryption ? 'Enabled' : 'Disabled'}</p>
-                          </div>
-                        </div>
-                        <div className="flex justify-center">
-                          <Button
-                            variant="outline"
-                            onClick={() => {
-                              const config = allSettings.settings.matrix_config;
-                              setMatrixForm({
-                                homeserver: config.homeserver || '',
-                                accessToken: config.accessToken || '',
-                                userId: config.userId || '',
-                                welcomeRoomId: config.welcomeRoomId || '',
-                                enableEncryption: config.enableEncryption || false,
-                              });
-                              setShowMatrixDialog(true);
-                            }}
-                          >
-                            <Edit className="w-4 h-4 mr-2" />
-                            Edit Configuration
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
 
           {/* General Settings Tab */}
           <TabsContent value="settings" className="space-y-4">

@@ -420,7 +420,7 @@ export default function AdminConfigurationPage() {
             </Card>
           </TabsContent>
 
-          {/* Add placeholders for other tabs */}
+          {/* Authentik Configuration Tab */}
           <TabsContent value="authentik" className="space-y-4">
             <Card>
               <CardHeader>
@@ -434,20 +434,151 @@ export default function AdminConfigurationPage() {
                       Configure Authentik for user authentication and identity management
                     </CardDescription>
                   </div>
-                  <Badge variant="secondary">
-                    <AlertTriangle className="w-3 h-3 mr-1" />
-                    Coming Soon
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    {isServiceConfigured('authentik_config', ['baseUrl', 'apiToken', 'clientId', 'clientSecret', 'issuer']) ? (
+                      <Badge variant="default" className="bg-green-100 text-green-800">
+                        <CheckCircle className="w-3 h-3 mr-1" />
+                        Configured
+                      </Badge>
+                    ) : (
+                      <Badge variant="destructive">
+                        <AlertTriangle className="w-3 h-3 mr-1" />
+                        Not Configured
+                      </Badge>
+                    )}
+                    <Dialog open={showAuthentikDialog} onOpenChange={setShowAuthentikDialog}>
+                      <DialogTrigger asChild>
+                        <Button onClick={() => {
+                          if (isServiceConfigured('authentik_config', ['baseUrl', 'apiToken', 'clientId', 'clientSecret', 'issuer'])) {
+                            const config = allSettings?.settings?.authentik_config;
+                            if (config) {
+                              setAuthentikForm({
+                                baseUrl: config.baseUrl || '',
+                                apiToken: config.apiToken || '',
+                                clientId: config.clientId || '',
+                                clientSecret: config.clientSecret || '',
+                                issuer: config.issuer || '',
+                              });
+                            }
+                          }
+                        }}>
+                          {isServiceConfigured('authentik_config', ['baseUrl', 'apiToken', 'clientId', 'clientSecret', 'issuer']) ? (
+                            <>
+                              <Edit className="w-4 h-4 mr-2" />
+                              Edit Configuration
+                            </>
+                          ) : (
+                            <>
+                              <Plus className="w-4 h-4 mr-2" />
+                              Configure Authentik
+                            </>
+                          )}
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="max-w-2xl">
+                        <DialogHeader>
+                          <DialogTitle>Authentik Configuration</DialogTitle>
+                          <DialogDescription>
+                            Set up your Authentik identity provider connection details
+                          </DialogDescription>
+                        </DialogHeader>
+                        <div className="space-y-4">
+                          <div>
+                            <Label htmlFor="authentik-base-url">Base URL</Label>
+                            <Input
+                              id="authentik-base-url"
+                              value={authentikForm.baseUrl}
+                              onChange={(e) => setAuthentikForm({ ...authentikForm, baseUrl: e.target.value })}
+                              placeholder="https://sso.example.com/api/v3"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Authentik API base URL (e.g., https://sso.example.com/api/v3)</p>
+                          </div>
+                          <div>
+                            <Label htmlFor="authentik-api-token">API Token</Label>
+                            <Input
+                              id="authentik-api-token"
+                              type="password"
+                              value={authentikForm.apiToken}
+                              onChange={(e) => setAuthentikForm({ ...authentikForm, apiToken: e.target.value })}
+                              placeholder="API token for Authentik"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">API token with read permissions for user data</p>
+                          </div>
+                          <div>
+                            <Label htmlFor="authentik-client-id">Client ID</Label>
+                            <Input
+                              id="authentik-client-id"
+                              value={authentikForm.clientId}
+                              onChange={(e) => setAuthentikForm({ ...authentikForm, clientId: e.target.value })}
+                              placeholder="OAuth2 Client ID"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">OAuth2/OpenID Connect client identifier</p>
+                          </div>
+                          <div>
+                            <Label htmlFor="authentik-client-secret">Client Secret</Label>
+                            <Input
+                              id="authentik-client-secret"
+                              type="password"
+                              value={authentikForm.clientSecret}
+                              onChange={(e) => setAuthentikForm({ ...authentikForm, clientSecret: e.target.value })}
+                              placeholder="OAuth2 Client Secret"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">OAuth2/OpenID Connect client secret</p>
+                          </div>
+                          <div>
+                            <Label htmlFor="authentik-issuer">Issuer URL</Label>
+                            <Input
+                              id="authentik-issuer"
+                              value={authentikForm.issuer}
+                              onChange={(e) => setAuthentikForm({ ...authentikForm, issuer: e.target.value })}
+                              placeholder="https://sso.example.com/application/o/dashboard/"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">OpenID Connect issuer URL</p>
+                          </div>
+                          <div className="flex justify-end space-x-2">
+                            <Button variant="outline" onClick={() => setShowAuthentikDialog(false)}>
+                              Cancel
+                            </Button>
+                            <Button onClick={handleSaveAuthentikConfig} disabled={updateSettingMutation.isPending}>
+                              {updateSettingMutation.isPending ? 'Saving...' : 'Save Configuration'}
+                            </Button>
+                          </div>
+                        </div>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="text-center py-8 text-gray-500">
-                  Authentik configuration interface will be available in the next update.
-                </div>
+                {isServiceConfigured('authentik_config', ['baseUrl', 'apiToken', 'clientId', 'clientSecret', 'issuer']) ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Base URL</h4>
+                      <p className="text-sm text-gray-600">{allSettings?.settings?.authentik_config?.baseUrl}</p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Issuer</h4>
+                      <p className="text-sm text-gray-600">{allSettings?.settings?.authentik_config?.issuer}</p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Client ID</h4>
+                      <p className="text-sm text-gray-600">{allSettings?.settings?.authentik_config?.clientId}</p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Status</h4>
+                      <p className="text-sm text-gray-600">Connected and configured</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-gray-500">
+                    Authentik identity provider is not configured. Click "Configure Authentik" to get started.
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
 
+          {/* Discourse Configuration Tab */}
           <TabsContent value="discourse" className="space-y-4">
             <Card>
               <CardHeader>
@@ -461,20 +592,140 @@ export default function AdminConfigurationPage() {
                       Configure Discourse forum integration for community discussions
                     </CardDescription>
                   </div>
-                  <Badge variant="secondary">
-                    <AlertTriangle className="w-3 h-3 mr-1" />
-                    Coming Soon
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    {isServiceConfigured('discourse_config', ['baseUrl', 'apiKey', 'apiUsername']) ? (
+                      <Badge variant="default" className="bg-green-100 text-green-800">
+                        <CheckCircle className="w-3 h-3 mr-1" />
+                        Configured
+                      </Badge>
+                    ) : (
+                      <Badge variant="destructive">
+                        <AlertTriangle className="w-3 h-3 mr-1" />
+                        Not Configured
+                      </Badge>
+                    )}
+                    <Dialog open={showDiscourseDialog} onOpenChange={setShowDiscourseDialog}>
+                      <DialogTrigger asChild>
+                        <Button onClick={() => {
+                          if (isServiceConfigured('discourse_config', ['baseUrl', 'apiKey', 'apiUsername'])) {
+                            const config = allSettings?.settings?.discourse_config;
+                            if (config) {
+                              setDiscourseForm({
+                                baseUrl: config.baseUrl || '',
+                                apiKey: config.apiKey || '',
+                                apiUsername: config.apiUsername || '',
+                                webhookSecret: config.webhookSecret || '',
+                              });
+                            }
+                          }
+                        }}>
+                          {isServiceConfigured('discourse_config', ['baseUrl', 'apiKey', 'apiUsername']) ? (
+                            <>
+                              <Edit className="w-4 h-4 mr-2" />
+                              Edit Configuration
+                            </>
+                          ) : (
+                            <>
+                              <Plus className="w-4 h-4 mr-2" />
+                              Configure Discourse
+                            </>
+                          )}
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="max-w-2xl">
+                        <DialogHeader>
+                          <DialogTitle>Discourse Configuration</DialogTitle>
+                          <DialogDescription>
+                            Set up your Discourse forum integration details
+                          </DialogDescription>
+                        </DialogHeader>
+                        <div className="space-y-4">
+                          <div>
+                            <Label htmlFor="discourse-base-url">Forum URL</Label>
+                            <Input
+                              id="discourse-base-url"
+                              value={discourseForm.baseUrl}
+                              onChange={(e) => setDiscourseForm({ ...discourseForm, baseUrl: e.target.value })}
+                              placeholder="https://forum.example.com"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Your Discourse forum base URL</p>
+                          </div>
+                          <div>
+                            <Label htmlFor="discourse-api-key">API Key</Label>
+                            <Input
+                              id="discourse-api-key"
+                              type="password"
+                              value={discourseForm.apiKey}
+                              onChange={(e) => setDiscourseForm({ ...discourseForm, apiKey: e.target.value })}
+                              placeholder="API key from Discourse admin"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">API key generated in Discourse admin settings</p>
+                          </div>
+                          <div>
+                            <Label htmlFor="discourse-api-username">API Username</Label>
+                            <Input
+                              id="discourse-api-username"
+                              value={discourseForm.apiUsername}
+                              onChange={(e) => setDiscourseForm({ ...discourseForm, apiUsername: e.target.value })}
+                              placeholder="system or admin username"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Username associated with the API key</p>
+                          </div>
+                          <div>
+                            <Label htmlFor="discourse-webhook-secret">Webhook Secret (Optional)</Label>
+                            <Input
+                              id="discourse-webhook-secret"
+                              type="password"
+                              value={discourseForm.webhookSecret}
+                              onChange={(e) => setDiscourseForm({ ...discourseForm, webhookSecret: e.target.value })}
+                              placeholder="Webhook secret for secure callbacks"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Secret for validating webhook payloads</p>
+                          </div>
+                          <div className="flex justify-end space-x-2">
+                            <Button variant="outline" onClick={() => setShowDiscourseDialog(false)}>
+                              Cancel
+                            </Button>
+                            <Button onClick={handleSaveDiscourseConfig} disabled={updateSettingMutation.isPending}>
+                              {updateSettingMutation.isPending ? 'Saving...' : 'Save Configuration'}
+                            </Button>
+                          </div>
+                        </div>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="text-center py-8 text-gray-500">
-                  Discourse configuration interface will be available in the next update.
-                </div>
+                {isServiceConfigured('discourse_config', ['baseUrl', 'apiKey', 'apiUsername']) ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Forum URL</h4>
+                      <p className="text-sm text-gray-600">{allSettings?.settings?.discourse_config?.baseUrl}</p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">API Username</h4>
+                      <p className="text-sm text-gray-600">{allSettings?.settings?.discourse_config?.apiUsername}</p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Webhook Secret</h4>
+                      <p className="text-sm text-gray-600">{allSettings?.settings?.discourse_config?.webhookSecret ? 'Configured' : 'Not set'}</p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Status</h4>
+                      <p className="text-sm text-gray-600">Connected and configured</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-gray-500">
+                    Discourse forum is not configured. Click "Configure Discourse" to get started.
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
 
+          {/* AI API Configuration Tab */}
           <TabsContent value="ai" className="space-y-4">
             <Card>
               <CardHeader>
@@ -488,20 +739,173 @@ export default function AdminConfigurationPage() {
                       Configure AI providers (OpenAI, Claude, Local) for automated responses
                     </CardDescription>
                   </div>
-                  <Badge variant="secondary">
-                    <AlertTriangle className="w-3 h-3 mr-1" />
-                    Coming Soon
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    {isServiceConfigured('ai_config', ['provider']) ? (
+                      <Badge variant="default" className="bg-green-100 text-green-800">
+                        <CheckCircle className="w-3 h-3 mr-1" />
+                        Configured
+                      </Badge>
+                    ) : (
+                      <Badge variant="destructive">
+                        <AlertTriangle className="w-3 h-3 mr-1" />
+                        Not Configured
+                      </Badge>
+                    )}
+                    <Dialog open={showAIDialog} onOpenChange={setShowAIDialog}>
+                      <DialogTrigger asChild>
+                        <Button onClick={() => {
+                          if (isServiceConfigured('ai_config', ['provider'])) {
+                            const config = allSettings?.settings?.ai_config;
+                            if (config) {
+                              setAIForm({
+                                provider: config.provider || 'openai',
+                                openaiApiKey: config.openaiApiKey || '',
+                                claudeApiKey: config.claudeApiKey || '',
+                                localEndpoint: config.localEndpoint || '',
+                                model: config.model || 'gpt-3.5-turbo',
+                              });
+                            }
+                          }
+                        }}>
+                          {isServiceConfigured('ai_config', ['provider']) ? (
+                            <>
+                              <Edit className="w-4 h-4 mr-2" />
+                              Edit Configuration
+                            </>
+                          ) : (
+                            <>
+                              <Plus className="w-4 h-4 mr-2" />
+                              Configure AI APIs
+                            </>
+                          )}
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="max-w-2xl">
+                        <DialogHeader>
+                          <DialogTitle>AI API Configuration</DialogTitle>
+                          <DialogDescription>
+                            Set up your AI provider for automated responses and content generation
+                          </DialogDescription>
+                        </DialogHeader>
+                        <div className="space-y-4">
+                          <div>
+                            <Label htmlFor="ai-provider">AI Provider</Label>
+                            <Select value={aiForm.provider} onValueChange={(value) => setAIForm({ ...aiForm, provider: value })}>
+                              <SelectTrigger id="ai-provider">
+                                <SelectValue placeholder="Select AI provider" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="openai">OpenAI</SelectItem>
+                                <SelectItem value="claude">Claude (Anthropic)</SelectItem>
+                                <SelectItem value="local">Local/Self-hosted</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <p className="text-xs text-gray-500 mt-1">Choose your preferred AI provider</p>
+                          </div>
+                          {aiForm.provider === 'openai' && (
+                            <>
+                              <div>
+                                <Label htmlFor="openai-api-key">OpenAI API Key</Label>
+                                <Input
+                                  id="openai-api-key"
+                                  type="password"
+                                  value={aiForm.openaiApiKey}
+                                  onChange={(e) => setAIForm({ ...aiForm, openaiApiKey: e.target.value })}
+                                  placeholder="sk-..."
+                                />
+                                <p className="text-xs text-gray-500 mt-1">Your OpenAI API key</p>
+                              </div>
+                              <div>
+                                <Label htmlFor="openai-model">Model</Label>
+                                <Select value={aiForm.model} onValueChange={(value) => setAIForm({ ...aiForm, model: value })}>
+                                  <SelectTrigger id="openai-model">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="gpt-3.5-turbo">GPT-3.5 Turbo</SelectItem>
+                                    <SelectItem value="gpt-4">GPT-4</SelectItem>
+                                    <SelectItem value="gpt-4-turbo">GPT-4 Turbo</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <p className="text-xs text-gray-500 mt-1">OpenAI model to use</p>
+                              </div>
+                            </>
+                          )}
+                          {aiForm.provider === 'claude' && (
+                            <div>
+                              <Label htmlFor="claude-api-key">Claude API Key</Label>
+                              <Input
+                                id="claude-api-key"
+                                type="password"
+                                value={aiForm.claudeApiKey}
+                                onChange={(e) => setAIForm({ ...aiForm, claudeApiKey: e.target.value })}
+                                placeholder="sk-ant-..."
+                              />
+                              <p className="text-xs text-gray-500 mt-1">Your Anthropic Claude API key</p>
+                            </div>
+                          )}
+                          {aiForm.provider === 'local' && (
+                            <div>
+                              <Label htmlFor="local-endpoint">Local API Endpoint</Label>
+                              <Input
+                                id="local-endpoint"
+                                value={aiForm.localEndpoint}
+                                onChange={(e) => setAIForm({ ...aiForm, localEndpoint: e.target.value })}
+                                placeholder="http://localhost:11434/api/generate"
+                              />
+                              <p className="text-xs text-gray-500 mt-1">Local AI API endpoint (e.g., Ollama, LocalAI)</p>
+                            </div>
+                          )}
+                          <div className="flex justify-end space-x-2">
+                            <Button variant="outline" onClick={() => setShowAIDialog(false)}>
+                              Cancel
+                            </Button>
+                            <Button onClick={handleSaveAIConfig} disabled={updateSettingMutation.isPending}>
+                              {updateSettingMutation.isPending ? 'Saving...' : 'Save Configuration'}
+                            </Button>
+                          </div>
+                        </div>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="text-center py-8 text-gray-500">
-                  AI API configuration interface will be available in the next update.
-                </div>
+                {isServiceConfigured('ai_config', ['provider']) ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Provider</h4>
+                      <p className="text-sm text-gray-600 capitalize">{allSettings?.settings?.ai_config?.provider}</p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Model/Endpoint</h4>
+                      <p className="text-sm text-gray-600">
+                        {allSettings?.settings?.ai_config?.provider === 'openai' && allSettings?.settings?.ai_config?.model}
+                        {allSettings?.settings?.ai_config?.provider === 'claude' && 'Claude API'}
+                        {allSettings?.settings?.ai_config?.provider === 'local' && allSettings?.settings?.ai_config?.localEndpoint}
+                      </p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">API Key</h4>
+                      <p className="text-sm text-gray-600">
+                        {(allSettings?.settings?.ai_config?.openaiApiKey || allSettings?.settings?.ai_config?.claudeApiKey) ? 'Configured' : 'Not set'}
+                      </p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Status</h4>
+                      <p className="text-sm text-gray-600">Ready for use</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-gray-500">
+                    AI API is not configured. Click "Configure AI APIs" to get started.
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
 
+          {/* SMTP Configuration Tab */}
           <TabsContent value="smtp" className="space-y-4">
             <Card>
               <CardHeader>
@@ -515,16 +919,167 @@ export default function AdminConfigurationPage() {
                       Configure SMTP settings for sending emails and notifications
                     </CardDescription>
                   </div>
-                  <Badge variant="secondary">
-                    <AlertTriangle className="w-3 h-3 mr-1" />
-                    Coming Soon
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    {isServiceConfigured('smtp_config', ['host', 'port', 'user', 'password', 'from']) ? (
+                      <Badge variant="default" className="bg-green-100 text-green-800">
+                        <CheckCircle className="w-3 h-3 mr-1" />
+                        Configured
+                      </Badge>
+                    ) : (
+                      <Badge variant="destructive">
+                        <AlertTriangle className="w-3 h-3 mr-1" />
+                        Not Configured
+                      </Badge>
+                    )}
+                    <Dialog open={showSMTPDialog} onOpenChange={setShowSMTPDialog}>
+                      <DialogTrigger asChild>
+                        <Button onClick={() => {
+                          if (isServiceConfigured('smtp_config', ['host', 'port', 'user', 'password', 'from'])) {
+                            const config = allSettings?.settings?.smtp_config;
+                            if (config) {
+                              setSMTPForm({
+                                host: config.host || '',
+                                port: config.port || '587',
+                                user: config.user || '',
+                                password: config.password || '',
+                                from: config.from || '',
+                                bcc: config.bcc || '',
+                                enableTLS: config.enableTLS ?? true,
+                              });
+                            }
+                          }
+                        }}>
+                          {isServiceConfigured('smtp_config', ['host', 'port', 'user', 'password', 'from']) ? (
+                            <>
+                              <Edit className="w-4 h-4 mr-2" />
+                              Edit Configuration
+                            </>
+                          ) : (
+                            <>
+                              <Plus className="w-4 h-4 mr-2" />
+                              Configure SMTP
+                            </>
+                          )}
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="max-w-2xl">
+                        <DialogHeader>
+                          <DialogTitle>SMTP Configuration</DialogTitle>
+                          <DialogDescription>
+                            Set up your email server settings for sending notifications and emails
+                          </DialogDescription>
+                        </DialogHeader>
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <Label htmlFor="smtp-host">SMTP Host</Label>
+                              <Input
+                                id="smtp-host"
+                                value={smtpForm.host}
+                                onChange={(e) => setSMTPForm({ ...smtpForm, host: e.target.value })}
+                                placeholder="smtp.gmail.com"
+                              />
+                              <p className="text-xs text-gray-500 mt-1">SMTP server hostname</p>
+                            </div>
+                            <div>
+                              <Label htmlFor="smtp-port">Port</Label>
+                              <Input
+                                id="smtp-port"
+                                value={smtpForm.port}
+                                onChange={(e) => setSMTPForm({ ...smtpForm, port: e.target.value })}
+                                placeholder="587"
+                              />
+                              <p className="text-xs text-gray-500 mt-1">SMTP port (587, 465, 25)</p>
+                            </div>
+                          </div>
+                          <div>
+                            <Label htmlFor="smtp-user">Username</Label>
+                            <Input
+                              id="smtp-user"
+                              value={smtpForm.user}
+                              onChange={(e) => setSMTPForm({ ...smtpForm, user: e.target.value })}
+                              placeholder="your-email@example.com"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">SMTP authentication username</p>
+                          </div>
+                          <div>
+                            <Label htmlFor="smtp-password">Password</Label>
+                            <Input
+                              id="smtp-password"
+                              type="password"
+                              value={smtpForm.password}
+                              onChange={(e) => setSMTPForm({ ...smtpForm, password: e.target.value })}
+                              placeholder="your-password or app-password"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">SMTP authentication password</p>
+                          </div>
+                          <div>
+                            <Label htmlFor="smtp-from">From Email</Label>
+                            <Input
+                              id="smtp-from"
+                              value={smtpForm.from}
+                              onChange={(e) => setSMTPForm({ ...smtpForm, from: e.target.value })}
+                              placeholder="noreply@example.com"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Email address for outgoing messages</p>
+                          </div>
+                          <div>
+                            <Label htmlFor="smtp-bcc">BCC Email (Optional)</Label>
+                            <Input
+                              id="smtp-bcc"
+                              value={smtpForm.bcc}
+                              onChange={(e) => setSMTPForm({ ...smtpForm, bcc: e.target.value })}
+                              placeholder="admin@example.com"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">BCC all emails to this address</p>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <Switch
+                              id="smtp-tls"
+                              checked={smtpForm.enableTLS}
+                              onCheckedChange={(checked) => setSMTPForm({ ...smtpForm, enableTLS: checked })}
+                            />
+                            <Label htmlFor="smtp-tls">Enable TLS/SSL</Label>
+                          </div>
+                          <div className="flex justify-end space-x-2">
+                            <Button variant="outline" onClick={() => setShowSMTPDialog(false)}>
+                              Cancel
+                            </Button>
+                            <Button onClick={handleSaveSMTPConfig} disabled={updateSettingMutation.isPending}>
+                              {updateSettingMutation.isPending ? 'Saving...' : 'Save Configuration'}
+                            </Button>
+                          </div>
+                        </div>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="text-center py-8 text-gray-500">
-                  SMTP configuration interface will be available in the next update.
-                </div>
+                {isServiceConfigured('smtp_config', ['host', 'port', 'user', 'password', 'from']) ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">SMTP Host</h4>
+                      <p className="text-sm text-gray-600">{allSettings?.settings?.smtp_config?.host}:{allSettings?.settings?.smtp_config?.port}</p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Username</h4>
+                      <p className="text-sm text-gray-600">{allSettings?.settings?.smtp_config?.user}</p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">From Email</h4>
+                      <p className="text-sm text-gray-600">{allSettings?.settings?.smtp_config?.from}</p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Security</h4>
+                      <p className="text-sm text-gray-600">{allSettings?.settings?.smtp_config?.enableTLS ? 'TLS Enabled' : 'TLS Disabled'}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-gray-500">
+                    SMTP email is not configured. Click "Configure SMTP" to get started.
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

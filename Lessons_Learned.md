@@ -1522,3 +1522,70 @@ fi
 ```
 
 This prevents accidental deployment of wrong application stacks and ensures consistency.
+
+---
+
+## NextAuth Callback Error with Authentik (2025-08-09)
+
+### ❌ What Didn't Work
+
+**Problem**: NextAuth callback fails with `error=Callback` when users try to sign in via Authentik SSO.
+
+**Symptoms**:
+- Users get redirected to `/auth/signin?callbackUrl=...&error=Callback`
+- SSO flow initiates properly but fails during callback processing
+- Error occurs consistently after Authentik authentication succeeds
+
+**Root Causes**:
+1. **Database Connection Issues**: NextAuth signIn callback fails to create/update user records
+2. **Environment Variable Mismatch**: NEXTAUTH_URL doesn't match actual service URL
+3. **Authentik Profile Data**: Expected profile fields missing or malformed
+4. **Provider Configuration**: Authentik issuer URL or client credentials incorrect
+
+### ✅ What Worked
+
+**Solution 1: Verify Environment Variables**
+```bash
+# Ensure these match exactly on Cloud Run
+NEXTAUTH_URL=https://community-dashboard-nesvf2duwa-uc.a.run.app
+AUTHENTIK_ISSUER=https://sso.irregularchat.com/application/o/dashboard/
+AUTHENTIK_CLIENT_ID=<correct-client-id>
+AUTHENTIK_CLIENT_SECRET=<correct-client-secret>
+```
+
+**Solution 2: Add Error Handling to SignIn Callback**
+```typescript
+// In auth.ts signIn callback
+async signIn({ user, account, profile }) {
+  if (account?.provider === 'authentik') {
+    try {
+      // Wrap database operations in try-catch
+      const existingUser = await prisma.user.findUnique({
+        where: { authentikId: user.id },
+      });
+      // ... handle user creation/update
+      return true;
+    } catch (error) {
+      console.error('SignIn callback error:', error);
+      return false; // This will trigger the callback error
+    }
+  }
+  return true;
+}
+```
+
+**Solution 3: Verify Authentik Configuration**
+1. **Redirect URI**: Must exactly match `/api/auth/callback/authentik`
+2. **Scopes**: Must include `openid email profile`
+3. **Client Type**: Must be set to "Confidential" not "Public"
+
+**Solution 4: Database Connection Verification**
+```bash
+# Test database connectivity from Cloud Run
+gcloud run services logs read community-dashboard --region=us-central1
+# Look for Prisma connection errors or timeout issues
+```
+
+**Prevention**: Always test SSO flow in staging environment before deployment and add proper error logging to signIn callbacks.
+
+This ensures NextAuth can properly handle Authentik authentication and user provisioning without callback failures.

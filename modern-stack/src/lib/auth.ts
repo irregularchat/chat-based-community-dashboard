@@ -120,38 +120,59 @@ export const authOptions: NextAuthOptions = {
     },
     async signIn({ user, account, profile }) {
       if (account?.provider === 'authentik') {
-        // Handle Authentik OIDC sign-in
-        const existingUser = await prisma.user.findUnique({
-          where: { authentikId: user.id },
-        });
-
-        if (!existingUser) {
-          // Create new user from Authentik profile
-          await prisma.user.create({
-            data: {
-              authentikId: user.id,
-              email: user.email,
-              username: user.username,
-              firstName: user.firstName,
-              lastName: user.lastName,
-              isActive: true,
-              isAdmin: user.groups?.includes('admin') || false,
-              isModerator: user.groups?.includes('moderator') || false,
-            },
+        try {
+          console.log('Authentik signIn callback:', { 
+            userId: user.id, 
+            email: user.email, 
+            username: user.username 
           });
-        } else {
-          // Update existing user
-          await prisma.user.update({
+          
+          // Handle Authentik OIDC sign-in
+          const existingUser = await prisma.user.findUnique({
             where: { authentikId: user.id },
-            data: {
-              email: user.email,
-              firstName: user.firstName,
-              lastName: user.lastName,
-              lastLogin: new Date(),
-              isAdmin: user.groups?.includes('admin') || false,
-              isModerator: user.groups?.includes('moderator') || false,
-            },
           });
+
+          if (!existingUser) {
+            console.log('Creating new user from Authentik profile');
+            // Create new user from Authentik profile
+            await prisma.user.create({
+              data: {
+                authentikId: user.id,
+                email: user.email || '',
+                username: user.username || user.email?.split('@')[0] || `user_${Date.now()}`,
+                firstName: user.firstName || '',
+                lastName: user.lastName || '',
+                isActive: true,
+                lastLogin: new Date(),
+                isAdmin: user.groups?.includes('admin') || false,
+                isModerator: user.groups?.includes('moderator') || false,
+              },
+            });
+            console.log('Successfully created new user');
+          } else {
+            console.log('Updating existing user');
+            // Update existing user
+            await prisma.user.update({
+              where: { authentikId: user.id },
+              data: {
+                email: user.email || existingUser.email,
+                firstName: user.firstName || existingUser.firstName,
+                lastName: user.lastName || existingUser.lastName,
+                lastLogin: new Date(),
+                isAdmin: user.groups?.includes('admin') || false,
+                isModerator: user.groups?.includes('moderator') || false,
+              },
+            });
+            console.log('Successfully updated existing user');
+          }
+        } catch (error) {
+          console.error('SignIn callback error:', error);
+          console.error('Error details:', {
+            message: error instanceof Error ? error.message : 'Unknown error',
+            userId: user.id,
+            email: user.email
+          });
+          return false; // This will cause the callback error page
         }
       }
       return true;

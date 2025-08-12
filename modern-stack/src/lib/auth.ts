@@ -127,6 +127,12 @@ export const authOptions: NextAuthOptions = {
             username: user.username 
           });
           
+          // Check if prisma is available
+          if (!prisma) {
+            console.error('Prisma client not available in signIn callback');
+            return false;
+          }
+          
           // Handle Authentik OIDC sign-in
           const existingUser = await prisma.user.findUnique({
             where: { authentikId: user.id },

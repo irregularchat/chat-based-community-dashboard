@@ -5,11 +5,13 @@ export async function POST(request: NextRequest) {
   try {
     console.log('FORCE MIGRATION: Creating database tables directly...');
     
-    // Create the dashboard_settings table first (this is what's failing)
+    // Create the dashboard_settings table with correct schema
     await prisma.$executeRaw`
-      CREATE TABLE IF NOT EXISTS "dashboard_settings" (
+      DROP TABLE IF EXISTS "dashboard_settings";
+      CREATE TABLE "dashboard_settings" (
         "id" SERIAL PRIMARY KEY,
-        "settings" JSONB NOT NULL DEFAULT '{}',
+        "key" VARCHAR(255) UNIQUE NOT NULL,
+        "value" JSONB NOT NULL,
         "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
       );

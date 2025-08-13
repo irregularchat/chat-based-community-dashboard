@@ -323,6 +323,51 @@ export const settingsRouter = createTRPCRouter({
       return { success: true };
     }),
 
+  // Initialize settings from environment variables
+  initializeFromEnv: adminProcedure.mutation(async ({ ctx }) => {
+    // Map of environment variables to dashboard settings
+    const envMappings = {
+      'nextauth_url': process.env.NEXTAUTH_URL,
+      'authentik_client_id': process.env.AUTHENTIK_CLIENT_ID,
+      'authentik_issuer': process.env.AUTHENTIK_ISSUER,
+      'authentik_base_url': process.env.AUTHENTIK_BASE_URL,
+      'oidc_authorization_endpoint': process.env.OIDC_AUTHORIZATION_ENDPOINT,
+      'oidc_token_endpoint': process.env.OIDC_TOKEN_ENDPOINT,
+      'oidc_userinfo_endpoint': process.env.OIDC_USERINFO_ENDPOINT,
+      'oidc_end_session_endpoint': process.env.OIDC_END_SESSION_ENDPOINT,
+      'oidc_redirect_uri': process.env.OIDC_REDIRECT_URI,
+    };
+
+    const updates = [];
+    
+    for (const [key, value] of Object.entries(envMappings)) {
+      if (value) {
+        updates.push(
+          ctx.prisma.dashboardSettings.upsert({
+            where: { key },
+            update: { value },
+            create: { key, value },
+          })
+        );
+      }
+    }
+
+    if (updates.length > 0) {
+      await ctx.prisma.$transaction(updates);
+      
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'settings_initialized_from_env',
+          username: ctx.session.user.username || 'unknown',
+          details: `Initialized ${updates.length} settings from environment variables`,
+        },
+      });
+    }
+
+    return { success: true, initialized: updates.length };
+  }),
+
   // Get all settings for admin interface
   getAllSettings: adminProcedure.query(async ({ ctx }) => {
     const [settings, bookmarks, announcements] = await Promise.all([

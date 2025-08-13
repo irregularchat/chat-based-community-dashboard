@@ -15,10 +15,10 @@ export async function POST(request: NextRequest) {
       );
     `;
     
-    // Create users table for NextAuth
+    // Create users table for NextAuth (using TEXT id for compatibility)
     await prisma.$executeRaw`
       CREATE TABLE IF NOT EXISTS "users" (
-        "id" SERIAL PRIMARY KEY,
+        "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
         "username" VARCHAR(255) UNIQUE,
         "email" VARCHAR(255),
         "first_name" VARCHAR(255),
@@ -38,11 +38,11 @@ export async function POST(request: NextRequest) {
       );
     `;
 
-    // Create other essential tables
+    // Create other essential tables (using TEXT for user_id references)
     await prisma.$executeRaw`
       CREATE TABLE IF NOT EXISTS "community_bookmarks" (
         "id" SERIAL PRIMARY KEY,
-        "user_id" INTEGER REFERENCES "users"("id") ON DELETE CASCADE,
+        "user_id" TEXT REFERENCES "users"("id") ON DELETE CASCADE,
         "title" VARCHAR(255) NOT NULL,
         "url" VARCHAR(500) NOT NULL,
         "description" TEXT,
@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
         "id" SERIAL PRIMARY KEY,
         "title" VARCHAR(255) NOT NULL,
         "content" TEXT NOT NULL,
-        "author_id" INTEGER REFERENCES "users"("id"),
+        "author_id" TEXT REFERENCES "users"("id"),
         "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "is_active" BOOLEAN NOT NULL DEFAULT true
@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
         "id" SERIAL PRIMARY KEY,
         "email" VARCHAR(255) NOT NULL,
         "token" VARCHAR(255) UNIQUE NOT NULL,
-        "created_by_id" INTEGER REFERENCES "users"("id"),
+        "created_by_id" TEXT REFERENCES "users"("id"),
         "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "expires_at" TIMESTAMP(3) NOT NULL,
         "used_at" TIMESTAMP(3),

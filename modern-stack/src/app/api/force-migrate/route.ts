@@ -5,9 +5,9 @@ export async function POST(request: NextRequest) {
   try {
     console.log('FORCE MIGRATION: Creating database tables directly...');
     
-    // Create the dashboard_settings table with correct schema
+    // Create the dashboard_settings table with correct schema and populate from env
     await prisma.$executeRaw`
-      DROP TABLE IF EXISTS "dashboard_settings";
+      DROP TABLE IF EXISTS "dashboard_settings" CASCADE;
       CREATE TABLE "dashboard_settings" (
         "id" SERIAL PRIMARY KEY,
         "key" VARCHAR(255) UNIQUE NOT NULL,
@@ -16,6 +16,30 @@ export async function POST(request: NextRequest) {
         "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
     `;
+
+    // Initialize with environment variables
+    const envSettings = [
+      ['nextauth_url', process.env.NEXTAUTH_URL],
+      ['authentik_client_id', process.env.AUTHENTIK_CLIENT_ID],
+      ['authentik_client_secret', process.env.AUTHENTIK_CLIENT_SECRET],
+      ['authentik_issuer', process.env.AUTHENTIK_ISSUER],
+      ['authentik_base_url', process.env.AUTHENTIK_BASE_URL],
+      ['oidc_authorization_endpoint', process.env.OIDC_AUTHORIZATION_ENDPOINT],
+      ['oidc_token_endpoint', process.env.OIDC_TOKEN_ENDPOINT],
+      ['oidc_userinfo_endpoint', process.env.OIDC_USERINFO_ENDPOINT],
+      ['oidc_end_session_endpoint', process.env.OIDC_END_SESSION_ENDPOINT],
+      ['oidc_redirect_uri', process.env.OIDC_REDIRECT_URI],
+    ];
+
+    for (const [key, value] of envSettings) {
+      if (value) {
+        await prisma.$executeRaw`
+          INSERT INTO "dashboard_settings" ("key", "value") 
+          VALUES (${key}, ${JSON.stringify(value)})
+          ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value";
+        `;
+      }
+    }
     
     // Create users table for NextAuth (using TEXT id for compatibility)
     await prisma.$executeRaw`

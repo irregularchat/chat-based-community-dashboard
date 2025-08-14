@@ -22,6 +22,7 @@ This document captures key lessons learned during the development and debugging 
 17. [Cloud Run Deployment with Multiple Applications](#cloud-run-deployment-with-multiple-applications-2025-08-08)
 18. [Matrix Integration Configuration](#matrix-integration-configuration-2025-08-08)
 19. [Directory Context Critical for Deployments](#directory-context-critical-for-deployments-2025-08-09)
+20. [Authentik Invite URL Format](#authentik-invite-url-format-2025-08-14)
 
 ---
 
@@ -1589,3 +1590,50 @@ gcloud run services logs read community-dashboard --region=us-central1
 **Prevention**: Always test SSO flow in staging environment before deployment and add proper error logging to signIn callbacks.
 
 This ensures NextAuth can properly handle Authentik authentication and user provisioning without callback failures.
+
+## Authentik Invite URL Format (2025-08-14)
+
+### ❌ What Didn't Work
+**Incorrect Invite URL Format**:
+```
+https://sso.irregularchat.com/if/flow/enrollment/{invite_id}/
+```
+This resulted in **404 Not Found** errors when users tried to access invite links.
+
+### ✅ What Worked
+**Correct Invite URL Format**:
+```
+https://sso.irregularchat.com/if/flow/{flow_slug}/?itoken={invite_id}
+```
+
+**Working Example**:
+```
+https://sso.irregularchat.com/if/flow/invite-enrollment-flow/?itoken=7a877339-3143-452a-b245-83dff055d8a4
+```
+
+### 🔧 Root Cause
+- **Issue**: Using generic enrollment path instead of specific flow slug
+- **Authentik requires**: Exact flow slug from the flow configuration
+- **Parameter format**: `?itoken=` instead of path-based invite ID
+
+### 💡 Solution
+**Fix invite URL generation in authentik service**:
+```typescript
+// WRONG:
+const invite_link = `https://sso.irregularchat.com/if/flow/enrollment/${invite_id}/`;
+
+// CORRECT:
+const invite_link = `https://sso.irregularchat.com/if/flow/${flow_obj.slug}/?itoken=${invite_id}`;
+```
+
+**Required flow details from API response**:
+- `flow_obj.slug`: The flow slug (e.g., "invite-enrollment-flow")
+- `pk`: The invite token/ID for the `itoken` parameter
+
+### 🎯 Prevention
+1. **Always test invite links** manually after creation
+2. **Use flow slug from API response** not hardcoded enrollment path
+3. **Include proper error handling** for invite creation and URL generation
+4. **Document correct URL format** in code comments
+
+This ensures invite links work correctly and users can successfully complete the enrollment process.

@@ -4,6 +4,31 @@
 
 This roadmap is organized by timeline and shows how contributors at different skill levels can help. Whether you have 15 minutes or 15 hours, there's a way to contribute!
 
+## 🚨 CRITICAL: Database Schema Fix (v0.1.4) - *IN PROGRESS*
+
+### **Problem Identified**: Schema Drift in Production Database
+- ❌ Missing columns causing configuration save failures
+- ❌ No proper migration system causing production errors
+- ❌ Raw SQL patches created schema inconsistencies
+
+### **Root Cause Analysis**:
+1. Database created with incomplete schema
+2. Prisma client expects newer schema with additional columns
+3. Missing: `community_bookmarks.icon`, `dashboard_announcements.type`
+4. Configuration saving fails: `trpc.settings.updateDashboardSetting` → `prisma.dashboardSettings.upsert()` → schema mismatch
+
+### **✅ Proper Solution Plan**:
+- **Phase 1**: Initialize Prisma Migrate system properly
+- **Phase 2**: Create migration for missing columns
+- **Phase 3**: Deploy with proper migration strategy
+- **Phase 4**: Implement environment variable auto-population
+
+**Priority**: 🔴 CRITICAL - Blocking admin configuration functionality
+**Timeline**: Immediate (next 2-4 hours)
+**Skills**: Database migrations, Prisma, Production deployment
+
+---
+
 ## ✅ Recently Completed (v0.1.3)
 
 ### 👥 **Enhanced User Management** - *COMPLETED*

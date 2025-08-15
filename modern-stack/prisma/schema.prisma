@@ -37,6 +37,7 @@ model User {
   groups            UserGroup[]
   moderatorPermissions ModeratorPermission[]
   sentInvitations   UserInvitation[] @relation("UserInvitations")
+  emailHistory      EmailHistory[]
   
   @@map("users")
 }
@@ -329,4 +330,29 @@ model MatrixUserCache {
   @@index([isSignalUser])
   @@index([roomCount])
   @@map("matrix_user_cache")
+}
+
+// Email communication history tracking
+model EmailHistory {
+  id              Int      @id @default(autoincrement())
+  recipientId     Int?     @map("recipient_id") // User ID if recipient is a registered user
+  recipientEmail  String   @map("recipient_email")
+  senderUsername  String   @map("sender_username") // Admin who sent the email
+  subject         String
+  emailType       String   @map("email_type") // 'welcome', 'admin_message', 'invite', 'password_reset', 'custom'
+  status          String   @default("sent") // 'sent', 'failed', 'queued'
+  sentAt          DateTime @default(now()) @map("sent_at")
+  deliveredAt     DateTime? @map("delivered_at")
+  errorMessage    String?  @map("error_message")
+  messagePreview  String?  @map("message_preview") // First 200 chars for search/preview
+  
+  // Relations
+  recipient       User?    @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+  
+  @@index([recipientId])
+  @@index([senderUsername])
+  @@index([sentAt])
+  @@index([emailType])
+  @@index([status])
+  @@map("email_history")
 }

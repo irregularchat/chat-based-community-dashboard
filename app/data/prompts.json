@@ -1,0 +1,38 @@
+{
+  "prompts": [
+    {
+      "id": "welcome_1",
+      "name": "Standard Welcome",
+      "content": "Welcome to our community, {name}! We're glad to have you here.",
+      "description": "Standard welcome message for new members",
+      "tags": [
+        "welcome",
+        "general"
+      ]
+    },
+    {
+      "id": "rules_1",
+      "name": "Community Rules",
+      "content": "Please remember our community rules:\n1. Be respectful\n2. No spam\n3. Stay on topic",
+      "description": "Basic community rules reminder",
+      "tags": [
+        "rules",
+        "moderation"
+      ]
+    },
+    {
+      "id": "prompt_2c14e95c",
+      "name": "Reserach Welcome",
+      "content": "\ud83e\uddd0 Welcome to the Research Chat! \ud83d\udcda\nShare some of your relative research background, interests in research, and research projects! What are you currently researching, and how can we help?\n\nRemember the forum is unclassified, and use any DM for advanced sharing of PII and contact information.\nHelp Expand the known resources by reviewing:  https://irregularpedia.org/index.php/Category:Research\n\nLet us know what sections or resources should be included for research and planning.\n",
+      "description": "research chat welcome",
+      "tags": [
+        "research",
+        "one"
+      ]
+    }
+  ],
+  "room_associations": {
+    "!HGUydjrSMFbFdSVEYJ:irregularchat.com": "prompt_2c14e95c"
+  },
+  "category_associations": {}
+}

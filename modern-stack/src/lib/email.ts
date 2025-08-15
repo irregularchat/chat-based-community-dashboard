@@ -236,6 +236,9 @@ class EmailService {
       return false;
     }
 
+    // Process variable substitution for the subject
+    const processedSubject = this.substituteVariables(subject, userData || {});
+
     try {
       // Use the new MessageTemplates to generate the HTML content
       const emailTemplate = MessageTemplates.generateAdminEmailHTML({
@@ -251,8 +254,6 @@ class EmailService {
         } : undefined,
       });
 
-      // Process variable substitution for the subject
-      const processedSubject = this.substituteVariables(subject, userData || {});
 
       const mailOptions: any = {
         from: this.config!.from,

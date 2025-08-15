@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createTRPCRouter, publicProcedure, protectedProcedure, moderatorProcedure, adminProcedure } from '../trpc';
+import { createTRPCRouter, publicProcedure, adminProcedure } from '../trpc';
 import { TRPCError } from '@trpc/server';
 
 export const settingsRouter = createTRPCRouter({
@@ -23,14 +23,14 @@ export const settingsRouter = createTRPCRouter({
       return settings.reduce((acc, setting) => {
         acc[setting.key] = setting.value;
         return acc;
-      }, {} as Record<string, any>);
+      }, {} as Record<string, unknown>);
     }),
 
   updateDashboardSetting: adminProcedure
     .input(
       z.object({
         key: z.string(),
-        value: z.any(),
+        value: z.unknown(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -327,15 +327,86 @@ export const settingsRouter = createTRPCRouter({
   initializeFromEnv: adminProcedure.mutation(async ({ ctx }) => {
     // Map of environment variables to dashboard settings
     const envMappings = {
+      // NextAuth
       'nextauth_url': process.env.NEXTAUTH_URL,
-      'authentik_client_id': process.env.AUTHENTIK_CLIENT_ID,
+      
+      // Authentik/OIDC Configuration
+      'authentik_client_id': process.env.OIDC_CLIENT_ID,
+      'authentik_client_secret': process.env.OIDC_CLIENT_SECRET,
       'authentik_issuer': process.env.AUTHENTIK_ISSUER,
-      'authentik_base_url': process.env.AUTHENTIK_BASE_URL,
+      'authentik_base_url': process.env.AUTHENTIK_BASE_URL || process.env.AUTHENTIK_API_URL,
+      'authentik_api_token': process.env.AUTHENTIK_API_TOKEN,
       'oidc_authorization_endpoint': process.env.OIDC_AUTHORIZATION_ENDPOINT,
       'oidc_token_endpoint': process.env.OIDC_TOKEN_ENDPOINT,
       'oidc_userinfo_endpoint': process.env.OIDC_USERINFO_ENDPOINT,
       'oidc_end_session_endpoint': process.env.OIDC_END_SESSION_ENDPOINT,
       'oidc_redirect_uri': process.env.OIDC_REDIRECT_URI,
+      'oidc_scopes': process.env.OIDC_SCOPES,
+      
+      // Authentik specific
+      'main_group_id': process.env.MAIN_GROUP_ID,
+      'flow_id': process.env.FLOW_ID,
+      'invite_flow_id': process.env.INVITE_FLOW_ID,
+      'invite_label': process.env.INVITE_LABEL,
+      
+      // Database
+      'database_url': process.env.DATABASE_URL,
+      'postgres_db': process.env.POSTGRES_DB,
+      'postgres_user': process.env.POSTGRES_USER,
+      'postgres_password': process.env.POSTGRES_PASSWORD,
+      'postgres_port': process.env.POSTGRES_PORT,
+      
+      // SMTP Configuration
+      'smtp_active': process.env.SMTP_ACTIVE,
+      'smtp_server': process.env.SMTP_SERVER,
+      'smtp_port': process.env.SMTP_PORT,
+      'smtp_username': process.env.SMTP_USERNAME,
+      'smtp_password': process.env.SMTP_PASSWORD,
+      'smtp_from_email': process.env.SMTP_FROM_EMAIL,
+      'smtp_bcc': process.env.SMTP_BCC,
+      
+      // Matrix Configuration
+      'matrix_active': process.env.MATRIX_ACTIVE,
+      'matrix_url': process.env.MATRIX_URL || process.env.MATRIX_HOMESERVER_URL,
+      'matrix_access_token': process.env.MATRIX_ACCESS_TOKEN,
+      'matrix_bot_username': process.env.MATRIX_BOT_USERNAME,
+      'matrix_bot_display_name': process.env.MATRIX_BOT_DISPLAY_NAME,
+      'matrix_default_room_id': process.env.MATRIX_DEFAULT_ROOM_ID,
+      'matrix_welcome_room_id': process.env.MATRIX_WELCOME_ROOM_ID,
+      'matrix_signal_bridge_room_id': process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID,
+      'matrix_room_ids_name_category': process.env.MATRIX_ROOM_IDS_NAME_CATEGORY,
+      'matrix_min_room_members': process.env.MATRIX_MIN_ROOM_MEMBERS,
+      'matrix_message_notice': process.env.MATRIX_MESSAGE_NOTICE,
+      
+      // Discourse Configuration
+      'discourse_active': process.env.DISCOURSE_ACTIVE,
+      'discourse_url': process.env.DISCOURSE_URL,
+      'discourse_category_id': process.env.DISCOURSE_CATEGORY_ID,
+      'discourse_api_key': process.env.DISCOURSE_API_KEY,
+      'discourse_api_username': process.env.DISCOURSE_API_USERNAME,
+      'discourse_intro_tag': process.env.DISCOURSE_INTRO_TAG,
+      
+      // Webhook Configuration
+      'webhook_active': process.env.WEBHOOK_ACTIVE,
+      'webhook_url': process.env.WEBHOOK_URL,
+      'webhook_secret': process.env.WEBHOOK_SECRET,
+      
+      // OpenAI Configuration
+      'openai_api_key': process.env.OPENAI_API_KEY,
+      
+      // General Settings
+      'page_title': process.env.PAGE_TITLE,
+      'favicon_url': process.env.FAVICON_URL,
+      'base_domain': process.env.BASE_DOMAIN,
+      'port': process.env.PORT,
+      'login_required': process.env.LOGIN_REQUIRED,
+      'theme': process.env.THEME,
+      'admin_usernames': process.env.ADMIN_USERNAMES,
+      'default_admin_username': process.env.DEFAULT_ADMIN_USERNAME,
+      'default_admin_password': process.env.DEFAULT_ADMIN_PASSWORD,
+      
+      // ShLink Configuration
+      'shlink_active': process.env.SHLINK_ACTIVE,
     };
 
     const updates = [];
@@ -386,7 +457,7 @@ export const settingsRouter = createTRPCRouter({
       settings: settings.reduce((acc, setting) => {
         acc[setting.key] = setting.value;
         return acc;
-      }, {} as Record<string, any>),
+      }, {} as Record<string, unknown>),
       bookmarks,
       announcements,
     };
@@ -407,11 +478,11 @@ export const settingsRouter = createTRPCRouter({
       try {
         const roomCards = JSON.parse(setting.value as string) || [];
         if (input.isActive !== undefined) {
-          return roomCards.filter((card: any) => card.isActive === input.isActive);
+          return roomCards.filter((card: { isActive: boolean }) => card.isActive === input.isActive);
         }
         return roomCards;
-      } catch (error) {
-        console.error('Error parsing room cards:', error);
+      } catch (_error) {
+        console.error('Error parsing room cards:', _error);
         return [];
       }
     }),
@@ -519,7 +590,7 @@ export const settingsRouter = createTRPCRouter({
       }
 
       // Find and update the card
-      const cardIndex = roomCards.findIndex((card: any) => card.id === id);
+      const cardIndex = roomCards.findIndex((card: { id: number }) => card.id === id);
       if (cardIndex === -1) {
         throw new TRPCError({
           code: 'NOT_FOUND',

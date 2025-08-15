@@ -7,14 +7,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
-import { Separator } from '@/components/ui/separator';
-import { ArrowLeft, Settings, MessageCircle, Users, Mail, Bot, Database, CheckCircle, AlertTriangle, Plus, Edit } from 'lucide-react';
+import { ArrowLeft, MessageCircle, Users, Mail, Bot, Database, CheckCircle, AlertTriangle, Plus, Edit } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
@@ -73,7 +71,7 @@ export default function AdminConfigurationPage() {
   });
 
   // Fetch data
-  const { data: allSettings, isLoading, refetch } = trpc.settings.getAllSettings.useQuery();
+  const { data: allSettings, refetch } = trpc.settings.getAllSettings.useQuery();
 
   // Mutations
   const updateSettingMutation = trpc.settings.updateDashboardSetting.useMutation({
@@ -130,15 +128,15 @@ export default function AdminConfigurationPage() {
   }, [allSettings]);
 
   // Form handlers
-  const resetMatrixForm = () => {
-    setMatrixForm({
-      homeserver: '',
-      accessToken: '',
-      userId: '',
-      welcomeRoomId: '',
-      enableEncryption: false,
-    });
-  };
+  // const resetMatrixForm = () => {
+  //   setMatrixForm({
+  //     homeserver: '',
+  //     accessToken: '',
+  //     userId: '',
+  //     welcomeRoomId: '',
+  //     enableEncryption: false,
+  //   });
+  // };
 
   const handleSaveMatrixConfig = () => {
     const matrixConfig = {
@@ -464,7 +462,7 @@ export default function AdminConfigurationPage() {
                   </div>
                 ) : (
                   <div className="text-center py-8 text-gray-500">
-                    Matrix integration is not configured. Click "Configure Matrix" to get started.
+                    Matrix integration is not configured. Click &quot;Configure Matrix&quot; to get started.
                   </div>
                 )}
               </CardContent>
@@ -622,7 +620,7 @@ export default function AdminConfigurationPage() {
                   </div>
                 ) : (
                   <div className="text-center py-8 text-gray-500">
-                    Authentik identity provider is not configured. Click "Configure Authentik" to get started.
+                    Authentik identity provider is not configured. Click &quot;Configure Authentik&quot; to get started.
                   </div>
                 )}
               </CardContent>
@@ -769,7 +767,7 @@ export default function AdminConfigurationPage() {
                   </div>
                 ) : (
                   <div className="text-center py-8 text-gray-500">
-                    Discourse forum is not configured. Click "Configure Discourse" to get started.
+                    Discourse forum is not configured. Click &quot;Configure Discourse&quot; to get started.
                   </div>
                 )}
               </CardContent>
@@ -949,7 +947,7 @@ export default function AdminConfigurationPage() {
                   </div>
                 ) : (
                   <div className="text-center py-8 text-gray-500">
-                    AI API is not configured. Click "Configure AI APIs" to get started.
+                    AI API is not configured. Click &quot;Configure AI APIs&quot; to get started.
                   </div>
                 )}
               </CardContent>
@@ -1128,7 +1126,7 @@ export default function AdminConfigurationPage() {
                   </div>
                 ) : (
                   <div className="text-center py-8 text-gray-500">
-                    SMTP email is not configured. Click "Configure SMTP" to get started.
+                    SMTP email is not configured. Click &quot;Configure SMTP&quot; to get started.
                   </div>
                 )}
               </CardContent>

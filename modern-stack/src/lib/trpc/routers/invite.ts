@@ -1,12 +1,12 @@
 import { z } from 'zod';
-import { createTRPCRouter, protectedProcedure, moderatorProcedure, adminProcedure } from '../trpc';
+import { createTRPCRouter, moderatorProcedure } from '../trpc';
 import { authentikService } from '@/lib/authentik';
 import { emailService } from '@/lib/email';
 import { MessageTemplates } from '@/lib/message-templates';
 
 export const inviteRouter = createTRPCRouter({
   // Get available groups for invite assignment
-  getGroups: moderatorProcedure.query(async ({ ctx }) => {
+  getGroups: moderatorProcedure.query(async ({ ctx: _ctx }) => {
     try {
       const groups = await authentikService.getGroups();
       return groups;

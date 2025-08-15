@@ -2,6 +2,13 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { trpc } from '@/lib/trpc/client'
 import UsersPage from '@/app/users/page'
 
+// Define types for test mock data
+type MockQueryResult<T> = {
+  data: T | undefined
+  isLoading: boolean
+  error: { message: string } | null
+}
+
 // Mock the tRPC API
 jest.mock('@/lib/trpc/client', () => ({
   trpc: {
@@ -50,7 +57,7 @@ describe('UsersPage', () => {
       data: undefined,
       isLoading: true,
       error: null,
-    } as any)
+    } as MockQueryResult<{ users: typeof mockUsers; pagination: { page: number; pageSize: number; total: number; totalPages: number } }>)
 
     render(<UsersPage />)
     expect(screen.getByText(/loading/i)).toBeInTheDocument()
@@ -69,7 +76,7 @@ describe('UsersPage', () => {
       },
       isLoading: false,
       error: null,
-    } as any)
+    } as MockQueryResult<{ users: typeof mockUsers; pagination: { page: number; pageSize: number; total: number; totalPages: number } }>)
 
     render(<UsersPage />)
 
@@ -84,7 +91,7 @@ describe('UsersPage', () => {
       data: undefined,
       isLoading: false,
       error: { message: 'Failed to load users' },
-    } as any)
+    } as MockQueryResult<{ users: typeof mockUsers; pagination: { page: number; pageSize: number; total: number; totalPages: number } }>)
 
     render(<UsersPage />)
     expect(screen.getByText(/error/i)).toBeInTheDocument()
@@ -103,7 +110,7 @@ describe('UsersPage', () => {
       },
       isLoading: false,
       error: null,
-    } as any)
+    } as MockQueryResult<{ users: typeof mockUsers; pagination: { page: number; pageSize: number; total: number; totalPages: number } }>)
 
     render(<UsersPage />)
 

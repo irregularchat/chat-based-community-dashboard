@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
-export async function POST(request: NextRequest) {
+export async function POST(_request: NextRequest) {
   try {
     console.log('COLUMN MIGRATION: Adding missing columns to fix Prisma schema mismatch...');
     
@@ -12,7 +12,7 @@ export async function POST(request: NextRequest) {
         ALTER TABLE "community_bookmarks" ADD COLUMN IF NOT EXISTS "icon" TEXT;
       `;
       console.log('✅ Added icon column to community_bookmarks');
-    } catch (error) {
+    } catch (_error) {
       console.log('ℹ️ Icon column may already exist in community_bookmarks');
     }
     
@@ -23,14 +23,14 @@ export async function POST(request: NextRequest) {
         ALTER TABLE "dashboard_announcements" ADD COLUMN IF NOT EXISTS "type" TEXT NOT NULL DEFAULT 'info';
       `;
       console.log('✅ Added type column to dashboard_announcements');
-    } catch (error) {
+    } catch (_error) {
       console.log('ℹ️ Type column may already exist in dashboard_announcements');
     }
     
     // Test Prisma queries to verify fixes
     console.log('Testing Prisma queries...');
     
-    let queryResults = {
+    const queryResults = {
       communityBookmarks: false,
       dashboardAnnouncements: false,
       dashboardSettings: false
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Check if columns exist
     const communityBookmarksColumns = await prisma.$queryRaw`
@@ -101,8 +101,8 @@ export async function GET(request: NextRequest) {
       ORDER BY ordinal_position;
     `;
     
-    const hasIcon = (communityBookmarksColumns as any[]).some(col => col.column_name === 'icon');
-    const hasType = (dashboardAnnouncementsColumns as any[]).some(col => col.column_name === 'type');
+    const hasIcon = (communityBookmarksColumns as { column_name: string }[]).some(col => col.column_name === 'icon');
+    const hasType = (dashboardAnnouncementsColumns as { column_name: string }[]).some(col => col.column_name === 'type');
     
     return NextResponse.json({
       success: true,

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authentikService } from '@/lib/authentik';
 import { prisma } from '@/lib/prisma';
 
-export async function POST(request: NextRequest) {
+export async function POST(_request: NextRequest) {
   try {
     console.log('Creating test invite: unmanned_pause for 4 days...');
     
@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Get recent test invites
     const invites = await prisma.invite.findMany({

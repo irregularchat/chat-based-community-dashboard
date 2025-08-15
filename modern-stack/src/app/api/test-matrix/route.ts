@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { matrixSyncService } from '@/lib/matrix-sync';
 import { PrismaClient } from '@/generated/prisma';
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   const prisma = new PrismaClient();
 
   try {

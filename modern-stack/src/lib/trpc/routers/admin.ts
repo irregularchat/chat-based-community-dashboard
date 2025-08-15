@@ -527,7 +527,7 @@ export const adminRouter = createTRPCRouter({
                 lastLogin: authentikUser.last_login ? new Date(authentikUser.last_login) : null,
                 // Keep existing local data like phone, but update SSO fields
                 attributes: {
-                  ...(existingUser.attributes as Record<string, any> || {}),
+                  ...(existingUser.attributes as Record<string, unknown> || {}),
                   ssoGroups: authentikUser.groups,
                   lastSyncedFromSSO: new Date().toISOString(),
                 },

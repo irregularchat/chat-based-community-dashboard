@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
-import { Plus, Edit, Trash2, Save, X, ArrowUp, ArrowDown, Settings, MessageSquare, Bookmark, Bell, MessageCircle } from 'lucide-react';
+import { Plus, Edit, Trash2, ArrowUp, ArrowDown, Settings, MessageSquare, Bookmark, Bell } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
@@ -26,7 +26,6 @@ export default function AdminSettingsPage() {
 
   // Dialog states
   const [showBookmarkDialog, setShowBookmarkDialog] = useState(false);
-  const [showRoomCardDialog, setShowRoomCardDialog] = useState(false);
   const [showAnnouncementDialog, setShowAnnouncementDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
 
@@ -50,19 +49,6 @@ export default function AdminSettingsPage() {
     expiresAt: '',
   });
 
-  const [roomCardForm, setRoomCardForm] = useState({
-    title: '',
-    description: '',
-    category: 'general',
-    image: '',
-    matrixRoomId: '',
-    directLink: '',
-    forumLink: '',
-    wikiLink: '',
-    memberCount: 0,
-    order: 0,
-    isActive: true,
-  });
 
   const [settingsForm, setSettingsForm] = useState({
     key: '',
@@ -161,49 +147,7 @@ export default function AdminSettingsPage() {
     },
   });
 
-  // Room Card Mutations
-  const createRoomCardMutation = trpc.settings.createRoomCard.useMutation({
-    onSuccess: () => {
-      toast.success('Room card created successfully');
-      refetch();
-      setShowRoomCardDialog(false);
-      resetRoomCardForm();
-    },
-    onError: (error) => {
-      toast.error(`Failed to create room card: ${error.message}`);
-    },
-  });
 
-  const updateRoomCardMutation = trpc.settings.updateRoomCard.useMutation({
-    onSuccess: () => {
-      toast.success('Room card updated successfully');
-      refetch();
-      setIsEditing(null);
-    },
-    onError: (error) => {
-      toast.error(`Failed to update room card: ${error.message}`);
-    },
-  });
-
-  const deleteRoomCardMutation = trpc.settings.deleteRoomCard.useMutation({
-    onSuccess: () => {
-      toast.success('Room card deleted successfully');
-      refetch();
-    },
-    onError: (error) => {
-      toast.error(`Failed to delete room card: ${error.message}`);
-    },
-  });
-
-  const reorderRoomCardsMutation = trpc.settings.reorderRoomCards.useMutation({
-    onSuccess: () => {
-      toast.success('Room cards reordered successfully');
-      refetch();
-    },
-    onError: (error) => {
-      toast.error(`Failed to reorder room cards: ${error.message}`);
-    },
-  });
 
   // Form handlers
   const resetBookmarkForm = () => {
@@ -269,22 +213,6 @@ export default function AdminSettingsPage() {
     }
   };
 
-  const handleCreateRoomCard = () => {
-    createRoomCardMutation.mutate(roomCardForm);
-  };
-
-  const handleUpdateRoomCard = (id: number) => {
-    updateRoomCardMutation.mutate({
-      id,
-      ...roomCardForm,
-    });
-  };
-
-  const handleDeleteRoomCard = (id: number) => {
-    if (confirm('Are you sure you want to delete this room card?')) {
-      deleteRoomCardMutation.mutate({ id });
-    }
-  };
 
   const handleCreateAnnouncement = () => {
     const data = {
@@ -310,7 +238,7 @@ export default function AdminSettingsPage() {
   };
 
   const handleUpdateSetting = () => {
-    let value: any = settingsForm.value;
+    let value: string | number | boolean | object = settingsForm.value;
     
     // Try to parse as JSON, fallback to string
     try {
@@ -325,7 +253,7 @@ export default function AdminSettingsPage() {
     });
   };
 
-  const handleReorderBookmarks = (direction: 'up' | 'down', bookmark: any) => {
+  const handleReorderBookmarks = (direction: 'up' | 'down', bookmark: { id: number; order?: number }) => {
     const bookmarks = [...(allSettings?.bookmarks || [])];
     const currentIndex = bookmarks.findIndex(b => b.id === bookmark.id);
     
@@ -344,7 +272,7 @@ export default function AdminSettingsPage() {
     reorderBookmarksMutation.mutate({ bookmarks: updates });
   };
 
-  const startEditing = (type: string, item?: any) => {
+  const startEditing = (type: string, item?: { id?: number; [key: string]: unknown }) => {
     setIsEditing({ type, id: item?.id });
     
     if (type === 'bookmark' && item) {
@@ -570,7 +498,7 @@ export default function AdminSettingsPage() {
                   <div className="space-y-4">
                     {allSettings?.bookmarks?.length === 0 ? (
                       <div className="text-center py-8 text-gray-500">
-                        No bookmarks configured yet. Click "Add Bookmark" to get started.
+                        No bookmarks configured yet. Click &quot;Add Bookmark&quot; to get started.
                       </div>
                     ) : (
                       <Table>
@@ -714,7 +642,7 @@ export default function AdminSettingsPage() {
                         <div className="grid grid-cols-2 gap-4">
                           <div>
                             <Label htmlFor="announcement-type">Type</Label>
-                            <Select value={announcementForm.type} onValueChange={(value: any) => setAnnouncementForm({ ...announcementForm, type: value })}>
+                            <Select value={announcementForm.type} onValueChange={(value: 'info' | 'warning' | 'success' | 'error') => setAnnouncementForm({ ...announcementForm, type: value })}>
                               <SelectTrigger>
                                 <SelectValue />
                               </SelectTrigger>
@@ -776,7 +704,7 @@ export default function AdminSettingsPage() {
                   <div className="space-y-4">
                     {allSettings?.announcements?.length === 0 ? (
                       <div className="text-center py-8 text-gray-500">
-                        No announcements configured yet. Click "Add Announcement" to get started.
+                        No announcements configured yet. Click &quot;Add Announcement&quot; to get started.
                       </div>
                     ) : (
                       <Table>
@@ -922,7 +850,7 @@ export default function AdminSettingsPage() {
                   <div className="space-y-4">
                     {!allSettings?.settings || Object.keys(allSettings.settings).length === 0 ? (
                       <div className="text-center py-8 text-gray-500">
-                        No settings configured yet. Click "Add Setting" to get started.
+                        No settings configured yet. Click &quot;Add Setting&quot; to get started.
                       </div>
                     ) : (
                       <Table>
@@ -1085,7 +1013,7 @@ export default function AdminSettingsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="edit-announcement-type">Type</Label>
-                  <Select value={announcementForm.type} onValueChange={(value: any) => setAnnouncementForm({ ...announcementForm, type: value })}>
+                  <Select value={announcementForm.type} onValueChange={(value: 'info' | 'warning' | 'success' | 'error') => setAnnouncementForm({ ...announcementForm, type: value })}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>

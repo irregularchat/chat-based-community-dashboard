@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
-export async function POST(request: NextRequest) {
+export async function POST(_request: NextRequest) {
   try {
     console.log('IMMEDIATE COLUMN FIX: Adding missing columns now...');
     
@@ -19,21 +19,21 @@ export async function POST(request: NextRequest) {
     console.log('Testing Prisma queries...');
     
     try {
-      const bookmarks = await prisma.communityBookmark.findMany({ take: 1 });
+      await prisma.communityBookmark.findMany({ take: 1 });
       console.log('✅ CommunityBookmark query works');
     } catch (error) {
       console.error('❌ CommunityBookmark query still fails:', error);
     }
     
     try {
-      const announcements = await prisma.dashboardAnnouncement.findMany({ take: 1 });
+      await prisma.dashboardAnnouncement.findMany({ take: 1 });
       console.log('✅ DashboardAnnouncement query works');
     } catch (error) {
       console.error('❌ DashboardAnnouncement query still fails:', error);
     }
     
     try {
-      const settings = await prisma.dashboardSettings.findMany({ take: 1 });
+      await prisma.dashboardSettings.findMany({ take: 1 });
       console.log('✅ DashboardSettings query works');
     } catch (error) {
       console.error('❌ DashboardSettings query still fails:', error);

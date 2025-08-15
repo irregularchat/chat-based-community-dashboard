@@ -15,7 +15,7 @@ jest.mock('@/lib/db', () => ({
   },
 }))
 
-const mockDb = require('@/lib/db').db
+import { db as mockDb } from '@/lib/db'
 
 describe('User Router', () => {
   const mockUser = {

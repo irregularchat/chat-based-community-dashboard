@@ -1,5 +1,5 @@
 declare global {
-  var Olm: any;
+  var Olm: unknown;
 }
 
 export {};

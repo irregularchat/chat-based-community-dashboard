@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
-export async function POST(request: NextRequest) {
+export async function POST(_request: NextRequest) {
   try {
     console.log('SCHEMA MIGRATION: Starting database schema synchronization...');
     
@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Check current schema state without making changes
     const communityBookmarksColumns = await prisma.$queryRaw`
@@ -119,9 +119,9 @@ export async function GET(request: NextRequest) {
     `;
     
     // Check if required columns exist
-    const communityBookmarksHasIcon = (communityBookmarksColumns as any[]).some(col => col.column_name === 'icon');
-    const dashboardAnnouncementsHasType = (dashboardAnnouncementsColumns as any[]).some(col => col.column_name === 'type');
-    const dashboardSettingsHasKey = (dashboardSettingsColumns as any[]).some(col => col.column_name === 'key');
+    const communityBookmarksHasIcon = (communityBookmarksColumns as { column_name: string }[]).some(col => col.column_name === 'icon');
+    const dashboardAnnouncementsHasType = (dashboardAnnouncementsColumns as { column_name: string }[]).some(col => col.column_name === 'type');
+    const dashboardSettingsHasKey = (dashboardSettingsColumns as { column_name: string }[]).some(col => col.column_name === 'key');
     
     return NextResponse.json({
       success: true,

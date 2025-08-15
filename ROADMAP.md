@@ -4,6 +4,21 @@
 
 This roadmap is organized by timeline and shows how contributors at different skill levels can help. Whether you have 15 minutes or 15 hours, there's a way to contribute!
 
+## ✅ Recently Completed (v0.1.5) - *COMPLETED*
+
+### 🔧 **Dual Environment Configuration System** - *COMPLETED*
+- ✅ **Local and Cloud Deployment Support**
+  - **Features Delivered**:
+    - ✅ Separate environment configurations for local development (.env) and production (.env.production)
+    - ✅ Fixed Prisma client caching issues preventing local database connections
+    - ✅ Explicit database URL configuration in Prisma client initialization
+    - ✅ Local PostgreSQL database setup with Docker Compose
+    - ✅ Working local authentication with test users (admin/shareme314)
+    - ✅ Support for both Cloud SQL and local PostgreSQL databases
+  - **Skills used**: Environment configuration, Prisma ORM, Docker, Database management
+  - **Time invested**: 5+ hours
+  - **Impact**: High - Enables smooth development and testing workflow
+
 ## ✅ Recently Completed (v0.1.4) - *COMPLETED*
 
 ### 🗃️ **Database Schema & Configuration Management** - *COMPLETED*

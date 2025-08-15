@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { trpc } from '@/lib/trpc/client';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -85,6 +85,49 @@ export default function AdminConfigurationPage() {
       toast.error(`Failed to save configuration: ${error.message}`);
     },
   });
+
+  const initializeFromEnvMutation = trpc.settings.initializeFromEnv.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Initialized ${data.initialized} settings from environment variables`);
+      refetch();
+    },
+    onError: (error) => {
+      toast.error(`Failed to initialize from environment: ${error.message}`);
+    },
+  });
+
+  // Auto-populate forms from settings
+  useEffect(() => {
+    if (allSettings) {
+      // Populate Authentik form
+      setAuthentikForm({
+        baseUrl: allSettings.authentik_base_url || '',
+        apiToken: allSettings.authentik_api_token || '',
+        clientId: allSettings.authentik_client_id || '',
+        clientSecret: allSettings.authentik_client_secret || '',
+        issuer: allSettings.authentik_issuer || '',
+      });
+
+      // Populate Matrix form if settings exist
+      setMatrixForm(prev => ({
+        ...prev,
+        homeserver: allSettings.matrix_homeserver || '',
+        accessToken: allSettings.matrix_access_token || '',
+        userId: allSettings.matrix_user_id || '',
+        welcomeRoomId: allSettings.matrix_welcome_room_id || '',
+      }));
+
+      // Populate SMTP form if settings exist
+      setSMTPForm(prev => ({
+        ...prev,
+        host: allSettings.smtp_host || '',
+        port: allSettings.smtp_port || '587',
+        user: allSettings.smtp_user || '',
+        from: allSettings.smtp_from || '',
+        bcc: allSettings.smtp_bcc || '',
+      }));
+    }
+  }, [allSettings]);
 
   // Form handlers
   const resetMatrixForm = () => {
@@ -228,6 +271,14 @@ export default function AdminConfigurationPage() {
               </p>
             </div>
             <div className="flex items-center space-x-2">
+              <Button
+                variant="secondary"
+                onClick={() => initializeFromEnvMutation.mutate()}
+                disabled={initializeFromEnvMutation.isLoading}
+              >
+                <Database className="w-4 h-4 mr-2" />
+                {initializeFromEnvMutation.isLoading ? 'Initializing...' : 'Load from Environment'}
+              </Button>
               <Button
                 variant="outline"
                 onClick={() => router.push('/admin')}

@@ -142,7 +142,7 @@ export const userRouter = createTRPCRouter({
         try {
           // First, get all users from both sources to calculate proper pagination
           let authentikUsers: { pk: number; name?: string; email: string; is_active: boolean; }[] = [];
-          const authentikTotal = 0;
+          let _authentikTotal = 0;
           
           // Fetch all Authentik users for proper pagination calculation
           try {
@@ -153,7 +153,7 @@ export const userRouter = createTRPCRouter({
               }
               return true;
             });
-            authentikTotal = authentikResult.total;
+            _authentikTotal = authentikResult.total;
           } catch (authentikError) {
             console.error('Error fetching users from Authentik:', authentikError);
             // Continue with local users only if Authentik fails
@@ -2616,6 +2616,222 @@ The invitation email has been sent. You'll be notified when they accept the invi
         action: actionDescription,
       };
     }),
+
+  // Get email history analytics
+  getEmailAnalytics: moderatorProcedure
+    .input(
+      z.object({
+        dateRange: z.object({
+          start: z.date().optional(),
+          end: z.date().optional(),
+        }).optional(),
+        emailType: z.enum(['welcome', 'admin_message', 'invite', 'password_reset', 'custom']).optional(),
+        status: z.enum(['sent', 'failed']).optional(),
+        recipientId: z.number().optional(),
+        senderUsername: z.string().optional(),
+        page: z.number().default(1),
+        limit: z.number().default(25),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const { page, limit, dateRange, emailType, status, recipientId, senderUsername } = input;
+      const skip = (page - 1) * limit;
+
+      const where: any = {};
+      
+      if (dateRange?.start || dateRange?.end) {
+        where.sentAt = {};
+        if (dateRange.start) where.sentAt.gte = dateRange.start;
+        if (dateRange.end) where.sentAt.lte = dateRange.end;
+      }
+      
+      if (emailType) where.emailType = emailType;
+      if (status) where.status = status;
+      if (recipientId) where.recipientId = recipientId;
+      if (senderUsername) where.senderUsername = senderUsername;
+
+      const [emails, total] = await Promise.all([
+        ctx.prisma.emailHistory.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: { sentAt: 'desc' },
+          include: {
+            recipient: {
+              select: {
+                id: true,
+                username: true,
+                email: true,
+                firstName: true,
+                lastName: true,
+              },
+            },
+          },
+        }),
+        ctx.prisma.emailHistory.count({ where }),
+      ]);
+
+      return {
+        emails,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      };
+    }),
+
+  // Get email statistics summary
+  getEmailStats: moderatorProcedure
+    .input(
+      z.object({
+        dateRange: z.object({
+          start: z.date().optional(),
+          end: z.date().optional(),
+        }).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const { dateRange } = input;
+      
+      const where: any = {};
+      if (dateRange?.start || dateRange?.end) {
+        where.sentAt = {};
+        if (dateRange.start) where.sentAt.gte = dateRange.start;
+        if (dateRange.end) where.sentAt.lte = dateRange.end;
+      }
+
+      // Get total counts
+      const [totalEmails, sentEmails, failedEmails] = await Promise.all([
+        ctx.prisma.emailHistory.count({ where }),
+        ctx.prisma.emailHistory.count({ where: { ...where, status: 'sent' } }),
+        ctx.prisma.emailHistory.count({ where: { ...where, status: 'failed' } }),
+      ]);
+
+      // Get email type breakdown
+      const emailTypeStats = await ctx.prisma.emailHistory.groupBy({
+        by: ['emailType'],
+        where,
+        _count: { emailType: true },
+        orderBy: { _count: { emailType: 'desc' } },
+      });
+
+      // Get daily email counts for the last 30 days
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
+      const dailyStats = await ctx.prisma.emailHistory.groupBy({
+        by: ['sentAt'],
+        where: {
+          ...where,
+          sentAt: {
+            gte: dateRange?.start || thirtyDaysAgo,
+            ...(dateRange?.end && { lte: dateRange.end }),
+          },
+        },
+        _count: { id: true },
+        orderBy: { sentAt: 'desc' },
+      });
+
+      // Get top senders
+      const topSenders = await ctx.prisma.emailHistory.groupBy({
+        by: ['senderUsername'],
+        where,
+        _count: { senderUsername: true },
+        orderBy: { _count: { senderUsername: 'desc' } },
+        take: 10,
+      });
+
+      // Get recent activity (last 24 hours)
+      const twentyFourHoursAgo = new Date();
+      twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+      
+      const recentActivity = await ctx.prisma.emailHistory.count({
+        where: {
+          ...where,
+          sentAt: { gte: twentyFourHoursAgo },
+        },
+      });
+
+      return {
+        totalEmails,
+        sentEmails,
+        failedEmails,
+        successRate: totalEmails > 0 ? (sentEmails / totalEmails) * 100 : 0,
+        emailTypeStats: emailTypeStats.map(stat => ({
+          emailType: stat.emailType,
+          count: stat._count.emailType,
+        })),
+        dailyStats: dailyStats.map(stat => ({
+          date: stat.sentAt,
+          count: stat._count.id,
+        })),
+        topSenders: topSenders.map(sender => ({
+          senderUsername: sender.senderUsername,
+          count: sender._count.senderUsername,
+        })),
+        recentActivity,
+      };
+    }),
+
+  // Get user-specific email history
+  getUserEmailHistory: moderatorProcedure
+    .input(
+      z.object({
+        userId: z.number(),
+        page: z.number().default(1),
+        limit: z.number().default(10),
+        emailType: z.enum(['welcome', 'admin_message', 'invite', 'password_reset', 'custom']).optional(),
+        status: z.enum(['sent', 'failed']).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const { userId, page, limit, emailType, status } = input;
+      const skip = (page - 1) * limit;
+
+      const where: any = {
+        OR: [
+          { recipientId: userId },
+          { 
+            recipient: {
+              id: userId,
+            },
+          },
+        ],
+      };
+      
+      if (emailType) where.emailType = emailType;
+      if (status) where.status = status;
+
+      const [emails, total] = await Promise.all([
+        ctx.prisma.emailHistory.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: { sentAt: 'desc' },
+          include: {
+            recipient: {
+              select: {
+                id: true,
+                username: true,
+                email: true,
+                firstName: true,
+                lastName: true,
+              },
+            },
+          },
+        }),
+        ctx.prisma.emailHistory.count({ where }),
+      ]);
+
+      return {
+        emails,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      };
+    }),
+
 });
 
 // Helper function for password hashing

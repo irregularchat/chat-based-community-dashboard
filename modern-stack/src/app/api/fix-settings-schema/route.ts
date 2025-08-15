@@ -49,7 +49,8 @@ export async function POST(_request: NextRequest) {
       if (value) {
         await prisma.$executeRaw`
           INSERT INTO "dashboard_settings" ("key", "value") 
-          VALUES (${key}, ${JSON.stringify(value)})
+          VALUES (${key}, ${JSON.stringify(value)}::jsonb)
+          ON CONFLICT ("key") DO UPDATE SET "value" = ${JSON.stringify(value)}::jsonb
         `;
         insertedSettings.push(key);
       }

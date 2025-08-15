@@ -180,21 +180,21 @@ export default function AdminSettingsPage() {
     });
   };
 
-  const resetRoomCardForm = () => {
-    setRoomCardForm({
-      title: '',
-      description: '',
-      category: 'general',
-      image: '',
-      matrixRoomId: '',
-      directLink: '',
-      forumLink: '',
-      wikiLink: '',
-      memberCount: 0,
-      order: 0,
-      isActive: true,
-    });
-  };
+  // const resetRoomCardForm = () => {
+  //   setRoomCardForm({
+  //     title: '',
+  //     description: '',
+  //     category: 'general',
+  //     image: '',
+  //     matrixRoomId: '',
+  //     directLink: '',
+  //     forumLink: '',
+  //     wikiLink: '',
+  //     memberCount: 0,
+  //     order: 0,
+  //     isActive: true,
+  //   });
+  // };
 
   const handleCreateBookmark = () => {
     createBookmarkMutation.mutate(bookmarkForm);
@@ -277,36 +277,36 @@ export default function AdminSettingsPage() {
     
     if (type === 'bookmark' && item) {
       setBookmarkForm({
-        title: item.title,
-        description: item.description || '',
-        url: item.url,
-        icon: item.icon || '',
-        category: item.category,
-        order: item.order,
-        isActive: item.isActive,
+        title: item.title as string,
+        description: (item.description as string) || '',
+        url: item.url as string,
+        icon: (item.icon as string) || '',
+        category: item.category as string,
+        order: item.order as number,
+        isActive: item.isActive as boolean,
       });
     } else if (type === 'roomcard' && item) {
-      setRoomCardForm({
-        title: item.title,
-        description: item.description || '',
-        category: item.category,
-        image: item.image || '',
-        matrixRoomId: item.matrixRoomId || '',
-        directLink: item.directLink || '',
-        forumLink: item.forumLink || '',
-        wikiLink: item.wikiLink || '',
-        memberCount: item.memberCount || 0,
-        order: item.order,
-        isActive: item.isActive,
-      });
+      // setRoomCardForm({
+      //   title: item.title,
+      //   description: item.description || '',
+      //   category: item.category,
+      //   image: item.image || '',
+      //   matrixRoomId: item.matrixRoomId || '',
+      //   directLink: item.directLink || '',
+      //   forumLink: item.forumLink || '',
+      //   wikiLink: item.wikiLink || '',
+      //   memberCount: item.memberCount || 0,
+      //   order: item.order,
+      //   isActive: item.isActive,
+      // });
     } else if (type === 'announcement' && item) {
       setAnnouncementForm({
-        title: item.title,
-        content: item.content,
-        type: item.type,
-        isActive: item.isActive,
-        priority: item.priority,
-        expiresAt: item.expiresAt ? new Date(item.expiresAt).toISOString().slice(0, 16) : '',
+        title: item.title as string,
+        content: item.content as string,
+        type: item.type as "error" | "info" | "success" | "warning",
+        isActive: item.isActive as boolean,
+        priority: item.priority as number,
+        expiresAt: item.expiresAt ? new Date(item.expiresAt as string).toISOString().slice(0, 16) : '',
       });
     }
   };
@@ -314,7 +314,7 @@ export default function AdminSettingsPage() {
   const cancelEditing = () => {
     setIsEditing(null);
     resetBookmarkForm();
-    resetRoomCardForm();
+    // resetRoomCardForm();
     resetAnnouncementForm();
   };
 

@@ -452,10 +452,11 @@ export default function UserDashboard() {
 
   const getRoomsByCategory = (category: string) => {
     if (!matrixRooms) return [];
-    return matrixRooms.filter(room => 
-      room.category?.toLowerCase().includes(category.toLowerCase()) ||
-      room.topic?.toLowerCase().includes(category.toLowerCase())
-    );
+    return matrixRooms.filter((room: unknown) => {
+      const r = room as Record<string, unknown>;
+      return (r.category as string)?.toLowerCase().includes(category.toLowerCase()) ||
+        (r.topic as string)?.toLowerCase().includes(category.toLowerCase());
+    });
   };
 
   if (!session) {
@@ -547,36 +548,44 @@ export default function UserDashboard() {
                       💻 Technology & Development
                     </h3>
                     <div className="grid gap-3">
-                      {getRoomsByCategory('tech').map((room) => (
-                        <div key={room.room_id} className="flex items-center justify-between p-3 border rounded-lg">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <h4 className="font-medium">{room.name}</h4>
-                              <Badge variant="secondary" className="text-xs">
-                                {room.member_count} members
-                              </Badge>
-                            </div>
-                            {room.topic && (
-                              <p className="text-sm text-muted-foreground mt-1">
-                                {room.topic}
-                              </p>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => copyToClipboard(room.room_id, `${room.name} Room ID`)}
-                            >
-                              {copiedItems.has(`${room.name} Room ID`) ? (
-                                <CheckCircle className="w-4 h-4 text-green-600" />
-                              ) : (
-                                <Copy className="w-4 h-4" />
+                      {getRoomsByCategory('tech').map((room: unknown) => {
+                        const roomData = room as Record<string, unknown>;
+                        const roomId = roomData.room_id as string;
+                        const roomName = roomData.name as string;
+                        const memberCount = roomData.member_count as number;
+                        const roomTopic = roomData.topic as string;
+                        
+                        return (
+                          <div key={roomId} className="flex items-center justify-between p-3 border rounded-lg">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <h4 className="font-medium">{roomName}</h4>
+                                <Badge variant="secondary" className="text-xs">
+                                  {memberCount} members
+                                </Badge>
+                              </div>
+                              {roomTopic && (
+                                <p className="text-sm text-muted-foreground mt-1">
+                                  {roomTopic}
+                                </p>
                               )}
-                            </Button>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
+                              >
+                                {copiedItems.has(`${roomName} Room ID`) ? (
+                                  <CheckCircle className="w-4 h-4 text-green-600" />
+                                ) : (
+                                  <Copy className="w-4 h-4" />
+                                )}
+                              </Button>
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -586,36 +595,44 @@ export default function UserDashboard() {
                       💬 General Discussion
                     </h3>
                     <div className="grid gap-3">
-                      {getRoomsByCategory('general').map((room) => (
-                        <div key={room.room_id} className="flex items-center justify-between p-3 border rounded-lg">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <h4 className="font-medium">{room.name}</h4>
-                              <Badge variant="secondary" className="text-xs">
-                                {room.member_count} members
-                              </Badge>
-                            </div>
-                            {room.topic && (
-                              <p className="text-sm text-muted-foreground mt-1">
-                                {room.topic}
-                              </p>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => copyToClipboard(room.room_id, `${room.name} Room ID`)}
-                            >
-                              {copiedItems.has(`${room.name} Room ID`) ? (
-                                <CheckCircle className="w-4 h-4 text-green-600" />
-                              ) : (
-                                <Copy className="w-4 h-4" />
+                      {getRoomsByCategory('general').map((room: unknown) => {
+                        const roomData = room as Record<string, unknown>;
+                        const roomId = roomData.room_id as string;
+                        const roomName = roomData.name as string;
+                        const memberCount = roomData.member_count as number;
+                        const roomTopic = roomData.topic as string;
+                        
+                        return (
+                          <div key={roomId} className="flex items-center justify-between p-3 border rounded-lg">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <h4 className="font-medium">{roomName}</h4>
+                                <Badge variant="secondary" className="text-xs">
+                                  {memberCount} members
+                                </Badge>
+                              </div>
+                              {roomTopic && (
+                                <p className="text-sm text-muted-foreground mt-1">
+                                  {roomTopic}
+                                </p>
                               )}
-                            </Button>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
+                              >
+                                {copiedItems.has(`${roomName} Room ID`) ? (
+                                  <CheckCircle className="w-4 h-4 text-green-600" />
+                                ) : (
+                                  <Copy className="w-4 h-4" />
+                                )}
+                              </Button>
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -625,41 +642,50 @@ export default function UserDashboard() {
                       🏠 All Rooms
                     </h3>
                     <div className="grid gap-3">
-                      {matrixRooms.map((room) => (
-                        <div key={room.room_id} className="flex items-center justify-between p-3 border rounded-lg">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <h4 className="font-medium">{room.name}</h4>
-                              <Badge variant="secondary" className="text-xs">
-                                {room.member_count} members
-                              </Badge>
-                              {room.category && (
-                                <Badge variant="outline" className="text-xs">
-                                  {room.category}
+                      {matrixRooms.map((room: unknown) => {
+                        const roomData = room as Record<string, unknown>;
+                        const roomId = roomData.room_id as string;
+                        const roomName = roomData.name as string;
+                        const memberCount = roomData.member_count as number;
+                        const roomTopic = roomData.topic as string;
+                        const roomCategory = roomData.category as string;
+                        
+                        return (
+                          <div key={roomId} className="flex items-center justify-between p-3 border rounded-lg">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <h4 className="font-medium">{roomName}</h4>
+                                <Badge variant="secondary" className="text-xs">
+                                  {memberCount} members
                                 </Badge>
+                                {roomCategory && (
+                                  <Badge variant="outline" className="text-xs">
+                                    {roomCategory}
+                                  </Badge>
+                                )}
+                              </div>
+                              {roomTopic && (
+                                <p className="text-sm text-muted-foreground mt-1">
+                                  {roomTopic}
+                                </p>
                               )}
                             </div>
-                            {room.topic && (
-                              <p className="text-sm text-muted-foreground mt-1">
-                                {room.topic}
-                              </p>
-                            )}
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
+                              >
+                                {copiedItems.has(`${roomName} Room ID`) ? (
+                                  <CheckCircle className="w-4 h-4 text-green-600" />
+                                ) : (
+                                  <Copy className="w-4 h-4" />
+                                )}
+                              </Button>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => copyToClipboard(room.room_id, `${room.name} Room ID`)}
-                            >
-                              {copiedItems.has(`${room.name} Room ID`) ? (
-                                <CheckCircle className="w-4 h-4 text-green-600" />
-                              ) : (
-                                <Copy className="w-4 h-4" />
-                              )}
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
@@ -1006,33 +1032,40 @@ export default function UserDashboard() {
                       <p className="text-sm text-muted-foreground">Loading rooms...</p>
                     ) : matrixRooms && matrixRooms.length > 0 ? (
                       <div className="space-y-2">
-                        {matrixRooms.map((room: MatrixRoom) => (
-                          <div key={room.room_id} className="flex items-center space-x-2">
-                            <Checkbox
-                              id={`room-${room.room_id}`}
-                              checked={inviteForm.roomIds.includes(room.room_id)}
-                              onCheckedChange={(checked) => {
-                                if (checked) {
-                                  setInviteForm(prev => ({ 
-                                    ...prev, 
-                                    roomIds: [...prev.roomIds, room.room_id] 
-                                  }));
-                                } else {
-                                  setInviteForm(prev => ({ 
-                                    ...prev, 
-                                    roomIds: prev.roomIds.filter(id => id !== room.room_id) 
-                                  }));
-                                }
-                              }}
-                            />
-                            <Label 
-                              htmlFor={`room-${room.room_id}`} 
-                              className="text-sm font-normal cursor-pointer"
-                            >
-                              {room.name} ({room.member_count} members)
-                            </Label>
-                          </div>
-                        ))}
+                        {matrixRooms.map((room: unknown) => {
+                          const roomData = room as Record<string, unknown>;
+                          const roomId = roomData.room_id as string;
+                          const roomName = roomData.name as string;
+                          const memberCount = roomData.member_count as number;
+                          
+                          return (
+                            <div key={roomId} className="flex items-center space-x-2">
+                              <Checkbox
+                                id={`room-${roomId}`}
+                                checked={inviteForm.roomIds.includes(roomId)}
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    setInviteForm(prev => ({ 
+                                      ...prev, 
+                                      roomIds: [...prev.roomIds, roomId] 
+                                    }));
+                                  } else {
+                                    setInviteForm(prev => ({ 
+                                      ...prev, 
+                                      roomIds: prev.roomIds.filter(id => id !== roomId) 
+                                    }));
+                                  }
+                                }}
+                              />
+                              <Label 
+                                htmlFor={`room-${roomId}`} 
+                                className="text-sm font-normal cursor-pointer"
+                              >
+                                {roomName} ({memberCount} members)
+                              </Label>
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : (
                       <p className="text-sm text-muted-foreground">No rooms available</p>
@@ -1568,20 +1601,28 @@ export default function UserDashboard() {
                       <h4 className="font-medium">Existing Rooms</h4>
                       {matrixRooms && matrixRooms.length > 0 ? (
                         <div className="space-y-2 max-h-64 overflow-y-auto">
-                          {matrixRooms.slice(0, 5).map((room: MatrixRoom) => (
-                            <div key={room.room_id} className="flex items-center justify-between p-3 border rounded-md">
-                              <div>
-                                <div className="font-medium">{room.name}</div>
-                                <div className="text-sm text-muted-foreground">
-                                  {room.member_count} members • {room.category || 'General'}
+                          {matrixRooms.slice(0, 5).map((room: unknown) => {
+                            const roomData = room as Record<string, unknown>;
+                            const roomId = roomData.room_id as string;
+                            const roomName = roomData.name as string;
+                            const memberCount = roomData.member_count as number;
+                            const roomCategory = roomData.category as string;
+                            
+                            return (
+                              <div key={roomId} className="flex items-center justify-between p-3 border rounded-md">
+                                <div>
+                                  <div className="font-medium">{roomName}</div>
+                                  <div className="text-sm text-muted-foreground">
+                                    {memberCount} members • {roomCategory || 'General'}
+                                  </div>
+                                </div>
+                                <div className="flex gap-2">
+                                  <Button size="sm" variant="outline">Edit</Button>
+                                  <Button size="sm" variant="outline">Settings</Button>
                                 </div>
                               </div>
-                              <div className="flex gap-2">
-                                <Button size="sm" variant="outline">Edit</Button>
-                                <Button size="sm" variant="outline">Settings</Button>
-                              </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       ) : (
                         <p className="text-sm text-muted-foreground">No rooms available</p>

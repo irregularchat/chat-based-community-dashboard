@@ -185,21 +185,21 @@ class MatrixService {
         
         // Configure Olm with our WASM path if available
         const olmWasmPath = this.config?.olmWasmPath || process.env.MATRIX_OLM_WASM_PATH;
-        if (olmWasmPath && global.Olm && typeof global.Olm.init === 'function') {
+        if (olmWasmPath && global.Olm && typeof (global.Olm as unknown as Record<string, unknown>).init === 'function') {
           console.log(`🔧 Initializing Olm with WASM path: ${olmWasmPath}`);
           // Note: We may need to set the locateFile function for WASM loading
-          if (global.Olm.locateFile) {
-            global.Olm.locateFile = (file: string) => {
+          if ((global.Olm as unknown as Record<string, unknown>).locateFile) {
+            (global.Olm as unknown as Record<string, unknown>).locateFile = (file: string) => {
               if (file.endsWith('.wasm')) {
                 return `${olmWasmPath}/${file}`;
               }
               return file;
             };
           }
-          await global.Olm.init();
-        } else if (global.Olm && typeof global.Olm.init === 'function') {
+          await ((global.Olm as unknown as Record<string, unknown>).init as () => Promise<unknown>)();
+        } else if (global.Olm && typeof (global.Olm as unknown as Record<string, unknown>).init === 'function') {
           console.log('🔧 Initializing Olm with default settings');
-          await global.Olm.init();
+          await ((global.Olm as unknown as Record<string, unknown>).init as () => Promise<unknown>)();
         }
         
         console.log('✅ Olm library loaded and initialized successfully');

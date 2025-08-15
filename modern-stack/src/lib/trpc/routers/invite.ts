@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createTRPCRouter, moderatorProcedure } from '../trpc';
+import { createTRPCRouter, protectedProcedure, moderatorProcedure } from '../trpc';
 import { authentikService } from '@/lib/authentik';
 import { emailService } from '@/lib/email';
 import { MessageTemplates } from '@/lib/message-templates';

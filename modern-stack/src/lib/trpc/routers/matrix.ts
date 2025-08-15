@@ -96,10 +96,10 @@ export const matrixRouter = createTRPCRouter({
 
         // Apply filters
         if (!input.includeSignalUsers) {
-          users = users.filter(user => !user.is_signal_user);
+          users = users.filter(user => !(user as Record<string, unknown>).is_signal_user);
         }
         if (!input.includeRegularUsers) {
-          users = users.filter(user => user.is_signal_user);
+          users = users.filter(user => (user as Record<string, unknown>).is_signal_user);
         }
 
         // Apply search filter
@@ -121,7 +121,7 @@ export const matrixRouter = createTRPCRouter({
           user_id: user.user_id,
           display_name: user.display_name || user.user_id,
           avatar_url: user.avatar_url,
-          is_signal_user: user.is_signal_user,
+          is_signal_user: (user as Record<string, unknown>).is_signal_user,
         }));
 
         return formattedUsers;

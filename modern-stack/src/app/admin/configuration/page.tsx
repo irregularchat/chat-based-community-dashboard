@@ -96,33 +96,33 @@ export default function AdminConfigurationPage() {
 
   // Auto-populate forms from settings
   useEffect(() => {
-    if (allSettings) {
+    if (allSettings?.settings) {
       // Populate Authentik form
       setAuthentikForm({
-        baseUrl: allSettings.authentik_base_url || '',
-        apiToken: allSettings.authentik_api_token || '',
-        clientId: allSettings.authentik_client_id || '',
-        clientSecret: allSettings.authentik_client_secret || '',
-        issuer: allSettings.authentik_issuer || '',
+        baseUrl: (allSettings.settings.authentik_base_url as string) || '',
+        apiToken: (allSettings.settings.authentik_api_token as string) || '',
+        clientId: (allSettings.settings.authentik_client_id as string) || '',
+        clientSecret: (allSettings.settings.authentik_client_secret as string) || '',
+        issuer: (allSettings.settings.authentik_issuer as string) || '',
       });
 
       // Populate Matrix form if settings exist
       setMatrixForm(prev => ({
         ...prev,
-        homeserver: allSettings.matrix_homeserver || '',
-        accessToken: allSettings.matrix_access_token || '',
-        userId: allSettings.matrix_user_id || '',
-        welcomeRoomId: allSettings.matrix_welcome_room_id || '',
+        homeserver: (allSettings.settings.matrix_homeserver as string) || (allSettings.settings.matrix_url as string) || '',
+        accessToken: (allSettings.settings.matrix_access_token as string) || '',
+        userId: (allSettings.settings.matrix_bot_username as string) || '',
+        welcomeRoomId: (allSettings.settings.matrix_welcome_room_id as string) || '',
       }));
 
       // Populate SMTP form if settings exist
       setSMTPForm(prev => ({
         ...prev,
-        host: allSettings.smtp_host || '',
-        port: allSettings.smtp_port || '587',
-        user: allSettings.smtp_user || '',
-        from: allSettings.smtp_from || '',
-        bcc: allSettings.smtp_bcc || '',
+        host: (allSettings.settings.smtp_server as string) || '',
+        port: (allSettings.settings.smtp_port as string) || '587',
+        user: (allSettings.settings.smtp_username as string) || '',
+        from: (allSettings.settings.smtp_from_email as string) || '',
+        bcc: (allSettings.settings.smtp_bcc as string) || '',
       }));
     }
   }, [allSettings]);
@@ -252,7 +252,7 @@ export default function AdminConfigurationPage() {
 
   // Helper function to check if a service is configured
   const isServiceConfigured = (configKey: string, requiredFields: string[]) => {
-    const config = allSettings?.settings?.[configKey];
+    const config = allSettings?.settings?.[configKey] as Record<string, unknown>;
     if (!config) return false;
     return requiredFields.every(field => config[field] && config[field] !== '');
   };
@@ -272,10 +272,10 @@ export default function AdminConfigurationPage() {
               <Button
                 variant="secondary"
                 onClick={() => initializeFromEnvMutation.mutate()}
-                disabled={initializeFromEnvMutation.isLoading}
+                disabled={initializeFromEnvMutation.isPending}
               >
                 <Database className="w-4 h-4 mr-2" />
-                {initializeFromEnvMutation.isLoading ? 'Initializing...' : 'Load from Environment'}
+                {initializeFromEnvMutation.isPending ? 'Initializing...' : 'Load from Environment'}
               </Button>
               <Button
                 variant="outline"
@@ -344,14 +344,14 @@ export default function AdminConfigurationPage() {
                       <DialogTrigger asChild>
                         <Button onClick={() => {
                           if (isServiceConfigured('matrix_config', ['homeserver', 'accessToken', 'userId'])) {
-                            const config = allSettings?.settings?.matrix_config;
+                            const config = allSettings?.settings?.matrix_config as Record<string, unknown>;
                             if (config) {
                               setMatrixForm({
-                                homeserver: config.homeserver || '',
-                                accessToken: config.accessToken || '',
-                                userId: config.userId || '',
-                                welcomeRoomId: config.welcomeRoomId || '',
-                                enableEncryption: config.enableEncryption || false,
+                                homeserver: (config.homeserver as string) || '',
+                                accessToken: (config.accessToken as string) || '',
+                                userId: (config.userId as string) || '',
+                                welcomeRoomId: (config.welcomeRoomId as string) || '',
+                                enableEncryption: (config.enableEncryption as boolean) || false,
                               });
                             }
                           }
@@ -445,19 +445,19 @@ export default function AdminConfigurationPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Homeserver</h4>
-                      <p className="text-sm text-gray-600">{allSettings?.settings?.matrix_config?.homeserver}</p>
+                      <p className="text-sm text-gray-600">{(allSettings?.settings?.matrix_config as Record<string, unknown>)?.homeserver as string}</p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Bot User ID</h4>
-                      <p className="text-sm text-gray-600">{allSettings?.settings?.matrix_config?.userId}</p>
+                      <p className="text-sm text-gray-600">{(allSettings?.settings?.matrix_config as Record<string, unknown>)?.userId as string}</p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Welcome Room</h4>
-                      <p className="text-sm text-gray-600">{allSettings?.settings?.matrix_config?.welcomeRoomId || 'Not configured'}</p>
+                      <p className="text-sm text-gray-600">{(allSettings?.settings?.matrix_config as Record<string, unknown>)?.welcomeRoomId as string || 'Not configured'}</p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Encryption</h4>
-                      <p className="text-sm text-gray-600">{allSettings?.settings?.matrix_config?.enableEncryption ? 'Enabled' : 'Disabled'}</p>
+                      <p className="text-sm text-gray-600">{(allSettings?.settings?.matrix_config as Record<string, unknown>)?.enableEncryption as boolean ? 'Enabled' : 'Disabled'}</p>
                     </div>
                   </div>
                 ) : (
@@ -499,14 +499,14 @@ export default function AdminConfigurationPage() {
                       <DialogTrigger asChild>
                         <Button onClick={() => {
                           if (isServiceConfigured('authentik_config', ['baseUrl', 'apiToken', 'clientId', 'clientSecret', 'issuer'])) {
-                            const config = allSettings?.settings?.authentik_config;
+                            const config = allSettings?.settings?.authentik_config as Record<string, unknown>;
                             if (config) {
                               setAuthentikForm({
-                                baseUrl: config.baseUrl || '',
-                                apiToken: config.apiToken || '',
-                                clientId: config.clientId || '',
-                                clientSecret: config.clientSecret || '',
-                                issuer: config.issuer || '',
+                                baseUrl: (config.baseUrl as string) || '',
+                                apiToken: (config.apiToken as string) || '',
+                                clientId: (config.clientId as string) || '',
+                                clientSecret: (config.clientSecret as string) || '',
+                                issuer: (config.issuer as string) || '',
                               });
                             }
                           }
@@ -603,15 +603,15 @@ export default function AdminConfigurationPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Base URL</h4>
-                      <p className="text-sm text-gray-600">{allSettings?.settings?.authentik_config?.baseUrl}</p>
+                      <p className="text-sm text-gray-600">{(allSettings?.settings?.authentik_config as Record<string, unknown>)?.baseUrl as string}</p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Issuer</h4>
-                      <p className="text-sm text-gray-600">{allSettings?.settings?.authentik_config?.issuer}</p>
+                      <p className="text-sm text-gray-600">{(allSettings?.settings?.authentik_config as Record<string, unknown>)?.issuer as string}</p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Client ID</h4>
-                      <p className="text-sm text-gray-600">{allSettings?.settings?.authentik_config?.clientId}</p>
+                      <p className="text-sm text-gray-600">{(allSettings?.settings?.authentik_config as Record<string, unknown>)?.clientId as string}</p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Status</h4>
@@ -657,13 +657,13 @@ export default function AdminConfigurationPage() {
                       <DialogTrigger asChild>
                         <Button onClick={() => {
                           if (isServiceConfigured('discourse_config', ['baseUrl', 'apiKey', 'apiUsername'])) {
-                            const config = allSettings?.settings?.discourse_config;
+                            const config = allSettings?.settings?.discourse_config as Record<string, unknown>;
                             if (config) {
                               setDiscourseForm({
-                                baseUrl: config.baseUrl || '',
-                                apiKey: config.apiKey || '',
-                                apiUsername: config.apiUsername || '',
-                                webhookSecret: config.webhookSecret || '',
+                                baseUrl: (config.baseUrl as string) || '',
+                                apiKey: (config.apiKey as string) || '',
+                                apiUsername: (config.apiUsername as string) || '',
+                                webhookSecret: (config.webhookSecret as string) || '',
                               });
                             }
                           }
@@ -750,15 +750,15 @@ export default function AdminConfigurationPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Forum URL</h4>
-                      <p className="text-sm text-gray-600">{allSettings?.settings?.discourse_config?.baseUrl}</p>
+                      <p className="text-sm text-gray-600">{(allSettings?.settings?.discourse_config as Record<string, unknown>)?.baseUrl as string}</p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">API Username</h4>
-                      <p className="text-sm text-gray-600">{allSettings?.settings?.discourse_config?.apiUsername}</p>
+                      <p className="text-sm text-gray-600">{(allSettings?.settings?.discourse_config as Record<string, unknown>)?.apiUsername as string}</p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Webhook Secret</h4>
-                      <p className="text-sm text-gray-600">{allSettings?.settings?.discourse_config?.webhookSecret ? 'Configured' : 'Not set'}</p>
+                      <p className="text-sm text-gray-600">{(allSettings?.settings?.discourse_config as Record<string, unknown>)?.webhookSecret as string ? 'Configured' : 'Not set'}</p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Status</h4>
@@ -804,14 +804,14 @@ export default function AdminConfigurationPage() {
                       <DialogTrigger asChild>
                         <Button onClick={() => {
                           if (isServiceConfigured('ai_config', ['provider'])) {
-                            const config = allSettings?.settings?.ai_config;
+                            const config = allSettings?.settings?.ai_config as Record<string, unknown>;
                             if (config) {
                               setAIForm({
-                                provider: config.provider || 'openai',
-                                openaiApiKey: config.openaiApiKey || '',
-                                claudeApiKey: config.claudeApiKey || '',
-                                localEndpoint: config.localEndpoint || '',
-                                model: config.model || 'gpt-3.5-turbo',
+                                provider: (config.provider as string) || 'openai',
+                                openaiApiKey: (config.openaiApiKey as string) || '',
+                                claudeApiKey: (config.claudeApiKey as string) || '',
+                                localEndpoint: (config.localEndpoint as string) || '',
+                                model: (config.model as string) || 'gpt-3.5-turbo',
                               });
                             }
                           }
@@ -924,20 +924,20 @@ export default function AdminConfigurationPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Provider</h4>
-                      <p className="text-sm text-gray-600 capitalize">{allSettings?.settings?.ai_config?.provider}</p>
+                      <p className="text-sm text-gray-600 capitalize">{(allSettings?.settings?.ai_config as Record<string, unknown>)?.provider as string}</p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Model/Endpoint</h4>
                       <p className="text-sm text-gray-600">
-                        {allSettings?.settings?.ai_config?.provider === 'openai' && allSettings?.settings?.ai_config?.model}
-                        {allSettings?.settings?.ai_config?.provider === 'claude' && 'Claude API'}
-                        {allSettings?.settings?.ai_config?.provider === 'local' && allSettings?.settings?.ai_config?.localEndpoint}
+                        {(allSettings?.settings?.ai_config as Record<string, unknown>)?.provider === 'openai' && (allSettings?.settings?.ai_config as Record<string, unknown>)?.model as string}
+                        {(allSettings?.settings?.ai_config as Record<string, unknown>)?.provider === 'claude' && 'Claude API'}
+                        {(allSettings?.settings?.ai_config as Record<string, unknown>)?.provider === 'local' && (allSettings?.settings?.ai_config as Record<string, unknown>)?.localEndpoint as string}
                       </p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">API Key</h4>
                       <p className="text-sm text-gray-600">
-                        {(allSettings?.settings?.ai_config?.openaiApiKey || allSettings?.settings?.ai_config?.claudeApiKey) ? 'Configured' : 'Not set'}
+                        {((allSettings?.settings?.ai_config as Record<string, unknown>)?.openaiApiKey as string || (allSettings?.settings?.ai_config as Record<string, unknown>)?.claudeApiKey as string) ? 'Configured' : 'Not set'}
                       </p>
                     </div>
                     <div className="border rounded-lg p-4">
@@ -984,16 +984,16 @@ export default function AdminConfigurationPage() {
                       <DialogTrigger asChild>
                         <Button onClick={() => {
                           if (isServiceConfigured('smtp_config', ['host', 'port', 'user', 'password', 'from'])) {
-                            const config = allSettings?.settings?.smtp_config;
+                            const config = allSettings?.settings?.smtp_config as Record<string, unknown>;
                             if (config) {
                               setSMTPForm({
-                                host: config.host || '',
-                                port: config.port || '587',
-                                user: config.user || '',
-                                password: config.password || '',
-                                from: config.from || '',
-                                bcc: config.bcc || '',
-                                enableTLS: config.enableTLS ?? true,
+                                host: (config.host as string) || '',
+                                port: (config.port as string) || '587',
+                                user: (config.user as string) || '',
+                                password: (config.password as string) || '',
+                                from: (config.from as string) || '',
+                                bcc: (config.bcc as string) || '',
+                                enableTLS: (config.enableTLS as boolean) ?? true,
                               });
                             }
                           }
@@ -1109,19 +1109,19 @@ export default function AdminConfigurationPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">SMTP Host</h4>
-                      <p className="text-sm text-gray-600">{allSettings?.settings?.smtp_config?.host}:{allSettings?.settings?.smtp_config?.port}</p>
+                      <p className="text-sm text-gray-600">{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.host as string}:{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.port as string}</p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Username</h4>
-                      <p className="text-sm text-gray-600">{allSettings?.settings?.smtp_config?.user}</p>
+                      <p className="text-sm text-gray-600">{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.user as string}</p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">From Email</h4>
-                      <p className="text-sm text-gray-600">{allSettings?.settings?.smtp_config?.from}</p>
+                      <p className="text-sm text-gray-600">{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.from as string}</p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Security</h4>
-                      <p className="text-sm text-gray-600">{allSettings?.settings?.smtp_config?.enableTLS ? 'TLS Enabled' : 'TLS Disabled'}</p>
+                      <p className="text-sm text-gray-600">{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.enableTLS as boolean ? 'TLS Enabled' : 'TLS Disabled'}</p>
                     </div>
                   </div>
                 ) : (

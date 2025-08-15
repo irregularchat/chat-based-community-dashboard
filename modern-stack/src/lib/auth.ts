@@ -45,50 +45,74 @@ export const authOptions: NextAuthOptions = {
         password: { label: 'Password', type: 'password' },
       },
       async authorize(credentials) {
+        console.log('[LOCAL AUTH] Attempting authorization for:', credentials?.username);
+        
         if (!credentials?.username || !credentials?.password) {
+          console.log('[LOCAL AUTH] Missing credentials');
           return null;
         }
 
         // Check if local auth is enabled
         if (process.env.ENABLE_LOCAL_AUTH !== 'true') {
+          console.log('[LOCAL AUTH] Local auth is disabled. ENABLE_LOCAL_AUTH:', process.env.ENABLE_LOCAL_AUTH);
           return null;
         }
+        
+        console.log('[LOCAL AUTH] Local auth is enabled');
 
         // Find user by username or email
-        const user = await prisma.user.findFirst({
-          where: {
-            OR: [
-              { username: credentials.username },
-              { email: credentials.username },
-            ],
-          },
-          include: {
-            groups: true,
-          },
-        });
+        try {
+          const user = await prisma.user.findFirst({
+            where: {
+              OR: [
+                { username: credentials.username },
+                { email: credentials.username },
+              ],
+            },
+            include: {
+              groups: {
+                include: {
+                  group: true
+                }
+              },
+            },
+          });
 
-        if (!user) {
-          return null;
-        }
-
-        // For local auth, we need to check password
-        // In migration, we may need to handle users without passwords
-        if (user.password) {
-          const isValid = await bcrypt.compare(credentials.password, user.password);
-          if (!isValid) {
+          console.log('[LOCAL AUTH] User lookup result:', user ? 'User found' : 'User not found');
+          
+          if (!user) {
+            console.log('[LOCAL AUTH] No user found for:', credentials.username);
             return null;
           }
-        }
 
-        return {
-          id: user.id.toString(),
-          email: user.email,
-          name: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
-          username: user.username || undefined,
-          isAdmin: user.isAdmin,
-          isModerator: user.isModerator,
-          groups: user.groups.map((g: any) => g.group.name),
-        };
+          // For local auth, we need to check password
+          // In migration, we may need to handle users without passwords
+          if (user.password) {
+            const isValid = await bcrypt.compare(credentials.password, user.password);
+            console.log('[LOCAL AUTH] Password validation:', isValid ? 'Valid' : 'Invalid');
+            if (!isValid) {
+              return null;
+            }
+          } else {
+            console.log('[LOCAL AUTH] User has no password set');
+            return null;
+          }
+
+          console.log('[LOCAL AUTH] Authentication successful for:', user.username);
+          
+          return {
+            id: user.id.toString(),
+            email: user.email,
+            name: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
+            username: user.username || undefined,
+            isAdmin: user.isAdmin,
+            isModerator: user.isModerator,
+            groups: user.groups?.map((g: any) => g.group?.name).filter(Boolean) || [],
+          };
+        } catch (error) {
+          console.error('[LOCAL AUTH] Error during authentication:', error);
+          return null;
+        }
       },
     }),
   ],

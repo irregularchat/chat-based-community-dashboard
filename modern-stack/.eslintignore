@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Generated files
+.next/
+.vercel/
+.env*
+!.env.example
+
+# Prisma generated files
+src/generated/
+prisma/generated/
+
+# Build output
+dist/
+build/
+
+# Logs
+*.log
+logs/
+
+# Testing
+coverage/
+.nyc_output/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp 

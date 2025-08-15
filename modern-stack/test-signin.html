@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Local Sign In</title>
+</head>
+<body>
+    <h1>Test Local Sign In</h1>
+    <form action="http://localhost:3000/api/auth/callback/credentials" method="POST">
+        <input name="csrfToken" type="hidden" id="csrfToken">
+        <label>
+            Username
+            <input name="username" type="text" value="admin">
+        </label>
+        <label>
+            Password
+            <input name="password" type="password" value="shareme314">
+        </label>
+        <button type="submit">Sign in</button>
+    </form>
+    
+    <script>
+        // Get CSRF token
+        fetch('http://localhost:3000/api/auth/csrf')
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('csrfToken').value = data.csrfToken;
+                console.log('CSRF Token set:', data.csrfToken);
+            });
+    </script>
+</body>
+</html>

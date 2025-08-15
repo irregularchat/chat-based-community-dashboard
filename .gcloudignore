@@ -1,0 +1,43 @@
+# Exclude node_modules
+node_modules/
+**/node_modules/
+
+# Exclude git files
+.git/
+.gitignore
+.github/
+
+# Exclude development files
+modern-stack/.next/
+modern-stack/.env*
+modern-stack/coverage/
+
+# Exclude test files
+**/*.test.js
+**/*.test.ts
+**/*.spec.js
+**/*.spec.ts
+
+# Exclude documentation
+**/*.md
+docs/
+
+# Exclude IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Exclude logs
+*.log
+logs/
+
+# Exclude cache directories
+.cache/
+tmp/
+temp/
+
+# Exclude unnecessary files
+**/.DS_Store
+**/*.map
+**/*.d.ts.map

@@ -19,6 +19,10 @@ This document captures key lessons learned during the development and debugging 
 14. [Docker Package Dependency Resolution](#docker-package-dependency-resolution-2025-05-31)
 15. [Streamlit DataFrame Display Limitations](#streamlit-dataframe-display-limitations-2025-05-31)
 16. [Test Organization and Structure](#test-organization-and-structure-2025-05-31)
+17. [Cloud Run Deployment with Multiple Applications](#cloud-run-deployment-with-multiple-applications-2025-08-08)
+18. [Matrix Integration Configuration](#matrix-integration-configuration-2025-08-08)
+19. [Directory Context Critical for Deployments](#directory-context-critical-for-deployments-2025-08-09)
+20. [Authentik Invite URL Format](#authentik-invite-url-format-2025-08-14)
 
 ---
 
@@ -1268,6 +1272,369 @@ def display_user_list_optimized():
 4. **User experience matters** - Provide search, filters, and export options for large datasets
 
 This experience reinforces the importance of understanding platform limitations and designing around them rather than trying to force large amounts of data through a system not designed for it.
+
+---
+
+## Cloud Run Deployment with Multiple Applications (2025-08-08)
+
+### ❌ What Didn't Work
+
+**Problem**: Cloud Run deployment script deployed the Streamlit application instead of the Next.js modern-stack application.
+
+**Root Cause**: Repository contains both Streamlit (Python) and Next.js (TypeScript) applications. The deploy script ran from repository root where there is a Dockerfile for the Streamlit app, not the modern-stack subdirectory.
+
+**Symptoms**:
+- Deploy script completes successfully 
+- Service returns Streamlit HTML instead of Next.js pages
+- Health endpoint returns HTML instead of JSON
+- Service logs show "Starting Streamlit app on port 8080"
+- Admin/configure page returns Streamlit interface instead of Next.js interface
+
+### ✅ What Worked
+
+**Solution**: Always deploy from the correct application subdirectory.
+
+**Steps to Fix**:
+1. Delete the incorrect service deployment:
+   ```bash
+   gcloud run services delete community-dashboard --region=us-central1 --project=speech-memorization --quiet
+   ```
+
+2. Navigate to the correct application directory:
+   ```bash
+   cd modern-stack  # For Next.js application
+   # NOT from repository root (which has Streamlit Dockerfile)
+   ```
+
+3. Deploy from the application directory:
+   ```bash
+   ../scripts/deploy_cloud_run.sh -p speech-memorization -e ../deploy.env --allow-unauthenticated
+   ```
+
+**Key Insight**: The deploy script uses the Dockerfile in the current working directory. Multi-application repositories must specify the correct context.
+
+### 🔧 Prevention Strategy
+
+**Repository Structure Awareness**:
+- Always check `pwd` before deployment
+- Verify Dockerfile contents with `head -5 Dockerfile`
+- Check package.json for application type identification
+- Use explicit paths in deployment scripts
+
+**Verification Steps**:
+1. Confirm application type: `head package.json` (Next.js) vs `head requirements.txt` (Python)
+2. Verify build output: Next.js shows route list vs Python shows module installation
+3. Test health endpoint response type: JSON (Next.js) vs HTML (Streamlit)
+
+**Deployment Checklist**:
+- [ ] Navigate to correct application directory 
+- [ ] Verify Dockerfile is for intended application
+- [ ] Check build output matches expected application type
+- [ ] Test deployed service returns expected response format
+- [ ] Verify admin interfaces show correct framework
+
+This prevents deploying the wrong application stack and saves debugging time.
+
+---
+
+## Matrix Integration Configuration (2025-08-08)
+
+### ❌ What Didn't Work
+
+**Problem**: `Matrix Integration Disabled` error shown to users with message "Matrix integration is not currently active. Please contact your administrator to enable Matrix functionality."
+
+**Root Cause**: Missing required Matrix environment variables in deployment configuration. The Next.js Matrix service requires three essential environment variables:
+- `MATRIX_HOMESERVER` - Matrix homeserver URL
+- `MATRIX_ACCESS_TOKEN` - Bot user access token  
+- `MATRIX_USER_ID` - Bot Matrix user ID
+
+**Problem**: Database error `The table 'public.matrix_user_cache' does not exist in the current database`
+
+**Root Cause**: Prisma schema contains Matrix-related tables but migrations haven't been run on the production database to create these tables.
+
+### ✅ What Worked
+
+**Admin Configuration Interface**:
+```typescript
+// Added Matrix Configuration tab to admin settings
+<TabsTrigger value="matrix" className="flex items-center gap-2">
+  <MessageCircle className="w-4 h-4" />
+  <span>Matrix Config</span>
+</TabsTrigger>
+```
+
+**Environment Variable Structure**:
+```env
+# Matrix Integration Configuration
+MATRIX_HOMESERVER=https://matrix.irregularchat.com
+MATRIX_ACCESS_TOKEN=syt_...
+MATRIX_USER_ID=@dashboard_bot:irregularchat.com  
+MATRIX_WELCOME_ROOM_ID=!roomid:irregularchat.com
+MATRIX_ENABLE_ENCRYPTION=false
+```
+
+**Database Settings Storage**:
+```javascript
+// Store Matrix config in dashboard_settings table
+const matrixConfig = {
+  homeserver: matrixForm.homeserver,
+  accessToken: matrixForm.accessToken,
+  userId: matrixForm.userId,
+  welcomeRoomId: matrixForm.welcomeRoomId,
+  enableEncryption: matrixForm.enableEncryption,
+};
+
+await updateSettingMutation.mutate({
+  key: 'matrix_config', 
+  value: matrixConfig
+});
+```
+
+### 🔧 Complete Resolution Process
+
+**Phase 1: Admin Configuration UI**
+1. Add Matrix Configuration tab to `/admin/settings`
+2. Create form for Matrix credentials (homeserver, token, user ID)
+3. Store configuration in `dashboard_settings` table
+4. Show current status and validation
+
+**Phase 2: Deployment Configuration**  
+1. Add Matrix environment variables to `deploy.env`
+2. Update deployment with new environment variables:
+   ```bash
+   cd modern-stack
+   gcloud run deploy community-dashboard \
+     --image=IMAGE_URI \
+     --set-env-vars="MATRIX_HOMESERVER=...,MATRIX_ACCESS_TOKEN=...,MATRIX_USER_ID=..."
+   ```
+
+**Phase 3: Database Migration**
+1. Generate Prisma client: `npx prisma generate`  
+2. Run database migrations: `npx prisma db push`
+3. Verify tables created: `matrix_user_cache`, `matrix_rooms`, etc.
+
+**Phase 4: Testing**
+1. Verify Matrix service initialization in logs
+2. Test Matrix endpoints return configuration
+3. Confirm admin UI shows "Matrix Configuration Found" status
+
+### 🚨 Key Insights
+
+**Configuration Flow**:
+- Admin UI stores config in database for reference
+- Environment variables provide runtime configuration  
+- Both are needed: UI for management, env vars for service operation
+
+**Database Dependencies**:
+- Matrix functionality requires specific database schema
+- Prisma migrations must be run before Matrix features work
+- Database and environment configuration must be synchronized
+
+**Security Considerations**:
+- Access tokens stored as password fields in admin UI
+- Environment variables contain sensitive credentials
+- Database settings provide non-sensitive configuration display
+
+### 🔧 Prevention Strategy
+
+**Matrix Setup Checklist**:
+- [ ] Configure Matrix credentials in admin settings UI
+- [ ] Add Matrix environment variables to deployment configuration  
+- [ ] Run Prisma migrations to create Matrix database tables
+- [ ] Deploy service with updated environment variables
+- [ ] Verify Matrix service initialization in logs
+- [ ] Test Matrix functionality through admin interface
+
+**Configuration Validation**:
+```javascript
+// Check Matrix service initialization
+const isConfigured = homeserver && accessToken && userId;
+if (!isConfigured) {
+  console.warn('Matrix not configured. Required: MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, MATRIX_USER_ID');
+  return;
+}
+```
+
+**Deployment Integration**:
+```bash
+# Always redeploy after Matrix configuration changes
+cd modern-stack
+../scripts/deploy_cloud_run.sh -p PROJECT_ID -e ../deploy.env --allow-unauthenticated
+```
+
+This ensures Matrix integration is properly configured and functional before users attempt to access Matrix features.
+
+---
+
+## Directory Context Critical for Deployments (2025-08-09)
+
+### ❌ What Didn't Work
+
+**Problem**: Deployed the wrong codebase - old Streamlit version instead of modern Next.js stack.
+
+**Root Cause**: Running deployment script from the wrong directory context. The repository contains both:
+- Root directory: Legacy Streamlit application (archived)
+- `modern-stack/` subdirectory: Current Next.js application
+
+When deployment script was run from root directory (`/chat-based-community-dashboard/`), it deployed the old Streamlit Dockerfile instead of the modern Next.js application.
+
+```bash
+# ❌ WRONG - Deploys old Streamlit code
+cd /Users/admin/Documents/Git/chat-based-community-dashboard
+./scripts/deploy_cloud_run.sh -p speech-memorization -e deploy.env
+
+# This uses the root Dockerfile which builds the Streamlit app
+```
+
+**Result**: 
+- Service URL served old Streamlit interface
+- Lost modern Next.js features (admin configuration consolidation)
+- Wasted deployment time and resources
+- Confused users expecting modern interface
+
+### ✅ What Worked
+
+**Solution**: Always run deployment from the correct application directory.
+
+```bash
+# ✅ CORRECT - Deploys modern Next.js code
+cd /Users/admin/Documents/Git/chat-based-community-dashboard/modern-stack
+../scripts/deploy_cloud_run.sh -p speech-memorization -e ../deploy.env
+
+# This uses modern-stack/Dockerfile which builds the Next.js app
+```
+
+**Best Practices**:
+1. **Always check working directory** before deployment: `pwd`
+2. **Verify Dockerfile contents** to ensure correct application build
+3. **Repository structure awareness**: Know which directories contain which applications
+4. **Update scripts** to include directory context validation
+5. **Create deployment aliases** to prevent directory mistakes
+
+**Script Enhancement Recommendation**:
+```bash
+# Add to deployment script header
+if [[ ! -f "package.json" ]] || [[ ! -f "next.config.ts" ]]; then
+  echo "Error: Not in Next.js application directory. Run from modern-stack/" >&2
+  exit 2
+fi
+```
+
+This prevents accidental deployment of wrong application stacks and ensures consistency.
+
+---
+
+## NextAuth Callback Error with Authentik (2025-08-09)
+
+### ❌ What Didn't Work
+
+**Problem**: NextAuth callback fails with `error=Callback` when users try to sign in via Authentik SSO.
+
+**Symptoms**:
+- Users get redirected to `/auth/signin?callbackUrl=...&error=Callback`
+- SSO flow initiates properly but fails during callback processing
+- Error occurs consistently after Authentik authentication succeeds
+
+**Root Causes**:
+1. **Database Connection Issues**: NextAuth signIn callback fails to create/update user records
+2. **Environment Variable Mismatch**: NEXTAUTH_URL doesn't match actual service URL
+3. **Authentik Profile Data**: Expected profile fields missing or malformed
+4. **Provider Configuration**: Authentik issuer URL or client credentials incorrect
+
+### ✅ What Worked
+
+**Solution 1: Verify Environment Variables**
+```bash
+# Ensure these match exactly on Cloud Run
+NEXTAUTH_URL=https://community-dashboard-nesvf2duwa-uc.a.run.app
+AUTHENTIK_ISSUER=https://sso.irregularchat.com/application/o/dashboard/
+AUTHENTIK_CLIENT_ID=<correct-client-id>
+AUTHENTIK_CLIENT_SECRET=<correct-client-secret>
+```
+
+**Solution 2: Add Error Handling to SignIn Callback**
+```typescript
+// In auth.ts signIn callback
+async signIn({ user, account, profile }) {
+  if (account?.provider === 'authentik') {
+    try {
+      // Wrap database operations in try-catch
+      const existingUser = await prisma.user.findUnique({
+        where: { authentikId: user.id },
+      });
+      // ... handle user creation/update
+      return true;
+    } catch (error) {
+      console.error('SignIn callback error:', error);
+      return false; // This will trigger the callback error
+    }
+  }
+  return true;
+}
+```
+
+**Solution 3: Verify Authentik Configuration**
+1. **Redirect URI**: Must exactly match `/api/auth/callback/authentik`
+2. **Scopes**: Must include `openid email profile`
+3. **Client Type**: Must be set to "Confidential" not "Public"
+
+**Solution 4: Database Connection Verification**
+```bash
+# Test database connectivity from Cloud Run
+gcloud run services logs read community-dashboard --region=us-central1
+# Look for Prisma connection errors or timeout issues
+```
+
+**Prevention**: Always test SSO flow in staging environment before deployment and add proper error logging to signIn callbacks.
+
+This ensures NextAuth can properly handle Authentik authentication and user provisioning without callback failures.
+
+## Authentik Invite URL Format (2025-08-14)
+
+### ❌ What Didn't Work
+**Incorrect Invite URL Format**:
+```
+https://sso.irregularchat.com/if/flow/enrollment/{invite_id}/
+```
+This resulted in **404 Not Found** errors when users tried to access invite links.
+
+### ✅ What Worked
+**Correct Invite URL Format**:
+```
+https://sso.irregularchat.com/if/flow/{flow_slug}/?itoken={invite_id}
+```
+
+**Working Example**:
+```
+https://sso.irregularchat.com/if/flow/invite-enrollment-flow/?itoken=7a877339-3143-452a-b245-83dff055d8a4
+```
+
+### 🔧 Root Cause
+- **Issue**: Using generic enrollment path instead of specific flow slug
+- **Authentik requires**: Exact flow slug from the flow configuration
+- **Parameter format**: `?itoken=` instead of path-based invite ID
+
+### 💡 Solution
+**Fix invite URL generation in authentik service**:
+```typescript
+// WRONG:
+const invite_link = `https://sso.irregularchat.com/if/flow/enrollment/${invite_id}/`;
+
+// CORRECT:
+const invite_link = `https://sso.irregularchat.com/if/flow/${flow_obj.slug}/?itoken=${invite_id}`;
+```
+
+**Required flow details from API response**:
+- `flow_obj.slug`: The flow slug (e.g., "invite-enrollment-flow")
+- `pk`: The invite token/ID for the `itoken` parameter
+
+### 🎯 Prevention
+1. **Always test invite links** manually after creation
+2. **Use flow slug from API response** not hardcoded enrollment path
+3. **Include proper error handling** for invite creation and URL generation
+4. **Document correct URL format** in code comments
+
+This ensures invite links work correctly and users can successfully complete the enrollment process.
 
 ---
 

@@ -190,7 +190,7 @@ Once Logged in, see all the chats and services: https://forum.irregularchat.com/
    * Generate HTML content for welcome email - based on legacy get_email_html_content
    */
   static generateWelcomeEmailHTML(data: WelcomeEmailData): string {
-    const { fullName, username, password, topicId, discoursePostUrl, isLocalAccount = false } = data;
+    const { fullName, username, password, discoursePostUrl, isLocalAccount = false } = data;
 
     // Create Discourse post link section if URL is available
     const discourseSection = discoursePostUrl ? `

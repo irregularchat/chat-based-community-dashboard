@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ArrowLeft, Edit3, Save, X, Plus, Trash2, Calendar, Mail, User, Shield, MessageCircle } from 'lucide-react';
+import { ArrowLeft, Edit3, Save, X, Plus, Trash2, Calendar, User, Shield, MessageCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface UserProfilePageProps {
@@ -42,7 +42,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
       refetch();
       setIsEditing(false);
     },
-    onError: (error: any) => {
+    onError: (_error: unknown) => {
       toast.error('Failed to update user');
     },
   });
@@ -53,7 +53,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
       refetch();
       setNewNote('');
     },
-    onError: (error: any) => {
+    onError: (_error: unknown) => {
       toast.error('Failed to add note');
     },
   });
@@ -65,7 +65,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
       setEditingNote(null);
       setEditingNoteContent('');
     },
-    onError: (error: any) => {
+    onError: (_error: unknown) => {
       toast.error('Failed to update note');
     },
   });
@@ -75,7 +75,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
       toast.success('Note deleted successfully');
       refetch();
     },
-    onError: (error: any) => {
+    onError: (_error: unknown) => {
       toast.error('Failed to delete note');
     },
   });
@@ -186,7 +186,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
         <Card className="w-full max-w-md">
           <CardHeader>
             <CardTitle>User Not Found</CardTitle>
-            <CardDescription>The user you're looking for doesn't exist</CardDescription>
+            <CardDescription>The user you&apos;re looking for doesn&apos;t exist</CardDescription>
           </CardHeader>
         </Card>
       </div>
@@ -434,7 +434,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
                     <div className="space-y-4">
                       <Label>Existing Notes</Label>
                       <div className="space-y-3">
-                        {user.notes.map((note: any) => (
+                        {user.notes.map((note: { id: number; content: string; createdAt: Date }) => (
                           <div key={note.id} className="border rounded-md p-4 bg-gray-50">
                             <div className="flex justify-between items-start mb-2">
                               <div className="text-xs text-gray-500">

@@ -142,7 +142,7 @@ export const authOptions: NextAuthOptions = {
       }
       return session;
     },
-    async signIn({ user, account, profile }) {
+    async signIn({ user, account, profile: _profile }) {
       if (account?.provider === 'authentik') {
         try {
           console.log('Authentik signIn callback:', { 
@@ -213,7 +213,7 @@ export const authOptions: NextAuthOptions = {
     error: '/auth/error',
   },
   events: {
-    async signIn({ user, account, profile }) {
+    async signIn({ user, account, profile: _profile }) {
       // Log sign-in event
       await prisma.adminEvent.create({
         data: {

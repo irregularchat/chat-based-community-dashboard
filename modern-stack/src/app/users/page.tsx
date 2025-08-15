@@ -8,20 +8,19 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { TableRowSkeleton, CardSkeleton } from '@/components/ui/skeleton';
-import { MoreHorizontal, Search, UserPlus, Filter, RefreshCw, Mail, Key, MessageSquare, Edit, Trash2, Users, Send, Copy, AlertTriangle } from 'lucide-react';
+import { TableRowSkeleton } from '@/components/ui/skeleton';
+import { MoreHorizontal, Search, UserPlus, Filter, RefreshCw, Mail, Key, MessageSquare, Edit, Trash2, Users, Copy, AlertTriangle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import SearchHelp from '@/components/ui/search-help';
 
-type UserWithRelations = {
+interface UserWithRelations {
   id: number;
   username: string | null;
   email: string | null;
@@ -50,14 +49,12 @@ export default function UsersPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [isActive, setIsActive] = useState<boolean | undefined>(undefined);
-  const [limit, setLimit] = useState(25);
+  const [limit] = useState(25);
   const [source, setSource] = useState<'authentik' | 'local' | 'both'>('both');
   const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
-  const [showBulkActions, setShowBulkActions] = useState(false);
   const [showEmailDialog, setShowEmailDialog] = useState(false);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
   const [showMatrixDialog, setShowMatrixDialog] = useState(false);
-  const [currentAction, setCurrentAction] = useState<string>('');
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   
   // Dialog states
@@ -86,7 +83,7 @@ export default function UsersPage() {
       toast.success('User deleted successfully');
       refetch();
     },
-    onError: (error) => {
+    onError: (_error) => {
       toast.error('Failed to delete user');
     },
   });
@@ -96,7 +93,7 @@ export default function UsersPage() {
       toast.success('User updated successfully');
       refetch();
     },
-    onError: (error) => {
+    onError: (_error) => {
       toast.error('Failed to update user');
     },
   });
@@ -109,7 +106,7 @@ export default function UsersPage() {
       refetch();
       refetchSyncStatus();
     },
-    onError: (error) => {
+    onError: (_error) => {
       toast.error(`Sync failed: ${error.message}`);
     },
   });
@@ -121,7 +118,7 @@ export default function UsersPage() {
       setShowPasswordDialog(false);
       refetch();
     },
-    onError: (error) => {
+    onError: (_error) => {
       toast.error('Failed to reset password');
     },
   });
@@ -135,7 +132,7 @@ export default function UsersPage() {
       setShowEmailDialog(false);
       setEmailForm({ subject: '', message: '' });
     },
-    onError: (error) => {
+    onError: (_error) => {
       toast.error('Failed to send email');
     },
   });
@@ -147,7 +144,7 @@ export default function UsersPage() {
       setMatrixForm({ matrixUsername: '' });
       refetch();
     },
-    onError: (error) => {
+    onError: (_error) => {
       toast.error('Failed to connect Matrix account');
     },
   });
@@ -162,7 +159,7 @@ export default function UsersPage() {
       setShowBulkActions(false);
       refetch();
     },
-    onError: (error) => {
+    onError: (_error) => {
       toast.error('Failed to perform bulk action');
     },
   });
@@ -215,7 +212,7 @@ export default function UsersPage() {
       case 'delete':
         bulkUpdateMutation.mutate({
           userIds: selectedUsers,
-          action: action as any,
+          action: action as 'activate' | 'deactivate' | 'makeAdmin' | 'removeAdmin' | 'makeModerator' | 'removeModerator' | 'delete',
         });
         break;
     }
@@ -592,7 +589,7 @@ export default function UsersPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {usersData?.users.map((user: any) => (
+                      {usersData?.users.map((user: UserWithRelations) => (
                         <TableRow key={user.id}>
                           <TableCell>
                             <Checkbox
@@ -905,7 +902,7 @@ export default function UsersPage() {
                   <SelectValue placeholder="Select a Matrix user" />
                 </SelectTrigger>
                 <SelectContent>
-                  {matrixUsers?.map((user: any) => (
+                  {matrixUsers?.map((user: { id: string; displayName: string; username: string }) => (
                     <SelectItem key={user.user_id} value={user.user_id}>
                       {user.display_name} ({user.user_id})
                     </SelectItem>

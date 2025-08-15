@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { 
   Popover, 
   PopoverContent, 
@@ -146,7 +145,7 @@ export default function SearchHelp({ onSuggestionClick, className }: SearchHelpP
           <div>
             <h5 className="text-sm font-medium mb-2">Tips</h5>
             <ul className="text-xs text-muted-foreground space-y-1">
-              <li>• Use quotes for exact phrases: <code className="bg-muted px-1 rounded">"John Smith"</code></li>
+              <li>• Use quotes for exact phrases: <code className="bg-muted px-1 rounded">&quot;John Smith&quot;</code></li>
               <li>• Combine conditions: <code className="bg-muted px-1 rounded">user:admin AND active:true</code></li>
               <li>• Search email domains: <code className="bg-muted px-1 rounded">email:gmail.com</code></li>
               <li>• Boolean values: <code className="bg-muted px-1 rounded">active:true</code> or <code className="bg-muted px-1 rounded">admin:false</code></li>

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createTRPCRouter, publicProcedure, protectedProcedure, moderatorProcedure, adminProcedure } from '../trpc';
+import { createTRPCRouter, protectedProcedure, moderatorProcedure, adminProcedure } from '../trpc';
 import { authentikService } from '@/lib/authentik';
 import { emailService } from '@/lib/email';
 import { matrixService } from '@/lib/matrix';
@@ -27,7 +27,7 @@ export const userRouter = createTRPCRouter({
       const { page, limit, search, isActive, source } = input;
 
       // Helper function to transform Authentik users to our UI format
-      const transformAuthentikUser = (user: any, localUser?: any) => {
+      const transformAuthentikUser = (user: { pk: number; name?: string; email: string; is_active: boolean; }, localUser?: { firstName?: string; lastName?: string; phoneNumber?: string; } | null) => {
         const authentikIdString = String(user.pk);
         const [firstName, ...lastNameParts] = user.name?.split(' ') || [];
         
@@ -141,8 +141,8 @@ export const userRouter = createTRPCRouter({
         // Fetch from both sources and combine results
         try {
           // First, get all users from both sources to calculate proper pagination
-          let authentikUsers: any[] = [];
-          let authentikTotal = 0;
+          let authentikUsers: { pk: number; name?: string; email: string; is_active: boolean; }[] = [];
+          const authentikTotal = 0;
           
           // Fetch all Authentik users for proper pagination calculation
           try {
@@ -166,7 +166,7 @@ export const userRouter = createTRPCRouter({
             ...(isActive !== undefined && { isActive }),
           };
 
-          const [localUsers, localTotal] = await Promise.all([
+          const [localUsers] = await Promise.all([
             ctx.prisma.user.findMany({
               where: localWhere,
               orderBy: { dateJoined: 'desc' },
@@ -261,7 +261,7 @@ export const userRouter = createTRPCRouter({
         forceSync: z.boolean().default(false),
       })
     )
-    .mutation(async ({ ctx, input }) => {
+    .mutation(async ({ ctx, input: _input }) => {
       try {
         console.log('Starting user sync from Authentik...');
         
@@ -300,7 +300,7 @@ export const userRouter = createTRPCRouter({
             };
 
             // Use upsert to handle both create and update cases, handling duplicate usernames
-            const result = await ctx.prisma.user.upsert({
+            await ctx.prisma.user.upsert({
               where: { authentikId: authentikIdString },
               update: userData,
               create: {

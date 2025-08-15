@@ -1,7 +1,7 @@
 'use client';
 
 import { useSession } from 'next-auth/react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,7 +10,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { 
   Users, 
@@ -20,8 +19,6 @@ import {
   Phone, 
   Mail, 
   Lock, 
-  User,
-  Hash,
   Copy,
   CheckCircle,
   AlertCircle,
@@ -31,15 +28,8 @@ import {
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc/client';
 import { toast } from 'sonner';
+import Link from 'next/link';
 
-interface MatrixRoom {
-  room_id: string;
-  name: string;
-  topic?: string;
-  member_count: number;
-  category?: string;
-  configured?: boolean;
-}
 
 interface CommunityLink {
   name: string;
@@ -52,12 +42,12 @@ export default function UserDashboard() {
   const { data: session } = useSession();
   
   // Set default tab based on user role
-  const getDefaultTab = () => {
+  const getDefaultTab = useCallback(() => {
     if (!session?.user) return 'links';
     if (session.user.isAdmin) return 'admin';
     if (session.user.isModerator) return 'moderation';
     return 'links'; // Regular users land on quick links
-  };
+  }, [session?.user]);
   
   const [selectedTab, setSelectedTab] = useState(getDefaultTab());
   const [messageToAdmin, setMessageToAdmin] = useState('');
@@ -100,7 +90,7 @@ export default function UserDashboard() {
 
   // Update invite form when dashboard settings load
   useEffect(() => {
-    const defaultInviteExpiry = (dashboardSettings as any)?.default_invite_expiry_days || 1;
+    const defaultInviteExpiry = (dashboardSettings as { default_invite_expiry_days?: number })?.default_invite_expiry_days || 1;
     setInviteForm(prev => ({ ...prev, expiryDays: defaultInviteExpiry }));
   }, [dashboardSettings]);
 
@@ -109,7 +99,7 @@ export default function UserDashboard() {
     if (session?.user) {
       setSelectedTab(getDefaultTab());
     }
-  }, [session?.user?.isAdmin, session?.user?.isModerator]);
+  }, [session?.user?.isAdmin, session?.user?.isModerator, getDefaultTab, session?.user]);
   
   // Get community bookmarks
   const { data: communityBookmarks } = trpc.settings.getCommunityBookmarks.useQuery({
@@ -117,9 +107,6 @@ export default function UserDashboard() {
   });
 
   // Get dashboard announcements
-  const { data: dashboardAnnouncements } = trpc.settings.getDashboardAnnouncements.useQuery({
-    isActive: true,
-  });
 
   // Get user's sent invitations
   const { data: myInvitations } = trpc.user.getMyInvitations.useQuery({
@@ -252,16 +239,6 @@ export default function UserDashboard() {
     },
   });
 
-  const updateEmailMutation = trpc.user.updateEmail.useMutation({
-    onSuccess: () => {
-      toast.success('Email updated successfully!');
-      setNewEmail('');
-      refetchProfile();
-    },
-    onError: (error) => {
-      toast.error(`Failed to update email: ${error.message}`);
-    },
-  });
 
   const createInvitationMutation = trpc.user.createUserInvitation.useMutation({
     onSuccess: () => {
@@ -272,7 +249,7 @@ export default function UserDashboard() {
         inviteePhone: '',
         roomIds: [],
         message: '',
-        expiryDays: (dashboardSettings as any)?.default_invite_expiry_days || 1,
+        expiryDays: (dashboardSettings as { default_invite_expiry_days?: number })?.default_invite_expiry_days || 1,
       });
       // Refetch invitations to update the list
       if (myInvitations) {
@@ -338,7 +315,7 @@ export default function UserDashboard() {
           return newSet;
         });
       }, 2000);
-    } catch (err) {
+    } catch {
       toast.error(`Failed to copy ${itemName}`);
     }
   };
@@ -479,7 +456,7 @@ export default function UserDashboard() {
         <div>
           <h1 className="text-3xl font-bold">Welcome back, {session.user.name || session.user.username}!</h1>
           <p className="text-muted-foreground">
-            Here's what's happening with your community
+            Here&apos;s what&apos;s happening with your community
           </p>
         </div>
       </div>
@@ -769,7 +746,7 @@ export default function UserDashboard() {
                             This verification is for <strong>Signal Messenger</strong>. Your phone number must be registered with Signal to receive verification codes.
                           </p>
                           <p className="text-sm text-blue-700 mt-2">
-                            <strong>Don't have Signal?</strong> You can join our Signal INDOC group to request manual verification from a moderator.
+                            <strong>Don&apos;t have Signal?</strong> You can join our Signal INDOC group to request manual verification from a moderator.
                           </p>
                         </div>
                       </div>
@@ -840,7 +817,7 @@ export default function UserDashboard() {
                         className="text-center text-lg font-mono tracking-widest"
                       />
                       <p className="text-xs text-muted-foreground">
-                        Code expires in 15 minutes. If you don't receive it, try requesting a new code.
+                        Code expires in 15 minutes. If you don&apos;t receive it, try requesting a new code.
                       </p>
                     </div>
                     <div className="flex gap-2">
@@ -889,7 +866,7 @@ export default function UserDashboard() {
                         <div className="flex-1">
                           <h4 className="font-semibold text-blue-900">Email Verification Required</h4>
                           <p className="text-sm text-blue-700 mt-1">
-                            To ensure account security, we'll send a verification code to your new email address before updating it.
+                            To ensure account security, we&apos;ll send a verification code to your new email address before updating it.
                           </p>
                           <p className="text-sm text-blue-700 mt-2">
                             <strong>Verification emails will be sent from:</strong> {process.env.NEXT_PUBLIC_SMTP_FROM || emailVerificationData?.fromEmail || 'noreply@irregularchat.com'}
@@ -928,7 +905,7 @@ export default function UserDashboard() {
                         <span className="font-medium text-blue-900">Email Verification Required</span>
                       </div>
                       <p className="text-sm text-blue-800">
-                        We've sent a 6-digit verification code to: <strong>{emailVerificationData?.email}</strong>
+                        We&apos;ve sent a 6-digit verification code to: <strong>{emailVerificationData?.email}</strong>
                       </p>
                       <p className="text-sm text-blue-700 mt-1">
                         Check your email inbox (and spam folder) for the verification code.
@@ -951,7 +928,7 @@ export default function UserDashboard() {
                         className="text-center text-lg font-mono tracking-widest"
                       />
                       <p className="text-xs text-muted-foreground">
-                        Code expires in 15 minutes. If you don't receive the email, check your spam folder or request a new code.
+                        Code expires in 15 minutes. If you don&apos;t receive the email, check your spam folder or request a new code.
                       </p>
                     </div>
                     <div className="flex gap-2">
@@ -996,7 +973,7 @@ export default function UserDashboard() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="invitee-name">Friend's Name</Label>
+                  <Label htmlFor="invitee-name">Friend&apos;s Name</Label>
                   <Input
                     id="invitee-name"
                     type="text"
@@ -1006,7 +983,7 @@ export default function UserDashboard() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="invitee-email">Friend's Email</Label>
+                  <Label htmlFor="invitee-email">Friend&apos;s Email</Label>
                   <Input
                     id="invitee-email"
                     type="email"
@@ -1016,7 +993,7 @@ export default function UserDashboard() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="invitee-phone">Friend's Phone Number (Optional)</Label>
+                  <Label htmlFor="invitee-phone">Friend&apos;s Phone Number (Optional)</Label>
                   <Input
                     id="invitee-phone"
                     type="tel"
@@ -1149,12 +1126,12 @@ export default function UserDashboard() {
                     Your Recent Invitations
                   </CardTitle>
                   <CardDescription>
-                    Invitations you've sent recently
+                    Invitations you&apos;ve sent recently
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {myInvitations.invitations.slice(0, 3).map((invitation: any) => (
+                    {myInvitations.invitations.slice(0, 3).map((invitation: { id: string; inviteeName?: string; email: string; createdAt: string; status: string; }) => (
                       <div key={invitation.id} className="flex items-center justify-between p-3 border rounded-lg">
                         <div className="flex-1">
                           <p className="font-medium">{invitation.inviteeName || invitation.email}</p>
@@ -1177,7 +1154,7 @@ export default function UserDashboard() {
                   {myInvitations.total > 3 && (
                     <div className="mt-4 text-center">
                       <Button variant="outline" size="sm" asChild>
-                        <a href="/users/invitations">View All Invitations</a>
+                        <Link href="/users/invitations">View All Invitations</Link>
                       </Button>
                     </div>
                   )}
@@ -1344,7 +1321,7 @@ export default function UserDashboard() {
               <div className="grid gap-4 md:grid-cols-2">
                 {/* Database-managed community bookmarks */}
                 {communityBookmarks && communityBookmarks.length > 0 ? (
-                  communityBookmarks.map((bookmark: any) => (
+                  communityBookmarks.map((bookmark: { id: string; title: string; url: string; description: string; icon?: string; }) => (
                     <div key={bookmark.id} className="flex items-start gap-3 p-4 border rounded-lg hover:bg-muted/50 transition-colors relative">
                       <div className="text-2xl">{bookmark.icon || '🔗'}</div>
                       <div className="flex-1">

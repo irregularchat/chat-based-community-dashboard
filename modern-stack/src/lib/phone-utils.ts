@@ -3,7 +3,7 @@
  * Based on legacy Streamlit implementation
  */
 
-import { parsePhoneNumber, isValidPhoneNumber, CountryCode } from 'libphonenumber-js';
+import { parsePhoneNumber } from 'libphonenumber-js';
 
 export interface NormalizedPhone {
   normalized: string;
@@ -27,7 +27,7 @@ export function normalizePhoneNumber(phoneNumber: string): NormalizedPhone {
   }
 
   // Clean the input - remove whitespace and common separators
-  let cleaned = phoneNumber.trim().replace(/[\s\-\(\)\[\]\{\}]/g, '');
+  const cleaned = phoneNumber.trim().replace(/[\s\-\(\)\[\]\{\}]/g, '');
   
   // If it already starts with +, try to parse as-is
   if (cleaned.startsWith('+')) {
@@ -40,7 +40,7 @@ export function normalizePhoneNumber(phoneNumber: string): NormalizedPhone {
           country: parsed.country
         };
       }
-    } catch (error) {
+    } catch (_error) {
       return {
         normalized: cleaned,
         isValid: false,
@@ -73,7 +73,7 @@ export function normalizePhoneNumber(phoneNumber: string): NormalizedPhone {
           country: parsed.country
         };
       }
-    } catch (error) {
+    } catch (_error) {
       // If US parsing fails, continue to international logic
     }
   }
@@ -90,7 +90,7 @@ export function normalizePhoneNumber(phoneNumber: string): NormalizedPhone {
           country: parsed.country
         };
       }
-    } catch (error) {
+    } catch (_error) {
       // If US parsing fails, continue to international logic
     }
   }
@@ -131,7 +131,7 @@ export function normalizePhoneNumber(phoneNumber: string): NormalizedPhone {
               country: parsed.country
             };
           }
-        } catch (error) {
+        } catch (_error) {
           // Continue to next country
         }
       }
@@ -195,7 +195,7 @@ export function formatPhoneForDisplay(phoneNumber: string): string {
     if (parsed) {
       return parsed.formatInternational();
     }
-  } catch (error) {
+  } catch (_error) {
     // Fall back to raw number
   }
   return phoneNumber;

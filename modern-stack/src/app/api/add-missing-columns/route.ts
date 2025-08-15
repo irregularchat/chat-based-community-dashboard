@@ -12,7 +12,7 @@ export async function POST(_request: NextRequest) {
         ALTER TABLE "community_bookmarks" ADD COLUMN IF NOT EXISTS "icon" TEXT;
       `;
       console.log('✅ Added icon column to community_bookmarks');
-    } catch (_error) {
+    } catch {
       console.log('ℹ️ Icon column may already exist in community_bookmarks');
     }
     
@@ -23,7 +23,7 @@ export async function POST(_request: NextRequest) {
         ALTER TABLE "dashboard_announcements" ADD COLUMN IF NOT EXISTS "type" TEXT NOT NULL DEFAULT 'info';
       `;
       console.log('✅ Added type column to dashboard_announcements');
-    } catch (_error) {
+    } catch {
       console.log('ℹ️ Type column may already exist in dashboard_announcements');
     }
     

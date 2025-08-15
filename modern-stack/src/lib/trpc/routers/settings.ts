@@ -513,7 +513,7 @@ export const settingsRouter = createTRPCRouter({
       if (setting?.value) {
         try {
           roomCards = JSON.parse(setting.value as string) || [];
-        } catch (error) {
+        } catch (_error) {
           console.error('Error parsing existing room cards:', error);
         }
       }
@@ -582,7 +582,7 @@ export const settingsRouter = createTRPCRouter({
       let roomCards = [];
       try {
         roomCards = JSON.parse(setting.value as string) || [];
-      } catch (error) {
+      } catch (_error) {
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Error parsing room cards data',
@@ -641,7 +641,7 @@ export const settingsRouter = createTRPCRouter({
       let roomCards = [];
       try {
         roomCards = JSON.parse(setting.value as string) || [];
-      } catch (error) {
+      } catch (_error) {
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Error parsing room cards data',
@@ -649,7 +649,7 @@ export const settingsRouter = createTRPCRouter({
       }
 
       // Find and remove the card
-      const cardIndex = roomCards.findIndex((card: any) => card.id === input.id);
+      const cardIndex = roomCards.findIndex((card: { id: number }) => card.id === input.id);
       if (cardIndex === -1) {
         throw new TRPCError({
           code: 'NOT_FOUND',
@@ -696,7 +696,7 @@ export const settingsRouter = createTRPCRouter({
       let roomCards = [];
       try {
         roomCards = JSON.parse(setting.value as string) || [];
-      } catch (error) {
+      } catch (_error) {
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Error parsing room cards data',
@@ -705,7 +705,7 @@ export const settingsRouter = createTRPCRouter({
 
       // Update order for each card
       input.cards.forEach(({ id, order }) => {
-        const cardIndex = roomCards.findIndex((card: any) => card.id === id);
+        const cardIndex = roomCards.findIndex((card: { id: number }) => card.id === id);
         if (cardIndex !== -1) {
           roomCards[cardIndex].order = order;
           roomCards[cardIndex].updatedAt = new Date().toISOString();
@@ -713,7 +713,7 @@ export const settingsRouter = createTRPCRouter({
       });
 
       // Sort by order
-      roomCards.sort((a: any, b: any) => a.order - b.order);
+      roomCards.sort((a: { order: number }, b: { order: number }) => a.order - b.order);
 
       // Save back to settings
       await ctx.prisma.dashboardSettings.update({

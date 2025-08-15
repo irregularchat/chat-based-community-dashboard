@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { useSession } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
 import { trpc } from '@/lib/trpc/client';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -13,14 +12,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Separator } from '@/components/ui/separator';
-import { TabsSkeleton, UserListSkeleton, FormSkeleton, CardSkeleton } from '@/components/ui/skeleton';
+import { TabsSkeleton, UserListSkeleton, CardSkeleton } from '@/components/ui/skeleton';
 import { ArrowLeft, Send, MessageCircle, Users, UserPlus, UserMinus, Search, Filter, AlertTriangle, CheckCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function MatrixPage() {
   const { data: session } = useSession();
-  const router = useRouter();
   
   // State for different tabs
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
@@ -40,13 +37,13 @@ export default function MatrixPage() {
   // API queries
   const { data: matrixConfig, isLoading: configLoading } = trpc.matrix.getConfig.useQuery();
   
-  const { data: matrixUsers, isLoading: usersLoading, refetch: refetchUsers } = trpc.matrix.getUsers.useQuery({
+  const { data: matrixUsers, isLoading: usersLoading } = trpc.matrix.getUsers.useQuery({
     search: userSearch || undefined,
     includeSignalUsers,
     includeRegularUsers,
   });
 
-  const { data: matrixRooms, isLoading: roomsLoading, refetch: refetchRooms } = trpc.matrix.getRooms.useQuery({
+  const { data: matrixRooms, isLoading: roomsLoading } = trpc.matrix.getRooms.useQuery({
     category: selectedCategory || undefined,
     search: roomSearch || undefined,
   });
@@ -60,7 +57,7 @@ export default function MatrixPage() {
       setDirectMessage('');
       setSelectedUsers([]);
     },
-    onError: (error) => {
+    onError: (_error) => {
       toast.error('Failed to send direct message');
     },
   });
@@ -365,7 +362,7 @@ export default function MatrixPage() {
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixUsers && matrixUsers.length > 0 ? (
                         <div className="space-y-2">
-                          {matrixUsers.map((user: any) => (
+                          {matrixUsers.map((user: { user_id: string; display_name: string; }) => (
                             <div key={user.user_id} className="flex items-center space-x-2">
                               <Checkbox
                                 id={`user-${user.user_id}`}
@@ -477,7 +474,7 @@ export default function MatrixPage() {
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixRooms && matrixRooms.length > 0 ? (
                         <div className="space-y-2">
-                          {matrixRooms.map((room: any) => (
+                          {matrixRooms.map((room: { room_id: string; name?: string; category: string; }) => (
                             <div key={room.room_id} className="flex items-center space-x-2">
                               <Checkbox
                                 id={`room-${room.room_id}`}
@@ -606,7 +603,7 @@ export default function MatrixPage() {
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixRooms && matrixRooms.length > 0 ? (
                         <div className="space-y-2">
-                          {matrixRooms.map((room: any) => (
+                          {matrixRooms.map((room: { room_id: string; name?: string; category: string; }) => (
                             <div key={room.room_id} className="flex items-center space-x-2">
                               <Checkbox
                                 id={`invite-room-${room.room_id}`}
@@ -719,7 +716,7 @@ export default function MatrixPage() {
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixRooms && matrixRooms.length > 0 ? (
                         <div className="space-y-2">
-                          {matrixRooms.map((room: any) => (
+                          {matrixRooms.map((room: { room_id: string; name?: string; category: string; }) => (
                             <div key={room.room_id} className="flex items-center space-x-2">
                               <Checkbox
                                 id={`remove-room-${room.room_id}`}
@@ -762,7 +759,7 @@ export default function MatrixPage() {
                     rows={3}
                   />
                   <p className="text-xs text-gray-500">
-                    Use {'{username}'} to include the user's display name in the message
+                    Use {'{username}'} to include the user&apos;s display name in the message
                   </p>
                 </div>
 

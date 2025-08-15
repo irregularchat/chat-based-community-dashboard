@@ -1,13 +1,12 @@
 'use client';
 
-import { signIn, getSession } from 'next-auth/react';
+import { signIn } from 'next-auth/react';
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Info } from 'lucide-react';
 
@@ -41,7 +40,7 @@ export default function SignInPage() {
     setError('');
     try {
       await signIn('authentik', { callbackUrl: '/' });
-    } catch (err) {
+    } catch {
       setError('Failed to sign in with Authentik');
     } finally {
       setIsLoading(false);
@@ -65,7 +64,7 @@ export default function SignInPage() {
       } else {
         window.location.href = '/';
       }
-    } catch (err) {
+    } catch {
       setError('Failed to sign in');
     } finally {
       setIsLoading(false);
@@ -100,7 +99,7 @@ export default function SignInPage() {
                     {isLoading ? 'Signing in...' : 'Sign in with Authentik'}
                   </Button>
                   <p className="text-sm text-gray-600 text-center">
-                    Sign in using your organization's single sign-on
+                    Sign in using your organization&apos;s single sign-on
                   </p>
                 </div>
               </TabsContent>

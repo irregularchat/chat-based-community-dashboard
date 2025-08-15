@@ -8,7 +8,7 @@ interface PasswordStrengthProps {
 export function PasswordStrength({ password, className }: PasswordStrengthProps) {
   const getStrength = (password: string) => {
     let score = 0;
-    let feedback: string[] = [];
+    const feedback: string[] = [];
     
     if (password.length >= 8) {
       score += 1;

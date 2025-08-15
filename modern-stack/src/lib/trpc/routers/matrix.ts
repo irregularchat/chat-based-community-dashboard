@@ -1,32 +1,32 @@
 import { z } from 'zod';
-import { createTRPCRouter, adminProcedure, moderatorProcedure } from '../trpc';
+import { createTRPCRouter, moderatorProcedure } from '../trpc';
 import { matrixService } from '@/lib/matrix';
 import { createMatrixCacheService } from '@/lib/matrix-cache';
 import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
 
 // Define Matrix-related schemas
-const _MatrixUserSchema = z.object({
-  user_id: z.string(),
-  display_name: z.string(),
-  avatar_url: z.string().optional(),
-  is_signal_user: z.boolean().optional(),
-});
+// const _MatrixUserSchema = z.object({
+//   user_id: z.string(),
+//   display_name: z.string(),
+//   avatar_url: z.string().optional(),
+//   is_signal_user: z.boolean().optional(),
+// });
 
-const _MatrixRoomSchema = z.object({
-  room_id: z.string(),
-  name: z.string().optional(),
-  topic: z.string().optional(),
-  member_count: z.number().optional(),
-  category: z.string().optional(),
-  configured: z.boolean().optional(),
-});
+// const _MatrixRoomSchema = z.object({
+//   room_id: z.string(),
+//   name: z.string().optional(),
+//   topic: z.string().optional(),
+//   member_count: z.number().optional(),
+//   category: z.string().optional(),
+//   configured: z.boolean().optional(),
+// });
 
-const _MessageHistorySchema = z.object({
-  sender: z.string(),
-  content: z.string(),
-  timestamp: z.string(),
-  event_id: z.string().optional(),
-});
+// const _MessageHistorySchema = z.object({
+//   sender: z.string(),
+//   content: z.string(),
+//   timestamp: z.string(),
+//   event_id: z.string().optional(),
+// });
 
 // Helper function to determine room category based on room name/topic
 function getRoomCategory(roomName: string): string {

@@ -1,8 +1,20 @@
 # Chat-Based Community Dashboard
 
-> **A simple, powerful tool to help community builders manage their members across Signal, Matrix, and other platforms - no technical expertise required.**
+> **A modern Next.js application for managing community members across Signal, Matrix, and other platforms - built for scale and ease of use.**
 
 See [forum post about this project](https://forum.irregularchat.com/t/forking-authentik-distro-for-better-community-management/647?u=sac) for more information.
+
+## 🎨 Modern Stack Architecture
+
+This repository contains the **modern-stack** version of the community dashboard, built with:
+- **Next.js 15** with App Router and Turbopack
+- **TypeScript** for type safety
+- **Prisma ORM** for database management
+- **tRPC** for type-safe APIs
+- **NextAuth** for authentication
+- **Tailwind CSS** and shadcn/ui for modern UI
+
+> **Looking for the legacy Streamlit version?** Check out the [`legacy-streamlit`](https://github.com/irregularchat/chat-based-community-dashboard/tree/legacy-streamlit) branch.
 
 
 ## 🎯 Why This Matters for Your Community
@@ -45,18 +57,43 @@ See [forum post about this project](https://forum.irregularchat.com/t/forking-au
 
 ## 🏃‍♀️ Quick Start (5 Minutes)
 
-### Option 1: I Just Want to Try It (Easiest)
-```bash
-# Clone and run with SQLite (no database setup needed)
-git clone https://github.com/irregularchat/chat-based-community-dashboard.git
-cd chat-based-community-dashboard
-cp .env-template .env
-# Edit .env with your API tokens (see setup guide below)
-./run_sqlite.sh
-```
-Open http://localhost:8501 in your browser!
+### Prerequisites
+- Node.js 18+ 
+- PostgreSQL (or use Docker)
+- Git
 
-### Option 2: Full Setup with Docker
+### Option 1: Local Development
+```bash
+# Clone the repository
+git clone https://github.com/irregularchat/chat-based-community-dashboard.git
+cd chat-based-community-dashboard/modern-stack
+
+# Install dependencies
+npm install
+
+# Set up PostgreSQL with Docker
+docker-compose up -d
+
+# Copy environment variables
+cp .env.example .env
+
+# Run database migrations
+npx prisma migrate dev
+
+# Seed the database with test data
+npx prisma db seed
+
+# Start the development server
+npm run dev
+```
+
+Open http://localhost:3000 in your browser!
+
+Default credentials:
+- Username: `admin`
+- Password: `shareme314`
+
+### Option 2: Production Deployment with Docker
 ```bash
 # Clone the repository
 git clone https://github.com/irregularchat/chat-based-community-dashboard.git

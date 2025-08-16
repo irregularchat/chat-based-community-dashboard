@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { createTRPCRouter, publicProcedure, adminProcedure } from '../trpc';
 import { TRPCError } from '@trpc/server';
+import { authentikService } from '@/lib/authentik';
+import { emailService } from '@/lib/email';
 
 export const settingsRouter = createTRPCRouter({
   // Dashboard Settings
@@ -460,6 +462,59 @@ export const settingsRouter = createTRPCRouter({
       }, {} as Record<string, unknown>),
       bookmarks,
       announcements,
+    };
+  }),
+
+  // Get service configurations status
+  getServicesConfig: adminProcedure.query(async ({ _ctx }) => {
+    // Check Authentik configuration
+    const authentikConfig = authentikService.getConfig();
+    const authentikConfigured = authentikService.isConfigured();
+
+    // Check Email/SMTP configuration
+    const emailConfig = emailService.getConfig();
+    const emailConfigured = emailService.isConfigured();
+
+    // Check Discourse configuration from environment
+    const discourseConfigured = !!(
+      process.env.DISCOURSE_URL &&
+      process.env.DISCOURSE_API_KEY &&
+      process.env.DISCOURSE_API_USERNAME
+    );
+
+    // Check AI configuration from environment
+    const aiConfigured = !!(
+      process.env.OPENAI_API_KEY ||
+      process.env.CLAUDE_API_KEY ||
+      process.env.LOCAL_AI_ENDPOINT
+    );
+
+    return {
+      authentik: {
+        isConfigured: authentikConfigured,
+        apiUrl: authentikConfig?.apiUrl,
+        hasApiToken: !!authentikConfig?.apiToken,
+        mainGroupId: authentikConfig?.mainGroupId,
+      },
+      email: {
+        isConfigured: emailConfigured,
+        host: emailConfig?.host,
+        port: emailConfig?.port,
+        from: emailConfig?.from,
+        hasBcc: !!emailConfig?.bcc,
+      },
+      discourse: {
+        isConfigured: discourseConfigured,
+        url: process.env.DISCOURSE_URL,
+        hasApiKey: !!process.env.DISCOURSE_API_KEY,
+        apiUsername: process.env.DISCOURSE_API_USERNAME,
+      },
+      ai: {
+        isConfigured: aiConfigured,
+        hasOpenAI: !!process.env.OPENAI_API_KEY,
+        hasClaude: !!process.env.CLAUDE_API_KEY,
+        hasLocal: !!process.env.LOCAL_AI_ENDPOINT,
+      },
     };
   }),
 

@@ -32,7 +32,7 @@ export default function MatrixPage() {
   const [roomSearch, setRoomSearch] = useState('');
   const [includeSignalUsers, setIncludeSignalUsers] = useState(true);
   const [includeRegularUsers, setIncludeRegularUsers] = useState(true);
-  const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
   // API queries
   const { data: matrixConfig, isLoading: configLoading } = trpc.matrix.getConfig.useQuery();
@@ -457,7 +457,7 @@ export default function MatrixPage() {
                         <SelectValue placeholder="All Categories" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">All Categories</SelectItem>
+                        <SelectItem value="all">All Categories</SelectItem>
                         {categories?.map((category) => (
                           <SelectItem key={category} value={category}>
                             {category}
@@ -587,7 +587,7 @@ export default function MatrixPage() {
                         <SelectValue placeholder="All Categories" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">All Categories</SelectItem>
+                        <SelectItem value="all">All Categories</SelectItem>
                         {categories?.map((category) => (
                           <SelectItem key={category} value={category}>
                             {category}
@@ -700,7 +700,7 @@ export default function MatrixPage() {
                         <SelectValue placeholder="All Categories" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">All Categories</SelectItem>
+                        <SelectItem value="all">All Categories</SelectItem>
                         {categories?.map((category) => (
                           <SelectItem key={category} value={category}>
                             {category}

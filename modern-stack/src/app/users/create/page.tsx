@@ -79,12 +79,11 @@ export default function CreateUserPage() {
     email: string;
   } | null>(null);
 
-  // Matrix user state
-  const [matrixUsers, setMatrixUsers] = useState<MatrixUser[]>([]);
+  // Matrix user state - directly use query data, no duplicate state
   const [selectedMatrixUser, setSelectedMatrixUser] = useState<MatrixUser | null>(null);
 
   // Matrix user queries
-  const { data: matrixUsersData = [], isLoading: matrixUsersLoading, refetch: refetchMatrixUsers } = trpc.matrix.getUsers.useQuery({
+  const { data: matrixUsers = [], isLoading: matrixUsersLoading, refetch: refetchMatrixUsers } = trpc.matrix.getUsers.useQuery({
     includeSignalUsers: true,
     includeRegularUsers: true,
   });
@@ -98,13 +97,6 @@ export default function CreateUserPage() {
       toast.error('Failed to sync Matrix users: ' + error.message);
     },
   });
-
-  // Update Matrix users when data changes
-  useEffect(() => {
-    if (matrixUsersData) {
-      setMatrixUsers(matrixUsersData);
-    }
-  }, [matrixUsersData]);
 
   // Handle Matrix user selection
   const handleMatrixUserSelect = (userId: string) => {

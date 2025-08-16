@@ -90,3 +90,49 @@ Prisma migrations were out of sync, causing Matrix cache tables to not be create
 - Always run `npx prisma db push` or `npx prisma migrate dev` after schema changes
 - Check migration status before deployment
 - Ensure DATABASE_URL is properly set when running migrations
+
+## React State Management Issues
+
+### Problem 1: Infinite Loop in useEffect
+Component had `useEffect` that was setting state from query data that gets recreated on every render, causing infinite re-renders.
+
+### Root Cause
+The tRPC query returns a new array reference on each render even with the same data, triggering useEffect dependencies.
+
+### Solution
+Remove unnecessary state duplication - directly use the query data instead of copying it to local state.
+
+```typescript
+// Bad: Causes infinite loop
+const { data: matrixUsersData = [] } = trpc.matrix.getUsers.useQuery();
+const [matrixUsers, setMatrixUsers] = useState([]);
+useEffect(() => {
+  setMatrixUsers(matrixUsersData); // Infinite loop!
+}, [matrixUsersData]);
+
+// Good: Direct usage
+const { data: matrixUsers = [] } = trpc.matrix.getUsers.useQuery();
+```
+
+### Problem 2: Select Component Empty String Values
+React Select components throw error when using empty string as a value because it's reserved for clearing selection.
+
+### Solution
+Use a non-empty string like "all" for the default/all option:
+
+```typescript
+// Bad
+const [category, setCategory] = useState('');
+<SelectItem value="">All Categories</SelectItem>
+
+// Good
+const [category, setCategory] = useState('all');
+<SelectItem value="all">All Categories</SelectItem>
+// Update query to handle 'all' value
+category: category === 'all' ? undefined : category
+```
+
+### Prevention
+- Avoid duplicating query data in local state
+- Never use empty strings as Select option values
+- Use meaningful default values like 'all', 'none', etc.

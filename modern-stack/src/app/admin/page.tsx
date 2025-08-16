@@ -33,7 +33,7 @@ export default function AdminDashboard() {
   const router = useRouter();
   const [selectedTimeRange, setSelectedTimeRange] = useState('7d');
   const [eventSearch, setEventSearch] = useState('');
-  const [selectedEventType, setSelectedEventType] = useState('');
+  const [selectedEventType, setSelectedEventType] = useState('all');
   const [eventsPage, setEventsPage] = useState(1);
 
   // Fetch dashboard data
@@ -48,7 +48,7 @@ export default function AdminDashboard() {
   const { data: adminEvents, isLoading: eventsLoading } = trpc.admin.getAdminEvents.useQuery({
     page: eventsPage,
     limit: 20,
-    eventType: selectedEventType || undefined,
+    eventType: selectedEventType === 'all' ? undefined : selectedEventType,
     username: eventSearch || undefined,
   });
 
@@ -597,7 +597,7 @@ export default function AdminDashboard() {
                       <SelectValue placeholder="All event types" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">All event types</SelectItem>
+                      <SelectItem value="all">All event types</SelectItem>
                       <SelectItem value="user_login">User Login</SelectItem>
                       <SelectItem value="user_logout">User Logout</SelectItem>
                       <SelectItem value="user_created">User Created</SelectItem>

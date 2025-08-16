@@ -22,14 +22,14 @@ import {
 export default function CommunityTimelinePage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
-  const [category, setCategory] = useState<string>('');
+  const [category, setCategory] = useState<string>('all');
   const [eventType] = useState<string>('');
   const [limit] = useState(25);
 
   const { data: timelineData, isLoading, refetch, error } = trpc.community.getTimeline.useQuery({
     page,
     limit,
-    category: category || undefined,
+    category: category === 'all' ? undefined : category,
     eventType: eventType || undefined,
     username: search || undefined,
   });
@@ -147,7 +147,7 @@ export default function CommunityTimelinePage() {
                       <SelectValue placeholder="All Categories" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">All Categories</SelectItem>
+                      <SelectItem value="all">All Categories</SelectItem>
                       {categories?.map((cat) => (
                         <SelectItem key={cat} value={cat}>
                           {cat.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}

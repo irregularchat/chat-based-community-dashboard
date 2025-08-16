@@ -132,7 +132,7 @@ export const matrixRouter = createTRPCRouter({
     }),
 
   // Sync Matrix users to cache
-  syncMatrixUsers: moderatorProcedure.mutation(async ({ ctx: _ctx }) => {
+  syncMatrixUsers: moderatorProcedure.mutation(async ({ ctx }) => {
     try {
       if (!matrixService.isConfigured()) {
         throw new Error('Matrix service not configured');

@@ -3223,6 +3223,109 @@ The invitation email has been sent. You'll be notified when they accept the invi
       };
     }),
 
+  requestRoomJoin: protectedProcedure
+    .input(
+      z.object({
+        roomIds: z.array(z.string()).min(1, 'At least one room must be selected'),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.session.user.id;
+      
+      // Get user profile to check Signal verification
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          username: true,
+          signalIdentity: true,
+          attributes: true,
+        },
+      });
+      
+      if (!user) {
+        throw new Error('User not found');
+      }
+      
+      // Check if user has Signal verified
+      const userAttributes = user.attributes as Record<string, unknown> || {};
+      const phoneNumber = userAttributes.phoneNumber as string;
+      const hasSignalVerification = !!user.signalIdentity || !!phoneNumber;
+      
+      if (!hasSignalVerification) {
+        throw new Error('SIGNAL_VERIFICATION_REQUIRED');
+      }
+      
+      // Use Matrix service to invite user to rooms
+      const { matrixService } = await import('@/lib/matrix');
+      if (!matrixService.isConfigured()) {
+        throw new Error('Matrix service not configured');
+      }
+      
+      const results: { roomId: string; success: boolean; error?: string }[] = [];
+      
+      for (const roomId of input.roomIds) {
+        try {
+          // For regular users, we'll have the bot invite them using their Matrix username
+          // First, resolve user to Matrix username
+          let matrixUserId = userAttributes.matrixUsername as string;
+          
+          if (!matrixUserId && phoneNumber) {
+            // Try to resolve via Signal bridge if available
+            try {
+              const signalUuid = await matrixService.resolvePhoneToSignalUuid(phoneNumber);
+              if (signalUuid) {
+                // This would be the Signal bridge user ID format
+                matrixUserId = `@${signalUuid}:${process.env.MATRIX_HOMESERVER?.replace('https://', '') || 'matrix.org'}`;
+              }
+            } catch (signalError) {
+              console.warn('Could not resolve Signal UUID for user:', signalError);
+            }
+          }
+          
+          if (!matrixUserId) {
+            // Fallback: construct Matrix ID from username
+            const homeserver = process.env.MATRIX_HOMESERVER?.replace('https://', '') || 'matrix.org';
+            matrixUserId = `@${user.username}:${homeserver}`;
+          }
+          
+          const success = await matrixService.inviteToRoom(roomId, matrixUserId);
+          results.push({ roomId, success });
+          
+          if (success) {
+            // Log the room join request
+            await logCommunityEvent(
+              ctx.prisma,
+              'user_room_join_request',
+              user.username || 'Unknown User',
+              `Requested to join room: ${roomId}`
+            );
+          }
+          
+        } catch (error) {
+          console.error(`Failed to invite user ${userId} to room ${roomId}:`, error);
+          results.push({ 
+            roomId, 
+            success: false, 
+            error: error instanceof Error ? error.message : 'Unknown error'
+          });
+        }
+      }
+      
+      const successCount = results.filter(r => r.success).length;
+      const failedCount = results.length - successCount;
+      
+      if (successCount > 0) {
+        return {
+          success: true,
+          message: `Successfully requested to join ${successCount} room${successCount === 1 ? '' : 's'}${failedCount > 0 ? `, ${failedCount} failed` : ''}`,
+          results,
+        };
+      } else {
+        throw new Error('Failed to join any rooms. Please try again or contact an administrator.');
+      }
+    }),
+
 });
 
 // Helper function for password hashing

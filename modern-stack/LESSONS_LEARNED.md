@@ -398,3 +398,43 @@ When working correctly, logs show:
 - Avoid importing Matrix SDK directly in multiple modules
 - Centralize Matrix service access through single entry point
 - Test bundling with development server after Matrix-related changes
+
+## Admin Message Import Error Fix (2024-08-16)
+
+### Problem
+"Failed to send message to admin" error with 500 status when trying to send messages to the INDOC room. Console showed `ReferenceError: matrixService is not defined`.
+
+### Root Cause
+The user router (`src/lib/trpc/routers/user.ts`) was using `matrixService` without importing it. The service was being referenced in the admin message functionality at line 1794 but the import statement was missing.
+
+### Solution
+Added dynamic import for matrixService before usage:
+
+```typescript
+// Added this line before using matrixService
+const { matrixService } = await import('@/lib/matrix');
+if (matrixService.isConfigured()) {
+  const indocRoom = process.env.MATRIX_INDOC_ROOM_ID || process.env.MATRIX_ADMIN_ROOM_ID;
+  if (indocRoom) {
+    await matrixService.sendRoomMessage(indocRoom, matrixMessage);
+  }
+}
+```
+
+### Key Learning Points
+
+#### Import Before Use Pattern
+- **Always import services** before using them in tRPC procedures
+- **Use dynamic imports** for Matrix service to avoid bundling conflicts
+- **Check for undefined services** can indicate missing imports
+
+#### Error Diagnosis
+- **500 errors in tRPC** often indicate server-side code issues
+- **ReferenceError messages** clearly indicate missing imports
+- **Check network tab** for detailed error messages in API responses
+
+### Prevention
+- Always import required services at the top of procedure functions
+- Use TypeScript to catch undefined references during development
+- Test admin functionality after Matrix service refactoring
+- Review all tRPC procedures that reference external services

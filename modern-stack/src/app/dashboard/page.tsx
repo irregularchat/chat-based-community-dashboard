@@ -29,6 +29,7 @@ import {
 import { trpc } from '@/lib/trpc/client';
 import { toast } from 'sonner';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 
 interface CommunityLink {
@@ -40,6 +41,7 @@ interface CommunityLink {
 
 export default function UserDashboard() {
   const { data: session } = useSession();
+  const router = useRouter();
   
   // Set default tab based on user role
   const getDefaultTab = useCallback(() => {
@@ -59,6 +61,7 @@ export default function UserDashboard() {
   const [pendingVerification, setPendingVerification] = useState<'phone' | 'email' | null>(null);
   const [emailVerificationData, setEmailVerificationData] = useState<{email: string; fromEmail: string} | null>(null);
   const [copiedItems, setCopiedItems] = useState<Set<string>>(new Set());
+  const [selectedRooms, setSelectedRooms] = useState<Set<string>>(new Set());
   
   // Quicklinks admin editing state
   const [isEditingQuicklinks, setIsEditingQuicklinks] = useState(false);
@@ -261,6 +264,30 @@ export default function UserDashboard() {
     },
   });
 
+  const joinRoomsMutation = trpc.user.requestRoomJoin.useMutation({
+    onSuccess: (result) => {
+      toast.success(result.message);
+      setSelectedRooms(new Set());
+    },
+    onError: (error) => {
+      if (error.message === 'SIGNAL_VERIFICATION_REQUIRED') {
+        toast.error('Signal verification required to join rooms');
+        // Show a toast with redirect option
+        setTimeout(() => {
+          toast.info('Click here to verify your Signal account', {
+            action: {
+              label: 'Verify Signal',
+              onClick: () => setSelectedTab('account')
+            },
+            duration: 8000,
+          });
+        }, 1000);
+      } else {
+        toast.error(`Failed to join rooms: ${error.message}`);
+      }
+    },
+  });
+
   // Community quick links (these would ideally come from environment variables)
   const communityLinks: CommunityLink[] = [
     {
@@ -427,6 +454,36 @@ export default function UserDashboard() {
     });
   };
 
+  const handleRoomSelection = (roomId: string) => {
+    setSelectedRooms(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(roomId)) {
+        newSet.delete(roomId);
+      } else {
+        newSet.add(roomId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleJoinSelectedRooms = () => {
+    if (selectedRooms.size === 0) {
+      toast.error('Please select at least one room to join');
+      return;
+    }
+
+    joinRoomsMutation.mutate({
+      roomIds: Array.from(selectedRooms),
+    });
+  };
+
+  const checkSignalVerification = () => {
+    const userAttributes = userProfile?.attributes as Record<string, unknown> || {};
+    const phoneNumber = userAttributes.phoneNumber as string;
+    const hasSignalVerification = !!userProfile?.signalIdentity || !!phoneNumber;
+    return hasSignalVerification;
+  };
+
   const getRoomsByCategory = (category: string) => {
     if (!matrixRooms) return [];
     return matrixRooms.filter((room: unknown) => {
@@ -511,6 +568,59 @@ export default function UserDashboard() {
               <CardDescription>
                 Join Matrix rooms based on your interests and expertise
               </CardDescription>
+              {!checkSignalVerification() && (
+                <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                  <div className="flex items-start space-x-3">
+                    <div className="text-amber-600">
+                      🔐
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-amber-900">Signal Verification Required</h4>
+                      <p className="text-sm text-amber-700 mt-1">
+                        You need to verify your Signal account before joining community rooms. This ensures secure messaging and proper access to Matrix bridged channels.
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-3 border-amber-300 text-amber-700 hover:bg-amber-100"
+                        onClick={() => setSelectedTab('account')}
+                      >
+                        Verify Signal Account
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {checkSignalVerification() && selectedRooms.size > 0 && (
+                <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-semibold text-blue-900">
+                        {selectedRooms.size} room{selectedRooms.size === 1 ? '' : 's'} selected
+                      </h4>
+                      <p className="text-sm text-blue-700">
+                        Ready to join the selected rooms
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setSelectedRooms(new Set())}
+                      >
+                        Clear Selection
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleJoinSelectedRooms}
+                        disabled={joinRoomsMutation.isPending}
+                      >
+                        {joinRoomsMutation.isPending ? 'Joining...' : `Join ${selectedRooms.size} Room${selectedRooms.size === 1 ? '' : 's'}`}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </CardHeader>
             <CardContent>
               {roomsLoading ? (
@@ -531,35 +641,53 @@ export default function UserDashboard() {
                         const roomName = roomData.name as string;
                         const memberCount = roomData.member_count as number;
                         const roomTopic = roomData.topic as string;
+                        const isSignalVerified = checkSignalVerification();
+                        const isSelected = selectedRooms.has(roomId);
                         
                         return (
-                          <div key={roomId} className="flex items-center justify-between p-3 border rounded-lg">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                <h4 className="font-medium">{roomName}</h4>
-                                <Badge variant="secondary" className="text-xs">
-                                  {memberCount} members
-                                </Badge>
-                              </div>
-                              {roomTopic && (
-                                <p className="text-sm text-muted-foreground mt-1">
-                                  {roomTopic}
-                                </p>
+                          <div key={roomId} className={`flex items-center justify-between p-3 border rounded-lg transition-colors ${
+                            isSelected ? 'bg-blue-50 border-blue-200' : 'hover:bg-muted/50'
+                          }`}>
+                            <div className="flex items-center gap-3 flex-1">
+                              {isSignalVerified && (
+                                <Checkbox
+                                  id={`room-${roomId}`}
+                                  checked={isSelected}
+                                  onCheckedChange={() => handleRoomSelection(roomId)}
+                                />
                               )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
-                              >
-                                {copiedItems.has(`${roomName} Room ID`) ? (
-                                  <CheckCircle className="w-4 h-4 text-green-600" />
-                                ) : (
-                                  <Copy className="w-4 h-4" />
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                  <h4 className="font-medium">{roomName}</h4>
+                                  <Badge variant="secondary" className="text-xs">
+                                    {memberCount} members
+                                  </Badge>
+                                </div>
+                                {roomTopic && (
+                                  <p className="text-sm text-muted-foreground mt-1">
+                                    {roomTopic}
+                                  </p>
                                 )}
-                              </Button>
+                              </div>
                             </div>
+                            {!isSignalVerified && (
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="text-xs text-amber-600">
+                                  Signal verification required
+                                </Badge>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
+                                >
+                                  {copiedItems.has(`${roomName} Room ID`) ? (
+                                    <CheckCircle className="w-4 h-4 text-green-600" />
+                                  ) : (
+                                    <Copy className="w-4 h-4" />
+                                  )}
+                                </Button>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -578,35 +706,53 @@ export default function UserDashboard() {
                         const roomName = roomData.name as string;
                         const memberCount = roomData.member_count as number;
                         const roomTopic = roomData.topic as string;
+                        const isSignalVerified = checkSignalVerification();
+                        const isSelected = selectedRooms.has(roomId);
                         
                         return (
-                          <div key={roomId} className="flex items-center justify-between p-3 border rounded-lg">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                <h4 className="font-medium">{roomName}</h4>
-                                <Badge variant="secondary" className="text-xs">
-                                  {memberCount} members
-                                </Badge>
-                              </div>
-                              {roomTopic && (
-                                <p className="text-sm text-muted-foreground mt-1">
-                                  {roomTopic}
-                                </p>
+                          <div key={roomId} className={`flex items-center justify-between p-3 border rounded-lg transition-colors ${
+                            isSelected ? 'bg-blue-50 border-blue-200' : 'hover:bg-muted/50'
+                          }`}>
+                            <div className="flex items-center gap-3 flex-1">
+                              {isSignalVerified && (
+                                <Checkbox
+                                  id={`room-general-${roomId}`}
+                                  checked={isSelected}
+                                  onCheckedChange={() => handleRoomSelection(roomId)}
+                                />
                               )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
-                              >
-                                {copiedItems.has(`${roomName} Room ID`) ? (
-                                  <CheckCircle className="w-4 h-4 text-green-600" />
-                                ) : (
-                                  <Copy className="w-4 h-4" />
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                  <h4 className="font-medium">{roomName}</h4>
+                                  <Badge variant="secondary" className="text-xs">
+                                    {memberCount} members
+                                  </Badge>
+                                </div>
+                                {roomTopic && (
+                                  <p className="text-sm text-muted-foreground mt-1">
+                                    {roomTopic}
+                                  </p>
                                 )}
-                              </Button>
+                              </div>
                             </div>
+                            {!isSignalVerified && (
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="text-xs text-amber-600">
+                                  Signal verification required
+                                </Badge>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
+                                >
+                                  {copiedItems.has(`${roomName} Room ID`) ? (
+                                    <CheckCircle className="w-4 h-4 text-green-600" />
+                                  ) : (
+                                    <Copy className="w-4 h-4" />
+                                  )}
+                                </Button>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -626,40 +772,58 @@ export default function UserDashboard() {
                         const memberCount = roomData.member_count as number;
                         const roomTopic = roomData.topic as string;
                         const roomCategory = roomData.category as string;
+                        const isSignalVerified = checkSignalVerification();
+                        const isSelected = selectedRooms.has(roomId);
                         
                         return (
-                          <div key={roomId} className="flex items-center justify-between p-3 border rounded-lg">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                <h4 className="font-medium">{roomName}</h4>
-                                <Badge variant="secondary" className="text-xs">
-                                  {memberCount} members
-                                </Badge>
-                                {roomCategory && (
-                                  <Badge variant="outline" className="text-xs">
-                                    {roomCategory}
+                          <div key={roomId} className={`flex items-center justify-between p-3 border rounded-lg transition-colors ${
+                            isSelected ? 'bg-blue-50 border-blue-200' : 'hover:bg-muted/50'
+                          }`}>
+                            <div className="flex items-center gap-3 flex-1">
+                              {isSignalVerified && (
+                                <Checkbox
+                                  id={`room-all-${roomId}`}
+                                  checked={isSelected}
+                                  onCheckedChange={() => handleRoomSelection(roomId)}
+                                />
+                              )}
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                  <h4 className="font-medium">{roomName}</h4>
+                                  <Badge variant="secondary" className="text-xs">
+                                    {memberCount} members
                                   </Badge>
+                                  {roomCategory && (
+                                    <Badge variant="outline" className="text-xs">
+                                      {roomCategory}
+                                    </Badge>
+                                  )}
+                                </div>
+                                {roomTopic && (
+                                  <p className="text-sm text-muted-foreground mt-1">
+                                    {roomTopic}
+                                  </p>
                                 )}
                               </div>
-                              {roomTopic && (
-                                <p className="text-sm text-muted-foreground mt-1">
-                                  {roomTopic}
-                                </p>
-                              )}
                             </div>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
-                              >
-                                {copiedItems.has(`${roomName} Room ID`) ? (
-                                  <CheckCircle className="w-4 h-4 text-green-600" />
-                                ) : (
-                                  <Copy className="w-4 h-4" />
-                                )}
-                              </Button>
-                            </div>
+                            {!isSignalVerified && (
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="text-xs text-amber-600">
+                                  Signal verification required
+                                </Badge>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
+                                >
+                                  {copiedItems.has(`${roomName} Room ID`) ? (
+                                    <CheckCircle className="w-4 h-4 text-green-600" />
+                                  ) : (
+                                    <Copy className="w-4 h-4" />
+                                  )}
+                                </Button>
+                              </div>
+                            )}
                           </div>
                         );
                       })}

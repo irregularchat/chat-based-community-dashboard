@@ -467,6 +467,13 @@ export const settingsRouter = createTRPCRouter({
 
   // Get service configurations status
   getServicesConfig: adminProcedure.query(async ({ _ctx }) => {
+    // Import Matrix service
+    const { matrixService } = await import('@/lib/matrix');
+    
+    // Check Matrix configuration
+    const matrixConfig = matrixService.getConfig();
+    const matrixConfigured = matrixService.isConfigured();
+
     // Check Authentik configuration
     const authentikConfig = authentikService.getConfig();
     const authentikConfigured = authentikService.isConfigured();
@@ -490,6 +497,12 @@ export const settingsRouter = createTRPCRouter({
     );
 
     return {
+      matrix: {
+        isConfigured: matrixConfigured,
+        homeserver: matrixConfig?.homeserver,
+        userId: matrixConfig?.userId,
+        hasAccessToken: !!matrixConfig?.accessToken,
+      },
       authentik: {
         isConfigured: authentikConfigured,
         apiUrl: authentikConfig?.apiUrl,

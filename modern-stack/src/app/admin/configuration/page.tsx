@@ -256,7 +256,7 @@ export default function AdminConfigurationPage() {
   const isServiceConfigured = (configKey: string, requiredFields: string[]) => {
     // Check actual service status from environment variables
     if (configKey === 'matrix_config') {
-      return matrixConfig?.isConfigured === true;
+      return servicesConfig?.matrix?.isConfigured === true || matrixConfig?.isConfigured === true;
     }
     if (configKey === 'authentik_config') {
       return servicesConfig?.authentik?.isConfigured === true;

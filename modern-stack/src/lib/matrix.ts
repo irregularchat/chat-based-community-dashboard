@@ -1547,7 +1547,7 @@ class MatrixService {
       // Configuration
       const minScore = parseFloat(process.env.MIN_RECOMMENDATION_SCORE || '0.3');
       const maxRecommendations = parseInt(process.env.MAX_ROOM_RECOMMENDATIONS || '12');
-      const minMembers = parseInt(process.env.MATRIX_MIN_ROOM_MEMBERS || '3');
+      const minMembers = parseInt(process.env.MATRIX_MIN_ROOM_MEMBERS || '10');
       
       // Score and rank rooms
       const scoredRooms: Array<{roomId: string, score: number, name: string}> = [];

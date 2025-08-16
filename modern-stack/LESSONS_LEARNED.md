@@ -148,13 +148,13 @@ The Matrix bot account (@bot.irregularchat:irregularchat.com) needs to be joined
 ### Solution
 1. **Join the bot to Matrix rooms**: The bot account must be invited to and join the Matrix rooms you want to sync users from
 2. **Check bot permissions**: Ensure the bot has appropriate permissions in the rooms
-3. **Verify room membership**: The sync only processes rooms with more than the minimum member count (default 3)
+3. **Verify room membership**: The sync only processes rooms with more than the minimum member count (default 10)
 
 ### Troubleshooting Steps
 1. Check if Matrix service is configured: `Matrix service initialized successfully` in logs
 2. Verify bot credentials are correct in .env.local
 3. Ensure the bot account is joined to at least one room
-4. Check the minimum room member setting: `MATRIX_MIN_ROOM_MEMBERS` (default 3)
+4. Check the minimum room member setting: `MATRIX_MIN_ROOM_MEMBERS` (default 10)
 
 ### Prevention
 - Document that the Matrix bot must be joined to rooms before sync will work

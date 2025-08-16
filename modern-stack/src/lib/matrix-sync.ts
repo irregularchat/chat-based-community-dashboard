@@ -222,7 +222,7 @@ class MatrixSyncService {
           const memberCount = room.getJoinedMemberCount();
           
           // Skip rooms with fewer than minimum members (configurable)
-          const minRoomMembers = parseInt(process.env.MATRIX_MIN_ROOM_MEMBERS || '3');
+          const minRoomMembers = parseInt(process.env.MATRIX_MIN_ROOM_MEMBERS || '10');
           if (memberCount <= minRoomMembers) {
             console.log(`Skipping room ${room.roomId} - only ${memberCount} members`);
             roomsSkipped++;
@@ -301,7 +301,7 @@ class MatrixSyncService {
       for (const matrixRoom of matrixRooms) {
         try {
           const memberCount = matrixRoom.getJoinedMemberCount();
-          const minRoomMembers = parseInt(process.env.MATRIX_MIN_ROOM_MEMBERS || '3');
+          const minRoomMembers = parseInt(process.env.MATRIX_MIN_ROOM_MEMBERS || '10');
           
           if (memberCount <= minRoomMembers) {
             console.log(`Skipping membership sync for ${matrixRoom.roomId} - only ${memberCount} members`);

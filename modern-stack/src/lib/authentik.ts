@@ -89,7 +89,8 @@ class AuthentikService {
   private async makeRequest(
     endpoint: string,
     method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
-    data?: any
+    data?: any,
+    timeoutMs: number = 15000 // Default 15 second timeout
   ) {
     if (!this.config) {
       throw new Error('Authentik service not configured');
@@ -104,6 +105,7 @@ class AuthentikService {
     const options: RequestInit = {
       method,
       headers,
+      signal: AbortSignal.timeout(timeoutMs), // Add timeout signal
     };
 
     if (data && (method === 'POST' || method === 'PUT')) {
@@ -135,6 +137,13 @@ class AuthentikService {
       
       return {};
     } catch (error) {
+      // Enhanced error handling for timeouts
+      if (error instanceof Error) {
+        if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+          console.warn(`Authentik API timeout after ${timeoutMs}ms: ${method} ${url}`);
+          throw new Error(`Authentik SSO service timeout (${timeoutMs}ms)`);
+        }
+      }
       console.error(`Authentik API request failed: ${method} ${url}`, error);
       throw error;
     }

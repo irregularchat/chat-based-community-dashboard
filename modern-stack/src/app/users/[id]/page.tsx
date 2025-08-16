@@ -53,8 +53,12 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
       refetch();
       setNewNote('');
     },
-    onError: (_error: unknown) => {
-      toast.error('Failed to add note');
+    onError: (error: any) => {
+      if (error?.message?.includes('Matrix users')) {
+        toast.error('Cannot add notes to Matrix users. Please sync the user first.');
+      } else {
+        toast.error('Failed to add note');
+      }
     },
   });
 
@@ -411,24 +415,32 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="newNote">Add New Note</Label>
-                    <Textarea
-                      id="newNote"
-                      value={newNote}
-                      onChange={(e) => setNewNote(e.target.value)}
-                      placeholder="Enter a note about this user..."
-                      rows={3}
-                    />
-                    <Button
-                      onClick={handleAddNote}
-                      disabled={!newNote.trim() || addNoteMutation.isPending}
-                      className="flex items-center gap-2"
-                    >
-                      <Plus className="w-4 h-4" />
-                      Add Note
-                    </Button>
-                  </div>
+                  {user.attributes?.source === 'matrix' ? (
+                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                      <p className="text-sm text-amber-800">
+                        📝 Notes are not available for Matrix users. Sync this user to the database to enable notes.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <Label htmlFor="newNote">Add New Note</Label>
+                      <Textarea
+                        id="newNote"
+                        value={newNote}
+                        onChange={(e) => setNewNote(e.target.value)}
+                        placeholder="Enter a note about this user..."
+                        rows={3}
+                      />
+                      <Button
+                        onClick={handleAddNote}
+                        disabled={!newNote.trim() || addNoteMutation.isPending}
+                        className="flex items-center gap-2"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Add Note
+                      </Button>
+                    </div>
+                  )}
 
                   {user.notes && user.notes.length > 0 ? (
                     <div className="space-y-4">

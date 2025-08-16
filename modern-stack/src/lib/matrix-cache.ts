@@ -1,5 +1,4 @@
 import { PrismaClient } from '@/generated/prisma';
-import { matrixService } from './matrix';
 
 interface MatrixUserCache {
   userId: string;
@@ -322,6 +321,7 @@ class MatrixCacheService {
       throw new Error('Sync already in progress');
     }
 
+    const { matrixService } = await import('./matrix');
     if (!matrixService.isConfigured()) {
       throw new Error('Matrix service not configured');
     }
@@ -437,6 +437,7 @@ class MatrixCacheService {
 
   // Incremental sync (for frequent updates)
   public async incrementalSync(): Promise<Partial<SyncResult>> {
+    const { matrixService } = await import('./matrix');
     if (!matrixService.isConfigured()) {
       throw new Error('Matrix service not configured');
     }
@@ -547,6 +548,7 @@ class MatrixCacheService {
   }> {
     try {
       const stats = await this.getCacheStats();
+      const { matrixService } = await import('./matrix');
       const isConfigured = matrixService.isConfigured();
       
       let status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';

@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { createTRPCRouter, moderatorProcedure } from '../trpc';
-import { createMatrixCacheService } from '@/lib/matrix-cache';
 import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
 
 // Define Matrix-related schemas
@@ -84,7 +83,8 @@ export const matrixRouter = createTRPCRouter({
           users = await matrixSyncService.getUsersFromPriorityRooms();
         } else {
           // Get all cached users
-          const cacheService = createMatrixCacheService(ctx.prisma);
+          const { createMatrixCacheService } = await import('@/lib/matrix-cache');
+            const cacheService = createMatrixCacheService(ctx.prisma);
           users = await cacheService.getCachedUsers({
             search: input.search,
             includeSignalUsers: input.includeSignalUsers,
@@ -139,7 +139,8 @@ export const matrixRouter = createTRPCRouter({
         throw new Error('Matrix service not configured');
       }
 
-      const cacheService = createMatrixCacheService(ctx.prisma);
+      const { createMatrixCacheService } = await import('@/lib/matrix-cache');
+        const cacheService = createMatrixCacheService(ctx.prisma);
       const result = await cacheService.incrementalSync();
 
       // Log admin event
@@ -177,6 +178,8 @@ export const matrixRouter = createTRPCRouter({
     )
     .query(async ({ ctx, input }) => {
       try {
+        const { matrixService } = await import('@/lib/matrix');
+        const { createMatrixCacheService } = await import('@/lib/matrix-cache');
         const cacheService = createMatrixCacheService(ctx.prisma);
         let rooms: unknown[] = [];
         
@@ -265,6 +268,7 @@ export const matrixRouter = createTRPCRouter({
   // Get room categories
   getCategories: moderatorProcedure.query(async ({ ctx: _ctx }) => {
     try {
+      const { matrixService } = await import('@/lib/matrix');
       // Get environment-configured categories
       const envCategories = matrixService.parseCategories();
       const categoryNames = Object.values(envCategories).map(cat => cat.displayName);
@@ -292,6 +296,7 @@ export const matrixRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const { matrixService } = await import('@/lib/matrix');
         const result = await matrixService.sendDirectMessage(input.userId, input.message);
         
         // Log admin event
@@ -817,7 +822,8 @@ export const matrixRouter = createTRPCRouter({
   // Get cache statistics
   getCacheStats: moderatorProcedure.query(async ({ ctx: _ctx }) => {
     try {
-      const cacheService = createMatrixCacheService(ctx.prisma);
+      const { createMatrixCacheService } = await import('@/lib/matrix-cache');
+        const cacheService = createMatrixCacheService(ctx.prisma);
       const stats = await cacheService.getCacheStats();
       return stats;
     } catch (error) {
@@ -839,6 +845,7 @@ export const matrixRouter = createTRPCRouter({
           throw new Error('Matrix service not configured');
         }
 
+        const { createMatrixCacheService } = await import('@/lib/matrix-cache');
         const cacheService = createMatrixCacheService(ctx.prisma);
         const result = await cacheService.fullSync(input.force);
 
@@ -871,6 +878,7 @@ export const matrixRouter = createTRPCRouter({
           throw new Error('Matrix service not configured');
         }
 
+        const { createMatrixCacheService } = await import('@/lib/matrix-cache');
         const cacheService = createMatrixCacheService(ctx.prisma);
         
         // Trigger background sync (non-blocking)
@@ -899,7 +907,8 @@ export const matrixRouter = createTRPCRouter({
   // Matrix health check
   getHealthStatus: moderatorProcedure.query(async ({ ctx: _ctx }) => {
     try {
-      const cacheService = createMatrixCacheService(ctx.prisma);
+      const { createMatrixCacheService } = await import('@/lib/matrix-cache');
+        const cacheService = createMatrixCacheService(ctx.prisma);
       const health = await cacheService.healthCheck();
       return health;
     } catch (error) {
@@ -916,7 +925,8 @@ export const matrixRouter = createTRPCRouter({
   // Detect and update Signal users
   detectSignalUsers: moderatorProcedure.mutation(async ({ ctx: _ctx }) => {
     try {
-      const cacheService = createMatrixCacheService(ctx.prisma);
+      const { createMatrixCacheService } = await import('@/lib/matrix-cache');
+        const cacheService = createMatrixCacheService(ctx.prisma);
       const updatedCount = await cacheService.detectSignalUsers();
 
       // Log admin event
@@ -948,6 +958,7 @@ export const matrixRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const { createMatrixCacheService } = await import('@/lib/matrix-cache');
         const cacheService = createMatrixCacheService(ctx.prisma);
         const deletedCount = await cacheService.cleanupCache(input.maxAgeHours);
 

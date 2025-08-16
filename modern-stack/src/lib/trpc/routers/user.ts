@@ -137,116 +137,124 @@ export const userRouter = createTRPCRouter({
       }
 
       if (source === 'both') {
-        // Fetch from both sources and combine results
+        // Resilient approach: Start with Matrix users and merge Authentik if available
+        const startTime = Date.now();
+        
+        // First, get Matrix users immediately (fast fallback)
+        let matrixUsers: any[] = [];
+        let authentikUsers: { pk: number; name?: string; email: string; is_active: boolean; username?: string; groups?: string[]; attributes?: any; last_login?: string; }[] = [];
+        let authentikError: string | null = null;
+        
         try {
-          // First, get all users from both sources to calculate proper pagination
-          let authentikUsers: { pk: number; name?: string; email: string; is_active: boolean; }[] = [];
-          let _authentikTotal = 0;
-          
-          // Fetch all Authentik users for proper pagination calculation
-          try {
-            const authentikResult = await authentikService.listUsers(search, 1, 1000); // Get a large batch
-            authentikUsers = authentikResult.users.filter(user => {
-              if (isActive !== undefined && user.is_active !== isActive) {
-                return false;
-              }
-              return true;
-            });
-            _authentikTotal = authentikResult.total;
-          } catch (authentikError) {
-            console.error('Error fetching users from Authentik:', authentikError);
-            // Continue with local users only if Authentik fails
+          const { matrixService } = await import('@/lib/matrix');
+          const { matrixSyncService } = await import('@/lib/matrix-sync');
+          if (matrixService.isConfigured()) {
+            const cachedUsers = await matrixSyncService.getUsersFromPriorityRooms();
+            matrixUsers = cachedUsers
+              .filter(user => {
+                // Only include users with valid userId
+                if (!user.userId) return false;
+                
+                if (search) {
+                  const searchLower = search.toLowerCase();
+                  return user.displayName?.toLowerCase().includes(searchLower) ||
+                         user.userId?.toLowerCase().includes(searchLower);
+                }
+                return true;
+              })
+              .map(user => ({
+                id: parseInt(user.userId.replace(/[@:]/g, '').slice(0, 8), 36), // Generate numeric ID
+                username: user.userId.split(':')[0].substring(1),
+                email: `${user.userId.split(':')[0].substring(1)}@${user.userId.split(':')[1]}`,
+                firstName: user.displayName?.split(' ')[0] || '',
+                lastName: user.displayName?.split(' ').slice(1).join(' ') || '',
+                isActive: true,
+                isAdmin: false,
+                isModerator: false,
+                dateJoined: new Date(),
+                lastLogin: null,
+                authentikId: null,
+                groups: [],
+                notes: [],
+                attributes: { source: 'matrix', matrixUserId: user.userId },
+              }));
           }
-
-          // Get local user data
-          const { where: searchWhere } = parseAdvancedSearch(search || '');
-          const localWhere = {
-            ...searchWhere,
-            ...(isActive !== undefined && { isActive }),
-          };
-
-          const [localUsers] = await Promise.all([
-            ctx.prisma.user.findMany({
-              where: localWhere,
-              orderBy: { dateJoined: 'desc' },
-              include: {
-                groups: {
-                  include: {
-                    group: true,
-                  },
-                },
-                notes: true,
-              },
-            }),
-            ctx.prisma.user.count({ where: localWhere }),
-          ]);
-
-          // Create a map of local users by authentikId for merging
-          const localUserMap = new Map(localUsers.map(u => [u.authentikId, u]));
-
-          // Transform Authentik users and merge with local data
-          const transformedAuthentikUsers = authentikUsers.map(user => 
-            transformAuthentikUser(user, localUserMap.get(String(user.pk)))
-          );
-
-          // Get local-only users (those without authentikId)
-          const localOnlyUsers = localUsers.filter(user => !user.authentikId);
-
-          // Combine all users
-          const allUsers = [...transformedAuthentikUsers, ...localOnlyUsers];
-
-          // Calculate pagination
-          const totalUsers = allUsers.length;
-          const totalPages = Math.ceil(totalUsers / limit);
-          const skip = (page - 1) * limit;
-          const paginatedUsers = allUsers.slice(skip, skip + limit);
-
-          return {
-            users: paginatedUsers,
-            total: totalUsers,
-            page,
-            limit,
-            totalPages,
-            source: 'both' as const,
-          };
-        } catch (error) {
-          console.error('Error fetching users from both sources:', error);
-          
-          // Fall back to local database only
-          const skip = (page - 1) * limit;
-          const { where: searchWhere } = parseAdvancedSearch(search || '');
-          const where = {
-            ...searchWhere,
-            ...(isActive !== undefined && { isActive }),
-          };
-
-          const [users, total] = await Promise.all([
-            ctx.prisma.user.findMany({
-              where,
-              skip,
-              take: limit,
-              orderBy: { dateJoined: 'desc' },
-              include: {
-                groups: {
-                  include: {
-                    group: true,
-                  },
-                },
-                notes: true,
-              },
-            }),
-            ctx.prisma.user.count({ where }),
-          ]);
-
-          return {
-            users,
-            total,
-            page,
-            limit,
-            totalPages: Math.ceil(total / limit),
-            source: 'local' as const,
-          };
+        } catch (matrixError) {
+          console.warn('Matrix users not available:', matrixError);
         }
+
+        // Try to fetch Authentik users with timeout (non-blocking)
+        try {
+          const authentikResult = await authentikService.listUsers(search, page, limit);
+          authentikUsers = authentikResult.users.filter(user => {
+            if (isActive !== undefined && user.is_active !== isActive) {
+              return false;
+            }
+            return true;
+          });
+          console.log(`✅ Authentik users fetched in ${Date.now() - startTime}ms`);
+        } catch (error) {
+          authentikError = error instanceof Error ? error.message : 'Unknown error';
+          console.warn(`⚠️ Authentik unavailable after ${Date.now() - startTime}ms:`, authentikError);
+        }
+
+        // Get local user data for additional info
+        const { where: searchWhere } = parseAdvancedSearch(search || '');
+        const localWhere = {
+          ...searchWhere,
+          ...(isActive !== undefined && { isActive }),
+        };
+
+        const localUsers = await ctx.prisma.user.findMany({
+          where: localWhere,
+          orderBy: { dateJoined: 'desc' },
+          include: {
+            groups: {
+              include: {
+                group: true,
+              },
+            },
+            notes: true,
+          },
+        });
+
+        // Create a map of local users by authentikId for merging
+        const localUserMap = new Map(localUsers.map(u => [u.authentikId, u]));
+
+        // Transform Authentik users and merge with local data
+        const transformedAuthentikUsers = authentikUsers.map(user => 
+          transformAuthentikUser(user, localUserMap.get(String(user.pk)))
+        );
+
+        // Get local-only users (those without authentikId or Matrix mapping)
+        const localOnlyUsers = localUsers.filter(user => !user.authentikId);
+
+        // Combine all users, prioritizing Authentik users if available
+        const allUsers = [
+          ...transformedAuthentikUsers,
+          ...localOnlyUsers,
+          // Only include Matrix users if we don't have many Authentik users
+          ...(authentikUsers.length < 10 ? matrixUsers : [])
+        ];
+
+        // Calculate pagination
+        const totalUsers = allUsers.length;
+        const totalPages = Math.ceil(totalUsers / limit);
+        const skip = (page - 1) * limit;
+        const paginatedUsers = allUsers.slice(skip, skip + limit);
+
+        return {
+          users: paginatedUsers,
+          total: totalUsers,
+          page,
+          limit,
+          totalPages,
+          source: 'both' as const,
+          loadTime: Date.now() - startTime,
+          authentikAvailable: !authentikError,
+          authentikError,
+          fallbackToMatrix: !!authentikError && matrixUsers.length > 0,
+        };
       }
 
       // This should never be reached, but just in case
@@ -750,10 +758,47 @@ export const userRouter = createTRPCRouter({
         }
       } catch (error) {
         console.error('Error fetching user from Authentik:', error);
-        // Continue to return null if Authentik fetch fails
+        // Continue to check Matrix users if Authentik fetch fails
       }
 
-      // User not found in either source
+      // Finally, check if this might be a Matrix user
+      try {
+        const { matrixService } = await import('@/lib/matrix');
+        const { matrixSyncService } = await import('@/lib/matrix-sync');
+        if (matrixService.isConfigured()) {
+          const cachedUsers = await matrixSyncService.getUsersFromPriorityRooms();
+          const matrixUser = cachedUsers.find(user => {
+            if (!user.userId) return false;
+            const generatedId = parseInt(user.userId.replace(/[@:]/g, '').slice(0, 8), 36);
+            return generatedId === input.id;
+          });
+
+          if (matrixUser) {
+            // Return Matrix user in the expected format
+            return {
+              id: input.id,
+              username: matrixUser.userId.split(':')[0].substring(1),
+              email: `${matrixUser.userId.split(':')[0].substring(1)}@${matrixUser.userId.split(':')[1]}`,
+              firstName: matrixUser.displayName?.split(' ')[0] || '',
+              lastName: matrixUser.displayName?.split(' ').slice(1).join(' ') || '',
+              isActive: true,
+              isAdmin: false,
+              isModerator: false,
+              dateJoined: new Date(),
+              lastLogin: null,
+              authentikId: null,
+              groups: [],
+              notes: [],
+              attributes: { source: 'matrix', matrixUserId: matrixUser.userId },
+              moderatorPermissions: null,
+            };
+          }
+        }
+      } catch (matrixError) {
+        console.warn('Matrix users not available:', matrixError);
+      }
+
+      // User not found in any source
       return null;
     }),
 
@@ -2115,6 +2160,18 @@ The invitation email has been sent. You'll be notified when they accept the invi
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Check if user exists in the database
+      const userExists = await ctx.prisma.user.findUnique({
+        where: { id: input.userId },
+      });
+
+      if (!userExists) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Cannot add notes to Matrix users. Please sync the user to the database first.',
+        });
+      }
+
       const note = await ctx.prisma.userNote.create({
         data: {
           userId: input.userId,

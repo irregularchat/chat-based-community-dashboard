@@ -405,6 +405,25 @@ export default function UsersPage() {
             </div>
           </div>
         </div>
+
+        {/* SSO Unavailable Banner */}
+        {usersData?.fallbackToMatrix && (
+          <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-600" />
+              <div>
+                <h3 className="text-sm font-medium text-amber-800">
+                  SSO Directory Unavailable
+                </h3>
+                <p className="text-sm text-amber-700 mt-1">
+                  Authentik SSO service is currently unavailable ({usersData.authentikError}). 
+                  Showing Matrix users instead. Load time: {usersData.loadTime}ms
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

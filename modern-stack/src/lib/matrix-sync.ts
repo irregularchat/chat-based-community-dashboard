@@ -1,6 +1,4 @@
 import { PrismaClient } from '@/generated/prisma';
-import { matrixService } from './matrix';
-import { MatrixClient, ClientEvent } from 'matrix-js-sdk';
 
 interface SyncResult {
   status: string;
@@ -137,7 +135,8 @@ class MatrixSyncService {
     }
   }
 
-  private async getMatrixClient(): Promise<MatrixClient | null> {
+  private async getMatrixClient(): Promise<any | null> {
+    const { matrixService } = await import('./matrix');
     const config = matrixService.getConfig();
     if (!config) {
       console.warn('Matrix service not configured');
@@ -175,7 +174,7 @@ class MatrixSyncService {
             }
           };
 
-          client.once(ClientEvent.Sync, handleSync);
+          client.once('sync', handleSync);
           
           // Also check current state immediately
           const currentState = client.getSyncState();
@@ -196,7 +195,7 @@ class MatrixSyncService {
     }
   }
 
-  private async syncRooms(client: MatrixClient | null, isRapidManualSync: boolean): Promise<{ roomsSync?: number }> {
+  private async syncRooms(client: any | null, isRapidManualSync: boolean): Promise<{ roomsSync?: number }> {
     if (!client) {
       console.warn('Matrix client not available for room sync');
       return { roomsSync: 0 };
@@ -291,7 +290,7 @@ class MatrixSyncService {
     }
   }
 
-  private async syncUsersAndMemberships(client: MatrixClient | null, isRapidManualSync: boolean): Promise<{ usersSync?: number; membershipsSync?: number }> {
+  private async syncUsersAndMemberships(client: any | null, isRapidManualSync: boolean): Promise<{ usersSync?: number; membershipsSync?: number }> {
     if (!client) {
       console.warn('Matrix client not available for user/membership sync');
       return { usersSync: 0, membershipsSync: 0 };

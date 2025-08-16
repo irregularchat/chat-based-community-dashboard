@@ -200,3 +200,47 @@ When working correctly, logs show:
 - Implement proper error handling for encryption mismatches
 - Add logging for successful message delivery confirmation
 - Test direct messaging with both encrypted and non-encrypted scenarios
+
+## Matrix SDK Multiple Entrypoints Bundling Error
+
+### Problem
+Matrix sync and other Matrix operations fail with bundling error: "Multiple matrix-js-sdk entrypoints detected!" causing 500 errors on tRPC API calls.
+
+### Root Cause
+Both `matrix.ts` and `user.ts` tRPC routers were importing `matrixService` from `@/lib/matrix` at the top level, causing Turbo/Webpack to detect multiple entrypoints for the matrix-js-sdk library during bundling.
+
+### Solution
+Use dynamic imports for Matrix service in tRPC routers instead of top-level imports:
+
+```typescript
+// Bad: Top-level import causes bundling conflicts
+import { matrixService } from '@/lib/matrix';
+
+// Good: Dynamic import avoids bundling conflicts
+export const someEndpoint = procedure.query(async ({ ctx }) => {
+  const { matrixService } = await import('@/lib/matrix');
+  return matrixService.someMethod();
+});
+```
+
+### Key Success Indicators
+When working correctly, logs show:
+- `Matrix service initialized successfully` without SDK errors
+- API endpoints return proper 401/403 auth errors instead of 500 server errors
+- No "Multiple matrix-js-sdk entrypoints detected!" errors in stderr
+
+### Files Modified
+- `src/lib/trpc/routers/matrix.ts` - Updated getConfig and syncMatrixUsers functions
+- `src/lib/trpc/routers/user.ts` - Updated Matrix welcome message functionality
+
+### Troubleshooting Steps
+1. Check for multiple imports of `@/lib/matrix` across tRPC routers
+2. Look for "Multiple matrix-js-sdk entrypoints detected!" in build logs
+3. Convert top-level Matrix imports to dynamic imports in API routes
+4. Test API endpoints return auth errors instead of 500 server errors
+
+### Prevention
+- Use dynamic imports for heavy libraries in API routes
+- Avoid importing Matrix SDK directly in multiple modules
+- Centralize Matrix service access through single entry point
+- Test bundling with development server after Matrix-related changes

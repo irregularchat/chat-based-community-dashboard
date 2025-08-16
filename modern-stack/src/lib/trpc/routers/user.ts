@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { createTRPCRouter, protectedProcedure, moderatorProcedure, adminProcedure } from '../trpc';
 import { authentikService } from '@/lib/authentik';
 import { emailService } from '@/lib/email';
-import { matrixService } from '@/lib/matrix';
 import { discourseService } from '@/lib/discourse';
 import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
 import { normalizePhoneNumber, formatPhoneForDisplay } from '@/lib/phone-utils';
@@ -967,6 +966,7 @@ export const userRouter = createTRPCRouter({
         }
 
         // Send Matrix welcome message if requested and Matrix service is configured
+        const { matrixService } = await import('@/lib/matrix');
         if (input.sendMatrixWelcome && matrixService.isConfigured()) {
           try {
             // Generate Matrix user ID format (this should be configurable)

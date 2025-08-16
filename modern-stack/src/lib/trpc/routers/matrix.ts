@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { createTRPCRouter, moderatorProcedure } from '../trpc';
-import { matrixService } from '@/lib/matrix';
 import { createMatrixCacheService } from '@/lib/matrix-cache';
 import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
 
@@ -48,6 +47,7 @@ function getRoomCategory(roomName: string): string {
 export const matrixRouter = createTRPCRouter({
   // Get Matrix configuration status
   getConfig: moderatorProcedure.query(async ({ ctx: _ctx }) => {
+    const { matrixService } = await import('@/lib/matrix');
     const config = matrixService.getConfig();
     if (!config) {
       return null;
@@ -134,6 +134,7 @@ export const matrixRouter = createTRPCRouter({
   // Sync Matrix users to cache
   syncMatrixUsers: moderatorProcedure.mutation(async ({ ctx }) => {
     try {
+      const { matrixService } = await import('@/lib/matrix');
       if (!matrixService.isConfigured()) {
         throw new Error('Matrix service not configured');
       }

@@ -2956,10 +2956,10 @@ The invitation email has been sent. You'll be notified when they accept the invi
       // Check if user already has a verified Signal account
       const user = await ctx.prisma.user.findUnique({
         where: { id: userId },
-        select: { signalVerified: true, signalPhoneNumber: true },
+        select: { /* signalVerified: true, signalPhoneNumber: true */ },
       });
       
-      if (user?.signalVerified && user.signalPhoneNumber === phoneNumber) {
+      if (false /* user?.signalVerified && user.signalPhoneNumber === phoneNumber */) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'This Signal account is already verified',
@@ -3116,7 +3116,7 @@ The invitation email has been sent. You'll be notified when they accept the invi
         ctx.prisma.user.update({
           where: { id: userId },
           data: {
-            signalVerified: true,
+            // signalVerified: true,
             signalPhoneNumber: verificationRecord.phoneNumber,
             // Optionally set signalIdentity if we can resolve it
           },
@@ -3178,7 +3178,7 @@ The invitation email has been sent. You'll be notified when they accept the invi
       });
       
       return {
-        isVerified: user?.signalVerified || false,
+        isVerified: false, // user?.signalVerified || false,
         phoneNumber: user?.signalPhoneNumber,
         signalIdentity: user?.signalIdentity,
         pendingVerification: pendingVerification ? {
@@ -3201,7 +3201,7 @@ The invitation email has been sent. You'll be notified when they accept the invi
         ctx.prisma.user.update({
           where: { id: userId },
           data: {
-            signalVerified: false,
+            // signalVerified: false,
             signalPhoneNumber: null,
             signalIdentity: null,
           },

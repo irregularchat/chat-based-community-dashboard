@@ -30,8 +30,8 @@ model User {
   attributes        Json?
   authentikId       String?               @unique @map("authentik_id")
   signalIdentity    String?               @map("signal_identity")
-  signalVerified    Boolean               @default(false) @map("signal_verified")
-  signalPhoneNumber String?               @map("signal_phone_number")
+  // signalVerified    Boolean               @default(false) @map("signal_verified")
+  // signalPhoneNumber String?               @map("signal_phone_number")
   matrixUsername    String?               @map("matrix_username")
   
   // Relationships

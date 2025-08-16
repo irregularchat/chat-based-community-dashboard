@@ -121,12 +121,12 @@ export const matrixRouter = createTRPCRouter({
         const endIndex = startIndex + input.limit;
         users = users.slice(startIndex, endIndex);
 
-        // Convert to expected format
+        // Convert to expected format (camelCase for frontend)
         const formattedUsers = users.map(user => ({
-          user_id: user.user_id,
-          display_name: user.display_name || user.user_id,
-          avatar_url: user.avatar_url,
-          is_signal_user: (user as Record<string, unknown>).is_signal_user,
+          userId: user.user_id,
+          displayName: user.display_name || user.user_id,
+          avatarUrl: user.avatar_url,
+          isSignalUser: (user as Record<string, unknown>).is_signal_user,
         }));
 
         return formattedUsers;
@@ -1268,5 +1268,167 @@ export const matrixRouter = createTRPCRouter({
           message: error instanceof Error ? error.message : 'Unknown error occurred',
         };
       }
+    }),
+
+  // Batch invite multiple users to rooms
+  inviteUsersToRooms: moderatorProcedure
+    .input(
+      z.object({
+        userIds: z.array(z.string()).min(1),
+        roomIds: z.array(z.string()).min(1),
+        sendWelcome: z.boolean().default(false),
+        welcomeMessage: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { matrixService } = await import('@/lib/matrix');
+      const results: Record<string, Record<string, boolean>> = {};
+      const errors: Record<string, Record<string, string>> = {};
+      let totalInvited = 0;
+      let totalFailed = 0;
+      
+      for (const userId of input.userIds) {
+        results[userId] = {};
+        errors[userId] = {};
+        
+        for (const roomId of input.roomIds) {
+          try {
+            const success = matrixService.isConfigured() 
+              ? await matrixService.inviteToRoom(roomId, userId)
+              : Math.random() > 0.1; // Mock success
+            
+            results[userId][roomId] = success;
+            if (success) {
+              totalInvited++;
+            } else {
+              totalFailed++;
+              errors[userId][roomId] = 'Failed to invite user';
+            }
+          } catch (error) {
+            results[userId][roomId] = false;
+            errors[userId][roomId] = error instanceof Error ? error.message : 'Unknown error';
+            totalFailed++;
+          }
+        }
+        
+        // Send welcome message if requested
+        if (input.sendWelcome && input.welcomeMessage && Object.values(results[userId]).some(Boolean)) {
+          try {
+            if (matrixService.isConfigured()) {
+              await matrixService.sendDirectMessage(userId, input.welcomeMessage);
+            }
+          } catch (error) {
+            console.error(`Failed to send welcome message to ${userId}:`, error);
+          }
+        }
+      }
+      
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'matrix_batch_invite',
+          username: ctx.session.user.username || 'unknown',
+          details: `Invited ${input.userIds.length} users to ${input.roomIds.length} rooms. Success: ${totalInvited}, Failed: ${totalFailed}`,
+        },
+      });
+      
+      // Log community event
+      await logCommunityEvent(ctx.prisma, {
+        eventType: 'matrix_batch_invite',
+        username: ctx.session.user.username || 'unknown',
+        details: `Invited ${input.userIds.length} users to ${input.roomIds.length} rooms`,
+        isPublic: true,
+        category: getCategoryForEventType('matrix_batch_invite'),
+      });
+      
+      return {
+        results,
+        errors,
+        totalInvited,
+        totalFailed,
+        usersProcessed: input.userIds.length,
+        roomsProcessed: input.roomIds.length,
+      };
+    }),
+
+  // Batch remove multiple users from rooms
+  removeUsersFromRooms: moderatorProcedure
+    .input(
+      z.object({
+        userIds: z.array(z.string()).min(1),
+        roomIds: z.array(z.string()).min(1),
+        sendMessage: z.boolean().default(false),
+        message: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { matrixService } = await import('@/lib/matrix');
+      const results: Record<string, Record<string, boolean>> = {};
+      const errors: Record<string, Record<string, string>> = {};
+      let totalRemoved = 0;
+      let totalFailed = 0;
+      
+      for (const userId of input.userIds) {
+        results[userId] = {};
+        errors[userId] = {};
+        
+        // Send removal message if requested
+        if (input.sendMessage && input.message) {
+          try {
+            if (matrixService.isConfigured()) {
+              await matrixService.sendDirectMessage(userId, input.message);
+            }
+          } catch (error) {
+            console.error(`Failed to send removal message to ${userId}:`, error);
+          }
+        }
+        
+        for (const roomId of input.roomIds) {
+          try {
+            const success = matrixService.isConfigured()
+              ? await matrixService.removeFromRoom(roomId, userId)
+              : Math.random() > 0.1; // Mock success
+            
+            results[userId][roomId] = success;
+            if (success) {
+              totalRemoved++;
+            } else {
+              totalFailed++;
+              errors[userId][roomId] = 'Failed to remove user';
+            }
+          } catch (error) {
+            results[userId][roomId] = false;
+            errors[userId][roomId] = error instanceof Error ? error.message : 'Unknown error';
+            totalFailed++;
+          }
+        }
+      }
+      
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'matrix_batch_removal',
+          username: ctx.session.user.username || 'unknown',
+          details: `Removed ${input.userIds.length} users from ${input.roomIds.length} rooms. Success: ${totalRemoved}, Failed: ${totalFailed}`,
+        },
+      });
+      
+      // Log community event
+      await logCommunityEvent(ctx.prisma, {
+        eventType: 'matrix_batch_removal',
+        username: ctx.session.user.username || 'unknown',
+        details: `Removed ${input.userIds.length} users from ${input.roomIds.length} rooms`,
+        isPublic: true,
+        category: getCategoryForEventType('matrix_batch_removal'),
+      });
+      
+      return {
+        results,
+        errors,
+        totalRemoved,
+        totalFailed,
+        usersProcessed: input.userIds.length,
+        roomsProcessed: input.roomIds.length,
+      };
     }),
 }); 

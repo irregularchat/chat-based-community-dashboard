@@ -490,3 +490,287 @@ if (homeserver && accessToken && userId && signalBridgeRoom) {
 - Don't block functionality based solely on SDK initialization status
 - Test Signal verification with actual phone numbers during development
 - Monitor Signal bridge room for successful phone → UUID resolution
+
+## Signal CLI Direct Integration Implementation (2024-08-16)
+
+### Project Overview
+Successfully implemented a comprehensive Signal CLI REST API integration to replace Matrix Signal bridge functions with direct Signal CLI operations. This provides better reliability, control, and independence from Matrix SDK bundling issues.
+
+### Solution Architecture
+
+#### 1. Infrastructure Setup (Phase 1)
+- **Docker Compose Integration**: Added `bbernhard/signal-cli-rest-api` container with proper health checks
+- **Environment Configuration**: Complete Signal CLI settings in `.env.local`
+- **Service Architecture**: Three-layer approach:
+  - `SignalBotService` - High-level business logic
+  - `SignalApiClient` - HTTP client wrapper with logging
+  - Type definitions with proper error classes
+
+```yaml
+# Docker Compose configuration
+signal-cli-rest-api:
+  image: bbernhard/signal-cli-rest-api:latest
+  environment:
+    - MODE=normal
+    - SIGNAL_CLI_UID=1000
+    - SIGNAL_CLI_GID=1000
+  volumes:
+    - signal_cli_data:/home/.local/share/signal-cli
+  networks:
+    - dashboard-network
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:8080/v1/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+```
+
+#### 2. Core Service Development (Phase 2)
+- **tRPC Integration**: Comprehensive router with admin and public endpoints
+- **Phone Number Management**: Registration, verification, and validation
+- **Message Operations**: Single and bulk messaging with proper error handling
+- **Health Monitoring**: Real-time service status and configuration checks
+
+### Key Technical Patterns
+
+#### 1. Service Layer Architecture
+```typescript
+// High-level service class pattern
+export class SignalBotService {
+  private apiClient: SignalApiClient;
+  private config: SignalBotConfig;
+  
+  constructor(config?: SignalBotConfig) {
+    this.config = config || this.loadConfigFromEnv();
+    this.apiClient = new SignalApiClient(this.config);
+  }
+  
+  public async sendMessage(phoneNumber: string, message: string): Promise<SignalResult> {
+    // Business logic with validation and error handling
+    const normalizedPhone = normalizePhoneNumber(phoneNumber);
+    if (!normalizedPhone.isValid) {
+      throw new SignalMessageError(`Invalid phone number: ${phoneNumber}`);
+    }
+    return await this.apiClient.sendMessage(this.config.phoneNumber, signalMessage);
+  }
+}
+```
+
+#### 2. HTTP Client with Interceptors
+```typescript
+// API client with comprehensive logging
+export class SignalApiClient {
+  constructor(config: SignalBotConfig) {
+    this.httpClient = axios.create({
+      baseURL: config.apiUrl,
+      timeout: config.timeout,
+    });
+    
+    // Request/response interceptors for debugging
+    this.httpClient.interceptors.request.use(
+      (config) => console.log(`📤 Signal API Request: ${config.method?.toUpperCase()} ${config.url}`),
+      (error) => Promise.reject(new SignalConnectionError(`Signal API error: ${error.message}`))
+    );
+  }
+}
+```
+
+#### 3. tRPC Router Implementation
+```typescript
+// Comprehensive tRPC endpoints
+export const signalRouter = router({
+  // Admin endpoints for registration/configuration
+  registerPhoneNumber: adminProcedure
+    .input(z.object({ phoneNumber: z.string().min(10), useVoice: z.boolean().default(false) }))
+    .mutation(async ({ input, ctx }) => {
+      const signalBot = new SignalBotService();
+      await signalBot.registerPhoneNumber(input.phoneNumber, input.useVoice);
+      
+      // Log admin event for audit trail
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'signal_registration_initiated',
+          username: ctx.session.user.username || 'unknown',
+          details: `Initiated Signal registration for phone ${input.phoneNumber}`,
+        },
+      });
+    }),
+    
+  // Public endpoints for user verification
+  sendVerificationCode: publicProcedure
+    .input(z.object({ phoneNumber: z.string().min(10) }))
+    .mutation(async ({ input, ctx }) => {
+      const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+      
+      // Store in database with expiration
+      await ctx.prisma.signalVerification.create({
+        data: {
+          phoneNumber: normalizedPhone.normalized,
+          code: verificationCode,
+          expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+        },
+      });
+      
+      // Send via Signal CLI
+      await signalBot.sendMessage(input.phoneNumber, `Your verification code is: ${verificationCode}`);
+    }),
+});
+```
+
+### Admin Interface Implementation
+
+#### 1. Comprehensive Management UI
+- **Real-time Status Monitoring**: Service health, registration status, API response times
+- **Registration Workflow**: Phone number registration and verification forms
+- **Message Testing**: Send messages to single or multiple recipients
+- **Configuration Display**: Current settings and account information
+
+#### 2. Tabbed Interface Pattern
+```typescript
+// React component with comprehensive tabs
+export default function AdminSignalPage() {
+  const [activeTab, setActiveTab] = useState('status');
+  
+  // Auto-refresh health status every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(() => refetchHealth(), 30000);
+    return () => clearInterval(interval);
+  }, [refetchHealth]);
+  
+  return (
+    <Tabs value={activeTab} onValueChange={setActiveTab}>
+      <TabsList className="grid w-full grid-cols-4">
+        <TabsTrigger value="status">Status</TabsTrigger>
+        <TabsTrigger value="registration">Registration</TabsTrigger>
+        <TabsTrigger value="messaging">Messaging</TabsTrigger>
+        <TabsTrigger value="tools">Tools</TabsTrigger>
+      </TabsList>
+      {/* Tab content with forms and status displays */}
+    </Tabs>
+  );
+}
+```
+
+### Database Schema Integration
+
+#### 1. Verification Table Design
+```prisma
+// Simple verification for public API
+model SignalVerification {
+  id          Int       @id @default(autoincrement())
+  phoneNumber String    @map("phone_number")
+  code        String    // Plain text verification code (short-lived)
+  expiresAt   DateTime  @map("expires_at")
+  verifiedAt  DateTime? @map("verified_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  
+  @@index([phoneNumber])
+  @@index([expiresAt])
+  @@map("signal_verifications")
+}
+```
+
+### Key Learning Points
+
+#### 1. Docker Container Integration
+- **Health checks are essential** for proper service orchestration
+- **Volume mapping required** for Signal CLI data persistence
+- **Internal networking** allows services to communicate without exposing ports
+- **Port conflicts** need to be handled gracefully in development
+
+#### 2. Service Layer Design Patterns
+- **Three-layer architecture** provides clean separation of concerns
+- **Configuration loading** should prioritize environment variables
+- **Error classes** enable specific error handling at different layers
+- **Phone number normalization** is critical for international compatibility
+
+#### 3. tRPC Integration Best Practices
+- **Separate admin and public endpoints** with appropriate authentication
+- **Input validation** with Zod schemas prevents malformed requests
+- **Audit logging** for admin operations provides accountability
+- **Error handling** with TRPCError provides proper HTTP status codes
+
+#### 4. Admin UI Patterns
+- **Real-time status monitoring** improves operational visibility
+- **Auto-refresh mechanisms** keep status information current
+- **Tabbed interfaces** organize complex functionality logically
+- **Form validation** prevents user errors and improves UX
+
+#### 5. Health Check Implementation
+```typescript
+// Multi-endpoint health check pattern
+export async function GET(request: NextRequest) {
+  const healthResults: any = {
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    services: {},
+  };
+
+  // Check database health
+  const dbHealth = await checkDatabaseHealth();
+  healthResults.services.database = {
+    status: dbHealth.healthy ? 'healthy' : 'unhealthy',
+    responseTime: dbHealth.responseTime,
+  };
+
+  // Check Signal CLI health if enabled
+  const signalBot = new SignalBotService();
+  if (signalBot.isConfigured()) {
+    const signalHealth = await signalBot.checkServiceHealth();
+    healthResults.services.signalCli = {
+      status: signalHealth.containerStatus === 'running' ? 'healthy' : 'unhealthy',
+      containerStatus: signalHealth.containerStatus,
+      registrationStatus: signalHealth.registrationStatus,
+    };
+  }
+
+  // Determine overall health
+  const unhealthyServices = Object.entries(healthResults.services)
+    .filter(([, service]: [string, any]) => service.status === 'unhealthy')
+    .map(([name]) => name);
+
+  if (unhealthyServices.length > 0) {
+    healthResults.status = 'degraded';
+  }
+
+  return NextResponse.json(healthResults, { 
+    status: healthResults.status === 'unhealthy' ? 503 : 200 
+  });
+}
+```
+
+### Success Indicators
+- ✅ Signal CLI container starts and responds to health checks
+- ✅ Phone number registration sends SMS/voice verification
+- ✅ Verification codes are stored and validated correctly  
+- ✅ Messages send successfully to verified phone numbers
+- ✅ Admin interface provides real-time status monitoring
+- ✅ Health check endpoints return proper service status
+- ✅ Error handling provides meaningful feedback to users
+
+### Advantages Over Matrix Bridge Approach
+1. **Independence**: No dependency on Matrix SDK bundling issues
+2. **Direct Control**: Full control over Signal operations without bridge intermediary
+3. **Better Error Handling**: Clear error messages from Signal CLI REST API
+4. **Scalability**: Dedicated container can be scaled independently
+5. **Monitoring**: Direct health checks and status monitoring
+6. **Flexibility**: Support for both registration and device linking workflows
+
+### Implementation Files
+- `src/lib/signal/signal-bot-service.ts` - High-level service class
+- `src/lib/signal/api-client.ts` - HTTP client wrapper  
+- `src/lib/signal/types.ts` - TypeScript definitions
+- `src/lib/trpc/routers/signal.ts` - tRPC endpoints
+- `src/app/admin/signal/page.tsx` - Admin management interface
+- `src/app/api/health/route.ts` - Main health check endpoint
+- `src/app/api/signal/health/route.ts` - Signal-specific health check
+- `docker-compose.yml` - Container orchestration
+- `prisma/schema.prisma` - Database schema updates
+
+### Future Enhancements
+- Phone number registration flow in admin UI
+- Device linking QR code generation
+- Message history and analytics
+- Bulk messaging operations
+- Integration with user profile Signal verification
+- Migration tools from Matrix bridge to Signal CLI

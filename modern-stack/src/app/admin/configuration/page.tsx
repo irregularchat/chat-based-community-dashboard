@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
-import { ArrowLeft, MessageCircle, Users, Mail, Bot, Database, CheckCircle, AlertTriangle, Plus, Edit } from 'lucide-react';
+import { ArrowLeft, MessageCircle, Users, Mail, Bot, Database, CheckCircle, AlertTriangle, Plus, Edit, Phone } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
@@ -27,6 +27,7 @@ export default function AdminConfigurationPage() {
   const [showDiscourseDialog, setShowDiscourseDialog] = useState(false);
   const [showAIDialog, setShowAIDialog] = useState(false);
   const [showSMTPDialog, setShowSMTPDialog] = useState(false);
+  const [showSignalDialog, setShowSignalDialog] = useState(false);
 
   // Form states
   const [matrixForm, setMatrixForm] = useState({
@@ -70,6 +71,15 @@ export default function AdminConfigurationPage() {
     from: '',
     bcc: '',
     enableTLS: true,
+  });
+
+  const [signalForm, setSignalForm] = useState({
+    enabled: false,
+    apiUrl: 'http://localhost:8080',
+    phoneNumber: '',
+    timeout: 30000,
+    registrationPin: '',
+    deviceName: 'community-dashboard-bot',
   });
 
   // Fetch data
@@ -318,7 +328,7 @@ export default function AdminConfigurationPage() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-5 lg:overflow-x-visible">
+          <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-6 lg:overflow-x-visible">
             <TabsTrigger value="matrix" className="flex items-center gap-2 min-w-0 flex-shrink-0">
               <MessageCircle className="w-4 h-4 shrink-0" />
               <span className="hidden sm:inline">Matrix</span>
@@ -338,6 +348,10 @@ export default function AdminConfigurationPage() {
             <TabsTrigger value="smtp" className="flex items-center gap-2 min-w-0 flex-shrink-0">
               <Mail className="w-4 h-4 shrink-0" />
               <span className="hidden sm:inline">SMTP</span>
+            </TabsTrigger>
+            <TabsTrigger value="signal" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+              <Phone className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Signal CLI</span>
             </TabsTrigger>
           </TabsList>
 
@@ -1233,6 +1247,190 @@ export default function AdminConfigurationPage() {
                     SMTP email is not configured. Click &quot;Configure SMTP&quot; to get started.
                   </div>
                 )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Signal CLI Configuration Tab */}
+          <TabsContent value="signal" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Phone className="w-5 h-5" />
+                      Signal CLI Integration
+                    </CardTitle>
+                    <CardDescription>
+                      Configure Signal CLI REST API for direct Signal messaging integration
+                    </CardDescription>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isServiceConfigured('signal_cli_config', ['enabled', 'apiUrl']) ? (
+                      <Badge variant="default" className="bg-green-100 text-green-800">
+                        <CheckCircle className="w-3 h-3 mr-1" />
+                        Configured
+                      </Badge>
+                    ) : (
+                      <Badge variant="destructive">
+                        <AlertTriangle className="w-3 h-3 mr-1" />
+                        Not Configured
+                      </Badge>
+                    )}
+                    <Dialog open={showSignalDialog} onOpenChange={setShowSignalDialog}>
+                      <DialogTrigger asChild>
+                        <Button onClick={() => {
+                          if (isServiceConfigured('signal_cli_config', ['enabled', 'apiUrl'])) {
+                            const config = allSettings?.settings?.signal_cli_config as Record<string, unknown>;
+                            if (config) {
+                              setSignalForm({
+                                enabled: (config.enabled as boolean) || false,
+                                apiUrl: (config.apiUrl as string) || 'http://localhost:8080',
+                                phoneNumber: (config.phoneNumber as string) || '',
+                                timeout: (config.timeout as number) || 30000,
+                                registrationPin: (config.registrationPin as string) || '',
+                                deviceName: (config.deviceName as string) || 'community-dashboard-bot',
+                              });
+                            }
+                          }
+                        }}>
+                          {isServiceConfigured('signal_cli_config', ['enabled', 'apiUrl']) ? (
+                            <>
+                              <Edit className="w-4 h-4 mr-2" />
+                              Edit Configuration
+                            </>
+                          ) : (
+                            <>
+                              <Plus className="w-4 h-4 mr-2" />
+                              Configure Signal CLI
+                            </>
+                          )}
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="sm:max-w-[500px]">
+                        <DialogHeader>
+                          <DialogTitle>Signal CLI Configuration</DialogTitle>
+                          <DialogDescription>
+                            Configure Signal CLI REST API integration for direct Signal messaging.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <div className="grid gap-4 py-4">
+                          <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="signal-enabled" className="text-right">
+                              Enable Signal CLI
+                            </Label>
+                            <div className="col-span-3">
+                              <Switch
+                                id="signal-enabled"
+                                checked={signalForm.enabled}
+                                onCheckedChange={(checked) => setSignalForm({ ...signalForm, enabled: checked })}
+                              />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="signal-api-url" className="text-right">
+                              API URL
+                            </Label>
+                            <Input
+                              id="signal-api-url"
+                              value={signalForm.apiUrl}
+                              onChange={(e) => setSignalForm({ ...signalForm, apiUrl: e.target.value })}
+                              className="col-span-3"
+                              placeholder="http://localhost:8080"
+                            />
+                          </div>
+                          <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="signal-phone" className="text-right">
+                              Phone Number
+                            </Label>
+                            <Input
+                              id="signal-phone"
+                              value={signalForm.phoneNumber}
+                              onChange={(e) => setSignalForm({ ...signalForm, phoneNumber: e.target.value })}
+                              className="col-span-3"
+                              placeholder="+1234567890"
+                            />
+                          </div>
+                          <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="signal-timeout" className="text-right">
+                              Timeout (ms)
+                            </Label>
+                            <Input
+                              id="signal-timeout"
+                              type="number"
+                              value={signalForm.timeout}
+                              onChange={(e) => setSignalForm({ ...signalForm, timeout: parseInt(e.target.value) || 30000 })}
+                              className="col-span-3"
+                              placeholder="30000"
+                            />
+                          </div>
+                          <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="signal-device-name" className="text-right">
+                              Device Name
+                            </Label>
+                            <Input
+                              id="signal-device-name"
+                              value={signalForm.deviceName}
+                              onChange={(e) => setSignalForm({ ...signalForm, deviceName: e.target.value })}
+                              className="col-span-3"
+                              placeholder="community-dashboard-bot"
+                            />
+                          </div>
+                          <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="signal-pin" className="text-right">
+                              Registration PIN
+                            </Label>
+                            <Input
+                              id="signal-pin"
+                              type="password"
+                              value={signalForm.registrationPin}
+                              onChange={(e) => setSignalForm({ ...signalForm, registrationPin: e.target.value })}
+                              className="col-span-3"
+                              placeholder="Optional registration PIN"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex justify-end gap-2">
+                          <Button variant="outline" onClick={() => setShowSignalDialog(false)}>
+                            Cancel
+                          </Button>
+                          <Button onClick={() => {
+                            const signalConfig = {
+                              enabled: signalForm.enabled,
+                              apiUrl: signalForm.apiUrl,
+                              phoneNumber: signalForm.phoneNumber,
+                              timeout: signalForm.timeout,
+                              registrationPin: signalForm.registrationPin,
+                              deviceName: signalForm.deviceName,
+                            };
+
+                            updateSettingMutation.mutate({
+                              key: 'signal_cli_config',
+                              value: signalConfig,
+                            });
+
+                            setShowSignalDialog(false);
+                          }}>
+                            Save Configuration
+                          </Button>
+                        </div>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="text-sm text-muted-foreground">
+                  <p className="mb-2">
+                    Signal CLI provides direct integration with Signal Messenger without requiring Matrix bridge.
+                  </p>
+                  <ul className="list-disc list-inside space-y-1 text-xs">
+                    <li>Direct Signal messaging capabilities</li>
+                    <li>Phone number registration and verification</li>
+                    <li>Message sending and receiving</li>
+                    <li>Containerized deployment via Docker</li>
+                  </ul>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>

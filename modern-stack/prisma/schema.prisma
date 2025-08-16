@@ -383,3 +383,17 @@ model SignalVerificationCode {
   @@index([verified])
   @@map("signal_verification_codes")
 }
+
+// Signal phone number verification for public API
+model SignalVerification {
+  id          Int       @id @default(autoincrement())
+  phoneNumber String    @map("phone_number")
+  code        String    // Plain text verification code (short-lived)
+  expiresAt   DateTime  @map("expires_at")
+  verifiedAt  DateTime? @map("verified_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  
+  @@index([phoneNumber])
+  @@index([expiresAt])
+  @@map("signal_verifications")
+}

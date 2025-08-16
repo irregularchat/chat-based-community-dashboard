@@ -24,7 +24,8 @@ import {
   PieChart,
   Search,
   Filter,
-  Settings
+  Settings,
+  Phone
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -134,6 +135,13 @@ export default function AdminDashboard() {
               >
                 <Settings className="w-4 h-4 mr-2" />
                 Configuration
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => router.push('/admin/signal')}
+              >
+                <Phone className="w-4 h-4 mr-2" />
+                Signal CLI
               </Button>
               <Button
                 variant="outline"

@@ -384,6 +384,14 @@ export const settingsRouter = createTRPCRouter({
       'matrix_min_room_members': process.env.MATRIX_MIN_ROOM_MEMBERS,
       'matrix_message_notice': process.env.MATRIX_MESSAGE_NOTICE,
       
+      // Signal CLI Configuration
+      'signal_cli_enabled': process.env.SIGNAL_CLI_ENABLED,
+      'signal_cli_api_url': process.env.SIGNAL_CLI_API_URL,
+      'signal_cli_phone_number': process.env.SIGNAL_CLI_PHONE_NUMBER,
+      'signal_cli_timeout': process.env.SIGNAL_CLI_TIMEOUT,
+      'signal_cli_registration_pin': process.env.SIGNAL_CLI_REGISTRATION_PIN,
+      'signal_cli_device_name': process.env.SIGNAL_CLI_DEVICE_NAME,
+      
       // Discourse Configuration
       'discourse_active': process.env.DISCOURSE_ACTIVE,
       'discourse_url': process.env.DISCOURSE_URL,

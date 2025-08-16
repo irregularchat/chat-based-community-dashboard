@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: community-dashboard-postgres
+    environment:
+      POSTGRES_DB: dashboarddb
+      POSTGRES_USER: dashboard_user
+      POSTGRES_PASSWORD: dashboard_password
+    ports:
+      - "5436:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - dashboard-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dashboard_user -d dashboarddb"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Signal CLI REST API
+  signal-cli-rest-api:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: community-dashboard-signal
+    environment:
+      - MODE=normal
+      - SIGNAL_CLI_UID=1000
+      - SIGNAL_CLI_GID=1000
+    ports:
+      - "8080" # Internal only - not exposed to host
+    volumes:
+      - signal_cli_data:/home/.local/share/signal-cli
+    networks:
+      - dashboard-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Main Application
+  app:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: community-dashboard-app
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://dashboard_user:dashboard_password@postgres:5432/dashboarddb
+      - SIGNAL_CLI_ENABLED=true
+      - SIGNAL_CLI_API_URL=http://signal-cli-rest-api:8080
+      - SIGNAL_CLI_TIMEOUT=30000
+    ports:
+      - "3000:3000"
+    networks:
+      - dashboard-network
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      signal-cli-rest-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  postgres_data:
+    driver: local
+  signal_cli_data:
+    driver: local
+
+networks:
+  dashboard-network:
+    driver: bridge

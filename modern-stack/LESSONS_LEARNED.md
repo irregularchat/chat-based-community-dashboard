@@ -1,4 +1,71 @@
-# Lessons Learned - Configuration Status Display Fix
+# Lessons Learned
+
+## Matrix Room Display and SDK Bundling Issues (2024-08-16)
+
+### Issue Description
+Matrix rooms with >10 members were not displaying in the UI. Additionally, the Matrix SDK was causing "Multiple entrypoints detected" bundling errors, preventing the Matrix client from initializing properly.
+
+### Root Causes
+1. **SDK Bundling Issue**: The matrix-js-sdk was being imported multiple times, causing Next.js bundling conflicts
+2. **Service Configuration Check**: The `isConfigured()` method returned false when the Matrix client failed to initialize
+3. **Room Data Source**: Duplicate rooms were being shown - configured rooms from .env (with 0 members) and cached rooms from database
+
+### Solution Implemented
+
+#### 1. Fixed Matrix SDK Initialization
+- Added fallback mechanism when SDK wrapper fails
+- Modified `isConfigured()` to return true if config exists, even if client fails
+- This allows cached rooms to be fetched from database even when SDK has issues
+
+#### 2. Database Caching Strategy
+- Rooms are cached in the MatrixRoom table with:
+  - Room ID, name, topic
+  - Member count (actual numbers from Matrix server)
+  - Last synced timestamp
+- Cache is queried first, avoiding repeated Matrix API calls
+- Periodic sync (every 12 hours) keeps data fresh
+
+#### 3. Removed .env Room Configurations
+- Commented out MATRIX_ROOM_IDS_NAME_CATEGORY variable
+- Changed default `includeConfigured` to false
+- Now using only cached/indexed rooms from database
+
+### Key Learning Points
+
+#### Database Caching for External Services
+- **Cache expensive API calls**: Matrix room queries are cached in database
+- **Include metadata**: Store room ID, name, member count for efficient filtering
+- **Periodic updates**: Sync every 12 hours to keep data fresh
+- **Fallback gracefully**: Use cache when external service fails
+
+#### SDK Bundling in Next.js
+- Dynamic imports can cause "multiple entrypoints" errors
+- Implement fallback mechanisms for SDK initialization failures
+- Service configuration checks should not depend solely on client initialization
+
+#### Room Data Management Pattern
+```typescript
+// Good: Use cached data with periodic sync
+const rooms = await cacheService.getCachedRooms();
+if (rooms.length === 0 && matrixClient) {
+  // Fallback to direct fetch if cache empty
+  const freshRooms = await matrixClient.getRooms();
+  await cacheService.updateRooms(freshRooms);
+}
+
+// Bad: Always fetching from Matrix API
+const rooms = await matrixClient.getRooms(); // Expensive and fails if client not initialized
+```
+
+### Results
+- Successfully displaying 40+ cached rooms with actual member counts
+- Eliminated duplicate rooms with 0 members from .env
+- Matrix functionality works even when SDK fails to initialize
+- Improved performance by using database cache instead of repeated API calls
+
+---
+
+## Configuration Status Display Fix (Previous Issue)
 
 ## Issue Description
 The admin configuration page was showing all services (Matrix, Authentik, Discourse, SMTP, AI APIs) as "Not Configured" even though they were properly configured via environment variables and working correctly.

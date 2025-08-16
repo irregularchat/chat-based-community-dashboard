@@ -704,10 +704,10 @@ export default function MatrixPage() {
                             }}
                           />
                         </div>
-                        {matrixUsers?.slice(0, 50).map((user) => (
+                        {matrixUsers?.slice(0, 50).filter(user => user?.userId).map((user) => (
                           <SelectItem key={user.userId} value={user.userId}>
                             <div className="flex flex-col">
-                              <span className="font-medium">{user.displayName || user.userId.split(':')[0].replace('@', '')}</span>
+                              <span className="font-medium">{user.displayName || user.userId?.split(':')[0].replace('@', '') || 'Unknown User'}</span>
                               <span className="text-xs text-muted-foreground">{user.userId}</span>
                             </div>
                           </SelectItem>

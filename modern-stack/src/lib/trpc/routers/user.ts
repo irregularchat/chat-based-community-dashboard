@@ -2931,6 +2931,297 @@ The invitation email has been sent. You'll be notified when they accept the invi
       };
     }),
 
+  // Signal account verification endpoints
+  initiateSignalVerification: protectedProcedure
+    .input(
+      z.object({
+        phoneNumber: z.string().min(10),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { generateVerificationCode, hashVerificationCode, createExpirationDate, formatPhoneForSignal, validatePhoneNumber, formatVerificationMessage } = await import('@/lib/verification-codes');
+      const { matrixService } = await import('@/lib/matrix');
+      
+      const userId = ctx.session.user.id;
+      const phoneNumber = formatPhoneForSignal(input.phoneNumber);
+      
+      // Validate phone number
+      if (!validatePhoneNumber(phoneNumber)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Invalid phone number format',
+        });
+      }
+      
+      // Check if user already has a verified Signal account
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: userId },
+        select: { signalVerified: true, signalPhoneNumber: true },
+      });
+      
+      if (user?.signalVerified && user.signalPhoneNumber === phoneNumber) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'This Signal account is already verified',
+        });
+      }
+      
+      // Check for existing pending verification
+      const existingCode = await ctx.prisma.signalVerificationCode.findFirst({
+        where: {
+          userId,
+          verified: false,
+          expiresAt: { gt: new Date() },
+        },
+      });
+      
+      if (existingCode) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'A verification code has already been sent. Please wait for it to expire before requesting a new one.',
+        });
+      }
+      
+      // Generate verification code
+      const code = generateVerificationCode();
+      const salt = crypto.randomBytes(16).toString('hex');
+      const hashedCode = hashVerificationCode(code, salt);
+      const expiresAt = createExpirationDate(10); // 10 minutes
+      
+      // Store verification code in database
+      await ctx.prisma.signalVerificationCode.create({
+        data: {
+          userId,
+          phoneNumber,
+          code: hashedCode,
+          salt,
+          expiresAt,
+        },
+      });
+      
+      // Send verification code via Matrix-Signal bridge
+      try {
+        const message = formatVerificationMessage(code);
+        const result = await matrixService.sendSignalMessageByPhone(phoneNumber, message);
+        
+        if (!result.success) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Failed to send verification code. Please try again.',
+          });
+        }
+        
+        // Log the event
+        await logCommunityEvent(
+          ctx.prisma,
+          'signal_verification_initiated',
+          ctx.session.user.username || 'Unknown User',
+          `Signal verification initiated for phone number ending in ${phoneNumber.slice(-4)}`
+        );
+        
+        return {
+          success: true,
+          message: 'Verification code sent successfully',
+          expiresIn: 600, // 10 minutes in seconds
+        };
+      } catch (error) {
+        console.error('Error sending verification code:', error);
+        
+        // Clean up the stored code on failure
+        await ctx.prisma.signalVerificationCode.deleteMany({
+          where: {
+            userId,
+            phoneNumber,
+            verified: false,
+          },
+        });
+        
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to send verification code. Please try again.',
+        });
+      }
+    }),
+
+  verifySignalCode: protectedProcedure
+    .input(
+      z.object({
+        code: z.string().length(6),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { verifyCode, isCodeExpired } = await import('@/lib/verification-codes');
+      const userId = ctx.session.user.id;
+      
+      // Find the most recent verification code for this user
+      const verificationRecord = await ctx.prisma.signalVerificationCode.findFirst({
+        where: {
+          userId,
+          verified: false,
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
+      
+      if (!verificationRecord) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'No verification code found. Please request a new one.',
+        });
+      }
+      
+      // Check if code has expired
+      if (isCodeExpired(verificationRecord.expiresAt)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Verification code has expired. Please request a new one.',
+        });
+      }
+      
+      // Check attempts
+      if (verificationRecord.attempts >= verificationRecord.maxAttempts) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Maximum verification attempts exceeded. Please request a new code.',
+        });
+      }
+      
+      // Increment attempts
+      await ctx.prisma.signalVerificationCode.update({
+        where: { id: verificationRecord.id },
+        data: { attempts: { increment: 1 } },
+      });
+      
+      // Verify the code
+      const isValid = verifyCode(input.code, verificationRecord.code, verificationRecord.salt);
+      
+      if (!isValid) {
+        const remainingAttempts = verificationRecord.maxAttempts - verificationRecord.attempts - 1;
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `Invalid verification code. ${remainingAttempts} attempts remaining.`,
+        });
+      }
+      
+      // Mark as verified and update user
+      await ctx.prisma.$transaction([
+        ctx.prisma.signalVerificationCode.update({
+          where: { id: verificationRecord.id },
+          data: {
+            verified: true,
+            verifiedAt: new Date(),
+          },
+        }),
+        ctx.prisma.user.update({
+          where: { id: userId },
+          data: {
+            signalVerified: true,
+            signalPhoneNumber: verificationRecord.phoneNumber,
+            // Optionally set signalIdentity if we can resolve it
+          },
+        }),
+      ]);
+      
+      // Resolve Signal UUID if possible
+      const { matrixService } = await import('@/lib/matrix');
+      const signalUuid = await matrixService.resolvePhoneToSignalUuid(verificationRecord.phoneNumber);
+      
+      if (signalUuid) {
+        await ctx.prisma.user.update({
+          where: { id: userId },
+          data: {
+            signalIdentity: signalUuid,
+          },
+        });
+      }
+      
+      // Log the event
+      await logCommunityEvent(
+        ctx.prisma,
+        'signal_verification_completed',
+        ctx.session.user.username || 'Unknown User',
+        `Signal account successfully verified`
+      );
+      
+      return {
+        success: true,
+        message: 'Signal account successfully verified',
+      };
+    }),
+
+  getSignalVerificationStatus: protectedProcedure
+    .query(async ({ ctx }) => {
+      const userId = ctx.session.user.id;
+      
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          signalVerified: true,
+          signalPhoneNumber: true,
+          signalIdentity: true,
+        },
+      });
+      
+      // Check for pending verification
+      const pendingVerification = await ctx.prisma.signalVerificationCode.findFirst({
+        where: {
+          userId,
+          verified: false,
+          expiresAt: { gt: new Date() },
+        },
+        select: {
+          expiresAt: true,
+          attempts: true,
+          maxAttempts: true,
+        },
+      });
+      
+      return {
+        isVerified: user?.signalVerified || false,
+        phoneNumber: user?.signalPhoneNumber,
+        signalIdentity: user?.signalIdentity,
+        pendingVerification: pendingVerification ? {
+          expiresAt: pendingVerification.expiresAt,
+          remainingAttempts: pendingVerification.maxAttempts - pendingVerification.attempts,
+        } : null,
+      };
+    }),
+
+  removeSignalVerification: protectedProcedure
+    .mutation(async ({ ctx }) => {
+      const userId = ctx.session.user.id;
+      
+      await ctx.prisma.$transaction([
+        // Remove verification records
+        ctx.prisma.signalVerificationCode.deleteMany({
+          where: { userId },
+        }),
+        // Update user
+        ctx.prisma.user.update({
+          where: { id: userId },
+          data: {
+            signalVerified: false,
+            signalPhoneNumber: null,
+            signalIdentity: null,
+          },
+        }),
+      ]);
+      
+      // Log the event
+      await logCommunityEvent(
+        ctx.prisma,
+        'signal_verification_removed',
+        ctx.session.user.username || 'Unknown User',
+        `Signal account verification removed`
+      );
+      
+      return {
+        success: true,
+        message: 'Signal verification removed successfully',
+      };
+    }),
+
 });
 
 // Helper function for password hashing

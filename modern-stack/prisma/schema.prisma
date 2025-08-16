@@ -30,6 +30,8 @@ model User {
   attributes        Json?
   authentikId       String?               @unique @map("authentik_id")
   signalIdentity    String?               @map("signal_identity")
+  signalVerified    Boolean               @default(false) @map("signal_verified")
+  signalPhoneNumber String?               @map("signal_phone_number")
   matrixUsername    String?               @map("matrix_username")
   
   // Relationships
@@ -38,6 +40,7 @@ model User {
   moderatorPermissions ModeratorPermission[]
   sentInvitations   UserInvitation[] @relation("UserInvitations")
   emailHistory      EmailHistory[]
+  verificationCodes SignalVerificationCode[]
   
   @@map("users")
 }
@@ -355,4 +358,28 @@ model EmailHistory {
   @@index([emailType])
   @@index([status])
   @@map("email_history")
+}
+
+// Signal verification codes for account linking
+model SignalVerificationCode {
+  id            Int       @id @default(autoincrement())
+  userId        Int       @map("user_id")
+  phoneNumber   String    @map("phone_number")
+  code          String    // Hashed verification code
+  salt          String    // Salt for hashing
+  attempts      Int       @default(0)
+  maxAttempts   Int       @default(3) @map("max_attempts")
+  verified      Boolean   @default(false)
+  expiresAt     DateTime  @map("expires_at")
+  verifiedAt    DateTime? @map("verified_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  
+  // Relations
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([phoneNumber])
+  @@index([expiresAt])
+  @@index([verified])
+  @@map("signal_verification_codes")
 }

@@ -136,3 +136,28 @@ category: category === 'all' ? undefined : category
 - Avoid duplicating query data in local state
 - Never use empty strings as Select option values
 - Use meaningful default values like 'all', 'none', etc.
+
+## Matrix User Sync Issues
+
+### Problem
+Matrix user sync returns 0 users and 0 rooms, showing "No Matrix users found" in the UI.
+
+### Root Cause
+The Matrix bot account (@bot.irregularchat:irregularchat.com) needs to be joined to Matrix rooms to be able to see users and room membership. The bot can only sync data from rooms it has access to.
+
+### Solution
+1. **Join the bot to Matrix rooms**: The bot account must be invited to and join the Matrix rooms you want to sync users from
+2. **Check bot permissions**: Ensure the bot has appropriate permissions in the rooms
+3. **Verify room membership**: The sync only processes rooms with more than the minimum member count (default 3)
+
+### Troubleshooting Steps
+1. Check if Matrix service is configured: `Matrix service initialized successfully` in logs
+2. Verify bot credentials are correct in .env.local
+3. Ensure the bot account is joined to at least one room
+4. Check the minimum room member setting: `MATRIX_MIN_ROOM_MEMBERS` (default 3)
+
+### Prevention
+- Document that the Matrix bot must be joined to rooms before sync will work
+- Add a check to warn if bot has no rooms joined
+- Consider adding a "join room" feature in the admin panel
+- Provide clear error messages when sync finds no rooms

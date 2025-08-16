@@ -1791,6 +1791,7 @@ export const userRouter = createTRPCRouter({
         }
 
         // Also send via Matrix if configured
+        const { matrixService } = await import('@/lib/matrix');
         if (matrixService.isConfigured()) {
           const indocRoom = process.env.MATRIX_INDOC_ROOM_ID || process.env.MATRIX_ADMIN_ROOM_ID;
           if (indocRoom) {

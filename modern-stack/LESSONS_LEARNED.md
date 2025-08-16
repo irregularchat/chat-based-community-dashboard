@@ -69,3 +69,24 @@ const isConfigured = serviceInstance.isConfigured();
 - Database connection issues required proper `.env.local` setup
 - Matrix SDK conflicts in API routes (resolved by avoiding direct imports)
 - Authentication setup needed admin user creation script
+
+## Matrix Sync Database Tables Issue
+
+### Problem
+Matrix sync failed with error: "The table `public.matrix_rooms` does not exist in the current database"
+
+### Root Cause
+Prisma migrations were out of sync, causing Matrix cache tables to not be created in the database despite being defined in the schema.
+
+### Solution
+1. Force reset and push schema: `npx prisma db push --force-reset`
+2. This created all necessary tables including:
+   - `matrix_users`
+   - `matrix_rooms`
+   - `MatrixRoomMembership`
+3. Recreate admin user after database reset
+
+### Prevention
+- Always run `npx prisma db push` or `npx prisma migrate dev` after schema changes
+- Check migration status before deployment
+- Ensure DATABASE_URL is properly set when running migrations

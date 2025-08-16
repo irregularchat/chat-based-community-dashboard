@@ -447,10 +447,13 @@ class MatrixCacheService {
       // Import the Matrix sync service
       const { matrixSyncService } = await import('./matrix-sync');
       
-      // Perform a full sync to get latest data
-      const syncResult = await matrixSyncService.fullSync(false);
+      // Perform a full sync to get latest data (force=true for manual sync)
+      const syncResult = await matrixSyncService.fullSync(true);
+      
+      console.log('Matrix sync result:', syncResult);
       
       if (syncResult.status === 'completed') {
+        console.log(`Matrix sync completed: ${syncResult.usersSync || 0} users, ${syncResult.roomsSync || 0} rooms, ${syncResult.membershipsSync || 0} memberships`);
         return {
           status: 'completed',
           usersSynced: syncResult.usersSync || 0,
@@ -459,12 +462,13 @@ class MatrixCacheService {
           errors: [],
         };
       } else {
+        console.log(`Matrix sync failed/skipped: ${syncResult.status}, reason: ${syncResult.reason || syncResult.error}`);
         return {
           status: 'failed',
           usersSynced: 0,
           roomsSynced: 0,
           membershipsSynced: 0,
-          errors: [syncResult.error || 'Unknown sync error'],
+          errors: [syncResult.error || syncResult.reason || 'Unknown sync error'],
         };
       }
     } catch (error) {

@@ -38,7 +38,10 @@ class MatrixSyncService {
   }
 
   async fullSync(force: boolean = false): Promise<SyncResult> {
+    console.log(`Matrix fullSync called with force=${force}`);
+    
     if (this.syncInProgress && !force) {
+      console.log('Sync already in progress, skipping');
       return { status: 'skipped', reason: 'sync_in_progress' };
     }
 
@@ -56,12 +59,16 @@ class MatrixSyncService {
 
       // Check cache freshness unless forced or rapid manual sync
       if (!force && !isRapidManualSync) {
-        if (await this.isCacheFresh(30)) {
+        const isFresh = await this.isCacheFresh(30);
+        console.log(`Cache freshness check: ${isFresh}`);
+        if (isFresh) {
+          console.log('Cache is fresh, skipping sync');
           return { status: 'skipped', reason: 'cache_fresh' };
         }
       }
 
       if (!matrixService.isConfigured()) {
+        console.log('Matrix service not configured');
         return { status: 'error', error: 'Matrix not configured' };
       }
 

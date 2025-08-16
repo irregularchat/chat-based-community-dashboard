@@ -1,4 +1,5 @@
-import { MatrixClient, createClient, MsgType, ClientEvent, RoomEvent } from 'matrix-js-sdk';
+import type { MatrixClient, MsgType, ClientEvent, RoomEvent } from './matrix-sdk-wrapper';
+import { createClient, getMsgType, getClientEvent, getRoomEvent } from './matrix-sdk-wrapper';
 import { MessageTemplates, WelcomeMessageData } from './message-templates';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -120,7 +121,7 @@ class MatrixService {
         console.log(`🔐 Using device ID: ${deviceId}`);
       }
 
-      this.client = createClient(clientOptions);
+      this.client = await createClient(clientOptions);
 
       // Initialize encryption if enabled
       if (enableEncryption) {
@@ -218,13 +219,15 @@ class MatrixService {
       console.log('✅ Matrix crypto initialized');
 
       // Set up event listeners for encryption
-      this.client.on(ClientEvent.Event, (event) => {
+      const ClientEventEnum = await getClientEvent();
+      this.client.on(ClientEventEnum.Event, (event) => {
         if (event.getType() === 'm.room.encrypted') {
           console.log(`🔐 Received encrypted event in room ${event.getRoomId()}`);
         }
       });
 
-      this.client.on(RoomEvent.Timeline, (event: any, room: any) => {
+      const RoomEventEnum = await getRoomEvent();
+      this.client.on(RoomEventEnum.Timeline, (event: any, room: any) => {
         if (event.getType() === 'm.room.encrypted') {
           console.log(`🔐 Timeline encrypted event in room ${room?.roomId}`);
         }
@@ -478,8 +481,9 @@ class MatrixService {
       }
 
       // Send the message
+      const MsgTypeEnum = await getMsgType();
       const response = await this.client.sendEvent(roomId, 'm.room.message', {
-        msgtype: MsgType.Text,
+        msgtype: MsgTypeEnum.Text,
         body: message,
       });
 
@@ -548,8 +552,9 @@ class MatrixService {
       const startChatCommand = `start-chat ${signalUuid}`;
       console.log(`📤 BRIDGE: Sending Signal bridge command: ${startChatCommand} to room ${signalBridgeRoomId}`);
 
+      const MsgTypeEnum = await getMsgType();
       const commandResponse = await this.client.sendEvent(signalBridgeRoomId, 'm.room.message', {
-        msgtype: MsgType.Text,
+        msgtype: MsgTypeEnum.Text,
         body: startChatCommand,
       });
 
@@ -657,8 +662,9 @@ class MatrixService {
       const helloMessage = '👋 Hello! Setting up our secure chat...';
       console.log('📤 ENCRYPTION: Sending hello message to establish encryption...');
       
+      const MsgTypeEnum = await getMsgType();
       const helloResponse = await this.client.sendEvent(roomId, 'm.room.message', {
-        msgtype: MsgType.Text,
+        msgtype: MsgTypeEnum.Text,
         body: helloMessage,
       });
 
@@ -676,7 +682,7 @@ class MatrixService {
       // Step 3: Send the actual message
       console.log(`📤 ENCRYPTION: Sending main message to room ${roomId}`);
       const messageResponse = await this.client.sendEvent(roomId, 'm.room.message', {
-        msgtype: MsgType.Text,
+        msgtype: MsgTypeEnum.Text,
         body: message,
       });
 
@@ -809,8 +815,9 @@ class MatrixService {
       const resolveCommand = `resolve-identifier ${normalizedPhone}`;
       console.log(`📤 RESOLVE: Sending command to bridge room ${signalBridgeRoomId}: ${resolveCommand}`);
 
+      const MsgTypeEnum = await getMsgType();
       const commandResponse = await this.client.sendEvent(signalBridgeRoomId, 'm.room.message', {
-        msgtype: MsgType.Text,
+        msgtype: MsgTypeEnum.Text,
         body: resolveCommand,
       });
 
@@ -1182,8 +1189,9 @@ class MatrixService {
     }
 
     try {
+      const MsgTypeEnum = await getMsgType();
       const response = await this.client.sendEvent(roomId, 'm.room.message', {
-        msgtype: MsgType.Text,
+        msgtype: MsgTypeEnum.Text,
         body: message,
       });
 
@@ -1431,6 +1439,32 @@ class MatrixService {
   public parseRooms(): Array<{id: string, name: string, categories: string[], description: string, matrixRoomId: string}> {
     const rooms: Array<{id: string, name: string, categories: string[], description: string, matrixRoomId: string}> = [];
     
+    // Parse MATRIX_ROOM_IDS_NAME_CATEGORY format (legacy format)
+    const matrixRoomConfig = process.env.MATRIX_ROOM_IDS_NAME_CATEGORY;
+    if (matrixRoomConfig) {
+      const roomEntries = matrixRoomConfig.split(';').filter(entry => entry.trim());
+      
+      for (const entry of roomEntries) {
+        const parts = entry.split('|');
+        if (parts.length >= 3) {
+          const [name, categoriesStr, matrixRoomId] = parts;
+          if (name && categoriesStr && matrixRoomId) {
+            const categories = categoriesStr.split(',').map(c => c.trim().toLowerCase());
+            const cleanRoomId = matrixRoomId.trim();
+            
+            rooms.push({
+              id: cleanRoomId.replace(/[!:]/g, '_'), // Create ID from room ID
+              name: name.trim(),
+              categories,
+              description: `${name.trim()} - ${categoriesStr.trim()}`, // Generate description
+              matrixRoomId: cleanRoomId
+            });
+          }
+        }
+      }
+    }
+    
+    // Also parse ROOM_ prefixed variables (new format)
     for (const [key, value] of Object.entries(process.env)) {
       if (key.startsWith('ROOM_') && value) {
         const roomId = key.replace('ROOM_', '').toLowerCase();
@@ -1846,8 +1880,9 @@ Welcome to the full community! 🚀`;
       console.log(`Sending message to moderators in room: ${indocRoomId}`);
 
       // Send message to the INDOC room
+      const MsgTypeEnum = await getMsgType();
       const response = await this.client.sendEvent(indocRoomId, 'm.room.message', {
-        msgtype: MsgType.Text,
+        msgtype: MsgTypeEnum.Text,
         body: message,
       });
 
@@ -1901,8 +1936,9 @@ Welcome to the full community! 🚀`;
 
     for (const roomId of roomIds) {
       try {
+        const MsgTypeEnum = await getMsgType();
         const response = await this.client.sendEvent(roomId, 'm.room.message', {
-          msgtype: MsgType.Text,
+          msgtype: MsgTypeEnum.Text,
           body: message,
         });
 

@@ -1,16 +1,10 @@
-// Re-export everything from the new modular Matrix services
-// This maintains backward compatibility with existing imports
+// Use the legacy service to avoid the Multiple matrix-js-sdk entrypoints issue
+// TODO: Fix the bundling issue with modular services
+import { matrixService } from './matrix-legacy';
+export { matrixService };
+export default matrixService;
 
-export {
-  MatrixClientService,
-  MatrixMessagingService,
-  MatrixEncryptionService,
-  MatrixSignalBridgeService,
-  MatrixRoomService,
-  MatrixService,
-  matrixService,
-} from './matrix/index';
-
+// Re-export types from the new modular services
 export type {
   MatrixConfig,
   DirectMessageResult,
@@ -24,6 +18,3 @@ export type {
   MatrixEncryptionError,
   MatrixSignalBridgeError,
 } from './matrix/index';
-
-// Default export for backward compatibility
-export { matrixService as default } from './matrix/index';

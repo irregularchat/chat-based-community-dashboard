@@ -1,4 +1,5 @@
-// Use dynamic imports for matrix-js-sdk to avoid bundling conflicts
+// Use shared SDK instance to avoid bundling conflicts
+import { getMsgType } from './sdk-instance';
 import { MatrixClientService } from './client-service';
 import { 
   DirectMessageResult, 
@@ -54,6 +55,7 @@ export class MatrixMessagingService {
       }
 
       // Send the message
+      const MsgType = await getMsgType();
       const response = await client.sendEvent(roomId, 'm.room.message', {
         msgtype: MsgType.Text,
         body: message,

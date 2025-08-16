@@ -161,11 +161,47 @@ export class MatrixService {
   }
 
   /**
+   * Legacy compatibility: Send welcome message with encryption delay
+   * Expected by tRPC router sendWelcomeMessageWithEncryptionDelay endpoint
+   */
+  public async sendWelcomeMessageWithEncryptionDelay(
+    matrixUserId: string,
+    username: string,
+    fullName: string,
+    tempPassword: string,
+    discoursePostUrl?: string,
+    delaySeconds: number = 5
+  ): Promise<DirectMessageResult> {
+    const welcomeData: WelcomeMessageData = {
+      username,
+      fullName,
+      tempPassword,
+      discoursePostUrl,
+    };
+    return this.messagingService.sendWelcomeMessageWithDelay(matrixUserId, welcomeData, delaySeconds);
+  }
+
+  /**
    * Send messages to multiple users in bulk
    */
   public async sendBulkDirectMessages(
     messages: Array<{ userId: string; message: string }>
   ): Promise<BulkOperationResult> {
+    return this.messagingService.sendBulkDirectMessages(messages);
+  }
+
+  /**
+   * Legacy compatibility: Send message to multiple users with same message
+   * Expected by tRPC router sendMessageToUsers endpoint
+   */
+  public async bulkSendDirectMessages(
+    userIds: string[],
+    message: string,
+    batchSize: number = 10,
+    delayMs: number = 500
+  ): Promise<BulkOperationResult> {
+    // Convert to the format expected by sendBulkDirectMessages
+    const messages = userIds.map(userId => ({ userId, message }));
     return this.messagingService.sendBulkDirectMessages(messages);
   }
 
@@ -177,10 +213,59 @@ export class MatrixService {
   }
 
   /**
+   * Legacy compatibility: Send bulk messages to rooms
+   * Expected by tRPC router sendMessageToRooms endpoint
+   */
+  public async bulkSendRoomMessages(roomIds: string[], message: string): Promise<BulkOperationResult> {
+    return this.messagingService.sendMessageToMultipleRooms(roomIds, message);
+  }
+
+  /**
    * Send message to moderators
    */
   public async sendMessageToModerators(message: string, roomId?: string): Promise<DirectMessageResult> {
     return this.messagingService.sendMessageToModerators(message, roomId);
+  }
+
+  /**
+   * Send INDOC graduation message to a room
+   * Based on legacy implementation for user graduation flow
+   */
+  public async sendINDOCGraduationMessage(
+    roomId: string,
+    matrixUserId: string,
+    displayName: string
+  ): Promise<DirectMessageResult> {
+    await this.ensureInitialized();
+    
+    if (!this.clientService.isConfigured()) {
+      return {
+        success: false,
+        error: 'Matrix service not configured',
+      };
+    }
+
+    const graduationMessage = `🎓 **Congratulations ${displayName}!**
+
+You have successfully completed the introduction process and are now a full member of our community!
+
+🌟 **What's Next:**
+• Explore all the community rooms
+• Join conversations that interest you
+• Share your expertise and learn from others
+• Check out our resources and documentation
+
+Welcome to the full community! 🚀`;
+
+    try {
+      return await this.sendRoomMessage(roomId, graduationMessage);
+    } catch (error) {
+      console.error('Error sending INDOC graduation message:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
   }
 
   // === Signal Bridge ===
@@ -301,6 +386,19 @@ export class MatrixService {
   }
 
   /**
+   * Legacy compatibility: Get user power level (alternative signature)
+   */
+  public async getUserPowerLevel(roomId: string, matrixUserId: string): Promise<number | null> {
+    try {
+      const powerLevel = await this.roomService.getPowerLevel(roomId, matrixUserId);
+      return powerLevel;
+    } catch (error) {
+      console.error(`Error getting power level for ${matrixUserId} in room ${roomId}:`, error);
+      return null;
+    }
+  }
+
+  /**
    * Get power levels configuration for a room
    */
   public async getRoomPowerLevels(roomId: string): Promise<PowerLevelEvent | null> {
@@ -398,12 +496,38 @@ export class MatrixService {
   }
 
   /**
-   * Parse ROOM_ environment variables
-   * Format: ROOM_UNIQUE_ID = Room Name|Category Name(s)|Description|Matrix Room ID
+   * Parse Matrix room configuration from environment variables
+   * Supports both ROOM_ prefixed variables and MATRIX_ROOM_IDS_NAME_CATEGORY format
    */
   public parseRooms(): Array<{id: string, name: string, categories: string[], description: string, matrixRoomId: string}> {
     const rooms: Array<{id: string, name: string, categories: string[], description: string, matrixRoomId: string}> = [];
     
+    // Parse MATRIX_ROOM_IDS_NAME_CATEGORY format (legacy format)
+    const matrixRoomConfig = process.env.MATRIX_ROOM_IDS_NAME_CATEGORY;
+    if (matrixRoomConfig) {
+      const roomEntries = matrixRoomConfig.split(';').filter(entry => entry.trim());
+      
+      for (const entry of roomEntries) {
+        const parts = entry.split('|');
+        if (parts.length >= 3) {
+          const [name, categoriesStr, matrixRoomId] = parts;
+          if (name && categoriesStr && matrixRoomId) {
+            const categories = categoriesStr.split(',').map(c => c.trim().toLowerCase());
+            const cleanRoomId = matrixRoomId.trim();
+            
+            rooms.push({
+              id: cleanRoomId.replace(/[!:]/g, '_'), // Create ID from room ID
+              name: name.trim(),
+              categories,
+              description: `${name.trim()} - ${categoriesStr.trim()}`, // Generate description
+              matrixRoomId: cleanRoomId
+            });
+          }
+        }
+      }
+    }
+    
+    // Also parse ROOM_ prefixed variables (new format)
     for (const [key, value] of Object.entries(process.env)) {
       if (key.startsWith('ROOM_') && value) {
         const roomId = key.replace('ROOM_', '').toLowerCase();
@@ -435,6 +559,19 @@ export class MatrixService {
     interests: string[] = []
   ): Promise<{ success: boolean; invitedRooms: string[]; errors: string[] }> {
     return this.roomService.inviteToRecommendedRooms(matrixUserId, interests);
+  }
+
+  /**
+   * Legacy compatibility: Bulk invite users to specific rooms
+   * Expected by tRPC router bulkInviteToRooms endpoint
+   */
+  public async bulkInviteToRooms(
+    userIds: string[],
+    roomIds: string[],
+    batchSize: number = 5,
+    delayMs: number = 1000
+  ): Promise<BulkOperationResult> {
+    return this.roomService.bulkInviteToRooms(userIds, roomIds, batchSize, delayMs);
   }
 
   // === Encryption ===

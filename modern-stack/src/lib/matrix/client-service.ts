@@ -78,16 +78,16 @@ export class MatrixClientService {
     }
 
     try {
-      // Use dynamic import to avoid bundling conflicts
-      const { createClient } = await import('matrix-js-sdk');
+      // Use shared SDK instance to avoid "Multiple matrix-js-sdk entrypoints detected!" error
+      const { createMatrixClient } = await import('./sdk-instance');
       
-      this.client = createClient({
+      this.client = await createMatrixClient({
         baseUrl: this.config.homeserver,
         accessToken: this.config.accessToken,
         userId: this.config.userId,
         deviceId: this.config.deviceId,
         timelineSupport: true,
-        unstableClientRelationAggregation: true,
+        // Remove unstableClientRelationAggregation as it's not available in current SDK
       });
 
       // Set device display name if provided

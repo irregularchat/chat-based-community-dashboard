@@ -650,6 +650,77 @@ export class MatrixRoomService {
   }
 
   /**
+   * Bulk invite multiple users to multiple rooms
+   * Based on legacy implementation pattern
+   */
+  public async bulkInviteToRooms(
+    userIds: string[],
+    roomIds: string[],
+    batchSize: number = 5,
+    delayMs: number = 1000
+  ): Promise<BulkOperationResult> {
+    const results: Record<string, boolean> = {};
+    const errors: Record<string, string> = {};
+
+    if (!this.clientService.isConfigured()) {
+      return {
+        success: false,
+        results,
+        errors: { general: 'Matrix service not configured' },
+        totalSuccess: 0,
+        totalFailed: userIds.length * roomIds.length,
+      };
+    }
+
+    // Process users in batches
+    const batches = [];
+    for (let i = 0; i < userIds.length; i += batchSize) {
+      batches.push(userIds.slice(i, i + batchSize));
+    }
+
+    for (const [batchIndex, batch] of batches.entries()) {
+      // Add delay between batches
+      if (batchIndex > 0) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+
+      // Process batch in parallel
+      const batchPromises = batch.map(async (userId) => {
+        for (const roomId of roomIds) {
+          const key = `${userId}:${roomId}`;
+          try {
+            const success = await this.inviteToRoom(roomId, userId);
+            results[key] = success;
+            if (!success) {
+              errors[key] = 'Failed to invite user to room';
+            }
+          } catch (error) {
+            results[key] = false;
+            errors[key] = error instanceof Error ? error.message : 'Unknown error';
+          }
+
+          // Small delay between room invitations for same user
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      });
+
+      await Promise.all(batchPromises);
+      console.log(`Completed bulk invite batch ${batchIndex + 1}/${batches.length}`);
+    }
+
+    const totalSuccess = Object.values(results).filter(Boolean).length;
+    const totalFailed = Object.values(results).filter(success => !success).length;
+
+    return {
+      success: totalFailed === 0,
+      results,
+      errors,
+      totalSuccess,
+      totalFailed,
+    };
+  }
+
+  /**
    * Determine room category based on name
    */
   private getRoomCategory(roomName: string): string | undefined {

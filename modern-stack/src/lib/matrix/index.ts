@@ -23,23 +23,5 @@ export type {
   MatrixSignalBridgeError,
 } from './types';
 
-// Export matrixService singleton with defensive initialization
-export const matrixService = (() => {
-  try {
-    const { matrixService: service } = require('./matrix-service');
-    return service;
-  } catch (error) {
-    console.error('Failed to load MatrixService:', error);
-    // Return a minimal mock object to prevent crashes
-    return {
-      isConfigured: () => false,
-      getConfig: () => null,
-      initialize: async () => {},
-      cleanup: async () => {},
-      sendDirectMessage: async () => ({ success: false, error: 'Service not available' }),
-    };
-  }
-})();
-
-// Default export for backward compatibility with existing imports
-export default matrixService;
+// Export matrixService singleton - import from matrix-service
+export { matrixService } from './matrix-service';

@@ -1,5 +1,92 @@
 # Lessons Learned
 
+## Matrix User Search and Multi-Select Implementation (2024-08-16)
+
+### Issue Description
+The search functionality in Matrix user dropdowns wasn't working - users could see the list but searching/filtering had no effect. Additionally, there was a need to select and process multiple users at once for bulk operations.
+
+### Root Causes
+1. **Data Format Mismatch**: API returned `user_id` (snake_case) but frontend expected `userId` (camelCase)
+2. **Event Propagation**: Search input events were being captured by the Select component
+3. **Missing Database Columns**: Signal verification fields referenced in code didn't exist in database
+4. **Single User Limitation**: Original implementation only supported one user at a time
+
+### Solution Implemented
+
+#### 1. Fixed Data Format Consistency
+```typescript
+// In matrix router - convert to camelCase for frontend
+const formattedUsers = users.map(user => ({
+  userId: user.user_id,           // was user_id
+  displayName: user.display_name, // was display_name
+  avatarUrl: user.avatar_url,     // was avatar_url
+  isSignalUser: user.is_signal_user
+}));
+```
+
+#### 2. Proper Event Handling in Dropdowns
+```typescript
+// Stop propagation to prevent Select from interfering
+<Input
+  onChange={(e) => {
+    e.stopPropagation();
+    setInviteUserSearch(e.target.value);
+  }}
+  onKeyDown={(e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') e.preventDefault();
+  }}
+/>
+```
+
+#### 3. Multi-Select UI Implementation
+- Added state arrays for tracking multiple selected users
+- Visual badges show selected users with click-to-remove
+- Dynamic button text shows count of users being processed
+- Automatic switching between single and batch operations
+
+#### 4. Batch API Operations
+Created new endpoints for processing multiple users:
+- `inviteUsersToRooms`: Invite multiple users to multiple rooms
+- `removeUsersFromRooms`: Remove multiple users from multiple rooms
+
+### Key Learning Points
+
+#### API Data Contract Consistency
+- **Always maintain consistent naming conventions** between API and frontend
+- **Use TypeScript interfaces** to catch mismatches early
+- **Transform at API boundary** rather than throughout the codebase
+
+#### React Select Component Event Handling
+- **Event bubbling issues** in nested interactive elements require stopPropagation
+- **Custom search in Select** needs careful event management
+- **Consider alternatives** like Combobox for complex search needs
+
+#### Database Schema Management
+- **Always run migrations** before using new fields
+- **Use Prisma generate** after schema changes
+- **Comment out fields temporarily** if migration isn't ready yet
+
+#### UX Improvements for Bulk Operations
+- **Multi-select saves time** for repetitive operations
+- **Visual feedback important** - show selected items clearly
+- **Batch operations** reduce API calls and improve performance
+- **Smart fallback** - use single operation for one item, batch for multiple
+
+### Code Patterns
+
+```typescript
+// Good: Handle both single and multiple selections
+const usersToProcess = selectedUsers.length > 0 ? selectedUsers : 
+                       manualInput ? [manualInput] : [];
+
+if (usersToProcess.length > 1) {
+  await batchMutation.mutateAsync({ userIds: usersToProcess });
+} else {
+  await singleMutation.mutateAsync({ userId: usersToProcess[0] });
+}
+```
+
 ## Matrix Room Display and SDK Bundling Issues (2024-08-16)
 
 ### Issue Description

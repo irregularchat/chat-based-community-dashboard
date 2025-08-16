@@ -1325,7 +1325,14 @@ export const userRouter = createTRPCRouter({
         // Send via SignalBot using direct phone number resolution
         // This will resolve phone -> UUID -> @signal_{UUID}:domain -> send message
         const { matrixService } = await import('@/lib/matrix');
-        if (matrixService.isConfigured()) {
+        
+        // Check environment variables directly to bypass SDK initialization issues
+        const homeserver = process.env.MATRIX_HOMESERVER;
+        const accessToken = process.env.MATRIX_ACCESS_TOKEN;
+        const userId = process.env.MATRIX_USER_ID;
+        const signalBridgeRoom = process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID;
+        
+        if (homeserver && accessToken && userId && signalBridgeRoom) {
           try {
             const verificationMessage = `🔐 Phone Verification Code\n\nYou requested to update your phone number to: ${normalizedPhone.normalized}\n\nVerification Code: ${verificationHash}\n\nEnter this 6-digit code in the dashboard to complete verification.\n\nThis code expires in 15 minutes.`;
             
@@ -1345,7 +1352,13 @@ export const userRouter = createTRPCRouter({
             console.warn('❌ Signal verification failed with exception:', signalError);
           }
         } else {
-          console.warn('⚠️ Matrix service not configured for Signal verification');
+          console.warn('⚠️ Matrix service environment not configured for Signal verification');
+          console.warn('Missing environment variables:', {
+            MATRIX_HOMESERVER: !!homeserver,
+            MATRIX_ACCESS_TOKEN: !!accessToken,
+            MATRIX_USER_ID: !!userId,
+            MATRIX_SIGNAL_BRIDGE_ROOM_ID: !!signalBridgeRoom,
+          });
         }
 
         if (!verificationSent) {

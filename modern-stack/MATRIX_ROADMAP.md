@@ -123,7 +123,35 @@ throw new MatrixSyncError('Unable to connect to Matrix server. Please check your
 
 ## High Priority Improvements (Q2 2025) 🚀
 
-### 5. **Implement Rate Limiting & Resource Management**
+### 5. **Direct Signal CLI Bot Integration**
+**Target: Q1 2025 | Effort: 2-3 weeks**
+
+**Problem**: Matrix-Signal bridge dependency creates encryption compatibility issues and added complexity
+
+**Solution**: Direct Signal CLI bot integration to replace some Matrix Signal bridge functions
+```typescript
+// Target: Direct Signal CLI integration
+class SignalBotService {
+  async sendMessage(phoneNumber: string, message: string): Promise<SignalResult>;
+  async resolvePhoneToUuid(phoneNumber: string): Promise<string | null>;
+  async receiveMessages(): Promise<SignalMessage[]>;
+  async getSignalAccountInfo(): Promise<SignalAccount>;
+}
+```
+
+**Benefits**:
+- Remove dependency on Matrix-Signal bridge encryption
+- Direct control over Signal messaging
+- Improved reliability and performance
+- Cleaner architecture separation
+
+**Implementation Strategy**:
+- Add signal-cli as a system dependency
+- Create SignalBotService for direct Signal operations
+- Gradually replace Matrix Signal bridge functions
+- Maintain Matrix integration for other community features
+
+### 6. **Implement Rate Limiting & Resource Management**
 **Target: Q2 2025 | Effort: 1-2 weeks**
 
 **Features**:
@@ -144,7 +172,7 @@ class MatrixRateLimiter {
 }
 ```
 
-### 6. **Enhanced Encryption Management**
+### 7. **Enhanced Encryption Management**
 **Target: Q2 2025 | Effort: 3-4 weeks**
 
 **Features**:
@@ -162,7 +190,7 @@ class MatrixEncryptionService {
 }
 ```
 
-### 7. **Room State Management**
+### 8. **Room State Management**
 **Target: Q2 2025 | Effort: 2-3 weeks**
 
 **Features**:
@@ -171,7 +199,7 @@ class MatrixEncryptionService {
 - Member permission handling
 - Room encryption status
 
-### 8. **Improved User Experience**
+### 9. **Improved User Experience**
 **Target: Q2 2025 | Effort: 2 weeks**
 
 **Features**:
@@ -184,7 +212,7 @@ class MatrixEncryptionService {
 
 ## Medium Priority Features (Q3 2025) 🔧
 
-### 9. **Message History & Search**
+### 10. **Message History & Search**
 **Target: Q3 2025 | Effort: 3-4 weeks**
 
 **Features**:
@@ -193,7 +221,7 @@ class MatrixEncryptionService {
 - Message pagination
 - Export functionality
 
-### 10. **Rich Media Support**
+### 11. **Rich Media Support**
 **Target: Q3 2025 | Effort: 2-3 weeks**
 
 **Features**:
@@ -202,7 +230,7 @@ class MatrixEncryptionService {
 - Emoji reactions
 - Message replies and threads
 
-### 11. **Advanced Admin Tools**
+### 12. **Advanced Admin Tools**
 **Target: Q3 2025 | Effort: 2-3 weeks**
 
 **Features**:
@@ -211,7 +239,7 @@ class MatrixEncryptionService {
 - Automated moderation tools
 - Custom notification rules
 
-### 12. **Performance Optimizations**
+### 13. **Performance Optimizations**
 **Target: Q3 2025 | Effort: 2 weeks**
 
 **Features**:
@@ -224,28 +252,28 @@ class MatrixEncryptionService {
 
 ## Future Enhancements (Q4 2025+) 🌟
 
-### 13. **Room Discovery & Management**
+### 14. **Room Discovery & Management**
 **Features**:
 - Public room directory
 - Room categories and tags
 - Room creation wizard
 - Space support
 
-### 14. **Advanced Integration Features**
+### 15. **Advanced Integration Features**
 **Features**:
 - Webhooks for external services
 - Bot framework integration
 - Custom Matrix widgets
 - Federation management
 
-### 15. **Mobile & Progressive Web App**
+### 16. **Mobile & Progressive Web App**
 **Features**:
 - Mobile-optimized interface
 - Push notifications
 - Offline support
 - App installation prompts
 
-### 16. **Analytics & Monitoring**
+### 17. **Analytics & Monitoring**
 **Features**:
 - Usage analytics dashboard
 - Performance monitoring

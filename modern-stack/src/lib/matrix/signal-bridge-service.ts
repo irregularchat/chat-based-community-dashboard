@@ -83,7 +83,7 @@ export class MatrixSignalBridgeService {
       console.log(`📤 BRIDGE: Sending Signal bridge command: ${startChatCommand} to room ${signalBridgeRoomId}`);
 
       const commandResponse = await client.sendEvent(signalBridgeRoomId, 'm.room.message', {
-        msgtype: MsgType.Text,
+        msgtype: 'm.text',
         body: startChatCommand,
       });
 
@@ -137,7 +137,7 @@ export class MatrixSignalBridgeService {
 
       // Send message to the chat room
       const response = await client.sendEvent(signalChatRoomId, 'm.room.message', {
-        msgtype: MsgType.Text,
+        msgtype: 'm.text',
         body: message,
       });
 
@@ -191,12 +191,13 @@ export class MatrixSignalBridgeService {
     // If client service failed, try to create client directly
     if (!client) {
       try {
-        // Dynamic import to avoid bundling issues
-        const { createClient } = await import('matrix-js-sdk');
-        client = createClient({
+        // Use shared SDK instance to handle encryption properly
+        const { createMatrixClient } = await import('./sdk-instance');
+        client = await createMatrixClient({
           baseUrl: homeserver,
           accessToken: accessToken,
           userId: userId,
+          deviceId: process.env.MATRIX_DEVICE_ID || 'DASHBOARD_BOT_001',
         });
       } catch (directError) {
         console.error(`❌ Direct client creation failed for phone resolution:`, directError);
@@ -228,7 +229,7 @@ export class MatrixSignalBridgeService {
       console.log(`📤 RESOLVE: Sending command to bridge room ${signalBridgeRoomId}: ${resolveCommand}`);
 
       const commandResponse = await client.sendEvent(signalBridgeRoomId, 'm.room.message', {
-        msgtype: MsgType.Text,
+        msgtype: 'm.text',
         body: resolveCommand,
       });
 
@@ -272,10 +273,11 @@ export class MatrixSignalBridgeService {
     const signalBridgeRoomId = process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID;
     
     console.log(`🔧 DEBUG: Environment check for Signal verification`);
-    console.log(`🔧 DEBUG: MATRIX_HOMESERVER=${!!homeserver}`);
-    console.log(`🔧 DEBUG: MATRIX_ACCESS_TOKEN=${!!accessToken}`);
-    console.log(`🔧 DEBUG: MATRIX_USER_ID=${!!userId}`);
-    console.log(`🔧 DEBUG: MATRIX_SIGNAL_BRIDGE_ROOM_ID=${!!signalBridgeRoomId}`);
+    console.log(`🔧 DEBUG: MATRIX_HOMESERVER=${!!homeserver} (${homeserver})`);
+    console.log(`🔧 DEBUG: MATRIX_ACCESS_TOKEN=${!!accessToken} (length: ${accessToken?.length || 0})`);
+    console.log(`🔧 DEBUG: MATRIX_USER_ID=${!!userId} (${userId})`);
+    console.log(`🔧 DEBUG: MATRIX_SIGNAL_BRIDGE_ROOM_ID=${!!signalBridgeRoomId} (${signalBridgeRoomId})`);
+    console.log(`🔧 DEBUG: MATRIX_ENABLE_ENCRYPTION=${process.env.MATRIX_ENABLE_ENCRYPTION}`);
     
     if (!homeserver || !accessToken || !userId || !signalBridgeRoomId) {
       return {
@@ -298,19 +300,32 @@ export class MatrixSignalBridgeService {
     if (!client) {
       try {
         console.log(`🔧 DEBUG: Attempting direct Matrix client creation`);
-        // Dynamic import to avoid bundling issues
-        const { createClient } = await import('matrix-js-sdk');
-        client = createClient({
+        console.log(`🔧 DEBUG: Import path: ./sdk-instance`);
+        // Use shared SDK instance to handle encryption properly
+        const { createMatrixClient } = await import('./sdk-instance');
+        console.log(`🔧 DEBUG: SDK instance imported successfully`);
+        
+        console.log(`🔧 DEBUG: Creating client with config:`, {
+          baseUrl: homeserver,
+          accessTokenLength: accessToken?.length,
+          userId: userId,
+          deviceId: process.env.MATRIX_DEVICE_ID || 'DASHBOARD_BOT_001',
+        });
+        
+        client = await createMatrixClient({
           baseUrl: homeserver,
           accessToken: accessToken,
           userId: userId,
+          deviceId: process.env.MATRIX_DEVICE_ID || 'DASHBOARD_BOT_001',
         });
         console.log(`✅ DEBUG: Direct client creation successful`);
+        console.log(`✅ DEBUG: Client available: ${!!client}`);
       } catch (directError) {
         console.error(`❌ DEBUG: Direct client creation failed:`, directError);
         return {
           success: false,
-          error: 'Failed to create Matrix client for Signal verification',
+          error: `Failed to create Matrix client for Signal verification: ${directError instanceof Error ? directError.message : String(directError)}`,
+          details: directError instanceof Error ? directError.stack : String(directError),
         };
       }
     }
@@ -486,7 +501,7 @@ export class MatrixSignalBridgeService {
       // Send the message
       console.log('📤 FALLBACK: Sending message in temp room...');
       const response = await client.sendEvent(roomId, 'm.room.message', {
-        msgtype: MsgType.Text,
+        msgtype: 'm.text',
         body: message,
       });
 

@@ -1,5 +1,11 @@
-import type { MatrixClient, MsgType, ClientEvent, RoomEvent } from './matrix-sdk-wrapper';
-import { createClient, getMsgType, getClientEvent, getRoomEvent } from './matrix-sdk-wrapper';
+// Use the new SDK instance to avoid multiple entrypoints
+import { createMatrixClient, getMsgType } from './matrix/sdk-instance';
+
+// Type imports - these will need to be imported dynamically to avoid bundling conflicts
+type MatrixClient = any;
+type MsgType = any;
+type ClientEvent = any;
+type RoomEvent = any;
 import { MessageTemplates, WelcomeMessageData } from './message-templates';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -122,13 +128,11 @@ class MatrixService {
       }
 
       try {
-        // Try using the wrapper first
-        this.client = await createClient(clientOptions);
+        // Use the shared SDK instance to avoid multiple entrypoints
+        this.client = await createMatrixClient(clientOptions);
       } catch (wrapperError) {
-        console.warn('SDK wrapper failed, trying direct import:', wrapperError);
-        // Fallback to direct import if wrapper fails
-        const sdk = await import('matrix-js-sdk');
-        this.client = sdk.createClient(clientOptions);
+        console.error('Matrix client creation failed:', wrapperError);
+        throw wrapperError;
       }
 
       // Initialize encryption if enabled

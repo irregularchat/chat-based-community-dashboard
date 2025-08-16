@@ -36,6 +36,7 @@ export default function AdminConfigurationPage() {
     welcomeRoomId: '',
     signalBridgeRoomId: '',
     enableEncryption: false,
+    securityKey: '',
   });
 
   const [authentikForm, setAuthentikForm] = useState({
@@ -116,6 +117,9 @@ export default function AdminConfigurationPage() {
         accessToken: (allSettings.settings.matrix_access_token as string) || '',
         userId: (allSettings.settings.matrix_bot_username as string) || '',
         welcomeRoomId: (allSettings.settings.matrix_welcome_room_id as string) || '',
+        signalBridgeRoomId: (allSettings.settings.matrix_signal_bridge_room_id as string) || '',
+        enableEncryption: (allSettings.settings.matrix_enable_encryption as boolean) || false,
+        securityKey: (allSettings.settings.matrix_security_key as string) || '',
       }));
 
       // Populate SMTP form if settings exist
@@ -149,6 +153,7 @@ export default function AdminConfigurationPage() {
       welcomeRoomId: matrixForm.welcomeRoomId,
       signalBridgeRoomId: matrixForm.signalBridgeRoomId,
       enableEncryption: matrixForm.enableEncryption,
+      securityKey: matrixForm.securityKey,
     };
 
     updateSettingMutation.mutate({
@@ -459,6 +464,19 @@ export default function AdminConfigurationPage() {
                             />
                             <Label htmlFor="matrix-encryption">Enable End-to-End Encryption</Label>
                           </div>
+                          {matrixForm.enableEncryption && (
+                            <div>
+                              <Label htmlFor="matrix-security-key">Matrix Security Key</Label>
+                              <Input
+                                id="matrix-security-key"
+                                type="password"
+                                value={matrixForm.securityKey || ''}
+                                onChange={(e) => setMatrixForm({ ...matrixForm, securityKey: e.target.value })}
+                                placeholder="Security key for encrypted rooms"
+                              />
+                              <p className="text-xs text-gray-500 mt-1">Security key for accessing encrypted rooms and Signal bridge</p>
+                            </div>
+                          )}
                           <div className="flex justify-end space-x-2">
                             <Button variant="outline" onClick={() => setShowMatrixDialog(false)}>
                               Cancel
@@ -502,10 +520,26 @@ export default function AdminConfigurationPage() {
                       <h4 className="font-medium text-gray-900 mb-2">Signal Bridge Room</h4>
                       <p className="text-sm text-gray-600">
                         {(allSettings?.settings?.matrix_config as Record<string, unknown>)?.signalBridgeRoomId as string || 
-                         process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID || 
                          'Not configured'}
                       </p>
                     </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Encryption</h4>
+                      <p className="text-sm text-gray-600">
+                        {(allSettings?.settings?.matrix_config as Record<string, unknown>)?.enableEncryption ? 
+                         'Enabled' : 'Disabled'}
+                      </p>
+                    </div>
+                    {(allSettings?.settings?.matrix_config as Record<string, unknown>)?.enableEncryption && (
+                      <div className="border rounded-lg p-4">
+                        <h4 className="font-medium text-gray-900 mb-2">Security Key</h4>
+                        <p className="text-sm text-gray-600">
+                          {(allSettings?.settings?.matrix_config as Record<string, unknown>)?.securityKey ? 
+                           '•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••' : 
+                           'Not configured'}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="text-center py-8 text-gray-500">

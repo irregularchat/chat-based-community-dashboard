@@ -11,9 +11,10 @@ import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ArrowLeft, Phone, MessageCircle, Settings, Activity, QrCode, CheckCircle, AlertTriangle, Send } from 'lucide-react';
+import { ArrowLeft, Phone, MessageCircle, Settings, Activity, QrCode, CheckCircle, AlertTriangle, Send, Download } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
+import QRCode from 'qrcode';
 
 export default function AdminSignalPage() {
   const { data: session } = useSession();
@@ -38,6 +39,12 @@ export default function AdminSignalPage() {
   const [messagingForm, setMessagingForm] = useState({
     recipients: '',
     message: '',
+  });
+
+  // QR code state
+  const [qrCodes, setQrCodes] = useState({
+    adminInterface: '',
+    captchaGenerator: '',
   });
 
   // Queries
@@ -100,6 +107,43 @@ export default function AdminSignalPage() {
     }, 30000);
     return () => clearInterval(interval);
   }, [refetchHealth]);
+
+  // Generate QR codes on component mount
+  useEffect(() => {
+    const generateQRCodes = async () => {
+      try {
+        const adminUrl = typeof window !== 'undefined' ? window.location.href : 'http://localhost:3002/admin/signal';
+        const captchaUrl = 'https://signalcaptchas.org/registration/generate.html';
+
+        const adminQR = await QRCode.toDataURL(adminUrl, {
+          width: 120,
+          margin: 1,
+          color: {
+            dark: '#000000',
+            light: '#ffffff'
+          }
+        });
+
+        const captchaQR = await QRCode.toDataURL(captchaUrl, {
+          width: 120,
+          margin: 1,
+          color: {
+            dark: '#000000',
+            light: '#ffffff'
+          }
+        });
+
+        setQrCodes({
+          adminInterface: adminQR,
+          captchaGenerator: captchaQR,
+        });
+      } catch (error) {
+        console.error('Failed to generate QR codes:', error);
+      }
+    };
+
+    generateQRCodes();
+  }, []);
 
   const handleRegister = () => {
     if (!registrationForm.phoneNumber) {
@@ -360,6 +404,82 @@ export default function AdminSignalPage() {
 
           {/* Registration Tab */}
           <TabsContent value="registration" className="space-y-6">
+            {/* Quick Setup Card */}
+            <Card className="border-blue-200 bg-blue-50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-blue-800">
+                  <QrCode className="w-5 h-5" />
+                  Quick Setup Guide
+                </CardTitle>
+                <CardDescription className="text-blue-700">
+                  Follow these steps to register your Signal CLI bot
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-3">
+                    <h4 className="font-semibold text-blue-800">Step 1: Get Captcha Token</h4>
+                    <p className="text-sm text-blue-700">
+                      Signal requires a captcha for new registrations. Click below to get your captcha token:
+                    </p>
+                    <Button 
+                      variant="outline" 
+                      className="w-full border-blue-300 text-blue-800 hover:bg-blue-100"
+                      onClick={() => window.open('https://signalcaptchas.org/registration/generate.html', '_blank')}
+                    >
+                      🔗 Open Signal Captcha Generator
+                    </Button>
+                    <div className="text-xs text-blue-600 p-3 bg-blue-100 rounded-md">
+                      <strong>Instructions:</strong>
+                      <ol className="list-decimal list-inside mt-1 space-y-1">
+                        <li>Solve the captcha puzzle</li>
+                        <li>Right-click "Open Signal" button</li>
+                        <li>Copy the link address</li>
+                        <li>Paste it in the captcha field below</li>
+                      </ol>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <h4 className="font-semibold text-blue-800">Step 2: Current Configuration</h4>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-blue-700">Phone Number:</span>
+                        <span className="font-mono bg-blue-100 px-2 py-1 rounded">
+                          {config?.phoneNumber || '+12247253276'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-blue-700">Device Name:</span>
+                        <span className="font-mono bg-blue-100 px-2 py-1 rounded">
+                          {config?.deviceName}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-blue-700">Status:</span>
+                        <Badge className={healthStatus?.registrationStatus === 'registered' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}>
+                          {healthStatus?.registrationStatus?.toUpperCase() || 'UNKNOWN'}
+                        </Badge>
+                      </div>
+                    </div>
+                    
+                    {healthStatus?.registrationStatus === 'registered' && (
+                      <div className="p-3 bg-green-100 rounded-md border border-green-200">
+                        <div className="flex items-center gap-2 text-green-800">
+                          <CheckCircle className="w-4 h-4" />
+                          <span className="font-semibold">Registration Complete!</span>
+                        </div>
+                        <p className="text-sm text-green-700 mt-1">
+                          Your Signal CLI bot is ready to send messages.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Registration Form */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -367,31 +487,41 @@ export default function AdminSignalPage() {
                   Register Phone Number
                 </CardTitle>
                 <CardDescription>
-                  Register a new phone number with Signal CLI
+                  Register your phone number with Signal CLI service
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="reg-phone">Phone Number</Label>
                     <Input
                       id="reg-phone"
                       type="tel"
                       placeholder="+1234567890"
-                      value={registrationForm.phoneNumber}
+                      value={registrationForm.phoneNumber || config?.phoneNumber || '+12247253276'}
                       onChange={(e) => setRegistrationForm({ ...registrationForm, phoneNumber: e.target.value })}
                     />
+                    <div className="text-xs text-muted-foreground">
+                      Use international format (e.g., +1234567890)
+                    </div>
                   </div>
+                  
                   <div className="space-y-2">
-                    <Label htmlFor="reg-captcha">Captcha (Optional)</Label>
-                    <Input
+                    <Label htmlFor="reg-captcha">Captcha Token</Label>
+                    <Textarea
                       id="reg-captcha"
-                      placeholder="Captcha response"
+                      placeholder="Paste the captcha link here (starts with signalcaptcha://...)"
                       value={registrationForm.captcha}
                       onChange={(e) => setRegistrationForm({ ...registrationForm, captcha: e.target.value })}
+                      rows={3}
+                      className="font-mono text-sm"
                     />
+                    <div className="text-xs text-muted-foreground">
+                      Get this from: <a href="https://signalcaptchas.org/registration/generate.html" target="_blank" className="text-blue-600 hover:underline">signalcaptchas.org</a>
+                    </div>
                   </div>
                 </div>
+                
                 <div className="flex items-center space-x-2">
                   <Switch
                     id="use-voice"
@@ -400,13 +530,38 @@ export default function AdminSignalPage() {
                   />
                   <Label htmlFor="use-voice">Use voice call instead of SMS</Label>
                 </div>
-                <Button 
-                  onClick={handleRegister}
-                  disabled={registerMutation.isPending}
-                  className="w-full md:w-auto"
-                >
-                  {registerMutation.isPending ? 'Registering...' : 'Send Registration Code'}
-                </Button>
+                
+                <div className="flex gap-2">
+                  <Button 
+                    onClick={handleRegister}
+                    disabled={registerMutation.isPending || !registrationForm.captcha}
+                    className="flex-1"
+                  >
+                    {registerMutation.isPending ? 'Registering...' : 'Send Registration Code'}
+                  </Button>
+                  <Button 
+                    variant="outline"
+                    onClick={() => setRegistrationForm({ 
+                      phoneNumber: config?.phoneNumber || '+12247253276', 
+                      useVoice: false, 
+                      captcha: '' 
+                    })}
+                  >
+                    Reset Form
+                  </Button>
+                </div>
+                
+                {!registrationForm.captcha && (
+                  <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+                    <div className="flex items-center gap-2 text-yellow-800">
+                      <AlertTriangle className="w-4 h-4" />
+                      <span className="font-semibold">Captcha Required</span>
+                    </div>
+                    <p className="text-sm text-yellow-700 mt-1">
+                      You need to get a captcha token before registering. Click the link above to generate one.
+                    </p>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -519,28 +674,187 @@ export default function AdminSignalPage() {
 
           {/* Tools Tab */}
           <TabsContent value="tools" className="space-y-6">
+            {/* Quick Access QR Codes */}
+            <Card className="border-purple-200 bg-purple-50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-purple-800">
+                  <QrCode className="w-5 h-5" />
+                  Quick Access QR Codes
+                </CardTitle>
+                <CardDescription className="text-purple-700">
+                  QR codes for easy access to important links
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-3">
+                    <h4 className="font-semibold text-purple-800">Admin Interface</h4>
+                    <div className="p-4 bg-white rounded-lg border border-purple-200">
+                      <div className="text-center space-y-2">
+                        <div className="inline-block p-2 bg-white border border-gray-300 rounded">
+                          {qrCodes.adminInterface ? (
+                            <img 
+                              src={qrCodes.adminInterface} 
+                              alt="Admin Interface QR Code" 
+                              className="w-[120px] h-[120px]"
+                            />
+                          ) : (
+                            <div className="w-[120px] h-[120px] bg-gray-100 flex items-center justify-center">
+                              <QrCode className="w-8 h-8 text-gray-400" />
+                            </div>
+                          )}
+                        </div>
+                        <p className="text-sm text-purple-700">Scan to access Signal CLI Admin</p>
+                        <p className="text-xs text-purple-600 font-mono break-all">
+                          {typeof window !== 'undefined' ? window.location.href : 'http://localhost:3002/admin/signal'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <h4 className="font-semibold text-purple-800">Signal Captcha Generator</h4>
+                    <div className="p-4 bg-white rounded-lg border border-purple-200">
+                      <div className="text-center space-y-2">
+                        <div className="inline-block p-2 bg-white border border-gray-300 rounded">
+                          {qrCodes.captchaGenerator ? (
+                            <img 
+                              src={qrCodes.captchaGenerator} 
+                              alt="Captcha Generator QR Code" 
+                              className="w-[120px] h-[120px]"
+                            />
+                          ) : (
+                            <div className="w-[120px] h-[120px] bg-gray-100 flex items-center justify-center">
+                              <QrCode className="w-8 h-8 text-gray-400" />
+                            </div>
+                          )}
+                        </div>
+                        <p className="text-sm text-purple-700">Scan to get captcha token</p>
+                        <p className="text-xs text-purple-600 font-mono break-all">
+                          https://signalcaptchas.org/registration/generate.html
+                        </p>
+                      </div>
+                    </div>
+                    
+                    <Button 
+                      variant="outline" 
+                      className="w-full border-purple-300 text-purple-800 hover:bg-purple-100"
+                      onClick={() => window.open('https://signalcaptchas.org/registration/generate.html', '_blank')}
+                    >
+                      🔗 Open Captcha Generator
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Device Linking */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <QrCode className="w-5 h-5" />
-                  Device Linking
+                  Device Linking (Alternative Method)
                 </CardTitle>
                 <CardDescription>
                   Generate QR code for linking Signal CLI as a secondary device
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="text-sm text-muted-foreground">
-                  Generate a QR code to link Signal CLI as a secondary device to an existing Signal account.
-                  This is an alternative to phone number registration.
+                <div className="p-4 bg-blue-50 border border-blue-200 rounded-md">
+                  <div className="flex items-center gap-2 text-blue-800 mb-2">
+                    <AlertTriangle className="w-4 h-4" />
+                    <span className="font-semibold">Alternative Registration Method</span>
+                  </div>
+                  <p className="text-sm text-blue-700">
+                    Instead of registering a new phone number, you can link Signal CLI as a secondary device to an existing Signal account. 
+                    This is useful if you want to use an existing Signal account rather than registering a new phone number.
+                  </p>
                 </div>
+                
+                <div className="space-y-3">
+                  <h4 className="font-semibold">How Device Linking Works:</h4>
+                  <ol className="list-decimal list-inside space-y-1 text-sm text-muted-foreground">
+                    <li>Generate a QR code on this device</li>
+                    <li>Open Signal app on your phone</li>
+                    <li>Go to Settings → Linked Devices → Link New Device</li>
+                    <li>Scan the QR code with your phone</li>
+                    <li>Signal CLI will be linked to your existing account</li>
+                  </ol>
+                </div>
+                
                 <Button 
                   onClick={() => generateQRMutation.mutate()}
                   disabled={generateQRMutation.isPending}
                   variant="outline"
+                  className="w-full md:w-auto"
                 >
                   <QrCode className="w-4 h-4 mr-2" />
-                  {generateQRMutation.isPending ? 'Generating...' : 'Generate QR Code'}
+                  {generateQRMutation.isPending ? 'Generating...' : 'Generate Device Linking QR Code'}
+                </Button>
+                
+                {generateQRMutation.isError && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-md">
+                    <div className="flex items-center gap-2 text-red-800">
+                      <AlertTriangle className="w-4 h-4" />
+                      <span className="font-semibold">QR Generation Failed</span>
+                    </div>
+                    <p className="text-sm text-red-700 mt-1">
+                      Device linking QR code generation is not available. Use phone number registration instead.
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            
+            {/* Configuration Export */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Download className="w-5 h-5" />
+                  Configuration Export
+                </CardTitle>
+                <CardDescription>
+                  Export current Signal CLI configuration for backup or replication
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Current Configuration</Label>
+                  <Textarea
+                    readOnly
+                    value={JSON.stringify({
+                      enabled: config?.enabled,
+                      apiUrl: config?.apiUrl,
+                      phoneNumber: config?.phoneNumber || '+12247253276',
+                      deviceName: config?.deviceName,
+                      registrationStatus: healthStatus?.registrationStatus,
+                      containerStatus: healthStatus?.containerStatus,
+                    }, null, 2)}
+                    rows={8}
+                    className="font-mono text-sm"
+                  />
+                </div>
+                <Button 
+                  variant="outline"
+                  onClick={() => {
+                    const config_export = {
+                      signal_cli_enabled: true,
+                      signal_cli_api_url: config?.apiUrl,
+                      signal_cli_phone_number: config?.phoneNumber || '+12247253276',
+                      signal_cli_device_name: config?.deviceName,
+                      exported_at: new Date().toISOString(),
+                    };
+                    const blob = new Blob([JSON.stringify(config_export, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `signal-cli-config-${new Date().toISOString().split('T')[0]}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Download Configuration
                 </Button>
               </CardContent>
             </Card>

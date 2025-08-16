@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useSession } from 'next-auth/react';
+import { useRouter } from 'next/navigation';
 import { trpc } from '@/lib/trpc/client';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -18,6 +19,7 @@ import { toast } from 'sonner';
 
 export default function MatrixPage() {
   const { data: session } = useSession();
+  const router = useRouter();
   
   // State for different tabs
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);

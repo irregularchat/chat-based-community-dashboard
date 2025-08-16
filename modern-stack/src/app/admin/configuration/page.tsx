@@ -72,6 +72,8 @@ export default function AdminConfigurationPage() {
 
   // Fetch data
   const { data: allSettings, refetch } = trpc.settings.getAllSettings.useQuery();
+  const { data: matrixConfig } = trpc.matrix.getConfig.useQuery();
+  const { data: servicesConfig } = trpc.settings.getServicesConfig.useQuery();
 
   // Mutations
   const updateSettingMutation = trpc.settings.updateDashboardSetting.useMutation({
@@ -252,6 +254,24 @@ export default function AdminConfigurationPage() {
 
   // Helper function to check if a service is configured
   const isServiceConfigured = (configKey: string, requiredFields: string[]) => {
+    // Check actual service status from environment variables
+    if (configKey === 'matrix_config') {
+      return matrixConfig?.isConfigured === true;
+    }
+    if (configKey === 'authentik_config') {
+      return servicesConfig?.authentik?.isConfigured === true;
+    }
+    if (configKey === 'discourse_config') {
+      return servicesConfig?.discourse?.isConfigured === true;
+    }
+    if (configKey === 'smtp_config') {
+      return servicesConfig?.email?.isConfigured === true;
+    }
+    if (configKey === 'ai_config') {
+      return servicesConfig?.ai?.isConfigured === true;
+    }
+    
+    // Fallback to database settings for unknown services
     const config = allSettings?.settings?.[configKey] as Record<string, unknown>;
     if (!config) return false;
     return requiredFields.every(field => config[field] && config[field] !== '');
@@ -445,19 +465,25 @@ export default function AdminConfigurationPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Homeserver</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.matrix_config as Record<string, unknown>)?.homeserver as string}</p>
+                      <p className="text-sm text-gray-600">
+                        {matrixConfig?.homeserver || (allSettings?.settings?.matrix_config as Record<string, unknown>)?.homeserver as string}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Bot User ID</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.matrix_config as Record<string, unknown>)?.userId as string}</p>
+                      <p className="text-sm text-gray-600">
+                        {matrixConfig?.userId || (allSettings?.settings?.matrix_config as Record<string, unknown>)?.userId as string}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Welcome Room</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.matrix_config as Record<string, unknown>)?.welcomeRoomId as string || 'Not configured'}</p>
+                      <h4 className="font-medium text-gray-900 mb-2">Configuration Source</h4>
+                      <p className="text-sm text-gray-600">
+                        {matrixConfig?.isConfigured ? 'Environment Variables' : 'Database Settings'}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Encryption</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.matrix_config as Record<string, unknown>)?.enableEncryption as boolean ? 'Enabled' : 'Disabled'}</p>
+                      <h4 className="font-medium text-gray-900 mb-2">Status</h4>
+                      <p className="text-sm text-gray-600">Active and Connected</p>
                     </div>
                   </div>
                 ) : (
@@ -602,20 +628,26 @@ export default function AdminConfigurationPage() {
                 {isServiceConfigured('authentik_config', ['baseUrl', 'apiToken', 'clientId', 'clientSecret', 'issuer']) ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Base URL</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.authentik_config as Record<string, unknown>)?.baseUrl as string}</p>
+                      <h4 className="font-medium text-gray-900 mb-2">API URL</h4>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.authentik?.apiUrl || (allSettings?.settings?.authentik_config as Record<string, unknown>)?.baseUrl as string}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Issuer</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.authentik_config as Record<string, unknown>)?.issuer as string}</p>
+                      <h4 className="font-medium text-gray-900 mb-2">Main Group ID</h4>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.authentik?.mainGroupId || 'Not configured'}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Client ID</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.authentik_config as Record<string, unknown>)?.clientId as string}</p>
+                      <h4 className="font-medium text-gray-900 mb-2">API Token</h4>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.authentik?.hasApiToken ? 'Configured' : 'Not set'}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Status</h4>
-                      <p className="text-sm text-gray-600">Connected and configured</p>
+                      <h4 className="font-medium text-gray-900 mb-2">Configuration Source</h4>
+                      <p className="text-sm text-gray-600">Environment Variables</p>
                     </div>
                   </div>
                 ) : (
@@ -750,19 +782,25 @@ export default function AdminConfigurationPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Forum URL</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.discourse_config as Record<string, unknown>)?.baseUrl as string}</p>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.discourse?.url || (allSettings?.settings?.discourse_config as Record<string, unknown>)?.baseUrl as string}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">API Username</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.discourse_config as Record<string, unknown>)?.apiUsername as string}</p>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.discourse?.apiUsername || (allSettings?.settings?.discourse_config as Record<string, unknown>)?.apiUsername as string}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Webhook Secret</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.discourse_config as Record<string, unknown>)?.webhookSecret as string ? 'Configured' : 'Not set'}</p>
+                      <h4 className="font-medium text-gray-900 mb-2">API Key</h4>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.discourse?.hasApiKey ? 'Configured' : 'Not set'}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Status</h4>
-                      <p className="text-sm text-gray-600">Connected and configured</p>
+                      <h4 className="font-medium text-gray-900 mb-2">Configuration Source</h4>
+                      <p className="text-sm text-gray-600">Environment Variables</p>
                     </div>
                   </div>
                 ) : (
@@ -923,26 +961,30 @@ export default function AdminConfigurationPage() {
                 {isServiceConfigured('ai_config', ['provider']) ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Provider</h4>
-                      <p className="text-sm text-gray-600 capitalize">{(allSettings?.settings?.ai_config as Record<string, unknown>)?.provider as string}</p>
-                    </div>
-                    <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Model/Endpoint</h4>
+                      <h4 className="font-medium text-gray-900 mb-2">Available Providers</h4>
                       <p className="text-sm text-gray-600">
-                        {(allSettings?.settings?.ai_config as Record<string, unknown>)?.provider === 'openai' && (allSettings?.settings?.ai_config as Record<string, unknown>)?.model as string}
-                        {(allSettings?.settings?.ai_config as Record<string, unknown>)?.provider === 'claude' && 'Claude API'}
-                        {(allSettings?.settings?.ai_config as Record<string, unknown>)?.provider === 'local' && (allSettings?.settings?.ai_config as Record<string, unknown>)?.localEndpoint as string}
+                        {[
+                          servicesConfig?.ai?.hasOpenAI && 'OpenAI',
+                          servicesConfig?.ai?.hasClaude && 'Claude',
+                          servicesConfig?.ai?.hasLocal && 'Local'
+                        ].filter(Boolean).join(', ') || 'None'}
                       </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">API Key</h4>
+                      <h4 className="font-medium text-gray-900 mb-2">OpenAI</h4>
                       <p className="text-sm text-gray-600">
-                        {((allSettings?.settings?.ai_config as Record<string, unknown>)?.openaiApiKey as string || (allSettings?.settings?.ai_config as Record<string, unknown>)?.claudeApiKey as string) ? 'Configured' : 'Not set'}
+                        {servicesConfig?.ai?.hasOpenAI ? 'Configured' : 'Not configured'}
                       </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Status</h4>
-                      <p className="text-sm text-gray-600">Ready for use</p>
+                      <h4 className="font-medium text-gray-900 mb-2">Claude</h4>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.ai?.hasClaude ? 'Configured' : 'Not configured'}
+                      </p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Configuration Source</h4>
+                      <p className="text-sm text-gray-600">Environment Variables</p>
                     </div>
                   </div>
                 ) : (
@@ -1109,19 +1151,26 @@ export default function AdminConfigurationPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">SMTP Host</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.host as string}:{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.port as string}</p>
-                    </div>
-                    <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Username</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.user as string}</p>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.email?.host ? `${servicesConfig.email.host}:${servicesConfig.email.port}` : 
+                         `${(allSettings?.settings?.smtp_config as Record<string, unknown>)?.host as string}:${(allSettings?.settings?.smtp_config as Record<string, unknown>)?.port as string}`}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">From Email</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.from as string}</p>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.email?.from || (allSettings?.settings?.smtp_config as Record<string, unknown>)?.from as string}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Security</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.enableTLS as boolean ? 'TLS Enabled' : 'TLS Disabled'}</p>
+                      <h4 className="font-medium text-gray-900 mb-2">BCC Email</h4>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.email?.hasBcc ? 'Configured' : 'Not set'}
+                      </p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Configuration Source</h4>
+                      <p className="text-sm text-gray-600">Environment Variables</p>
                     </div>
                   </div>
                 ) : (

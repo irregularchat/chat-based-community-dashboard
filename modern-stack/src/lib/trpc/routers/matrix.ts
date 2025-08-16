@@ -244,12 +244,19 @@ export const matrixRouter = createTRPCRouter({
           );
         }
 
-        // Apply category filter
-        if (input.category) {
+        // Apply category filter (skip if 'all' is selected)
+        if (input.category && input.category !== 'all') {
           rooms = rooms.filter(room => 
             room.category && room.category.toLowerCase().includes(input.category!.toLowerCase())
           );
         }
+
+        // Filter by minimum member count (show rooms with >10 users)
+        const MIN_MEMBER_COUNT = 10;
+        rooms = rooms.filter(room => 
+          room.configured || // Always include configured rooms
+          room.member_count > MIN_MEMBER_COUNT // Include discovered rooms with >10 members
+        );
 
         // Sort by configured status first, then by name
         rooms.sort((a, b) => {

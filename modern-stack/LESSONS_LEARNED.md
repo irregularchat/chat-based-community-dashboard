@@ -438,3 +438,55 @@ if (matrixService.isConfigured()) {
 - Use TypeScript to catch undefined references during development
 - Test admin functionality after Matrix service refactoring
 - Review all tRPC procedures that reference external services
+
+## Signal Verification Bypass Fix (2024-08-16)
+
+### Problem
+Signal verification was failing with "Failed to send verification code via Signal" and 500 errors. The issue was that `matrixService.isConfigured()` returned false due to Matrix SDK bundling issues ("Multiple matrix-js-sdk entrypoints detected!"), causing Signal verification to be blocked.
+
+### Root Cause
+The Signal verification code was checking `matrixService.isConfigured()` which relies on successful Matrix client initialization. However, the SDK bundling conflicts prevented client initialization, even though the environment variables and Signal bridge functionality were properly configured.
+
+### Solution
+Bypass the `isConfigured()` check by directly validating environment variables:
+
+```typescript
+// Before: Relied on SDK initialization
+if (matrixService.isConfigured()) {
+  const result = await matrixService.sendSignalMessageByPhone(phoneNumber, message);
+}
+
+// After: Check environment variables directly
+const homeserver = process.env.MATRIX_HOMESERVER;
+const accessToken = process.env.MATRIX_ACCESS_TOKEN;
+const userId = process.env.MATRIX_USER_ID;
+const signalBridgeRoom = process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID;
+
+if (homeserver && accessToken && userId && signalBridgeRoom) {
+  const result = await matrixService.sendSignalMessageByPhone(phoneNumber, message);
+}
+```
+
+### Key Learning Points
+
+#### Environment Variable Validation Pattern
+- **Check environment variables directly** when SDK initialization is unreliable
+- **Validate all required variables** before attempting service operations
+- **Provide detailed logging** about missing configuration
+
+#### SDK Bundling Workarounds
+- **Don't rely solely on isConfigured()** for service availability
+- **Use fallback validation methods** when SDK has initialization issues
+- **Service functionality can work** even when client initialization fails
+
+#### Signal Verification Flow
+- Signal verification uses Matrix bot → Signal bridge → phone number resolution
+- Requires MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, MATRIX_USER_ID, MATRIX_SIGNAL_BRIDGE_ROOM_ID
+- Bot sends `resolve-identifier +phone` command to Signal bridge room
+- Bridge responds with Signal UUID, then bot messages `@signal_{UUID}:domain`
+
+### Prevention
+- Always check environment variables directly for critical service operations
+- Don't block functionality based solely on SDK initialization status
+- Test Signal verification with actual phone numbers during development
+- Monitor Signal bridge room for successful phone → UUID resolution

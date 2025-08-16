@@ -34,6 +34,7 @@ export default function AdminConfigurationPage() {
     accessToken: '',
     userId: '',
     welcomeRoomId: '',
+    signalBridgeRoomId: '',
     enableEncryption: false,
   });
 
@@ -146,6 +147,7 @@ export default function AdminConfigurationPage() {
       accessToken: matrixForm.accessToken,
       userId: matrixForm.userId,
       welcomeRoomId: matrixForm.welcomeRoomId,
+      signalBridgeRoomId: matrixForm.signalBridgeRoomId,
       enableEncryption: matrixForm.enableEncryption,
     };
 
@@ -371,6 +373,7 @@ export default function AdminConfigurationPage() {
                                 accessToken: (config.accessToken as string) || '',
                                 userId: (config.userId as string) || '',
                                 welcomeRoomId: (config.welcomeRoomId as string) || '',
+                                signalBridgeRoomId: (config.signalBridgeRoomId as string) || '',
                                 enableEncryption: (config.enableEncryption as boolean) || false,
                               });
                             }
@@ -438,6 +441,16 @@ export default function AdminConfigurationPage() {
                             />
                             <p className="text-xs text-gray-500 mt-1">Default room for welcoming new users</p>
                           </div>
+                          <div>
+                            <Label htmlFor="matrix-signal-bridge-room">Signal Bridge Room ID</Label>
+                            <Input
+                              id="matrix-signal-bridge-room"
+                              value={matrixForm.signalBridgeRoomId}
+                              onChange={(e) => setMatrixForm({ ...matrixForm, signalBridgeRoomId: e.target.value })}
+                              placeholder="!signalroom:example.com"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Room ID for Signal bridge bot communication (required for Signal verification)</p>
+                          </div>
                           <div className="flex items-center space-x-2">
                             <Switch
                               id="matrix-encryption"
@@ -484,6 +497,14 @@ export default function AdminConfigurationPage() {
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Status</h4>
                       <p className="text-sm text-gray-600">Active and Connected</p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Signal Bridge Room</h4>
+                      <p className="text-sm text-gray-600">
+                        {(allSettings?.settings?.matrix_config as Record<string, unknown>)?.signalBridgeRoomId as string || 
+                         process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID || 
+                         'Not configured'}
+                      </p>
                     </div>
                   </div>
                 ) : (

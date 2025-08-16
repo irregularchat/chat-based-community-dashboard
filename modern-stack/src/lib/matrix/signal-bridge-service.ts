@@ -168,11 +168,44 @@ export class MatrixSignalBridgeService {
    * Resolve a phone number to Signal UUID using the Signal bridge
    */
   public async resolvePhoneToSignalUuid(phoneNumber: string): Promise<string | null> {
-    await this.clientService.ensureInitialized();
+    // Check environment variables directly instead of relying on client service
+    const homeserver = process.env.MATRIX_HOMESERVER;
+    const accessToken = process.env.MATRIX_ACCESS_TOKEN;
+    const userId = process.env.MATRIX_USER_ID;
+    const signalBridgeRoomId = process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID;
     
-    const client = this.clientService.getClient();
-    if (!client || !this.clientService.isConfigured()) {
-      console.error('❌ Matrix service not configured for phone resolution');
+    if (!homeserver || !accessToken || !userId || !signalBridgeRoomId) {
+      console.error('❌ Matrix service environment not configured for phone resolution');
+      return null;
+    }
+    
+    // Try to get client from service first, but continue even if it fails
+    let client = null;
+    try {
+      await this.clientService.ensureInitialized();
+      client = this.clientService.getClient();
+    } catch (error) {
+      console.warn(`⚠️ Client service initialization failed for phone resolution, will try direct client creation:`, error);
+    }
+    
+    // If client service failed, try to create client directly
+    if (!client) {
+      try {
+        // Dynamic import to avoid bundling issues
+        const { createClient } = await import('matrix-js-sdk');
+        client = createClient({
+          baseUrl: homeserver,
+          accessToken: accessToken,
+          userId: userId,
+        });
+      } catch (directError) {
+        console.error(`❌ Direct client creation failed for phone resolution:`, directError);
+        return null;
+      }
+    }
+    
+    if (!client) {
+      console.error('❌ Matrix client unavailable for phone resolution');
       return null;
     }
 
@@ -232,13 +265,60 @@ export class MatrixSignalBridgeService {
    * Send a message to a phone number via Signal bridge
    */
   public async sendSignalMessageByPhone(phoneNumber: string, message: string): Promise<DirectMessageResult> {
-    await this.clientService.ensureInitialized();
+    // Check environment variables directly instead of relying on client service
+    const homeserver = process.env.MATRIX_HOMESERVER;
+    const accessToken = process.env.MATRIX_ACCESS_TOKEN;
+    const userId = process.env.MATRIX_USER_ID;
+    const signalBridgeRoomId = process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID;
     
-    const client = this.clientService.getClient();
-    if (!client || !this.clientService.isConfigured()) {
+    console.log(`🔧 DEBUG: Environment check for Signal verification`);
+    console.log(`🔧 DEBUG: MATRIX_HOMESERVER=${!!homeserver}`);
+    console.log(`🔧 DEBUG: MATRIX_ACCESS_TOKEN=${!!accessToken}`);
+    console.log(`🔧 DEBUG: MATRIX_USER_ID=${!!userId}`);
+    console.log(`🔧 DEBUG: MATRIX_SIGNAL_BRIDGE_ROOM_ID=${!!signalBridgeRoomId}`);
+    
+    if (!homeserver || !accessToken || !userId || !signalBridgeRoomId) {
       return {
         success: false,
-        error: 'Matrix service not configured',
+        error: 'Matrix service environment not configured for Signal bridge',
+      };
+    }
+    
+    // Try to get client from service first, but continue even if it fails
+    let client = null;
+    try {
+      await this.clientService.ensureInitialized();
+      client = this.clientService.getClient();
+      console.log(`🔧 DEBUG: Client service client available: ${!!client}`);
+    } catch (error) {
+      console.warn(`⚠️ Client service initialization failed, will try direct client creation:`, error);
+    }
+    
+    // If client service failed, try to create client directly
+    if (!client) {
+      try {
+        console.log(`🔧 DEBUG: Attempting direct Matrix client creation`);
+        // Dynamic import to avoid bundling issues
+        const { createClient } = await import('matrix-js-sdk');
+        client = createClient({
+          baseUrl: homeserver,
+          accessToken: accessToken,
+          userId: userId,
+        });
+        console.log(`✅ DEBUG: Direct client creation successful`);
+      } catch (directError) {
+        console.error(`❌ DEBUG: Direct client creation failed:`, directError);
+        return {
+          success: false,
+          error: 'Failed to create Matrix client for Signal verification',
+        };
+      }
+    }
+    
+    if (!client) {
+      return {
+        success: false,
+        error: 'Matrix client unavailable for Signal verification',
       };
     }
 

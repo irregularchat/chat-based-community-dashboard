@@ -4,12 +4,12 @@
  */
 
 import { z } from 'zod';
-import { router, publicProcedure, adminProcedure } from '../trpc';
+import { createTRPCRouter, publicProcedure, adminProcedure } from '../trpc';
 import { SignalBotService } from '@/lib/signal/signal-bot-service';
 import { normalizePhoneNumber } from '@/lib/phone-utils';
 import { TRPCError } from '@trpc/server';
 
-export const signalRouter = router({
+export const signalRouter = createTRPCRouter({
   /**
    * Get Signal CLI service health status
    */

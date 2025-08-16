@@ -74,7 +74,23 @@ export default function AdminSignalPage() {
       refetchAccount();
     },
     onError: (error) => {
-      toast.error(`Verification failed: ${error.message}`);
+      // Handle specific PIN lock errors with helpful guidance
+      if (error.message.includes('PIN locked') || error.message.includes('pin data has been deleted')) {
+        toast.error('Account is PIN locked. Please start over with a new registration and fresh captcha token.', {
+          duration: 8000,
+        });
+        // Reset forms to encourage fresh start
+        setRegistrationForm({ 
+          phoneNumber: config?.phoneNumber || '+12247253276', 
+          useVoice: false, 
+          captcha: '' 
+        });
+        setVerificationForm({ phoneNumber: '', verificationCode: '', pin: '' });
+        // Switch to registration tab
+        setActiveTab('registration');
+      } else {
+        toast.error(`Verification failed: ${error.message}`);
+      }
     },
   });
 

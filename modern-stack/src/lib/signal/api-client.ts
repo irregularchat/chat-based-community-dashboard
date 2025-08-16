@@ -127,7 +127,31 @@ export class SignalApiClient {
         success: true,
         timestamp: new Date(),
       };
-    } catch (error) {
+    } catch (error: any) {
+      // Handle specific Signal API errors
+      const responseData = error.response?.data;
+      const status = error.response?.status;
+      
+      if (status === 400 && responseData?.error) {
+        const errorMessage = responseData.error;
+        
+        // Handle PIN lock scenarios
+        if (errorMessage.includes('pin locked') || errorMessage.includes('pin data has been deleted')) {
+          throw new SignalBotError(
+            'Account is PIN locked and data was deleted on the server. Please restart registration from the beginning with a fresh captcha token.',
+            'PIN_LOCK_ERROR',
+            { originalError: error, suggestedAction: 'RESTART_REGISTRATION' }
+          );
+        }
+        
+        // Handle other 400 errors with specific messages
+        throw new SignalBotError(
+          `Signal verification error: ${errorMessage}`,
+          'VERIFICATION_FAILED',
+          error
+        );
+      }
+      
       throw new SignalBotError(
         `Verification failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
         'VERIFICATION_FAILED',

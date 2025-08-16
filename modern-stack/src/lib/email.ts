@@ -160,6 +160,16 @@ class EmailService {
     }
 
     try {
+      // Debug logging for email template data
+      console.log('Email template data:', {
+        fullName: data.fullName,
+        username: data.username,
+        password: '[REDACTED]',
+        topicId: data.topicId,
+        discoursePostUrl: data.discoursePostUrl,
+        isLocalAccount: false,
+      });
+
       // Use the new MessageTemplates to generate the HTML content
       const welcomeTemplate = MessageTemplates.generateWelcomeEmailHTML({
         fullName: data.fullName,

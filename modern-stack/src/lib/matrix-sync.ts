@@ -65,6 +65,7 @@ class MatrixSyncService {
         }
       }
 
+      const { matrixService } = await import('./matrix');
       if (!matrixService.isConfigured()) {
         console.log('Matrix service not configured');
         return { status: 'error', error: 'Matrix not configured' };
@@ -340,6 +341,7 @@ class MatrixSyncService {
             if (member.membership !== 'join') continue;
 
             // Get homeserver URL for avatar URL generation
+            const { matrixService } = await import('./matrix');
             const config = matrixService.getConfig();
             const homeserverUrl = config?.homeserver || '';
 

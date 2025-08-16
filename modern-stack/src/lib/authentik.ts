@@ -381,7 +381,7 @@ class AuthentikService {
         params.append('search', searchTerm);
       }
 
-      const response = await this.makeRequest(`core/users/?${params.toString()}`);
+      const response = await this.makeRequest(`core/users/?${params.toString()}`, 'GET', undefined, 30000); // 30 second timeout for user listing
       const users = response.results.map((user: any) => ({
         pk: user.pk,
         username: user.username,

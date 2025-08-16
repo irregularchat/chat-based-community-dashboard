@@ -46,16 +46,21 @@ function getRoomCategory(roomName: string): string {
 export const matrixRouter = createTRPCRouter({
   // Get Matrix configuration status
   getConfig: moderatorProcedure.query(async ({ ctx: _ctx }) => {
-    const { matrixService } = await import('@/lib/matrix');
-    const config = matrixService.getConfig();
-    if (!config) {
+    // Check environment variables directly to follow lessons learned pattern
+    const homeserver = process.env.MATRIX_HOMESERVER;
+    const accessToken = process.env.MATRIX_ACCESS_TOKEN;
+    const userId = process.env.MATRIX_USER_ID;
+    
+    // If environment variables are not set, Matrix is not configured
+    if (!homeserver || !accessToken || !userId) {
       return null;
     }
     
+    // Return configuration with actual environment values
     return {
-      homeserver: config.homeserver,
-      userId: config.userId,
-      isConfigured: matrixService.isConfigured(),
+      homeserver,
+      userId,
+      isConfigured: true,
     };
   }),
 
@@ -340,6 +345,7 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const { matrixService } = await import('@/lib/matrix');
       if (matrixService.isConfigured()) {
         // Use the new bulk operation
         const result = await matrixService.bulkSendDirectMessages(
@@ -406,6 +412,7 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const { matrixService } = await import('@/lib/matrix');
       if (matrixService.isConfigured()) {
         // Use the new bulk operation
         const result = await matrixService.bulkSendRoomMessages(input.roomIds, input.message);
@@ -467,6 +474,7 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const { matrixService } = await import('@/lib/matrix');
       const results: Record<string, boolean> = {};
       const errors: Record<string, string> = {};
       
@@ -538,6 +546,7 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const { matrixService } = await import('@/lib/matrix');
       const results: Record<string, boolean> = {};
       const errors: Record<string, string> = {};
       
@@ -667,6 +676,7 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const { matrixService } = await import('@/lib/matrix');
       const results: Record<string, { invitedRooms: string[]; errors: string[] }> = {};
       
       if (matrixService.isConfigured()) {
@@ -757,6 +767,7 @@ export const matrixRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const { matrixService } = await import('@/lib/matrix');
       if (matrixService.isConfigured()) {
         // Use the new bulk operation
         const result = await matrixService.bulkInviteToRooms(
@@ -841,6 +852,7 @@ export const matrixRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const { matrixService } = await import('@/lib/matrix');
         if (!matrixService.isConfigured()) {
           throw new Error('Matrix service not configured');
         }
@@ -874,6 +886,7 @@ export const matrixRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const { matrixService } = await import('@/lib/matrix');
         if (!matrixService.isConfigured()) {
           throw new Error('Matrix service not configured');
         }
@@ -993,6 +1006,7 @@ export const matrixRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const { matrixService } = await import('@/lib/matrix');
         if (!matrixService.isConfigured()) {
           return {
             success: false,
@@ -1048,6 +1062,7 @@ export const matrixRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const { matrixService } = await import('@/lib/matrix');
         if (!matrixService.isConfigured()) {
           return {
             success: false,
@@ -1114,6 +1129,7 @@ export const matrixRouter = createTRPCRouter({
       const results: Record<string, boolean> = {};
       const errors: Record<string, string> = {};
 
+      const { matrixService } = await import('@/lib/matrix');
       if (!matrixService.isConfigured()) {
         return {
           success: false,

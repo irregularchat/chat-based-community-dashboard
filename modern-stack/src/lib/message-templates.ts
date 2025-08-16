@@ -59,6 +59,14 @@ export class MessageTemplates {
    */
   static createWelcomeMessage(data: WelcomeMessageData): string {
     const { username, tempPassword, discoursePostUrl, passwordResetSuccessful = true } = data;
+    
+    // Debug logging for Matrix welcome message
+    console.log('Matrix welcome message data:', {
+      username,
+      tempPassword: '[REDACTED]',
+      discoursePostUrl,
+      passwordResetSuccessful,
+    });
 
     // Special case for failed password reset
     if (!tempPassword || !passwordResetSuccessful) {

@@ -944,6 +944,47 @@ export const userRouter = createTRPCRouter({
           throw new Error(`SSO user creation failed: ${authentikResult.error}`);
         }
 
+        // Use temporary password for immediate return
+        let finalPassword = authentikResult.temp_password || '';
+        
+        // Start password reset in background (non-blocking for faster response)
+        if (authentikResult.user_id) {
+          const passwordResetOperation = (async () => {
+            try {
+              const newPassword = await authentikService.generateSecurePassphrase();
+              const resetResult = await authentikService.resetUserPassword(String(authentikResult.user_id), newPassword);
+              
+              if (resetResult.success) {
+                console.log(`Password reset successful for user ${username} - new password: ${newPassword}`);
+                
+                // Update local user record with new password in background
+                try {
+                  await ctx.prisma.user.update({
+                    where: { authentikId: String(authentikResult.user_id) },
+                    data: { 
+                      attributes: {
+                        ...attributes,
+                        actualPassword: newPassword
+                      }
+                    }
+                  });
+                } catch (updateError) {
+                  console.error('Error updating user with new password:', updateError);
+                }
+              } else {
+                console.warn(`Password reset failed for user ${username}: ${resetResult.error}`);
+              }
+            } catch (passwordResetError) {
+              console.error('Error during password reset:', passwordResetError);
+            }
+          })();
+          
+          // Don't await - let it run in background
+          passwordResetOperation.catch(error => {
+            console.error('Background password reset failed:', error);
+          });
+        }
+
         // Create local user record for synchronization
         const localUser = await ctx.prisma.user.create({
           data: {
@@ -1000,7 +1041,7 @@ export const userRouter = createTRPCRouter({
               subject: 'Welcome to IrregularChat!',
               fullName,
               username,
-              password: authentikResult.temp_password || '',
+              password: finalPassword,
               discoursePostUrl: discoursePostUrl,
             });
             console.log(`Welcome email sent to ${input.email}`);
@@ -1022,7 +1063,7 @@ export const userRouter = createTRPCRouter({
               matrixUserId,
               username,
               fullName,
-              authentikResult.temp_password || '',
+              finalPassword,
               discoursePostUrl
             );
             console.log(`Matrix welcome message sent to ${matrixUserId}`);
@@ -1051,11 +1092,11 @@ export const userRouter = createTRPCRouter({
           user: localUser,
           ssoUserId: authentikResult.user_id,
           username: authentikResult.username,
-          tempPassword: authentikResult.temp_password,
+          tempPassword: finalPassword, // Return the final password that was actually set
           passwordResetLink: authentikResult.password_reset_link,
           credentials: {
             username: authentikResult.username,
-            password: authentikResult.temp_password,
+            password: finalPassword, // Return the final password that was actually set
             resetLink: authentikResult.password_reset_link,
           }
         };
@@ -1283,6 +1324,7 @@ export const userRouter = createTRPCRouter({
 
         // Send via SignalBot using direct phone number resolution
         // This will resolve phone -> UUID -> @signal_{UUID}:domain -> send message
+        const { matrixService } = await import('@/lib/matrix');
         if (matrixService.isConfigured()) {
           try {
             const verificationMessage = `🔐 Phone Verification Code\n\nYou requested to update your phone number to: ${normalizedPhone.normalized}\n\nVerification Code: ${verificationHash}\n\nEnter this 6-digit code in the dashboard to complete verification.\n\nThis code expires in 15 minutes.`;

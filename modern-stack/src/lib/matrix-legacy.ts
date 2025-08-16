@@ -121,7 +121,15 @@ class MatrixService {
         console.log(`🔐 Using device ID: ${deviceId}`);
       }
 
-      this.client = await createClient(clientOptions);
+      try {
+        // Try using the wrapper first
+        this.client = await createClient(clientOptions);
+      } catch (wrapperError) {
+        console.warn('SDK wrapper failed, trying direct import:', wrapperError);
+        // Fallback to direct import if wrapper fails
+        const sdk = await import('matrix-js-sdk');
+        this.client = sdk.createClient(clientOptions);
+      }
 
       // Initialize encryption if enabled
       if (enableEncryption) {
@@ -1489,6 +1497,93 @@ class MatrixService {
   }
 
   /**
+   * Get all rooms the bot is in with member count and metadata
+   */
+  public async getRooms(): Promise<Array<{
+    roomId: string;
+    name?: string;
+    topic?: string;
+    memberCount: number;
+    category: string;
+    configured: boolean;
+  }>> {
+    console.log('MatrixService.getRooms() called');
+    
+    // If client is not initialized, return empty array for now
+    // This is a temporary workaround for the SDK bundling issue
+    if (!this.client) {
+      console.warn('Matrix client not initialized, returning empty rooms array');
+      return [];
+    }
+
+    try {
+      // Get all rooms the bot is a member of
+      const allRooms = this.client.getRooms();
+      console.log(`Found ${allRooms?.length || 0} total rooms from Matrix client`);
+      
+      // Get configured rooms
+      const configuredRooms = this.parseRooms();
+      const configuredRoomIds = new Set(configuredRooms.map(r => r.matrixRoomId));
+      
+      const rooms: Array<{
+        roomId: string;
+        name?: string;
+        topic?: string;
+        memberCount: number;
+        category: string;
+        configured: boolean;
+      }> = [];
+
+      for (const room of allRooms) {
+        try {
+          const memberCount = room.getJoinedMemberCount();
+          const roomName = room.name || undefined;
+          
+          // Try to get room topic
+          const topicEvent = room.currentState.getStateEvents('m.room.topic', '');
+          const roomTopic = topicEvent ? topicEvent.getContent()?.topic : undefined;
+          
+          // Check if this is a configured room
+          const configuredRoom = configuredRooms.find(r => r.matrixRoomId === room.roomId);
+          
+          // Determine category
+          let category = 'uncategorized';
+          if (configuredRoom) {
+            category = configuredRoom.categories[0] || 'general';
+          } else if (roomName) {
+            // Try to auto-detect category from room name
+            const categories = this.parseCategories();
+            for (const [catKey, catData] of Object.entries(categories)) {
+              const roomNameLower = roomName.toLowerCase();
+              if (catData.keywords.some(keyword => roomNameLower.includes(keyword))) {
+                category = catKey;
+                break;
+              }
+            }
+          }
+
+          rooms.push({
+            roomId: room.roomId,
+            name: roomName,
+            topic: roomTopic,
+            memberCount: memberCount,
+            category,
+            configured: configuredRoomIds.has(room.roomId)
+          });
+        } catch (error) {
+          console.warn(`Error processing room ${room.roomId}:`, error);
+        }
+      }
+
+      console.log(`Found ${rooms.length} total rooms, ${rooms.filter(r => r.member_count > 10).length} with >10 members`);
+      return rooms;
+    } catch (error) {
+      console.error('Error getting rooms:', error);
+      return [];
+    }
+  }
+
+  /**
    * Parse INTEREST_KEYWORD_EXPANSIONS environment variable
    * Format: tech:technology,programming,coding|ai:artificial intelligence,machine learning
    */
@@ -1983,7 +2078,9 @@ Welcome to the full community! 🚀`;
   }
 
   public isConfigured(): boolean {
-    return this.isActive && this.config !== null;
+    // Return true if config exists, even if client failed to initialize
+    // This allows us to still show configured rooms from .env
+    return this.config !== null;
   }
 
   public getConfig(): MatrixConfig | null {

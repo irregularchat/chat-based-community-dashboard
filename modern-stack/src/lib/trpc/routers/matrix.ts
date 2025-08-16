@@ -175,7 +175,7 @@ export const matrixRouter = createTRPCRouter({
       z.object({
         category: z.string().optional(),
         search: z.string().optional(),
-        includeConfigured: z.boolean().default(true),
+        includeConfigured: z.boolean().default(false), // Don't include .env rooms - using cached rooms only
         includeDiscovered: z.boolean().default(true),
         limit: z.number().default(100),
         offset: z.number().default(0),
@@ -183,6 +183,7 @@ export const matrixRouter = createTRPCRouter({
     )
     .query(async ({ ctx, input }) => {
       try {
+        console.log('getRooms query called with input:', input);
         const { matrixService } = await import('@/lib/matrix');
         const { createMatrixCacheService } = await import('@/lib/matrix-cache');
         const cacheService = createMatrixCacheService(ctx.prisma);
@@ -190,6 +191,7 @@ export const matrixRouter = createTRPCRouter({
         
         // Get environment-configured rooms (from .env file)
         if (input.includeConfigured) {
+          console.log('Including configured rooms from .env');
           const envRooms = matrixService.parseRooms();
           const envCategories = matrixService.parseCategories();
           
@@ -210,28 +212,76 @@ export const matrixRouter = createTRPCRouter({
           }
         }
         
-        // Get rooms from database cache if Matrix is configured
+        // Get rooms from database cache or directly from Matrix if cache is empty
+        console.log('Checking if should include discovered rooms:', { 
+          isConfigured: matrixService.isConfigured(), 
+          includeDiscovered: input.includeDiscovered 
+        });
         if (matrixService.isConfigured() && input.includeDiscovered) {
-          const cachedRooms = await cacheService.getCachedRooms({
+          console.log('Fetching discovered rooms...');
+          // First try to get from cache
+          let cachedRooms = await cacheService.getCachedRooms({
             search: input.search,
             includeDirectRooms: false,
             limit: input.limit,
             offset: input.offset,
           });
+          console.log(`Cache returned ${cachedRooms.length} rooms`);
+          
+          // Always try to fetch from Matrix when cache is empty
+          // This is a workaround since the Matrix client isn't initializing properly
+          if (cachedRooms.length === 0) {
+            console.log('Cache is empty, attempting to fetch rooms directly from Matrix...');
+            try {
+              await matrixService.ensureInitialized();
+              const matrixRooms = await matrixService.getRooms();
+              console.log(`Fetched ${matrixRooms?.length || 0} rooms from Matrix service`);
+              
+              // Filter for rooms with >10 members
+              const MIN_MEMBER_COUNT = 10;
+              const roomsToShow = matrixRooms.filter(room => {
+                // Always include environment configured rooms
+                const envRoomIds = rooms.map(r => r.room_id);
+                if (envRoomIds.includes(room.roomId)) return true;
+                
+                // Include rooms with enough members
+                return room.memberCount > MIN_MEMBER_COUNT;
+              });
+              console.log(`Filtered to ${roomsToShow.length} rooms with >10 members`);
 
-          const cacheRoomData = cachedRooms.map(room => ({
-            room_id: room.roomId,
-            name: room.displayName || room.name || room.roomId,
-            topic: room.topic,
-            member_count: room.memberCount,
-            category: getRoomCategory(room.displayName || room.name || ''),
-            configured: false, // These are discovered rooms
-          }));
+              // Map Matrix rooms to our format
+              const matrixRoomData = roomsToShow.map(room => ({
+                room_id: room.roomId,
+                name: room.name || room.roomId,
+                topic: room.topic || '',
+                member_count: room.memberCount,
+                category: getRoomCategory(room.name || ''),
+                configured: false,
+              }));
 
-          // Merge with env rooms, avoiding duplicates
-          const envRoomIds = new Set(rooms.map(r => r.room_id));
-          const newCacheRooms = cacheRoomData.filter(r => !envRoomIds.has(r.room_id));
-          rooms = [...rooms, ...newCacheRooms];
+              // Merge with env rooms, avoiding duplicates
+              const envRoomIds = new Set(rooms.map(r => r.room_id));
+              const newMatrixRooms = matrixRoomData.filter(r => !envRoomIds.has(r.room_id));
+              rooms = [...rooms, ...newMatrixRooms];
+            } catch (error) {
+              console.error('Error fetching rooms from Matrix:', error);
+            }
+          } else {
+            // Use cached rooms
+            const cacheRoomData = cachedRooms.map(room => ({
+              room_id: room.roomId,
+              name: room.displayName || room.name || room.roomId,
+              topic: room.topic,
+              member_count: room.memberCount,
+              category: getRoomCategory(room.displayName || room.name || ''),
+              configured: false, // These are discovered rooms
+            }));
+
+            // Merge with env rooms, avoiding duplicates
+            const envRoomIds = new Set(rooms.map(r => r.room_id));
+            const newCacheRooms = cacheRoomData.filter(r => !envRoomIds.has(r.room_id));
+            rooms = [...rooms, ...newCacheRooms];
+          }
         }
 
         // Apply search filter

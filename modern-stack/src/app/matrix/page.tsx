@@ -443,27 +443,27 @@ export default function MatrixPage() {
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixUsers && matrixUsers.length > 0 ? (
                         <div className="space-y-2">
-                          {matrixUsers.map((user: { user_id: string; display_name: string; }) => (
-                            <div key={user.user_id} className="flex items-center space-x-2">
+                          {matrixUsers.map((user) => (
+                            <div key={user.userId} className="flex items-center space-x-2">
                               <Checkbox
-                                id={`user-${user.user_id}`}
-                                checked={selectedUsers.includes(user.user_id)}
+                                id={`user-${user.userId}`}
+                                checked={selectedUsers.includes(user.userId)}
                                 onCheckedChange={(checked) => {
                                   if (checked) {
-                                    setSelectedUsers([...selectedUsers, user.user_id]);
+                                    setSelectedUsers([...selectedUsers, user.userId]);
                                   } else {
-                                    setSelectedUsers(selectedUsers.filter(id => id !== user.user_id));
+                                    setSelectedUsers(selectedUsers.filter(id => id !== user.userId));
                                   }
                                 }}
                               />
-                              <Label htmlFor={`user-${user.user_id}`} className="flex items-center gap-2 cursor-pointer">
-                                <span>{user.display_name}</span>
-                                {user.is_signal_user && (
+                              <Label htmlFor={`user-${user.userId}`} className="flex items-center gap-2 cursor-pointer">
+                                <span>{user.displayName || user.userId}</span>
+                                {user.isSignalUser && (
                                   <Badge variant="secondary" className="text-xs">
                                     📱 Signal
                                   </Badge>
                                 )}
-                                <span className="text-xs text-gray-500">{user.user_id}</span>
+                                <span className="text-xs text-gray-500">{user.userId}</span>
                               </Label>
                             </div>
                           ))}

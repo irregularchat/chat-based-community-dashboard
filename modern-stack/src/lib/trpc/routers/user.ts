@@ -1994,6 +1994,7 @@ The IrregularChat Team`;
           }
 
           // Send Signal notification to inviter (via Matrix bot)
+          const { matrixService } = await import('@/lib/matrix');
           if (matrixService.isConfigured()) {
             try {
               const matrixUserId = `@${inviter.username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;

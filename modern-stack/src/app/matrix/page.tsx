@@ -671,15 +671,53 @@ export default function MatrixPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-                {/* User ID Input */}
+                {/* User Selection with Search */}
                 <div className="space-y-2">
-                  <Label htmlFor="remove-user-id">Matrix User ID</Label>
-                  <Input
-                    id="remove-user-id"
-                    value={removeUserId}
-                    onChange={(e) => setRemoveUserId(e.target.value)}
-                    placeholder="@username:matrix.example.com"
-                  />
+                  <Label>Select or Enter Matrix User</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="remove-user-id"
+                      value={removeUserId}
+                      onChange={(e) => setRemoveUserId(e.target.value)}
+                      placeholder="@username:matrix.example.com or search..."
+                      className="flex-1"
+                      list="user-suggestions"
+                    />
+                    <Select 
+                      value=""
+                      onValueChange={(value) => setRemoveUserId(value)}
+                    >
+                      <SelectTrigger className="w-[200px]">
+                        <SelectValue placeholder="Select user..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <div className="sticky top-0 p-2 bg-background">
+                          <Input
+                            placeholder="Search users..."
+                            className="h-8"
+                            onChange={(e) => {
+                              const search = e.target.value.toLowerCase();
+                              const filtered = matrixUsers?.filter(user => 
+                                user.userId.toLowerCase().includes(search) ||
+                                user.displayName?.toLowerCase().includes(search)
+                              );
+                            }}
+                          />
+                        </div>
+                        {matrixUsers?.slice(0, 50).map((user) => (
+                          <SelectItem key={user.userId} value={user.userId}>
+                            <div className="flex flex-col">
+                              <span className="font-medium">{user.displayName || user.userId.split(':')[0].replace('@', '')}</span>
+                              <span className="text-xs text-muted-foreground">{user.userId}</span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Type a Matrix user ID directly or select from the dropdown
+                  </p>
                 </div>
 
                 {/* Room Selection */}

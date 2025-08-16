@@ -161,3 +161,42 @@ The Matrix bot account (@bot.irregularchat:irregularchat.com) needs to be joined
 - Add a check to warn if bot has no rooms joined
 - Consider adding a "join room" feature in the admin panel
 - Provide clear error messages when sync finds no rooms
+
+## Matrix Direct Message Encryption Error
+
+### Problem
+Direct messages fail with error: "This room is configured to use encryption, but your client does not support encryption." Messages show as "sent successfully" but users don't receive them.
+
+### Root Cause
+The Matrix service was configured with encryption disabled (`🔐 Matrix encryption DISABLED`), but Signal bridge rooms require encryption. The client attempts to send messages to encrypted rooms without encryption support, causing silent failures.
+
+### Solution
+1. **Disable encryption** in Matrix configuration to avoid encrypted room conflicts:
+   ```env
+   MATRIX_ENABLE_ENCRYPTION=false
+   ```
+2. **Use fallback messaging approach** that avoids encrypted Signal bridge rooms
+3. **Install encryption dependencies** if encryption is needed:
+   ```bash
+   npm install @matrix-org/olm
+   mkdir -p public/olm
+   cp node_modules/@matrix-org/olm/olm.wasm public/olm/
+   ```
+
+### Key Success Indicators
+When working correctly, logs show:
+- `✅ BRIDGE: Found Signal chat room: !roomId`
+- `✅ ENCRYPTION: Main message sent successfully: $eventId`
+- `Message sent successfully to @user:domain.com in room !roomId`
+
+### Troubleshooting Steps
+1. Check Matrix encryption status in logs: `🔐 Matrix encryption ENABLED/DISABLED`
+2. Verify Signal bridge room access without encryption conflicts
+3. Monitor message sending logs for successful event IDs
+4. Test with both Signal users and regular Matrix users
+
+### Prevention
+- Configure Matrix encryption consistently with target room requirements
+- Implement proper error handling for encryption mismatches
+- Add logging for successful message delivery confirmation
+- Test direct messaging with both encrypted and non-encrypted scenarios

@@ -616,13 +616,21 @@ export const signalRouter = createTRPCRouter({
 
         let recipientIdentifier = input.recipient;
         
-        // Handle username format (ensure it starts with @)
-        if (input.isUsername && !recipientIdentifier.startsWith('@')) {
-          recipientIdentifier = `@${recipientIdentifier}`;
-        }
-        
-        // If not username, normalize phone number
-        if (!input.isUsername) {
+        // Handle username format - Signal CLI requires "u:" prefix for usernames
+        if (input.isUsername) {
+          // Remove @ if present and add u: prefix
+          recipientIdentifier = recipientIdentifier.replace(/^@/, '');
+          // Ensure username has the proper format (username.XXX where XXX is 3 digits)
+          if (!recipientIdentifier.match(/^[a-zA-Z0-9_]+\.\d{3}$/)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Invalid Signal username format. Expected format: username.123',
+            });
+          }
+          // Add the u: prefix required by Signal CLI
+          recipientIdentifier = `u:${recipientIdentifier}`;
+        } else {
+          // If not username, normalize phone number
           const normalized = normalizePhoneNumber(recipientIdentifier);
           if (!normalized.isValid) {
             throw new TRPCError({

@@ -151,30 +151,42 @@ export class SignalBotService {
   }
 
   /**
-   * Send a message to a phone number
+   * Send a message to a phone number or username
    */
-  public async sendMessage(phoneNumber: string, message: string): Promise<SignalResult> {
+  public async sendMessage(recipient: string, message: string): Promise<SignalResult> {
     try {
-      console.log(`📤 Signal Bot: Sending message to ${phoneNumber}`);
+      console.log(`📤 Signal Bot: Sending message to ${recipient}`);
       
       if (!this.config.phoneNumber) {
         throw new SignalMessageError('No registered phone number configured for sending messages');
       }
 
-      const normalizedPhone = normalizePhoneNumber(phoneNumber);
-      if (!normalizedPhone.isValid) {
-        throw new SignalMessageError(`Invalid recipient phone number format: ${phoneNumber}`);
+      let finalRecipient: string;
+      
+      // Check if this is a username (starts with u:) or a phone number
+      if (recipient.startsWith('u:')) {
+        // Username format - use as is
+        finalRecipient = recipient;
+        console.log(`📝 Signal Bot: Sending to username: ${finalRecipient}`);
+      } else {
+        // Phone number format - normalize it
+        const normalizedPhone = normalizePhoneNumber(recipient);
+        if (!normalizedPhone.isValid) {
+          throw new SignalMessageError(`Invalid recipient phone number format: ${recipient}`);
+        }
+        finalRecipient = normalizedPhone.normalized;
+        console.log(`📝 Signal Bot: Sending to phone: ${finalRecipient}`);
       }
 
       const signalMessage: SignalMessage = {
         message,
-        recipients: [normalizedPhone.normalized],
+        recipients: [finalRecipient],
       };
 
       const response = await this.apiClient.sendMessage(this.config.phoneNumber, signalMessage);
       
       if (response.success && response.data) {
-        console.log(`✅ Signal Bot: Message sent successfully to ${normalizedPhone.normalized}`);
+        console.log(`✅ Signal Bot: Message sent successfully to ${finalRecipient}`);
         return response.data;
       } else {
         throw new SignalMessageError(`Failed to send message: ${response.error}`);

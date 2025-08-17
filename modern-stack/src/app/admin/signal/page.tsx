@@ -727,13 +727,13 @@ export default function AdminSignalPage() {
                     </Label>
                     <Input
                       id="recipient"
-                      placeholder={messagingForm.isUsername ? '@username.01' : '+1234567890'}
+                      placeholder={messagingForm.isUsername ? 'username.123' : '+1234567890'}
                       value={messagingForm.recipients}
                       onChange={(e) => setMessagingForm({ ...messagingForm, recipients: e.target.value })}
                     />
                     <div className="text-xs text-muted-foreground">
                       {messagingForm.isUsername 
-                        ? 'Enter Signal username (without @ prefix)'
+                        ? 'Enter Signal username (format: username.123, e.g., sac.159)'
                         : 'Enter phone number in international format'
                       }
                     </div>

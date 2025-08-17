@@ -176,7 +176,7 @@ export default function SignInPage() {
               <div className="text-center text-sm text-gray-600">
                 <p>Default admin credentials:</p>
                 <p><strong>Username:</strong> admin</p>
-                <p><strong>Password:</strong> shareme314</p>
+                <p><strong>Password:</strong> admin123</p>
               </div>
             </div>
           )}

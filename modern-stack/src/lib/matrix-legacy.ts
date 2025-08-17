@@ -137,7 +137,12 @@ class MatrixService {
 
       // Initialize encryption if enabled
       if (enableEncryption) {
-        await this.initializeEncryption();
+        try {
+          await this.initializeEncryption();
+        } catch (encryptionError) {
+          console.warn('⚠️ Encryption initialization failed, continuing without encryption:', encryptionError);
+          // Continue without encryption rather than crashing
+        }
       }
 
       this.isActive = true;
@@ -223,7 +228,8 @@ class MatrixService {
         console.error('   1. npm install @matrix-org/olm');
         console.error('   2. Ensure WASM files are in public/olm/ directory');
         console.error('   3. Check MATRIX_OLM_WASM_PATH environment variable');
-        throw new Error('Olm library is required for encryption');
+        console.warn('⚠️ Continuing without encryption support');
+        return; // Don't throw, just return without encryption
       }
 
       // Initialize crypto

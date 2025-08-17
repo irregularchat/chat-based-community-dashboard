@@ -524,6 +524,164 @@ export const signalRouter = createTRPCRouter({
     }),
 
   /**
+   * Get Signal groups (admin only)
+   */
+  getGroups: adminProcedure
+    .query(async ({ ctx }) => {
+      try {
+        const signalBot = new SignalBotService();
+        
+        if (!signalBot.isConfigured()) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Signal CLI is not enabled or configured',
+          });
+        }
+
+        const phoneNumber = signalBot.config.phoneNumber;
+        if (!phoneNumber) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'No phone number configured',
+          });
+        }
+
+        const groupsResult = await signalBot.apiClient.getGroups(phoneNumber);
+        
+        if (!groupsResult.success) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: groupsResult.error || 'Failed to get groups',
+          });
+        }
+
+        return {
+          success: true,
+          groups: groupsResult.data || [],
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to get groups',
+        });
+      }
+    }),
+
+  /**
+   * Sync incoming messages from Signal API to database
+   */
+  syncMessages: adminProcedure
+    .mutation(async ({ ctx }) => {
+      try {
+        const signalBot = new SignalBotService();
+        
+        if (!signalBot.isConfigured()) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Signal CLI is not enabled or configured',
+          });
+        }
+
+        const phoneNumber = signalBot.config.phoneNumber;
+        if (!phoneNumber) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'No phone number configured',
+          });
+        }
+
+        // Get messages from Signal API
+        const messagesResult = await signalBot.apiClient.getMessages(phoneNumber);
+        
+        if (!messagesResult.success) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: messagesResult.error || 'Failed to get messages',
+          });
+        }
+
+        let syncedCount = 0;
+        
+        // Process each message
+        for (const msg of messagesResult.data || []) {
+          if (!msg.envelope) continue;
+          
+          const messageTimestamp = msg.envelope.timestamp;
+          if (!messageTimestamp) continue;
+          
+          // Check if we already have this message
+          const existingMessage = await ctx.prisma.signalMessage.findFirst({
+            where: {
+              timestamp: new Date(messageTimestamp),
+              senderPhone: msg.envelope.source || msg.envelope.sourceNumber,
+            },
+          });
+          
+          if (existingMessage) continue; // Skip if already stored
+          
+          // Determine message type and content
+          let messageContent = '';
+          let messageType = 'text';
+          let groupId = null;
+          let groupName = null;
+          
+          if (msg.envelope.dataMessage?.message) {
+            messageContent = msg.envelope.dataMessage.message;
+          } else if (msg.envelope.dataMessage?.groupInfo) {
+            messageType = 'group';
+            messageContent = `Group update: ${msg.envelope.dataMessage.groupInfo.type || 'unknown'}`;
+            groupId = msg.envelope.dataMessage.groupInfo.groupId;
+            groupName = msg.envelope.dataMessage.groupInfo.groupName;
+          } else if (msg.envelope.receiptMessage) {
+            messageType = 'receipt';
+            messageContent = `${msg.envelope.receiptMessage.isDelivery ? 'Delivery' : 'Read'} receipt`;
+          } else {
+            continue; // Skip messages without content
+          }
+          
+          // Store message in database
+          await ctx.prisma.signalMessage.create({
+            data: {
+              messageId: messageTimestamp.toString(),
+              senderPhone: msg.envelope.source || msg.envelope.sourceNumber || '',
+              recipientPhone: phoneNumber,
+              groupId,
+              groupName,
+              message: messageContent,
+              direction: 'incoming',
+              messageType,
+              timestamp: new Date(messageTimestamp),
+              sourceDevice: msg.envelope.sourceDevice,
+              isDelivered: msg.envelope.receiptMessage?.isDelivery || false,
+              isRead: msg.envelope.receiptMessage?.isRead || false,
+              isViewed: msg.envelope.receiptMessage?.isViewed || false,
+              expiresInSeconds: msg.envelope.dataMessage?.expiresInSeconds,
+            },
+          });
+          
+          syncedCount++;
+        }
+
+        return {
+          success: true,
+          syncedCount,
+          message: `Synced ${syncedCount} new messages`,
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to sync messages',
+        });
+      }
+    }),
+
+  /**
    * Get conversation messages (admin only)
    */
   getConversation: adminProcedure
@@ -560,36 +718,45 @@ export const signalRouter = createTRPCRouter({
           });
         }
 
-        // Process all messages and filter for conversation
+        // First, get conversation messages from database (includes both sent and received)
         const normalizedRecipient = normalizePhoneNumber(input.recipient).normalized || input.recipient;
         
-        const conversationMessages = messagesResult.data
-          ?.filter(msg => {
-            // Filter for actual messages (not just receipts)
-            const hasMessage = msg.envelope?.dataMessage?.message;
-            const source = msg.envelope?.source || msg.envelope?.sourceNumber;
-            
-            // Include messages from the specified recipient
-            return hasMessage && (source === input.recipient || source === normalizedRecipient);
-          })
-          .slice(0, input.limit)
-          .map(msg => ({
-            id: msg.envelope?.timestamp?.toString() || Date.now().toString(),
-            sender: msg.envelope?.source || msg.envelope?.sourceNumber,
-            recipient: phoneNumber,
-            message: msg.envelope?.dataMessage?.message || '',
-            timestamp: new Date(msg.envelope?.timestamp || Date.now()),
-            isDelivered: msg.envelope?.receiptMessage?.isDelivery || false,
-            isRead: msg.envelope?.receiptMessage?.isRead || false,
-            direction: 'incoming' as const,
-          })) || [];
-        
-        // Note: The receive endpoint only returns incoming messages
-        // To show sent messages, we'd need to store them in database or use a different endpoint
+        const dbMessages = await ctx.prisma.signalMessage.findMany({
+          where: {
+            OR: [
+              {
+                // Incoming messages from this recipient
+                senderPhone: normalizedRecipient,
+                recipientPhone: phoneNumber,
+              },
+              {
+                // Outgoing messages to this recipient
+                senderPhone: phoneNumber,
+                recipientPhone: normalizedRecipient,
+              },
+            ],
+            messageType: 'text', // Only show text messages, not receipts
+          },
+          orderBy: {
+            timestamp: 'desc',
+          },
+          take: input.limit,
+        });
+
+        const conversationMessages = dbMessages.map(msg => ({
+          id: msg.id,
+          sender: msg.senderPhone,
+          recipient: msg.recipientPhone || '',
+          message: msg.message,
+          timestamp: msg.timestamp,
+          isDelivered: msg.isDelivered,
+          isRead: msg.isRead,
+          direction: msg.direction as 'incoming' | 'outgoing',
+        }));
 
         return {
           success: true,
-          messages: conversationMessages,
+          messages: conversationMessages.reverse(), // Reverse to show oldest first
           recipient: input.recipient,
         };
       } catch (error) {
@@ -660,6 +827,22 @@ export const signalRouter = createTRPCRouter({
         }
 
         const result = await signalBot.sendMessage(recipientIdentifier, input.message);
+
+        // Store sent message in database for conversation history
+        if (result.success && !input.isUsername) {
+          await ctx.prisma.signalMessage.create({
+            data: {
+              messageId: result.messageId,
+              senderPhone: signalBot.config.phoneNumber!,
+              recipientPhone: recipientIdentifier,
+              message: input.message,
+              direction: 'outgoing',
+              messageType: 'text',
+              timestamp: result.timestamp ? new Date(result.timestamp) : new Date(),
+              isDelivered: true, // Assume delivered if API call succeeded
+            },
+          });
+        }
 
         // Log admin event
         await ctx.prisma.adminEvent.create({

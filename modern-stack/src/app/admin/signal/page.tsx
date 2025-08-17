@@ -65,6 +65,7 @@ export default function AdminSignalPage() {
   const { data: healthStatus, refetch: refetchHealth } = trpc.signal.getHealth.useQuery();
   const { data: config, refetch: refetchConfig } = trpc.signal.getConfig.useQuery();
   const { data: accountInfo, refetch: refetchAccount } = trpc.signal.getAccountInfo.useQuery();
+  const { data: groups, refetch: refetchGroups } = trpc.signal.getGroups.useQuery();
   const { data: conversation, refetch: refetchConversation } = trpc.signal.getConversation.useQuery(
     { recipient: selectedConversation, limit: conversationLimit },
     { enabled: !!selectedConversation }
@@ -146,6 +147,16 @@ export default function AdminSignalPage() {
     onError: (error) => {
       toast.error(`QR code generation failed: ${error.message}`);
       setDeviceLinkingQR(null);
+    },
+  });
+
+  const syncMessagesMutation = trpc.signal.syncMessages.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.message || `Synced ${data.syncedCount} messages`);
+      refetchConversation();
+    },
+    onError: (error) => {
+      toast.error(`Message sync failed: ${error.message}`);
     },
   });
 
@@ -801,20 +812,47 @@ export default function AdminSignalPage() {
                 <CardContent>
                   {selectedConversation ? (
                     <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <Input
-                          placeholder="Enter phone number to view conversation"
-                          value={selectedConversation}
-                          onChange={(e) => setSelectedConversation(e.target.value)}
-                          className="flex-1 mr-2"
-                        />
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => refetchConversation()}
-                        >
-                          <RefreshCw className="w-4 h-4" />
-                        </Button>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <Input
+                            placeholder="Enter phone number to view conversation"
+                            value={selectedConversation}
+                            onChange={(e) => setSelectedConversation(e.target.value)}
+                            className="flex-1 mr-2"
+                          />
+                          <div className="flex gap-1">
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              onClick={() => syncMessagesMutation.mutate()}
+                              disabled={syncMessagesMutation.isPending}
+                              title="Sync new messages from Signal"
+                            >
+                              <RefreshCw className={`w-4 h-4 ${syncMessagesMutation.isPending ? 'animate-spin' : ''}`} />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              onClick={() => refetchConversation()}
+                            >
+                              <MessageSquare className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                        
+                        {/* Groups Display */}
+                        {groups?.groups && groups.groups.length > 0 && (
+                          <div className="border rounded-lg p-3 bg-blue-50 dark:bg-blue-950">
+                            <h4 className="font-semibold text-blue-800 dark:text-blue-200 mb-2">Signal Groups</h4>
+                            <div className="space-y-1 max-h-32 overflow-y-auto">
+                              {groups.groups.map((group: any) => (
+                                <div key={group.id} className="text-sm text-blue-700 dark:text-blue-300">
+                                  <strong>{group.name}</strong> ({group.members?.length || 0} members)
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                       
                       <div className="border rounded-lg p-4 h-96 overflow-y-auto bg-gray-50 dark:bg-gray-900">

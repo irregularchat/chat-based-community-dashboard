@@ -397,3 +397,39 @@ model SignalVerification {
   @@index([expiresAt])
   @@map("signal_verifications")
 }
+
+// Signal message history for conversation tracking
+model SignalMessage {
+  id            String    @id @default(uuid())
+  messageId     String?   @map("message_id") // Signal's internal message ID
+  
+  // Message details
+  senderPhone   String    @map("sender_phone")
+  recipientPhone String?  @map("recipient_phone")
+  groupId       String?   @map("group_id")
+  groupName     String?   @map("group_name")
+  message       String
+  direction     String    // 'incoming' or 'outgoing'
+  messageType   String    @default("text") @map("message_type") // 'text', 'group', 'receipt'
+  
+  // Timestamps
+  timestamp     DateTime  // Original message timestamp from Signal
+  receivedAt    DateTime  @default(now()) @map("received_at") // When we processed it
+  
+  // Status flags
+  isDelivered   Boolean   @default(false) @map("is_delivered")
+  isRead        Boolean   @default(false) @map("is_read")
+  isViewed      Boolean   @default(false) @map("is_viewed")
+  
+  // Metadata
+  sourceDevice  Int?      @map("source_device")
+  expiresInSeconds Int?   @map("expires_in_seconds")
+  
+  @@index([senderPhone])
+  @@index([recipientPhone])
+  @@index([groupId])
+  @@index([timestamp])
+  @@index([direction])
+  @@index([messageType])
+  @@map("signal_messages")
+}

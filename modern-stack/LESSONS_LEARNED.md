@@ -962,10 +962,97 @@ if (!verificationSent) {
 - ✅ Clear logging shows which method was used
 - ✅ Both methods store verification codes in database with proper expiration
 
+### Architecture Evolution: Matrix Management → Community Management (2025-08-17)
+
+**Critical Insight**: The current "Matrix Management" system should evolve into a unified "Community Management" system that can work with Signal CLI, Matrix, or both platforms seamlessly.
+
+#### Current State Analysis
+- **Matrix Management**: Currently focused on Matrix-only operations
+- **Signal CLI Integration**: Separate admin interface for Signal operations  
+- **User Experience**: Fragmented - users must choose between Matrix or Signal interfaces
+- **Configuration Dependencies**: Features tied to specific platform availability
+
+#### Proposed Architecture: Unified Community Management
+
+**Core Principle**: Same operations available regardless of underlying platform(s)
+
+##### Service Abstraction Layer
+```typescript
+interface CommunityService {
+  // Unified operations that work with any platform
+  sendMessage(recipient: string, message: string): Promise<MessageResult>
+  inviteToRoom(userId: string, roomId: string): Promise<InviteResult>
+  removeFromRoom(userId: string, roomId: string): Promise<RemoveResult>
+  broadcastToRoom(roomId: string, message: string): Promise<BroadcastResult>
+  getUsers(): Promise<CommunityUser[]>
+  getRooms(): Promise<CommunityRoom[]>
+}
+
+class SignalCommunityService implements CommunityService { /* Signal CLI implementation */ }
+class MatrixCommunityService implements CommunityService { /* Matrix SDK implementation */ }
+```
+
+##### Configuration Scenarios
+1. **Signal CLI Only**: All operations via Signal CLI REST API
+2. **Matrix Only**: All operations via Matrix SDK/bridge  
+3. **Both Available**: User choice or intelligent fallback
+4. **Neither Available**: Graceful degradation with clear messaging
+
+##### User Experience Benefits
+- **Single Interface**: One place for all community management
+- **Platform Agnostic**: Same operations work with Signal or Matrix
+- **Smart Fallbacks**: Automatic platform selection based on availability
+- **Unified User Directory**: Combined view of Signal contacts + Matrix users
+
+#### Implementation Strategy
+
+**Phase 1: Service Abstraction (Branch: feature/community-service-abstraction)**
+- Create `CommunityService` interface and implementations
+- Unified API layer for messaging, room management, user operations
+- Configuration-aware service selection
+
+**Phase 2: Frontend Refactor (Branch: feature/community-management-ui)**  
+- Rename `/matrix` → `/community` route
+- Unified interface supporting both platforms
+- Dynamic feature availability based on configured services
+
+**Phase 3: Cross-Platform Operations (Branch: feature/cross-platform-ops)**
+- Unified user selection (Signal + Matrix users)
+- Cross-platform messaging and room management
+- Bulk operations across both platforms
+
+**Phase 4: Advanced Features (Branch: feature/community-advanced)**
+- Message bridging between platforms
+- Cross-platform analytics and monitoring
+- Advanced community management tools
+
+#### Technical Considerations
+
+**Database Changes**:
+- Unified user/contact storage across platforms
+- Platform-agnostic room/group representation
+- Cross-reference tables for platform-specific IDs
+
+**API Design**:
+- Abstract away platform differences in tRPC endpoints
+- Consistent error handling across platforms
+- Platform-aware feature flags
+
+**Security**:
+- Unified permission system across platforms
+- Secure credential management for multiple services
+- Audit logging for cross-platform operations
+
+#### Success Metrics
+- **Single Interface**: Users can manage community without platform knowledge
+- **Reliability**: Operations succeed regardless of platform availability  
+- **Performance**: Service abstraction doesn't impact response times
+- **Maintainability**: Adding new platforms requires minimal changes
+
 ### Future Enhancements
-- Phone number registration flow in admin UI
-- Device linking QR code generation
-- Message history and analytics
-- Bulk messaging operations
 - ✅ Integration with user profile Signal verification (completed with fallback)
-- Migration tools from Matrix bridge to Signal CLI
+- → **MAJOR REFACTOR**: Unified Community Management System
+- Cross-platform message bridging
+- Advanced community analytics
+- Multi-platform notification system
+- Community moderation tools

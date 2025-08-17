@@ -22,24 +22,76 @@
 - [x] QR code generation for device linking
 - [x] Health monitoring and status checks
 - [x] Error handling and PIN lock recovery
+- [x] Profile management (display name and avatar)
+- [x] Two-way conversation threads with database storage
+- [x] Message history and conversation view
+- [x] Signal groups display functionality
+- [x] User profile Signal verification with fallback system
+- [x] Enhanced security verification messages
 
 ### 🚧 In Progress
 
-#### v0.2.1 - Signal CLI Enhancements
-- [ ] Profile management (display name and avatar)
-- [ ] Signal username support for messaging
-- [ ] Two-way conversation threads
-- [ ] Message history and conversation view
-- [ ] Delivery receipt tracking
+#### v0.2.1 - Community Management Foundation
+- [ ] **MAJOR REFACTOR**: Matrix Management → Community Management
+- [ ] Unified messaging interface (Signal CLI + Matrix)
+- [ ] Service abstraction layer for multi-platform support
+- [ ] Configuration-aware feature availability
+- [ ] Cross-platform user management
 
 ### 📋 Upcoming Features
 
-#### v0.3.0 - Matrix & Signal Bridge
-- [ ] Bidirectional message bridging
-- [ ] Room synchronization
-- [ ] User mapping between platforms
-- [ ] Encryption support for bridged messages
-- [ ] Admin controls for bridge configuration
+#### v0.3.0 - Unified Community Management System
+**🔧 ARCHITECTURAL REFACTOR: Matrix Management → Community Management**
+
+##### Core Infrastructure Changes
+- [ ] **Service Abstraction Layer**
+  - [ ] `CommunityService` base class with Signal/Matrix implementations
+  - [ ] Unified messaging interface across platforms
+  - [ ] Configuration-aware service selection
+  - [ ] Fallback mechanisms when services unavailable
+
+- [ ] **Frontend Refactor**
+  - [ ] Rename `/matrix` → `/community` route
+  - [ ] Unified user interface for both Signal CLI and Matrix users
+  - [ ] Platform-agnostic user selection and management
+  - [ ] Dynamic feature availability based on configured services
+
+##### Unified Operations Support
+- [ ] **Cross-Platform Messaging**
+  - [ ] Send messages via Signal CLI or Matrix bot (configuration-dependent)
+  - [ ] Unified recipient selection (Signal users, Matrix users, or both)
+  - [ ] Platform-aware message delivery with fallback options
+  
+- [ ] **Room/Group Management** 
+  - [ ] Invite users to Matrix rooms OR Signal groups
+  - [ ] Remove users from Matrix rooms OR Signal groups  
+  - [ ] Broadcast messages to entire Matrix room OR Signal group
+  - [ ] Create new Matrix rooms OR Signal groups
+
+- [ ] **User Management**
+  - [ ] Unified user directory (Matrix + Signal CLI contacts)
+  - [ ] Cross-platform user search and filtering
+  - [ ] Bulk operations across both platforms
+  - [ ] User verification status (Matrix + Signal)
+
+##### Configuration Scenarios
+- [ ] **Signal CLI Only**: All operations via Signal CLI REST API
+- [ ] **Matrix Only**: All operations via Matrix SDK/bridge
+- [ ] **Both Configured**: User choice or intelligent fallback
+- [ ] **Neither Configured**: Graceful degradation with clear messaging
+
+##### Implementation Strategy
+- [ ] **Phase 1**: Service abstraction layer and unified APIs
+- [ ] **Phase 2**: Frontend refactor for unified interface  
+- [ ] **Phase 3**: Cross-platform operations and management
+- [ ] **Phase 4**: Advanced features (bridging, sync, etc.)
+
+#### v0.4.0 - Advanced Community Features
+- [ ] Bidirectional message bridging between Signal and Matrix
+- [ ] Room/group synchronization and mapping
+- [ ] Cross-platform user presence and activity
+- [ ] Unified notification system
+- [ ] Community analytics across platforms
 
 #### v0.4.0 - Advanced Messaging
 - [ ] Group messaging support

@@ -763,11 +763,13 @@ export default function AdminSignalPage() {
                       variant="outline"
                       onClick={() => {
                         if (messagingForm.recipients && !messagingForm.isUsername) {
+                          console.log('Setting conversation to:', messagingForm.recipients);
                           setSelectedConversation(messagingForm.recipients);
                           refetchConversation();
                         }
                       }}
                       disabled={!messagingForm.recipients || messagingForm.isUsername}
+                      title="View conversation"
                     >
                       <MessageSquare className="w-4 h-4" />
                     </Button>
@@ -818,6 +820,7 @@ export default function AdminSignalPage() {
                       <div className="border rounded-lg p-4 h-96 overflow-y-auto bg-gray-50 dark:bg-gray-900">
                         {conversation?.messages && conversation.messages.length > 0 ? (
                           <div className="space-y-3">
+                            {console.log('Displaying messages:', conversation.messages)}
                             {conversation.messages.map((msg: any) => (
                               <div
                                 key={msg.id}
@@ -846,6 +849,7 @@ export default function AdminSignalPage() {
                               <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
                               <p>No messages found</p>
                               <p className="text-sm mt-1">Send a message to start the conversation</p>
+                              {console.log('No messages. Conversation data:', conversation)}
                             </div>
                           </div>
                         )}

@@ -560,11 +560,17 @@ export const signalRouter = createTRPCRouter({
           });
         }
 
-        // Filter messages for specific conversation
+        // Process all messages and filter for conversation
+        const normalizedRecipient = normalizePhoneNumber(input.recipient).normalized || input.recipient;
+        
         const conversationMessages = messagesResult.data
           ?.filter(msg => {
+            // Filter for actual messages (not just receipts)
+            const hasMessage = msg.envelope?.dataMessage?.message;
             const source = msg.envelope?.source || msg.envelope?.sourceNumber;
-            return source === input.recipient || source === normalizePhoneNumber(input.recipient).normalized;
+            
+            // Include messages from the specified recipient
+            return hasMessage && (source === input.recipient || source === normalizedRecipient);
           })
           .slice(0, input.limit)
           .map(msg => ({
@@ -577,6 +583,9 @@ export const signalRouter = createTRPCRouter({
             isRead: msg.envelope?.receiptMessage?.isRead || false,
             direction: 'incoming' as const,
           })) || [];
+        
+        // Note: The receive endpoint only returns incoming messages
+        // To show sent messages, we'd need to store them in database or use a different endpoint
 
         return {
           success: true,

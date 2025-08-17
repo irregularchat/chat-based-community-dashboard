@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ArrowLeft, Phone, MessageCircle, Settings, Activity, QrCode, CheckCircle, AlertTriangle, Send, Download, User, Upload, RefreshCw, MessageSquare, AtSign } from 'lucide-react';
+import { ArrowLeft, Phone, MessageCircle, Settings, Activity, QrCode, CheckCircle, AlertTriangle, Send, Download, User, Upload, RefreshCw, MessageSquare, AtSign, HelpCircle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import QRCode from 'qrcode';
@@ -75,7 +75,13 @@ export default function AdminSignalPage() {
   const registerMutation = trpc.signal.registerPhoneNumber.useMutation({
     onSuccess: (data) => {
       toast.success(data.message);
+      // Keep the phone number for verification
+      const phoneUsed = registrationForm.phoneNumber;
       setRegistrationForm({ phoneNumber: '', useVoice: false, captcha: '' });
+      // Pre-fill the verification form with the same phone number
+      setVerificationForm(prev => ({ ...prev, phoneNumber: phoneUsed }));
+      // Switch to verification tab
+      setActiveTab('registration');
       refetchHealth();
       refetchConfig();
     },
@@ -669,7 +675,7 @@ export default function AdminSignalPage() {
                       id="verify-phone"
                       type="tel"
                       placeholder="+1234567890"
-                      value={verificationForm.phoneNumber}
+                      value={verificationForm.phoneNumber || registrationForm.phoneNumber || config?.phoneNumber || ''}
                       onChange={(e) => setVerificationForm({ ...verificationForm, phoneNumber: e.target.value })}
                     />
                   </div>
@@ -684,14 +690,20 @@ export default function AdminSignalPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="verify-pin">PIN (Optional)</Label>
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="verify-pin">PIN (Optional)</Label>
+                      <HelpCircle className="w-4 h-4 text-muted-foreground" title="If you've set up a Signal PIN before, enter it here. Leave blank if you haven't set one or want to reset it." />
+                    </div>
                     <Input
                       id="verify-pin"
                       type="password"
-                      placeholder="Signal PIN"
+                      placeholder="Signal PIN (if you have one)"
                       value={verificationForm.pin}
                       onChange={(e) => setVerificationForm({ ...verificationForm, pin: e.target.value })}
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Only needed if you've previously set a PIN for this number
+                    </p>
                   </div>
                 </div>
                 <Button 

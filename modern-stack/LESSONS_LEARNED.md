@@ -1043,6 +1043,41 @@ class MatrixCommunityService implements CommunityService { /* Matrix SDK impleme
 - Secure credential management for multiple services
 - Audit logging for cross-platform operations
 
+#### Architecture Diagram
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Community Management UI                  │
+│              /community (formerly /matrix)                  │
+├─────────────────────────────────────────────────────────────┤
+│                    tRPC Community Router                    │
+│    ✓ Send Messages  ✓ Manage Rooms  ✓ User Operations     │
+├─────────────────────────────────────────────────────────────┤
+│                  CommunityService Interface                 │
+│   sendMessage() | inviteToRoom() | getUsers() | etc.       │
+├─────────────────────┬───────────────────────────────────────┤
+│  SignalCommunityService  │        MatrixCommunityService    │
+│                          │                                  │
+│  ┌─────────────────┐     │     ┌─────────────────────────┐  │
+│  │   Signal CLI    │     │     │    Matrix SDK/Bridge   │  │
+│  │   REST API      │     │     │                         │  │
+│  │                 │     │     │  ┌─────────────────────┐│  │
+│  │ • Messages      │     │     │  │   Matrix Homeserver ││  │
+│  │ • Groups        │     │     │  │                     ││  │
+│  │ • Contacts      │     │     │  │  • Rooms            ││  │
+│  │ • Profile       │     │     │  │  • Users            ││  │
+│  └─────────────────┘     │     │  │  • Events           ││  │
+│                          │     │  └─────────────────────┘│  │
+│                          │     └─────────────────────────┘  │
+└─────────────────────┴───────────────────────────────────────┘
+
+Configuration Scenarios:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Signal Only:     [SignalCommunityService] ──► Signal CLI
+2. Matrix Only:     [MatrixCommunityService] ──► Matrix SDK  
+3. Both Available:  [Intelligent Routing] ──► Signal CLI + Matrix
+4. Neither:         [Graceful Degradation] ──► Error Messages
+```
+
 #### Success Metrics
 - **Single Interface**: Users can manage community without platform knowledge
 - **Reliability**: Operations succeed regardless of platform availability  

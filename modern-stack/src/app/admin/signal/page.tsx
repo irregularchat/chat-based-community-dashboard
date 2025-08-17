@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ArrowLeft, Phone, MessageCircle, Settings, Activity, QrCode, CheckCircle, AlertTriangle, Send, Download } from 'lucide-react';
+import { ArrowLeft, Phone, MessageCircle, Settings, Activity, QrCode, CheckCircle, AlertTriangle, Send, Download, User, Upload, RefreshCw, MessageSquare, AtSign } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import QRCode from 'qrcode';
@@ -39,7 +39,18 @@ export default function AdminSignalPage() {
   const [messagingForm, setMessagingForm] = useState({
     recipients: '',
     message: '',
+    isUsername: false,
   });
+
+  // Profile form state
+  const [profileForm, setProfileForm] = useState({
+    displayName: '',
+    avatarBase64: '',
+  });
+
+  // Conversation state
+  const [selectedConversation, setSelectedConversation] = useState('');
+  const [conversationLimit, setConversationLimit] = useState(50);
 
   // QR code state
   const [qrCodes, setQrCodes] = useState({
@@ -54,6 +65,10 @@ export default function AdminSignalPage() {
   const { data: healthStatus, refetch: refetchHealth } = trpc.signal.getHealth.useQuery();
   const { data: config, refetch: refetchConfig } = trpc.signal.getConfig.useQuery();
   const { data: accountInfo, refetch: refetchAccount } = trpc.signal.getAccountInfo.useQuery();
+  const { data: conversation, refetch: refetchConversation } = trpc.signal.getConversation.useQuery(
+    { recipient: selectedConversation, limit: conversationLimit },
+    { enabled: !!selectedConversation }
+  );
 
   // Mutations
   const registerMutation = trpc.signal.registerPhoneNumber.useMutation({
@@ -97,13 +112,24 @@ export default function AdminSignalPage() {
     },
   });
 
-  const sendMessageMutation = trpc.signal.sendMessage.useMutation({
+  const sendMessageMutation = trpc.signal.sendMessageAdvanced.useMutation({
     onSuccess: (data) => {
       toast.success(data.message);
       setMessagingForm({ recipients: '', message: '' });
     },
     onError: (error) => {
       toast.error(`Message failed: ${error.message}`);
+    },
+  });
+
+  const updateProfileMutation = trpc.signal.updateProfile.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.message || 'Profile updated successfully');
+      setProfileForm({ displayName: '', avatarBase64: '' });
+      refetchAccount();
+    },
+    onError: (error) => {
+      toast.error(`Profile update failed: ${error.message}`);
     },
   });
 
@@ -186,24 +212,46 @@ export default function AdminSignalPage() {
 
   const handleSendMessage = () => {
     if (!messagingForm.recipients || !messagingForm.message) {
-      toast.error('Recipients and message are required');
-      return;
-    }
-    
-    const recipients = messagingForm.recipients
-      .split(',')
-      .map(r => r.trim())
-      .filter(r => r.length > 0);
-    
-    if (recipients.length === 0) {
-      toast.error('At least one recipient is required');
+      toast.error('Recipient and message are required');
       return;
     }
 
     sendMessageMutation.mutate({
-      recipients,
+      recipient: messagingForm.recipients.trim(),
       message: messagingForm.message,
+      isUsername: messagingForm.isUsername,
     });
+  };
+
+  const handleProfileUpdate = () => {
+    if (!profileForm.displayName && !profileForm.avatarBase64) {
+      toast.error('Please provide a display name or avatar to update');
+      return;
+    }
+    updateProfileMutation.mutate(profileForm);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (!file.type.startsWith('image/')) {
+        toast.error('Please select an image file');
+        return;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        toast.error('Image must be less than 5MB');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result?.toString().split(',')[1];
+        if (base64) {
+          setProfileForm({ ...profileForm, avatarBase64: base64 });
+          toast.success('Avatar loaded');
+        }
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const getStatusColor = (status: string) => {
@@ -267,7 +315,7 @@ export default function AdminSignalPage() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="status" className="flex items-center gap-2">
               <Activity className="w-4 h-4" />
               Status
@@ -279,6 +327,10 @@ export default function AdminSignalPage() {
             <TabsTrigger value="messaging" className="flex items-center gap-2">
               <MessageCircle className="w-4 h-4" />
               Messaging
+            </TabsTrigger>
+            <TabsTrigger value="profile" className="flex items-center gap-2">
+              <User className="w-4 h-4" />
+              Profile
             </TabsTrigger>
             <TabsTrigger value="tools" className="flex items-center gap-2">
               <QrCode className="w-4 h-4" />
@@ -644,53 +696,290 @@ export default function AdminSignalPage() {
 
           {/* Messaging Tab */}
           <TabsContent value="messaging" className="space-y-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Send Message Card */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Send className="w-5 h-5" />
+                    Send Message
+                  </CardTitle>
+                  <CardDescription>
+                    Send a message via phone number or Signal username
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-center space-x-2">
+                    <Switch
+                      id="use-username"
+                      checked={messagingForm.isUsername}
+                      onCheckedChange={(checked) => setMessagingForm({ ...messagingForm, isUsername: checked })}
+                    />
+                    <Label htmlFor="use-username" className="flex items-center gap-2">
+                      <AtSign className="w-4 h-4" />
+                      Use Signal Username
+                    </Label>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label htmlFor="recipient">
+                      {messagingForm.isUsername ? 'Signal Username' : 'Phone Number'}
+                    </Label>
+                    <Input
+                      id="recipient"
+                      placeholder={messagingForm.isUsername ? '@username.01' : '+1234567890'}
+                      value={messagingForm.recipients}
+                      onChange={(e) => setMessagingForm({ ...messagingForm, recipients: e.target.value })}
+                    />
+                    <div className="text-xs text-muted-foreground">
+                      {messagingForm.isUsername 
+                        ? 'Enter Signal username (without @ prefix)'
+                        : 'Enter phone number in international format'
+                      }
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label htmlFor="message">Message</Label>
+                    <Textarea
+                      id="message"
+                      placeholder="Enter your message here..."
+                      rows={4}
+                      value={messagingForm.message}
+                      onChange={(e) => setMessagingForm({ ...messagingForm, message: e.target.value })}
+                    />
+                  </div>
+                  
+                  <div className="flex gap-2">
+                    <Button 
+                      onClick={handleSendMessage}
+                      disabled={sendMessageMutation.isPending || !config?.hasPhoneNumber}
+                      className="flex-1"
+                    >
+                      <Send className="w-4 h-4 mr-2" />
+                      {sendMessageMutation.isPending ? 'Sending...' : 'Send Message'}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        if (messagingForm.recipients && !messagingForm.isUsername) {
+                          setSelectedConversation(messagingForm.recipients);
+                          refetchConversation();
+                        }
+                      }}
+                      disabled={!messagingForm.recipients || messagingForm.isUsername}
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                    </Button>
+                  </div>
+                  
+                  {!config?.hasPhoneNumber && (
+                    <div className="text-sm text-muted-foreground flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4" />
+                      A phone number must be registered before sending messages
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Conversation View Card */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <MessageSquare className="w-5 h-5" />
+                    Conversation Thread
+                  </CardTitle>
+                  <CardDescription>
+                    {selectedConversation 
+                      ? `Messages with ${selectedConversation}` 
+                      : 'Select a recipient to view conversation'
+                    }
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {selectedConversation ? (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <Input
+                          placeholder="Enter phone number to view conversation"
+                          value={selectedConversation}
+                          onChange={(e) => setSelectedConversation(e.target.value)}
+                          className="flex-1 mr-2"
+                        />
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => refetchConversation()}
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                        </Button>
+                      </div>
+                      
+                      <div className="border rounded-lg p-4 h-96 overflow-y-auto bg-gray-50 dark:bg-gray-900">
+                        {conversation?.messages && conversation.messages.length > 0 ? (
+                          <div className="space-y-3">
+                            {conversation.messages.map((msg: any) => (
+                              <div
+                                key={msg.id}
+                                className={`flex ${msg.direction === 'outgoing' ? 'justify-end' : 'justify-start'}`}
+                              >
+                                <div
+                                  className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
+                                    msg.direction === 'outgoing'
+                                      ? 'bg-blue-600 text-white'
+                                      : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100'
+                                  }`}
+                                >
+                                  <p className="text-sm">{msg.message}</p>
+                                  <p className="text-xs opacity-75 mt-1">
+                                    {new Date(msg.timestamp).toLocaleTimeString()}
+                                    {msg.isDelivered && ' ✓'}
+                                    {msg.isRead && '✓'}
+                                  </p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-center h-full text-gray-500">
+                            <div className="text-center">
+                              <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                              <p>No messages found</p>
+                              <p className="text-sm mt-1">Send a message to start the conversation</p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        <Label htmlFor="limit">Messages to load:</Label>
+                        <Input
+                          id="limit"
+                          type="number"
+                          min="10"
+                          max="100"
+                          value={conversationLimit}
+                          onChange={(e) => setConversationLimit(parseInt(e.target.value))}
+                          className="w-20"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center h-64 text-gray-500">
+                      <div className="text-center">
+                        <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                        <p>No conversation selected</p>
+                        <p className="text-sm mt-1">Enter a phone number above or click the conversation icon after entering a recipient</p>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          {/* Profile Tab */}
+          <TabsContent value="profile" className="space-y-6">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Send className="w-5 h-5" />
-                  Send Message
+                  <User className="w-5 h-5" />
+                  Bot Profile Management
                 </CardTitle>
                 <CardDescription>
-                  Send a message to one or more recipients via Signal
+                  Update the display name and avatar for your Signal bot
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="recipients">Recipients</Label>
-                  <Input
-                    id="recipients"
-                    placeholder="+1234567890, +0987654321"
-                    value={messagingForm.recipients}
-                    onChange={(e) => setMessagingForm({ ...messagingForm, recipients: e.target.value })}
-                  />
-                  <div className="text-xs text-muted-foreground">
-                    Enter phone numbers separated by commas
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="message">Message</Label>
-                  <Textarea
-                    id="message"
-                    placeholder="Enter your message here..."
-                    rows={4}
-                    value={messagingForm.message}
-                    onChange={(e) => setMessagingForm({ ...messagingForm, message: e.target.value })}
-                  />
-                </div>
-                <Button 
-                  onClick={handleSendMessage}
-                  disabled={sendMessageMutation.isPending || !config?.hasPhoneNumber}
-                  className="w-full md:w-auto"
-                >
-                  <Send className="w-4 h-4 mr-2" />
-                  {sendMessageMutation.isPending ? 'Sending...' : 'Send Message'}
-                </Button>
-                {!config?.hasPhoneNumber && (
-                  <div className="text-sm text-muted-foreground flex items-center gap-2">
-                    <AlertTriangle className="w-4 h-4" />
-                    A phone number must be registered before sending messages
+              <CardContent className="space-y-6">
+                {/* Current Profile Info */}
+                {accountInfo && (
+                  <div className="p-4 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                    <h4 className="font-semibold mb-3">Current Profile</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label className="text-sm">Phone Number</Label>
+                        <div className="text-sm text-muted-foreground">
+                          {accountInfo.phoneNumber || 'Not set'}
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-sm">Display Name</Label>
+                        <div className="text-sm text-muted-foreground">
+                          {accountInfo.displayName || 'Community Dashboard Bot'}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
+
+                {/* Update Form */}
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="display-name">Display Name</Label>
+                    <Input
+                      id="display-name"
+                      placeholder="Community Dashboard Bot"
+                      value={profileForm.displayName}
+                      onChange={(e) => setProfileForm({ ...profileForm, displayName: e.target.value })}
+                    />
+                    <div className="text-xs text-muted-foreground">
+                      This name will appear in Signal conversations
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="avatar">Profile Avatar</Label>
+                    <div className="flex items-center gap-4">
+                      <Input
+                        id="avatar"
+                        type="file"
+                        accept="image/*"
+                        onChange={handleFileUpload}
+                        className="flex-1"
+                      />
+                      {profileForm.avatarBase64 && (
+                        <Badge variant="outline" className="flex items-center gap-1">
+                          <Upload className="w-3 h-3" />
+                          Avatar loaded
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Upload an image (max 5MB) to use as the bot's avatar
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={handleProfileUpdate}
+                      disabled={updateProfileMutation.isPending || (!profileForm.displayName && !profileForm.avatarBase64)}
+                      className="flex-1"
+                    >
+                      <User className="w-4 h-4 mr-2" />
+                      {updateProfileMutation.isPending ? 'Updating...' : 'Update Profile'}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => setProfileForm({ displayName: '', avatarBase64: '' })}
+                    >
+                      Reset
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Profile Tips */}
+                <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg border border-blue-200 dark:border-blue-800">
+                  <h4 className="font-semibold text-blue-800 dark:text-blue-200 mb-2 flex items-center gap-2">
+                    <User className="w-4 h-4" />
+                    Profile Tips
+                  </h4>
+                  <ul className="space-y-1 text-sm text-blue-700 dark:text-blue-300">
+                    <li>• A clear display name helps users identify your bot</li>
+                    <li>• Use a recognizable avatar (e.g., your community logo)</li>
+                    <li>• Profile updates are visible to all Signal contacts</li>
+                    <li>• Changes may take a few moments to propagate</li>
+                  </ul>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>

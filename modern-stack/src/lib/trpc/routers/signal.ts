@@ -458,4 +458,207 @@ export const signalRouter = createTRPCRouter({
         });
       }
     }),
+
+  /**
+   * Update profile information (admin only)
+   */
+  updateProfile: adminProcedure
+    .input(z.object({
+      displayName: z.string().min(1).max(100).optional(),
+      avatarBase64: z.string().optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const signalBot = new SignalBotService();
+        
+        if (!signalBot.isConfigured()) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Signal CLI is not enabled or configured',
+          });
+        }
+
+        const phoneNumber = signalBot.config.phoneNumber;
+        if (!phoneNumber) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'No phone number configured',
+          });
+        }
+
+        const result = await signalBot.apiClient.updateProfile(
+          phoneNumber,
+          input.displayName,
+          input.avatarBase64
+        );
+
+        if (!result.success) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: result.error || 'Failed to update profile',
+          });
+        }
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'signal_profile_updated',
+            username: ctx.session.user.username || 'unknown',
+            details: `Updated Signal profile${input.displayName ? ` - Name: ${input.displayName}` : ''}${input.avatarBase64 ? ' - Avatar updated' : ''}`,
+          },
+        });
+
+        return {
+          success: true,
+          message: 'Profile updated successfully',
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to update profile',
+        });
+      }
+    }),
+
+  /**
+   * Get conversation messages (admin only)
+   */
+  getConversation: adminProcedure
+    .input(z.object({
+      recipient: z.string().min(1),
+      limit: z.number().min(1).max(100).default(50),
+    }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const signalBot = new SignalBotService();
+        
+        if (!signalBot.isConfigured()) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Signal CLI is not enabled or configured',
+          });
+        }
+
+        const phoneNumber = signalBot.config.phoneNumber;
+        if (!phoneNumber) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'No phone number configured',
+          });
+        }
+
+        // Get received messages
+        const messagesResult = await signalBot.apiClient.getMessages(phoneNumber);
+        
+        if (!messagesResult.success) {
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: messagesResult.error || 'Failed to get messages',
+          });
+        }
+
+        // Filter messages for specific conversation
+        const conversationMessages = messagesResult.data
+          ?.filter(msg => {
+            const source = msg.envelope?.source || msg.envelope?.sourceNumber;
+            return source === input.recipient || source === normalizePhoneNumber(input.recipient).normalized;
+          })
+          .slice(0, input.limit)
+          .map(msg => ({
+            id: msg.envelope?.timestamp?.toString() || Date.now().toString(),
+            sender: msg.envelope?.source || msg.envelope?.sourceNumber,
+            recipient: phoneNumber,
+            message: msg.envelope?.dataMessage?.message || '',
+            timestamp: new Date(msg.envelope?.timestamp || Date.now()),
+            isDelivered: msg.envelope?.receiptMessage?.isDelivery || false,
+            isRead: msg.envelope?.receiptMessage?.isRead || false,
+            direction: 'incoming' as const,
+          })) || [];
+
+        return {
+          success: true,
+          messages: conversationMessages,
+          recipient: input.recipient,
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to get conversation',
+        });
+      }
+    }),
+
+  /**
+   * Send message with username support (admin only)
+   */
+  sendMessageAdvanced: adminProcedure
+    .input(z.object({
+      recipient: z.string().min(1), // Can be phone number or username
+      message: z.string().min(1),
+      isUsername: z.boolean().default(false),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const signalBot = new SignalBotService();
+        
+        if (!signalBot.isConfigured()) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Signal CLI is not enabled or configured',
+          });
+        }
+
+        let recipientIdentifier = input.recipient;
+        
+        // Handle username format (ensure it starts with @)
+        if (input.isUsername && !recipientIdentifier.startsWith('@')) {
+          recipientIdentifier = `@${recipientIdentifier}`;
+        }
+        
+        // If not username, normalize phone number
+        if (!input.isUsername) {
+          const normalized = normalizePhoneNumber(recipientIdentifier);
+          if (!normalized.isValid) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: normalized.error || 'Invalid phone number format',
+            });
+          }
+          recipientIdentifier = normalized.normalized;
+        }
+
+        const result = await signalBot.sendMessage(recipientIdentifier, input.message);
+
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'signal_message_sent_advanced',
+            username: ctx.session.user.username || 'unknown',
+            details: `Sent Signal message to ${recipientIdentifier}${input.isUsername ? ' (username)' : ''}`,
+          },
+        });
+
+        return {
+          success: result.success,
+          messageId: result.messageId,
+          timestamp: result.timestamp,
+          recipient: recipientIdentifier,
+          message: `Message sent to ${recipientIdentifier}`,
+        };
+      } catch (error) {
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to send message',
+        });
+      }
+    }),
 });

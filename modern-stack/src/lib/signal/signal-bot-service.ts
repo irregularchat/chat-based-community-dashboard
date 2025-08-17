@@ -352,6 +352,72 @@ export class SignalBotService {
   }
 
   /**
+   * Update Signal profile (name and/or avatar)
+   */
+  public async updateProfile(displayName?: string, avatarBase64?: string): Promise<void> {
+    try {
+      if (!this.config.phoneNumber) {
+        throw new SignalBotError('No phone number configured for profile update', 'NO_PHONE_NUMBER');
+      }
+
+      console.log(`🔄 Signal Bot: Updating profile for ${this.config.phoneNumber}...`);
+      
+      // Validate inputs
+      if (!displayName && !avatarBase64) {
+        throw new SignalBotError('Either display name or avatar must be provided', 'INVALID_INPUT');
+      }
+
+      // Validate avatar if provided
+      if (avatarBase64) {
+        // Check if it's valid base64
+        try {
+          const buffer = Buffer.from(avatarBase64, 'base64');
+          if (buffer.length === 0) {
+            throw new Error('Empty avatar data');
+          }
+          console.log(`📸 Signal Bot: Avatar data validated (${buffer.length} bytes)`);
+        } catch (error) {
+          throw new SignalBotError('Invalid avatar data: must be valid base64', 'INVALID_AVATAR');
+        }
+      }
+
+      if (displayName) {
+        console.log(`👤 Signal Bot: Setting display name to "${displayName}"`);
+      }
+      
+      // Call the API to update profile
+      const response = await this.apiClient.updateProfile(
+        this.config.phoneNumber, 
+        displayName, 
+        avatarBase64
+      );
+
+      if (!response.success) {
+        throw new SignalBotError(
+          `Profile update failed: ${response.error}`,
+          'PROFILE_UPDATE_FAILED'
+        );
+      }
+
+      console.log('✅ Signal Bot: Profile updated successfully');
+      
+      // Add a small delay to allow profile changes to propagate
+      // Signal profile updates can take time to be visible to other clients
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      console.log('📡 Signal Bot: Profile update propagation delay completed');
+      
+    } catch (error) {
+      console.error('❌ Signal Bot: Profile update failed:', error);
+      throw error instanceof SignalBotError ? error : new SignalBotError(
+        `Profile update failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'PROFILE_UPDATE_FAILED',
+        error
+      );
+    }
+  }
+
+  /**
    * Cleanup resources
    */
   public async cleanup(): Promise<void> {

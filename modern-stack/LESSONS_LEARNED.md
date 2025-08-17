@@ -85,6 +85,19 @@ const isRegistered = accounts.includes(phoneNumber);
    - Recipients array for v2/send endpoint
    - International format required for all numbers
 
+4. **Profile Updates**:
+   - Use `/v1/profiles/{number}` endpoint with PUT method
+   - Supports both `name` and `avatar` fields
+   - Avatar must be base64-encoded image data
+   - No GET endpoint to retrieve current profile
+   - Profile changes may take time to propagate to other clients
+   - Profile visibility depends on Signal's contact/trust model
+   - Added 2-second delay after updates for propagation
+   - **Fixed**: Added proper updateProfile method to SignalBotService
+   - **Fixed**: Enhanced validation for avatar base64 data
+   - **Fixed**: Improved error handling and logging
+   - **Fixed**: tRPC router now uses service layer instead of direct API calls
+
 ### Performance Considerations
 
 - Signal CLI takes 1-8 seconds for operations

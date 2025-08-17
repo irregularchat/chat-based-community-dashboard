@@ -23,20 +23,22 @@
 - [x] Health monitoring and status checks
 - [x] Error handling and PIN lock recovery
 - [x] Profile management (display name and avatar)
+- [x] Profile persistence fixes with propagation delays
 - [x] Two-way conversation threads with database storage
 - [x] Message history and conversation view
 - [x] Signal groups display functionality
 - [x] User profile Signal verification with fallback system
 - [x] Enhanced security verification messages
 
-### 🚧 In Progress
-
 #### v0.2.1 - Community Management Foundation
-- [ ] **MAJOR REFACTOR**: Matrix Management → Community Management
-- [ ] Unified messaging interface (Signal CLI + Matrix)
-- [ ] Service abstraction layer for multi-platform support
-- [ ] Configuration-aware feature availability
-- [ ] Cross-platform user management
+- [x] **MAJOR REFACTOR**: Matrix Management → Community Management  
+- [x] Unified messaging interface (Signal CLI + Matrix)
+- [x] Service abstraction layer for multi-platform support
+- [x] Configuration-aware feature availability
+- [x] Cross-platform user management
+- [x] Signal bot profile fixes and validation
+
+### 🚧 In Progress
 
 ### 📋 Upcoming Features
 

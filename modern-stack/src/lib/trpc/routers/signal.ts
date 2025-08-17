@@ -486,18 +486,10 @@ export const signalRouter = createTRPCRouter({
           });
         }
 
-        const result = await signalBot.apiClient.updateProfile(
-          phoneNumber,
+        await signalBot.updateProfile(
           input.displayName,
           input.avatarBase64
         );
-
-        if (!result.success) {
-          throw new TRPCError({
-            code: 'INTERNAL_SERVER_ERROR',
-            message: result.error || 'Failed to update profile',
-          });
-        }
 
         // Log admin event
         await ctx.prisma.adminEvent.create({

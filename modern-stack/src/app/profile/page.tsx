@@ -115,9 +115,10 @@ export default function ProfilePage() {
   }
 
   const userAttributes = userProfile?.attributes as Record<string, unknown> || {};
-  const phoneNumber = (userAttributes.pendingPhoneVerification as any)?.phoneNumber || 
-                     userProfile?.signalIdentity;
-  const hasSignalVerification = !!userProfile?.signalIdentity || !!phoneNumber;
+  const verifiedPhoneNumber = (userAttributes.phoneNumber as string) || userProfile?.signalIdentity;
+  const pendingPhoneNumber = (userAttributes.pendingPhoneVerification as any)?.phoneNumber;
+  const phoneNumber = verifiedPhoneNumber || pendingPhoneNumber;
+  const hasSignalVerification = !!verifiedPhoneNumber;
 
   return (
     <div className="container mx-auto py-8 space-y-8">
@@ -255,14 +256,16 @@ export default function ProfilePage() {
                       </p>
                       <p className="text-sm text-muted-foreground">
                         {hasSignalVerification 
-                          ? `Verified with ${phoneNumber}`
-                          : 'Not verified'
+                          ? `Verified with ${verifiedPhoneNumber}`
+                          : pendingPhoneNumber 
+                            ? `Verification pending for ${pendingPhoneNumber}`
+                            : 'Not verified'
                         }
                       </p>
                     </div>
                   </div>
-                  <Badge variant={hasSignalVerification ? 'default' : 'destructive'}>
-                    {hasSignalVerification ? 'Verified' : 'Unverified'}
+                  <Badge variant={hasSignalVerification ? 'default' : pendingPhoneNumber ? 'outline' : 'destructive'}>
+                    {hasSignalVerification ? 'Verified' : pendingPhoneNumber ? 'Pending' : 'Unverified'}
                   </Badge>
                 </div>
               </div>

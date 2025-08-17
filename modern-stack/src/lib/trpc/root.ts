@@ -6,6 +6,7 @@ import { adminRouter } from './routers/admin';
 import { settingsRouter } from './routers/settings';
 import { inviteRouter } from './routers/invite';
 import { communityRouter } from './routers/community';
+import { communityManagementRouter } from './routers/community-management';
 import { signalRouter } from './routers/signal';
 
 export const appRouter = createTRPCRouter({
@@ -16,6 +17,7 @@ export const appRouter = createTRPCRouter({
   settings: settingsRouter,
   invite: inviteRouter,
   community: communityRouter,
+  communityManagement: communityManagementRouter,
   signal: signalRouter,
 });
 

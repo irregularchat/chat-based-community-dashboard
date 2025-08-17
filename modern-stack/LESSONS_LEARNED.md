@@ -901,10 +901,71 @@ export async function GET(request: NextRequest) {
 - `docker-compose.yml` - Container orchestration
 - `prisma/schema.prisma` - Database schema updates
 
+### Signal Verification Fallback Implementation (2025-08-17)
+
+**Feature**: Signal verification with automatic fallback from Signal CLI to Matrix Signal bridge
+
+**Implementation Details**:
+The user profile Signal verification now implements a robust fallback system:
+
+1. **Primary Method - Signal CLI REST API**: 
+   - Attempts to send verification via Signal CLI if configured
+   - Checks `signalBot.isConfigured()` and `signalBot.config.phoneNumber`
+   - Uses the bot's registered phone number to send verification codes
+
+2. **Fallback Method - Matrix Signal Bridge**:
+   - Falls back to Matrix Signal bridge if Signal CLI fails or isn't configured  
+   - Validates environment variables directly (bypasses SDK initialization issues)
+   - Uses phone-to-UUID resolution through Signal bridge room
+
+**Code Pattern**:
+```typescript
+// 1. First try Signal CLI REST API (preferred method)
+const { SignalBotService } = await import('@/lib/signal/signal-bot-service');
+const signalBot = new SignalBotService();
+
+if (signalBot.isConfigured() && signalBot.config.phoneNumber) {
+  const result = await signalBot.sendMessage(normalizedPhone.normalized, verificationMessage);
+  if (result.success) {
+    verificationSent = true;
+    method = 'signal-cli';
+  }
+}
+
+// 2. Fallback to Matrix Signal bridge if Signal CLI failed
+if (!verificationSent) {
+  const homeserver = process.env.MATRIX_HOMESERVER;
+  const accessToken = process.env.MATRIX_ACCESS_TOKEN;
+  const userId = process.env.MATRIX_USER_ID;
+  const signalBridgeRoom = process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID;
+  
+  if (homeserver && accessToken && userId && signalBridgeRoom) {
+    const result = await matrixService.sendSignalMessageByPhone(normalizedPhone.normalized, verificationMessage);
+    if (result.success) {
+      method = 'signal-bridge';
+    }
+  }
+}
+```
+
+**Key Benefits**:
+- **Reliability**: Automatic fallback ensures verification works even if Signal CLI is down
+- **Flexibility**: Supports both direct Signal CLI and Matrix bridge workflows
+- **User Experience**: Transparent fallback with clear method indication
+- **Environment Validation**: Direct environment variable checks bypass SDK initialization issues
+
+**File Location**: `src/lib/trpc/routers/user.ts` (lines 1321-1385)
+
+**Success Indicators**:
+- ✅ Signal CLI verification: "Verification code sent via Signal CLI!"
+- ✅ Matrix bridge fallback: "Verification code sent via Matrix Signal bridge!"
+- ✅ Clear logging shows which method was used
+- ✅ Both methods store verification codes in database with proper expiration
+
 ### Future Enhancements
 - Phone number registration flow in admin UI
 - Device linking QR code generation
 - Message history and analytics
 - Bulk messaging operations
-- Integration with user profile Signal verification
+- ✅ Integration with user profile Signal verification (completed with fallback)
 - Migration tools from Matrix bridge to Signal CLI

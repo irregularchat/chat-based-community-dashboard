@@ -618,6 +618,14 @@ export const signalRouter = createTRPCRouter({
         
         // Handle username format - Signal CLI requires "u:" prefix for usernames
         if (input.isUsername) {
+          // Note: Signal usernames are a new feature and may not be fully supported by signal-cli yet
+          // The REST API currently returns NullPointerException when trying to send to usernames
+          throw new TRPCError({
+            code: 'NOT_IMPLEMENTED',
+            message: 'Signal username messaging is not yet supported by the Signal CLI REST API. Please use phone numbers instead. This feature is pending upstream support.',
+          });
+          
+          /* TODO: Re-enable when signal-cli supports usernames
           // Remove @ if present and add u: prefix
           recipientIdentifier = recipientIdentifier.replace(/^@/, '');
           // Ensure username has the proper format (username.XXX where XXX is 3 digits)
@@ -629,6 +637,7 @@ export const signalRouter = createTRPCRouter({
           }
           // Add the u: prefix required by Signal CLI
           recipientIdentifier = `u:${recipientIdentifier}`;
+          */
         } else {
           // If not username, normalize phone number
           const normalized = normalizePhoneNumber(recipientIdentifier);

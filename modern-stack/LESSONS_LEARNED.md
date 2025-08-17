@@ -102,14 +102,37 @@ const isRegistered = accounts.includes(phoneNumber);
 
 ### Future Improvements Identified
 
-1. **Profile Management**: Add UI for setting bot name and avatar
-2. **Username Support**: Allow sending to Signal usernames
-3. **Two-way Conversations**: Implement message threads
-4. **Message History**: Store and display conversation history
+1. **Profile Management**: ✅ Added UI for setting bot name and avatar
+2. **Username Support**: ⚠️ Attempted but blocked by Signal CLI limitations (see below)
+3. **Two-way Conversations**: ✅ Implemented message threads with history
+4. **Message History**: ✅ Store and display conversation history
 5. **Bulk Operations**: Support sending to multiple recipients
 6. **Media Support**: Handle image/file attachments
 7. **Group Management**: Create and manage Signal groups
 8. **Delivery Tracking**: Show read receipts and delivery status
+
+### Signal Username Limitation (2025-08-17)
+
+**Issue**: Signal usernames (format: username.123) are not yet supported by signal-cli REST API v0.13.18
+
+**Details**:
+- Signal introduced usernames in 2024 as a privacy feature
+- The signal-cli documentation mentions `u:` prefix for usernames
+- When attempting to send to `u:sac.159`, the API returns:
+  ```
+  java.lang.NullPointerException: Cannot invoke "RecipientId.id()" because "recipientId" is null
+  ```
+- This indicates the username resolution is not implemented in signal-cli
+
+**Workaround**: 
+- Continue using phone numbers for messaging
+- UI shows "not yet supported" message when username toggle is enabled
+- Code is prepared for future support (commented out, ready to re-enable)
+
+**Action Items**:
+- Monitor signal-cli releases for username support
+- Test with newer versions when available
+- Re-enable username code when upstream support is added
 
 ## Matrix User Search and Multi-Select Implementation (2024-08-16)
 

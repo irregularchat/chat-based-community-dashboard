@@ -212,7 +212,7 @@ class MatrixSyncService {
       const priorityRoomNames = ['mod', 'action', 'entry', 'welcome', 'general', 'main', 'lobby'];
       
       // Sort rooms by priority (priority rooms first)
-      const sortedRooms = rooms.sort((a, b) => {
+      const sortedRooms = rooms.sort((a: any, b: any) => {
         const aName = (a.name || '').toLowerCase();
         const bName = (b.name || '').toLowerCase();
         

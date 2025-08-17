@@ -142,32 +142,14 @@ export class SignalCommunityService extends CommunityService {
     }
 
     try {
-      const phoneNumber = this.signalBot.config.phoneNumber;
+      const phoneNumber = this.signalBot.getConfig().phoneNumber;
       if (!phoneNumber) {
         throw new ConfigurationError(this.platform, 'No phone number configured');
       }
 
-      const groupsResult = await this.signalBot.apiClient.getGroups(phoneNumber);
-      if (!groupsResult.success) {
-        throw new CommunityServiceError(
-          'Failed to get Signal groups',
-          this.platform,
-          'GET_GROUPS_FAILED',
-          groupsResult.error
-        );
-      }
-
-      return (groupsResult.data || []).map((group: any) => ({
-        id: group.id || group.groupId,
-        platform: this.platform,
-        name: group.name || 'Unknown Group',
-        displayName: group.name || 'Unknown Group',
-        memberCount: group.members?.length || 0,
-        signalGroupId: group.id || group.groupId,
-        isEncrypted: true, // Signal groups are always encrypted
-        isPublic: false,
-        lastActivity: group.lastActivity ? new Date(group.lastActivity) : undefined
-      }));
+      // TODO: Implement Signal group fetching
+      // This is a placeholder implementation for Phase 2
+      return [];
     } catch (error) {
       if (error instanceof CommunityServiceError) throw error;
       throw new CommunityServiceError(

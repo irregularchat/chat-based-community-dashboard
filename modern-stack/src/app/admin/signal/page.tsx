@@ -116,7 +116,7 @@ export default function AdminSignalPage() {
   const sendMessageMutation = trpc.signal.sendMessageAdvanced.useMutation({
     onSuccess: (data) => {
       toast.success(data.message);
-      setMessagingForm({ recipients: '', message: '' });
+      setMessagingForm({ recipients: '', message: '', isUsername: false });
     },
     onError: (error) => {
       toast.error(`Message failed: ${error.message}`);
@@ -858,7 +858,6 @@ export default function AdminSignalPage() {
                       <div className="border rounded-lg p-4 h-96 overflow-y-auto bg-gray-50 dark:bg-gray-900">
                         {conversation?.messages && conversation.messages.length > 0 ? (
                           <div className="space-y-3">
-                            {console.log('Displaying messages:', conversation.messages)}
                             {conversation.messages.map((msg: any) => (
                               <div
                                 key={msg.id}
@@ -887,7 +886,6 @@ export default function AdminSignalPage() {
                               <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
                               <p>No messages found</p>
                               <p className="text-sm mt-1">Send a message to start the conversation</p>
-                              {console.log('No messages. Conversation data:', conversation)}
                             </div>
                           </div>
                         )}
@@ -947,7 +945,7 @@ export default function AdminSignalPage() {
                       <div className="space-y-2">
                         <Label className="text-sm">Display Name</Label>
                         <div className="text-sm text-muted-foreground">
-                          {accountInfo.displayName || 'Community Dashboard Bot'}
+                          {(accountInfo as any).displayName || 'Community Dashboard Bot'}
                         </div>
                       </div>
                     </div>

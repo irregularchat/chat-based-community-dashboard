@@ -325,7 +325,6 @@ export class MatrixSignalBridgeService {
         return {
           success: false,
           error: `Failed to create Matrix client for Signal verification: ${directError instanceof Error ? directError.message : String(directError)}`,
-          details: directError instanceof Error ? directError.stack : String(directError),
         };
       }
     }
@@ -414,7 +413,7 @@ export class MatrixSignalBridgeService {
   private async findSignalChatRoom(
     signalUserId: string, 
     botUsername: string, 
-    client: MatrixClient
+    client: any
   ): Promise<string | null> {
     try {
       console.log(`🔍 BRIDGE: Looking for Signal chat room for ${signalUserId}`);
@@ -433,14 +432,14 @@ export class MatrixSignalBridgeService {
         
         // Get room members
         const members = room.getJoinedMembers();
-        const memberUserIds = members.map(m => m.userId);
+        const memberUserIds = members.map((m: any) => m.userId);
         
         console.log(`🏠 BRIDGE: Checking room ${roomId} (${roomName}) with members: ${memberUserIds.join(', ')}`);
 
         // Check if this room has the bot and the signal user
-        const hasBotMember = memberUserIds.some(id => id.toLowerCase().includes(botUsername.replace('@', '').toLowerCase()));
+        const hasBotMember = memberUserIds.some((id: any) => id.toLowerCase().includes(botUsername.replace('@', '').toLowerCase()));
         const hasSignalUserInName = roomName.includes(cleanSignalUserId) || roomName.includes(signalUserId);
-        const hasSignalUserAsMember = memberUserIds.some(id => id.toLowerCase().includes(cleanSignalUserId));
+        const hasSignalUserAsMember = memberUserIds.some((id: any) => id.toLowerCase().includes(cleanSignalUserId));
 
         console.log(`🔍 BRIDGE: Room analysis - hasBotMember: ${hasBotMember}, hasSignalUserInName: ${hasSignalUserInName}, hasSignalUserAsMember: ${hasSignalUserAsMember}`);
 
@@ -468,7 +467,7 @@ export class MatrixSignalBridgeService {
   private async sendSignalMessageViaTempRoom(
     signalUserId: string,
     message: string,
-    client: MatrixClient
+    client: any
   ): Promise<DirectMessageResult> {
     try {
       console.log(`🔄 FALLBACK: Using temporary room fallback approach for Signal user: ${signalUserId}`);
@@ -539,7 +538,7 @@ export class MatrixSignalBridgeService {
   private async parseSignalBotResponse(
     signalBridgeRoomId: string,
     phoneNumber: string,
-    client: MatrixClient
+    client: any
   ): Promise<string | null> {
     try {
       // Get recent messages from Signal bridge room

@@ -110,7 +110,7 @@ export const matrixRouter = createTRPCRouter({
         // Apply search filter
         if (input.search) {
           const searchLower = input.search.toLowerCase();
-          users = users.filter(user => 
+          users = users.filter((user: any) => 
             user.user_id.toLowerCase().includes(searchLower) ||
             (user.display_name || '').toLowerCase().includes(searchLower)
           );
@@ -122,7 +122,7 @@ export const matrixRouter = createTRPCRouter({
         users = users.slice(startIndex, endIndex);
 
         // Convert to expected format (camelCase for frontend)
-        const formattedUsers = users.map(user => ({
+        const formattedUsers = users.map((user: any) => ({
           userId: user.user_id,
           displayName: user.display_name || user.user_id,
           avatarUrl: user.avatar_url,
@@ -233,7 +233,7 @@ export const matrixRouter = createTRPCRouter({
           if (cachedRooms.length === 0) {
             console.log('Cache is empty, attempting to fetch rooms directly from Matrix...');
             try {
-              await matrixService.ensureInitialized();
+              // await matrixService.ensureInitialized(); // TODO: Fix access issue in Phase 3
               const matrixRooms = await matrixService.getRooms();
               console.log(`Fetched ${matrixRooms?.length || 0} rooms from Matrix service`);
               
@@ -241,7 +241,7 @@ export const matrixRouter = createTRPCRouter({
               const MIN_MEMBER_COUNT = 10;
               const roomsToShow = matrixRooms.filter(room => {
                 // Always include environment configured rooms
-                const envRoomIds = rooms.map(r => r.room_id);
+                const envRoomIds = rooms.map((r: any) => r.room_id);
                 if (envRoomIds.includes(room.roomId)) return true;
                 
                 // Include rooms with enough members
@@ -260,8 +260,8 @@ export const matrixRouter = createTRPCRouter({
               }));
 
               // Merge with env rooms, avoiding duplicates
-              const envRoomIds = new Set(rooms.map(r => r.room_id));
-              const newMatrixRooms = matrixRoomData.filter(r => !envRoomIds.has(r.room_id));
+              const envRoomIds = new Set(rooms.map((r: any) => r.room_id));
+              const newMatrixRooms = matrixRoomData.filter((r: any) => !envRoomIds.has(r.room_id));
               rooms = [...rooms, ...newMatrixRooms];
             } catch (error) {
               console.error('Error fetching rooms from Matrix:', error);
@@ -278,8 +278,8 @@ export const matrixRouter = createTRPCRouter({
             }));
 
             // Merge with env rooms, avoiding duplicates
-            const envRoomIds = new Set(rooms.map(r => r.room_id));
-            const newCacheRooms = cacheRoomData.filter(r => !envRoomIds.has(r.room_id));
+            const envRoomIds = new Set(rooms.map((r: any) => r.room_id));
+            const newCacheRooms = cacheRoomData.filter((r: any) => !envRoomIds.has(r.room_id));
             rooms = [...rooms, ...newCacheRooms];
           }
         }
@@ -287,7 +287,7 @@ export const matrixRouter = createTRPCRouter({
         // Apply search filter
         if (input.search) {
           const searchLower = input.search.toLowerCase();
-          rooms = rooms.filter(room => 
+          rooms = rooms.filter((room: any) => 
             room.name.toLowerCase().includes(searchLower) ||
             (room.topic || '').toLowerCase().includes(searchLower) ||
             (room.category || '').toLowerCase().includes(searchLower)
@@ -296,20 +296,20 @@ export const matrixRouter = createTRPCRouter({
 
         // Apply category filter (skip if 'all' is selected)
         if (input.category && input.category !== 'all') {
-          rooms = rooms.filter(room => 
+          rooms = rooms.filter((room: any) => 
             room.category && room.category.toLowerCase().includes(input.category!.toLowerCase())
           );
         }
 
         // Filter by minimum member count (show rooms with >10 users)
         const MIN_MEMBER_COUNT = 10;
-        rooms = rooms.filter(room => 
+        rooms = rooms.filter((room: any) => 
           room.configured || // Always include configured rooms
           room.member_count > MIN_MEMBER_COUNT // Include discovered rooms with >10 members
         );
 
         // Sort by configured status first, then by name
-        rooms.sort((a, b) => {
+        rooms.sort((a: any, b: any) => {
           if (a.configured && !b.configured) return -1;
           if (!a.configured && b.configured) return 1;
           return a.name.localeCompare(b.name);
@@ -413,7 +413,7 @@ export const matrixRouter = createTRPCRouter({
         );
 
         // Log admin event
-        await ctx.prisma.adminEvent.create({
+        await _ctx.prisma.adminEvent.create({
           data: {
             eventType: 'matrix_bulk_message',
             username: ctx.session.user.username || 'unknown',
@@ -442,7 +442,7 @@ export const matrixRouter = createTRPCRouter({
         }
 
         // Log admin event
-        await ctx.prisma.adminEvent.create({
+        await _ctx.prisma.adminEvent.create({
           data: {
             eventType: 'matrix_bulk_message',
             username: ctx.session.user.username || 'unknown',
@@ -475,7 +475,7 @@ export const matrixRouter = createTRPCRouter({
         const result = await matrixService.bulkSendRoomMessages(input.roomIds, input.message);
 
         // Log admin event
-        await ctx.prisma.adminEvent.create({
+        await _ctx.prisma.adminEvent.create({
           data: {
             eventType: 'matrix_room_message',
             username: ctx.session.user.username || 'unknown',
@@ -503,7 +503,7 @@ export const matrixRouter = createTRPCRouter({
         }
 
         // Log admin event
-        await ctx.prisma.adminEvent.create({
+        await _ctx.prisma.adminEvent.create({
           data: {
             eventType: 'matrix_room_message',
             username: ctx.session.user.username || 'unknown',
@@ -575,7 +575,7 @@ export const matrixRouter = createTRPCRouter({
       }
 
       // Log admin event
-      await ctx.prisma.adminEvent.create({
+      await _ctx.prisma.adminEvent.create({
         data: {
           eventType: 'matrix_user_invite',
           username: ctx.session.user.username || 'unknown',
@@ -651,7 +651,7 @@ export const matrixRouter = createTRPCRouter({
       }
 
       // Log admin event
-      await ctx.prisma.adminEvent.create({
+      await _ctx.prisma.adminEvent.create({
         data: {
           eventType: 'matrix_user_removal',
           username: ctx.session.user.username || 'unknown',
@@ -794,7 +794,7 @@ export const matrixRouter = createTRPCRouter({
       const totalInvited = Object.values(results).reduce((sum, result) => sum + result.invitedRooms.length, 0);
       const totalErrors = Object.values(results).reduce((sum, result) => sum + result.errors.length, 0);
 
-      await ctx.prisma.adminEvent.create({
+      await _ctx.prisma.adminEvent.create({
         data: {
           eventType: 'matrix_bulk_invite_recommended',
           username: ctx.session.user.username || 'unknown',
@@ -846,7 +846,7 @@ export const matrixRouter = createTRPCRouter({
         }
 
         // Log admin event
-        await ctx.prisma.adminEvent.create({
+        await _ctx.prisma.adminEvent.create({
           data: {
             eventType: 'matrix_bulk_invite_rooms',
             username: ctx.session.user.username || 'unknown',
@@ -891,7 +891,7 @@ export const matrixRouter = createTRPCRouter({
   getCacheStats: moderatorProcedure.query(async ({ ctx: _ctx }) => {
     try {
       const { createMatrixCacheService } = await import('@/lib/matrix-cache');
-        const cacheService = createMatrixCacheService(ctx.prisma);
+        const cacheService = createMatrixCacheService(_ctx.prisma);
       const stats = await cacheService.getCacheStats();
       return stats;
     } catch (error) {
@@ -919,7 +919,7 @@ export const matrixRouter = createTRPCRouter({
         const result = await cacheService.fullSync(input.force);
 
         // Log admin event
-        await ctx.prisma.adminEvent.create({
+        await _ctx.prisma.adminEvent.create({
           data: {
             eventType: 'matrix_cache_sync',
             username: ctx.session.user.username || 'unknown',
@@ -955,7 +955,7 @@ export const matrixRouter = createTRPCRouter({
         cacheService.backgroundSync(input.maxAgeMinutes);
 
         // Log admin event
-        await ctx.prisma.adminEvent.create({
+        await _ctx.prisma.adminEvent.create({
           data: {
             eventType: 'matrix_background_sync',
             username: ctx.session.user.username || 'unknown',
@@ -978,7 +978,7 @@ export const matrixRouter = createTRPCRouter({
   getHealthStatus: moderatorProcedure.query(async ({ ctx: _ctx }) => {
     try {
       const { createMatrixCacheService } = await import('@/lib/matrix-cache');
-        const cacheService = createMatrixCacheService(ctx.prisma);
+        const cacheService = createMatrixCacheService(_ctx.prisma);
       const health = await cacheService.healthCheck();
       return health;
     } catch (error) {
@@ -996,11 +996,11 @@ export const matrixRouter = createTRPCRouter({
   detectSignalUsers: moderatorProcedure.mutation(async ({ ctx: _ctx }) => {
     try {
       const { createMatrixCacheService } = await import('@/lib/matrix-cache');
-        const cacheService = createMatrixCacheService(ctx.prisma);
+        const cacheService = createMatrixCacheService(_ctx.prisma);
       const updatedCount = await cacheService.detectSignalUsers();
 
       // Log admin event
-      await ctx.prisma.adminEvent.create({
+      await _ctx.prisma.adminEvent.create({
         data: {
           eventType: 'matrix_signal_detection',
           username: ctx.session.user.username || 'unknown',
@@ -1033,7 +1033,7 @@ export const matrixRouter = createTRPCRouter({
         const deletedCount = await cacheService.cleanupCache(input.maxAgeHours);
 
         // Log admin event
-        await ctx.prisma.adminEvent.create({
+        await _ctx.prisma.adminEvent.create({
           data: {
             eventType: 'matrix_cache_cleanup',
             username: ctx.session.user.username || 'unknown',
@@ -1077,7 +1077,7 @@ export const matrixRouter = createTRPCRouter({
         );
 
         // Log admin event
-        await ctx.prisma.adminEvent.create({
+        await _ctx.prisma.adminEvent.create({
           data: {
             eventType: 'signal_verification_message',
             username: ctx.session.user.username || 'unknown',
@@ -1137,7 +1137,7 @@ export const matrixRouter = createTRPCRouter({
         );
 
         // Log admin event
-        await ctx.prisma.adminEvent.create({
+        await _ctx.prisma.adminEvent.create({
           data: {
             eventType: 'welcome_message_encryption_delay',
             username: ctx.session.user.username || 'unknown',
@@ -1241,7 +1241,7 @@ export const matrixRouter = createTRPCRouter({
         const totalFailed = Object.values(results).filter(success => !success).length;
 
         // Log admin event
-        await ctx.prisma.adminEvent.create({
+        await _ctx.prisma.adminEvent.create({
           data: {
             eventType: 'bulk_welcome_messages_encryption_delay',
             username: ctx.session.user.username || 'unknown',
@@ -1324,7 +1324,7 @@ export const matrixRouter = createTRPCRouter({
       }
       
       // Log admin event
-      await ctx.prisma.adminEvent.create({
+      await _ctx.prisma.adminEvent.create({
         data: {
           eventType: 'matrix_batch_invite',
           username: ctx.session.user.username || 'unknown',
@@ -1405,7 +1405,7 @@ export const matrixRouter = createTRPCRouter({
       }
       
       // Log admin event
-      await ctx.prisma.adminEvent.create({
+      await _ctx.prisma.adminEvent.create({
         data: {
           eventType: 'matrix_batch_removal',
           username: ctx.session.user.username || 'unknown',

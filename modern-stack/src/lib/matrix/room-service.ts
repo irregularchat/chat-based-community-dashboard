@@ -179,7 +179,7 @@ export class MatrixRoomService {
       for (const room of rooms) {
         // Check if room is a direct message room (has exactly 2 members)
         const members = room.getMembers();
-        if (members.length === 2 && members.some(member => member.userId === matrixUserId)) {
+        if (members.length === 2 && members.some((member: any) => member.userId === matrixUserId)) {
           console.log(`Found existing direct room: ${room.roomId}`);
           return room.roomId;
         }
@@ -405,7 +405,7 @@ export class MatrixRoomService {
       }
 
       const members = room.getJoinedMembers();
-      return members.map(member => ({
+      return members.map((member: any) => ({
         userId: member.userId,
         displayName: member.name,
         avatarUrl: member.getAvatarUrl(client.getHomeserverUrl(), 32, 32, 'scale', false, false),

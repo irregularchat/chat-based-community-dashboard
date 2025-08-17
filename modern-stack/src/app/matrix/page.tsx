@@ -241,7 +241,7 @@ export default function MatrixPage() {
     
     if (removeFromAllRooms) {
       // Get all indexed rooms where the bot is present
-      roomsToRemoveFrom = matrixRooms?.map(room => room.room_id) || [];
+      roomsToRemoveFrom = matrixRooms?.map((room: any) => room.room_id) || [];
     }
 
     if (usersToRemove.length > 1) {
@@ -458,7 +458,7 @@ export default function MatrixPage() {
                               />
                               <Label htmlFor={`user-${user.userId}`} className="flex items-center gap-2 cursor-pointer">
                                 <span>{user.displayName || user.userId}</span>
-                                {user.isSignalUser && (
+                                {Boolean((user as any).isSignalUser) && (
                                   <Badge variant="secondary" className="text-xs">
                                     📱 Signal
                                   </Badge>
@@ -555,7 +555,7 @@ export default function MatrixPage() {
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixRooms && matrixRooms.length > 0 ? (
                         <div className="space-y-2">
-                          {matrixRooms.map((room: { room_id: string; name?: string; category: string; }) => (
+                          {matrixRooms.map((room: any) => (
                             <div key={room.room_id} className="flex items-center space-x-2">
                               <Checkbox
                                 id={`room-${room.room_id}`}
@@ -779,7 +779,7 @@ export default function MatrixPage() {
                     <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                       {matrixRooms && matrixRooms.length > 0 ? (
                         <div className="space-y-2">
-                          {matrixRooms.map((room: { room_id: string; name?: string; category: string; }) => (
+                          {matrixRooms.map((room: any) => (
                             <div key={room.room_id} className="flex items-center space-x-2">
                               <Checkbox
                                 id={`invite-room-${room.room_id}`}
@@ -1011,7 +1011,7 @@ export default function MatrixPage() {
                         <div className="border rounded-md p-4 max-h-60 overflow-y-auto">
                           {matrixRooms && matrixRooms.length > 0 ? (
                             <div className="space-y-2">
-                              {matrixRooms.map((room: { room_id: string; name?: string; category: string; }) => (
+                              {matrixRooms.map((room: any) => (
                                 <div key={room.room_id} className="flex items-center space-x-2">
                                   <Checkbox
                                     id={`remove-room-${room.room_id}`}

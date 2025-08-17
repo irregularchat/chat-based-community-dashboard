@@ -13,7 +13,8 @@ async function checkDatabaseHealth(): Promise<{ healthy: boolean; message?: stri
     
     // Use a simple database query to check connectivity
     // This will work with the Prisma setup
-    const { PrismaClient } = await import('@prisma/client');
+    const prismaModule = await import('@prisma/client');
+    const PrismaClient = (prismaModule as any).PrismaClient || prismaModule.default;
     const prisma = new PrismaClient();
     
     await prisma.$queryRaw`SELECT 1`;

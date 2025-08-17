@@ -26,7 +26,7 @@ export async function GET(_request: NextRequest) {
         console.log(`Matrix client has ${roomCount} rooms`);
         
         if (roomCount > 0) {
-          console.log('Sample rooms:', rooms.slice(0, 3).map(r => ({
+          console.log('Sample rooms:', rooms.slice(0, 3).map((r: any) => ({
             id: r.roomId,
             name: r.name,
             members: r.getJoinedMemberCount()

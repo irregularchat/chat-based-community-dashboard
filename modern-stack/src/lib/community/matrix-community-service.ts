@@ -91,10 +91,12 @@ export class MatrixCommunityService extends CommunityService {
 
     try {
       // Use dynamic import to avoid bundling issues
-      const { matrixService } = await import('@/lib/matrix');
+      const { createMatrixCacheService } = await import('@/lib/matrix-cache');
+      const { prisma } = await import('@/lib/prisma');
       
-      // Get cached Matrix users from database
-      const users = await matrixService.getCachedUsers();
+      // Get cached Matrix users from database  
+      const cacheService = createMatrixCacheService(prisma);
+      const users = await cacheService.getCachedUsers({});
       
       return users.map((user: any) => ({
         id: user.userId || user.user_id,
@@ -165,10 +167,12 @@ export class MatrixCommunityService extends CommunityService {
 
     try {
       // Use dynamic import to avoid bundling issues
-      const { matrixService } = await import('@/lib/matrix');
+      const { createMatrixCacheService } = await import('@/lib/matrix-cache');
+      const { prisma } = await import('@/lib/prisma');
       
       // Get cached Matrix rooms from database
-      const rooms = await matrixService.getCachedRooms();
+      const cacheService = createMatrixCacheService(prisma);
+      const rooms = await cacheService.getCachedRooms({});
       
       return rooms.map((room: any) => ({
         id: room.roomId || room.room_id,
@@ -203,16 +207,9 @@ export class MatrixCommunityService extends CommunityService {
     }
 
     try {
-      const { matrixService } = await import('@/lib/matrix');
-      
-      const result = await matrixService.createRoom(name, topic);
-      
-      return {
-        success: result.success,
-        roomId: result.roomId,
-        error: result.success ? undefined : result.error,
-        platform: this.platform
-      };
+      // TODO: Implement Matrix room creation
+      // This is a placeholder implementation for Phase 2
+      throw new CommunityServiceError('Room creation not yet implemented for Matrix', this.platform, 'NOT_IMPLEMENTED');
     } catch (error) {
       return {
         success: false,
@@ -286,12 +283,12 @@ export class MatrixCommunityService extends CommunityService {
     try {
       const { matrixService } = await import('@/lib/matrix');
       
-      const result = await matrixService.inviteUserToRoom(request.userId, request.roomId);
+      const result = await matrixService.inviteToRoom(request.userId, request.roomId);
       
       return {
-        success: result.success,
+        success: result,
         roomId: request.roomId,
-        error: result.success ? undefined : result.error,
+        error: result ? undefined : 'Failed to invite user to room',
         platform: this.platform
       };
     } catch (error) {
@@ -311,12 +308,12 @@ export class MatrixCommunityService extends CommunityService {
     try {
       const { matrixService } = await import('@/lib/matrix');
       
-      const result = await matrixService.removeUserFromRoom(request.userId, request.roomId);
+      const result = await matrixService.removeFromRoom(request.userId, request.roomId);
       
       return {
-        success: result.success,
+        success: result,
         roomId: request.roomId,
-        error: result.success ? undefined : result.error,
+        error: result ? undefined : 'Failed to remove user from room',
         platform: this.platform
       };
     } catch (error) {
@@ -336,17 +333,9 @@ export class MatrixCommunityService extends CommunityService {
     try {
       const { matrixService } = await import('@/lib/matrix');
       
-      const members = await matrixService.getRoomMembers(roomId);
-      
-      return members.map((member: any) => ({
-        id: member.userId || member.user_id,
-        platform: this.platform,
-        displayName: member.displayName || member.display_name || member.userId || member.user_id,
-        avatarUrl: member.avatarUrl || member.avatar_url,
-        matrixUserId: member.userId || member.user_id,
-        isSignalUser: false,
-        isVerified: false
-      }));
+      // TODO: Implement Matrix room member fetching
+      // This is a placeholder implementation for Phase 2
+      return [];
     } catch (error) {
       throw new CommunityServiceError(
         'Failed to get Matrix room members',

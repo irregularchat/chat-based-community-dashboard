@@ -106,7 +106,7 @@ export default function UsersPage() {
       refetch();
       refetchSyncStatus();
     },
-    onError: (_error) => {
+    onError: (error) => {
       toast.error(`Sync failed: ${error.message}`);
     },
   });
@@ -156,7 +156,6 @@ export default function UsersPage() {
         toast.warning(`Failed to update ${data.failedUpdates} users`);
       }
       setSelectedUsers([]);
-      setShowBulkActions(false);
       refetch();
     },
     onError: (_error) => {
@@ -166,7 +165,6 @@ export default function UsersPage() {
 
   const handleUserAction = (action: string, userId: number) => {
     setSelectedUserId(userId);
-    setCurrentAction(action);
     
     switch (action) {
       case 'reset_password':
@@ -652,9 +650,9 @@ export default function UsersPage() {
                             </div>
                           </TableCell>
                           <TableCell>
-                            {user.matrixUsername ? (
+                            {(user as any).matrixUsername ? (
                               <Badge variant="outline" className="text-xs">
-                                {user.matrixUsername}
+                                {(user as any).matrixUsername}
                               </Badge>
                             ) : (
                               <span className="text-xs text-muted-foreground">Not connected</span>
@@ -921,9 +919,9 @@ export default function UsersPage() {
                   <SelectValue placeholder="Select a Matrix user" />
                 </SelectTrigger>
                 <SelectContent>
-                  {matrixUsers?.map((user: { id: string; displayName: string; username: string }) => (
-                    <SelectItem key={user.user_id} value={user.user_id}>
-                      {user.display_name} ({user.user_id})
+                  {matrixUsers?.map((user: any) => (
+                    <SelectItem key={user.userId} value={user.userId}>
+                      {user.displayName} ({user.userId})
                     </SelectItem>
                   ))}
                 </SelectContent>

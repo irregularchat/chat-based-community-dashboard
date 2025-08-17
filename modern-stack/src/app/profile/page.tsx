@@ -115,7 +115,7 @@ export default function ProfilePage() {
   }
 
   const userAttributes = userProfile?.attributes as Record<string, unknown> || {};
-  const verifiedPhoneNumber = (userAttributes.phoneNumber as string) || userProfile?.signalIdentity;
+  const verifiedPhoneNumber = (userAttributes.phoneNumber as string) || (userProfile as any)?.signalIdentity;
   const pendingPhoneNumber = (userAttributes.pendingPhoneVerification as any)?.phoneNumber;
   const phoneNumber = verifiedPhoneNumber || pendingPhoneNumber;
   const hasSignalVerification = !!verifiedPhoneNumber;
@@ -210,8 +210,8 @@ export default function ProfilePage() {
                 <div>
                   <Label>Member Since</Label>
                   <div className="mt-1 p-3 bg-muted rounded-md">
-                    {userProfile?.dateJoined 
-                      ? new Date(userProfile.dateJoined).toLocaleDateString()
+                    {(userProfile as any)?.dateJoined 
+                      ? new Date((userProfile as any).dateJoined).toLocaleDateString()
                       : 'Unknown'
                     }
                   </div>
@@ -408,11 +408,11 @@ export default function ProfilePage() {
                   <div>
                     <p className="font-medium">Account Status</p>
                     <p className="text-sm text-muted-foreground">
-                      {userProfile?.isActive ? 'Active' : 'Inactive'}
+                      {(userProfile as any)?.isActive ? 'Active' : 'Inactive'}
                     </p>
                   </div>
-                  <Badge variant={userProfile?.isActive ? 'default' : 'destructive'}>
-                    {userProfile?.isActive ? 'Active' : 'Inactive'}
+                  <Badge variant={(userProfile as any)?.isActive ? 'default' : 'destructive'}>
+                    {(userProfile as any)?.isActive ? 'Active' : 'Inactive'}
                   </Badge>
                 </div>
               </div>

@@ -91,3 +91,13 @@ export async function getMsgType() {
   const sdk = await getMatrixSdk();
   return sdk.MsgType;
 }
+
+export async function getClientEvent() {
+  const sdk = await getMatrixSdk();
+  return sdk.ClientEvent;
+}
+
+export async function getRoomEvent() {
+  const sdk = await getMatrixSdk();
+  return sdk.RoomEvent;
+}

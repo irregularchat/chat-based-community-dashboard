@@ -100,8 +100,8 @@ export default function CreateUserPage() {
 
   // Handle Matrix user selection
   const handleMatrixUserSelect = (userId: string) => {
-    const user = matrixUsers.find(u => u.user_id === userId);
-    setSelectedMatrixUser(user || null);
+    const user = matrixUsers.find(u => u.userId === userId);
+    setSelectedMatrixUser(user as any || null);
     setFormData(prev => ({ ...prev, matrixUserId: userId }));
   };
 
@@ -1039,7 +1039,7 @@ export default function CreateUserPage() {
                           </div>
                         ) : (
                           <SearchableMatrixUserSelect
-                            users={matrixUsers}
+                            users={matrixUsers as any}
                             value={formData.matrixUserId}
                             onValueChange={handleMatrixUserSelect}
                             placeholder="Search and select a Matrix user..."

@@ -174,7 +174,7 @@ function buildFieldCondition(token: SearchToken, isNegated: boolean = false): Re
   const mappedFields = USER_SEARCH_FIELDS[field as keyof typeof USER_SEARCH_FIELDS];
   
   if (!mappedFields) {
-    return null;
+    return {};
   }
 
   if (Array.isArray(mappedFields)) {

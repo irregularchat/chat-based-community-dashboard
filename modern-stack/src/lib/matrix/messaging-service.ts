@@ -57,7 +57,7 @@ export class MatrixMessagingService {
       // Send the message
       const MsgType = await getMsgType();
       const response = await client.sendEvent(roomId, 'm.room.message', {
-        msgtype: MsgType.Text,
+        msgtype: 'm.text',
         body: message,
       });
 
@@ -82,7 +82,7 @@ export class MatrixMessagingService {
   public async sendRoomMessage(
     roomId: string,
     message: string,
-    msgType: MsgType = MsgType.Text
+    msgType?: any
   ): Promise<DirectMessageResult> {
     await this.clientService.ensureInitialized();
     
@@ -96,9 +96,12 @@ export class MatrixMessagingService {
 
     try {
       console.log(`Sending message to room ${roomId}`);
+      
+      // Use default message type
+      const messageType = msgType || 'm.text';
 
       const response = await client.sendEvent(roomId, 'm.room.message', {
-        msgtype: msgType,
+        msgtype: messageType,
         body: message,
       });
 
@@ -295,7 +298,7 @@ export class MatrixMessagingService {
   private async sendSignalBridgeMessage(
     signalUserId: string,
     message: string,
-    client: MatrixClient
+    client: any
   ): Promise<DirectMessageResult> {
     try {
       console.log(`🔥 BRIDGE: Starting Signal bridge message flow for ${signalUserId}`);
@@ -330,7 +333,7 @@ export class MatrixMessagingService {
       console.log(`📤 BRIDGE: Sending Signal bridge command: ${startChatCommand} to room ${signalBridgeRoomId}`);
 
       const commandResponse = await client.sendEvent(signalBridgeRoomId, 'm.room.message', {
-        msgtype: MsgType.Text,
+        msgtype: 'm.text',
         body: startChatCommand,
       });
 
@@ -424,7 +427,7 @@ export class MatrixMessagingService {
         console.log(`🔐 Room is encrypted, sending hello message first...`);
         try {
           await client.sendEvent(roomId, 'm.room.message', {
-            msgtype: MsgType.Text,
+            msgtype: 'm.text',
             body: 'hello',
           });
           console.log(`✅ Hello message sent to establish encryption`);
@@ -440,7 +443,7 @@ export class MatrixMessagingService {
       // Send the actual message
       console.log(`📤 Sending actual message to ${userId}`);
       const response = await client.sendEvent(roomId, 'm.room.message', {
-        msgtype: MsgType.Text,
+        msgtype: 'm.text',
         body: message,
       });
 
@@ -463,14 +466,14 @@ export class MatrixMessagingService {
   /**
    * Get or create a direct message room with a user
    */
-  private async getOrCreateDirectRoom(matrixUserId: string, client: MatrixClient): Promise<string | null> {
+  private async getOrCreateDirectRoom(matrixUserId: string, client: any): Promise<string | null> {
     try {
       // Check if we already have a direct room with this user
       const rooms = client.getRooms();
-      const directRoom = rooms.find(room => {
+      const directRoom = rooms.find((room: any) => {
         const members = room.getJoinedMembers();
         return members.length === 2 && 
-               members.some(member => member.userId === matrixUserId) &&
+               members.some((member: any) => member.userId === matrixUserId) &&
                room.getDMInviter();
       });
 
@@ -503,7 +506,7 @@ export class MatrixMessagingService {
   private async findSignalChatRoom(
     signalUserId: string, 
     botUsername: string, 
-    client: MatrixClient
+    client: any
   ): Promise<string | null> {
     try {
       console.log(`🔍 BRIDGE: Looking for Signal chat room for ${signalUserId}`);
@@ -522,14 +525,14 @@ export class MatrixMessagingService {
         
         // Get room members
         const members = room.getJoinedMembers();
-        const memberUserIds = members.map(m => m.userId);
+        const memberUserIds = members.map((m: any) => m.userId);
         
         console.log(`🏠 BRIDGE: Checking room ${roomId} (${roomName}) with members: ${memberUserIds.join(', ')}`);
 
         // Check if this room has the bot and the signal user
-        const hasBotMember = memberUserIds.some(id => id.toLowerCase().includes(botUsername.replace('@', '').toLowerCase()));
+        const hasBotMember = memberUserIds.some((id: any) => id.toLowerCase().includes(botUsername.replace('@', '').toLowerCase()));
         const hasSignalUserInName = roomName.includes(cleanSignalUserId) || roomName.includes(signalUserId);
-        const hasSignalUserAsMember = memberUserIds.some(id => id.toLowerCase().includes(cleanSignalUserId));
+        const hasSignalUserAsMember = memberUserIds.some((id: any) => id.toLowerCase().includes(cleanSignalUserId));
 
         console.log(`🔍 BRIDGE: Room analysis - hasBotMember: ${hasBotMember}, hasSignalUserInName: ${hasSignalUserInName}, hasSignalUserAsMember: ${hasSignalUserAsMember}`);
 

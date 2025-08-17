@@ -92,7 +92,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
   // Signal verification queries and mutations
   const { data: signalStatus, refetch: refetchSignalStatus } = trpc.user.getSignalVerificationStatus.useQuery(
     undefined,
-    { enabled: session?.user?.id === userId }
+    { enabled: session?.user?.id === id }
   );
 
   const initiateSignalVerificationMutation = trpc.user.initiateSignalVerification.useMutation({
@@ -284,7 +284,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
             <TabsTrigger value="profile">Profile</TabsTrigger>
             <TabsTrigger value="notes">Notes ({user.notes?.length || 0})</TabsTrigger>
             <TabsTrigger value="matrix">Matrix</TabsTrigger>
-            {session?.user?.id === userId && (
+            {session?.user?.id === id && (
               <TabsTrigger value="signal">Signal</TabsTrigger>
             )}
           </TabsList>
@@ -463,7 +463,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {user.attributes?.source === 'matrix' ? (
+                  {(user.attributes as any)?.source === 'matrix' ? (
                     <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
                       <p className="text-sm text-amber-800">
                         📝 Notes are not available for Matrix users. Sync this user to the database to enable notes.
@@ -494,7 +494,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
                     <div className="space-y-4">
                       <Label>Existing Notes</Label>
                       <div className="space-y-3">
-                        {user.notes.map((note: { id: number; content: string; createdAt: Date }) => (
+                        {user.notes.map((note: any) => (
                           <div key={note.id} className="border rounded-md p-4 bg-gray-50">
                             <div className="flex justify-between items-start mb-2">
                               <div className="text-xs text-gray-500">
@@ -585,7 +585,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
             </Card>
           </TabsContent>
 
-          {session?.user?.id === userId && (
+          {session?.user?.id === id && (
             <TabsContent value="signal">
               <Card>
                 <CardHeader>

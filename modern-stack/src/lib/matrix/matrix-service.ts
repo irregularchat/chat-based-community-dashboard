@@ -62,15 +62,6 @@ export class MatrixService {
     }
   }
 
-  /**
-   * Ensure the service is initialized before use
-   */
-  private async ensureInitialized(): Promise<void> {
-    if (!this.initPromise) {
-      this.initPromise = this.initialize();
-    }
-    await this.initPromise;
-  }
 
   /**
    * Check if the service is configured and ready

@@ -98,16 +98,16 @@ export default function NavigationHeader() {
           </Button>
 
           <Button
-            variant={isActive('/community') ? 'default' : 'ghost'}
+            variant={isActive('/community-timeline') ? 'default' : 'ghost'}
             size="sm"
             className={cn(
               "text-foreground/60 hover:text-foreground/80",
-              isActive('/community') ? "text-foreground" : ""
+              isActive('/community-timeline') ? "text-foreground" : ""
             )}
-            onClick={() => handleNavigation('/community')}
+            onClick={() => handleNavigation('/community-timeline')}
           >
             <Activity className="w-4 h-4 mr-2" />
-            Community Timeline
+            Timeline
           </Button>
 
           {(session.user.isModerator || session.user.isAdmin) && (
@@ -127,16 +127,16 @@ export default function NavigationHeader() {
 
           {(session.user.isModerator || session.user.isAdmin) && (
             <Button
-              variant={isActive('/matrix') ? 'default' : 'ghost'}
+              variant={isActive('/community') ? 'default' : 'ghost'}
               size="sm"
               className={cn(
                 "text-foreground/60 hover:text-foreground/80",
-                isActive('/matrix') ? "text-foreground" : ""
+                isActive('/community') ? "text-foreground" : ""
               )}
-              onClick={() => handleNavigation('/matrix')}
+              onClick={() => handleNavigation('/community')}
             >
               <MessageSquare className="w-4 h-4 mr-2" />
-              Matrix
+              Community Management
             </Button>
           )}
 
@@ -169,9 +169,9 @@ export default function NavigationHeader() {
                 <Home className="w-4 h-4 mr-2" />
                 Dashboard
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleNavigation('/community')}>
+              <DropdownMenuItem onClick={() => handleNavigation('/community-timeline')}>
                 <Activity className="w-4 h-4 mr-2" />
-                Community Timeline
+                Timeline
               </DropdownMenuItem>
               {(session.user.isModerator || session.user.isAdmin) && (
                 <DropdownMenuItem onClick={() => handleNavigation('/users')}>
@@ -180,9 +180,9 @@ export default function NavigationHeader() {
                 </DropdownMenuItem>
               )}
               {(session.user.isModerator || session.user.isAdmin) && (
-                <DropdownMenuItem onClick={() => handleNavigation('/matrix')}>
+                <DropdownMenuItem onClick={() => handleNavigation('/community')}>
                   <MessageSquare className="w-4 h-4 mr-2" />
-                  Matrix
+                  Community Management
                 </DropdownMenuItem>
               )}
               {session.user.isAdmin && (

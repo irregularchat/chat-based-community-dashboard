@@ -480,7 +480,7 @@ export default function UserDashboard() {
   const checkSignalVerification = () => {
     const userAttributes = userProfile?.attributes as Record<string, unknown> || {};
     const phoneNumber = userAttributes.phoneNumber as string;
-    const hasSignalVerification = !!userProfile?.signalIdentity || !!phoneNumber;
+    const hasSignalVerification = !!(userProfile as any)?.signalIdentity || !!phoneNumber;
     return hasSignalVerification;
   };
 
@@ -1295,7 +1295,7 @@ export default function UserDashboard() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {myInvitations.invitations.slice(0, 3).map((invitation: { id: string; inviteeName?: string; email: string; createdAt: string; status: string; }) => (
+                    {myInvitations.invitations.slice(0, 3).map((invitation: any) => (
                       <div key={invitation.id} className="flex items-center justify-between p-3 border rounded-lg">
                         <div className="flex-1">
                           <p className="font-medium">{invitation.inviteeName || invitation.email}</p>
@@ -1485,7 +1485,7 @@ export default function UserDashboard() {
               <div className="grid gap-4 md:grid-cols-2">
                 {/* Database-managed community bookmarks */}
                 {communityBookmarks && communityBookmarks.length > 0 ? (
-                  communityBookmarks.map((bookmark: { id: string; title: string; url: string; description: string; icon?: string; }) => (
+                  communityBookmarks.map((bookmark: any) => (
                     <div key={bookmark.id} className="flex items-start gap-3 p-4 border rounded-lg hover:bg-muted/50 transition-colors relative">
                       <div className="text-2xl">{bookmark.icon || '🔗'}</div>
                       <div className="flex-1">

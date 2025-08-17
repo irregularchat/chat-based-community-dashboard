@@ -1,5 +1,5 @@
 // Use the new SDK instance to avoid multiple entrypoints
-import { createMatrixClient, getMsgType } from './matrix/sdk-instance';
+import { createMatrixClient, getMsgType, getClientEvent, getRoomEvent } from './matrix/sdk-instance';
 
 // Type imports - these will need to be imported dynamically to avoid bundling conflicts
 type MatrixClient = any;
@@ -232,7 +232,7 @@ class MatrixService {
 
       // Set up event listeners for encryption
       const ClientEventEnum = await getClientEvent();
-      this.client.on(ClientEventEnum.Event, (event) => {
+      this.client.on(ClientEventEnum.Event, (event: any) => {
         if (event.getType() === 'm.room.encrypted') {
           console.log(`🔐 Received encrypted event in room ${event.getRoomId()}`);
         }
@@ -867,7 +867,7 @@ class MatrixService {
             
             // Log all messages for debugging
             console.log('🔍 RESOLVE: All messages in bridge room:');
-            messagesResponse.chunk.forEach((event, index) => {
+            messagesResponse.chunk.forEach((event: any, index: number) => {
               console.log(`  ${index + 1}. ${event.sender}: ${event.content?.body || '[no body]'} (${event.type})`);
             });
             
@@ -875,11 +875,11 @@ class MatrixService {
             const botUsername = process.env.MATRIX_SIGNAL_BOT_USERNAME || '@signalbot:irregularchat.com';
             
             // Check if bot has any messages at all
-            const botMessages = messagesResponse.chunk.filter(event => event.sender === botUsername);
+            const botMessages = messagesResponse.chunk.filter((event: any) => event.sender === botUsername);
             console.log(`🤖 RESOLVE: Found ${botMessages.length} messages from ${botUsername}`);
             
             // Check if messages are encrypted and try to decrypt them
-            const encryptedMessages = messagesResponse.chunk.filter(event => 
+            const encryptedMessages = messagesResponse.chunk.filter((event: any) => 
               event.type === 'm.room.encrypted' || event.content?.algorithm
             );
             
@@ -1003,7 +1003,7 @@ class MatrixService {
       }
 
       console.warn(`⚠️ RESOLVE: No UUID found for phone ${normalizedPhone} in bot responses`);
-      console.log(`🔍 RESOLVE: Recent messages from all users:`, recentEvents.map(e => ({
+      console.log(`🔍 RESOLVE: Recent messages from all users:`, recentEvents.map((e: any) => ({
         sender: e.getSender(),
         type: e.getType(),
         body: e.getContent()?.body?.substring(0, 100)
@@ -1174,7 +1174,7 @@ class MatrixService {
       for (const room of rooms) {
         // Check if room is a direct message room (has exactly 2 members)
         const members = room.getMembers();
-        if (members.length === 2 && members.some(member => member.userId === matrixUserId)) {
+        if (members.length === 2 && members.some((member: any) => member.userId === matrixUserId)) {
           return room.roomId;
         }
       }
@@ -1312,12 +1312,12 @@ class MatrixService {
         // Update all joined rooms where we have permission
         const allRooms = this.client.getRooms();
         roomsToUpdate = allRooms
-          .filter(room => {
+          .filter((room: any) => {
             // Only update rooms where we're an admin (power level 100)
             const myPowerLevel = room.getMember(this.config?.userId || '')?.powerLevel || 0;
             return myPowerLevel >= 100;
           })
-          .map(room => room.roomId);
+          .map((room: any) => room.roomId);
       }
 
       // Update power level in each room
@@ -1579,7 +1579,7 @@ class MatrixService {
         }
       }
 
-      console.log(`Found ${rooms.length} total rooms, ${rooms.filter(r => r.member_count > 10).length} with >10 members`);
+      console.log(`Found ${rooms.length} total rooms, ${rooms.filter(r => r.memberCount > 10).length} with >10 members`);
       return rooms;
     } catch (error) {
       console.error('Error getting rooms:', error);

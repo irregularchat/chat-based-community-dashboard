@@ -50,7 +50,7 @@ export default function ProfilePage() {
     },
   });
 
-  const verifyPhoneMutation = trpc.user.verifyPhoneNumber.useMutation({
+  const verifyPhoneMutation = trpc.user.verifyPhone.useMutation({
     onSuccess: (data) => {
       toast.success(data.message || 'Phone number verified successfully!');
       setPhoneVerificationForm({
@@ -82,7 +82,7 @@ export default function ProfilePage() {
     }
     verifyPhoneMutation.mutate({
       phoneNumber: phoneVerificationForm.phoneNumber,
-      verificationCode: phoneVerificationForm.verificationCode,
+      verificationHash: phoneVerificationForm.verificationCode,
     });
   };
 

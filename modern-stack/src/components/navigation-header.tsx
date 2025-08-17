@@ -248,7 +248,7 @@ export default function NavigationHeader() {
                 </p>
               </div>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => handleNavigation('/dashboard')}>
+              <DropdownMenuItem onClick={() => handleNavigation('/profile')}>
                 <User className="w-4 h-4 mr-2" />
                 Profile
               </DropdownMenuItem>

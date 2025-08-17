@@ -275,11 +275,19 @@ export class SignalApiClient {
       const name = deviceName || 'Signal-CLI-Dashboard';
       const params = `?device_name=${encodeURIComponent(name)}`;
       const url = `/v1/qrcodelink${params}`;
-      const response = await this.httpClient.get(url);
+      
+      // Request the QR code as binary data
+      const response = await this.httpClient.get(url, {
+        responseType: 'arraybuffer'
+      });
+      
+      // Convert binary PNG data to base64 data URL
+      const base64 = Buffer.from(response.data).toString('base64');
+      const dataUrl = `data:image/png;base64,${base64}`;
       
       return {
         success: true,
-        data: response.data?.qrcode || response.data || response.request?.responseURL,
+        data: dataUrl,
         timestamp: new Date(),
       };
     } catch (error) {

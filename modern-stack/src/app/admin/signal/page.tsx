@@ -47,6 +47,9 @@ export default function AdminSignalPage() {
     captchaGenerator: '',
   });
 
+  // Device linking QR code state
+  const [deviceLinkingQR, setDeviceLinkingQR] = useState<string | null>(null);
+
   // Queries
   const { data: healthStatus, refetch: refetchHealth } = trpc.signal.getHealth.useQuery();
   const { data: config, refetch: refetchConfig } = trpc.signal.getConfig.useQuery();
@@ -107,12 +110,16 @@ export default function AdminSignalPage() {
   const generateQRMutation = trpc.signal.generateQRCode.useMutation({
     onSuccess: (data) => {
       if (data.qrCode) {
-        // Display QR code (could open in modal or new tab)
-        window.open(data.qrCode, '_blank');
+        // Display QR code inline
+        setDeviceLinkingQR(data.qrCode);
+        toast.success('QR code generated! Scan with Signal app to link device.');
+      } else {
+        toast.error('No QR code returned from Signal CLI');
       }
     },
     onError: (error) => {
       toast.error(`QR code generation failed: ${error.message}`);
+      setDeviceLinkingQR(null);
     },
   });
 
@@ -807,6 +814,30 @@ export default function AdminSignalPage() {
                   <QrCode className="w-4 h-4 mr-2" />
                   {generateQRMutation.isPending ? 'Generating...' : 'Generate Device Linking QR Code'}
                 </Button>
+                
+                {/* Display generated QR code */}
+                {deviceLinkingQR && (
+                  <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-md">
+                    <div className="flex flex-col items-center space-y-3">
+                      <h4 className="font-semibold text-green-800">Scan with Signal App</h4>
+                      <img 
+                        src={deviceLinkingQR} 
+                        alt="Signal Device Linking QR Code" 
+                        className="w-64 h-64 border-2 border-green-300 rounded"
+                      />
+                      <p className="text-sm text-green-700 text-center">
+                        Open Signal on your phone → Settings → Linked Devices → Link New Device
+                      </p>
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => setDeviceLinkingQR(null)}
+                      >
+                        Close QR Code
+                      </Button>
+                    </div>
+                  </div>
+                )}
                 
                 {generateQRMutation.isError && (
                   <div className="p-3 bg-red-50 border border-red-200 rounded-md">

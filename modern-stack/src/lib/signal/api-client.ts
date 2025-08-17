@@ -324,6 +324,60 @@ export class SignalApiClient {
   }
 
   /**
+   * Update profile information (name and/or avatar)
+   */
+  async updateProfile(phoneNumber: string, name?: string, avatarBase64?: string): Promise<SignalApiResponse<void>> {
+    try {
+      const url = `/v1/profiles/${phoneNumber}`;
+      const payload: any = {};
+      
+      if (name) {
+        payload.name = name;
+      }
+      
+      if (avatarBase64) {
+        payload.avatar = avatarBase64;
+      }
+      
+      await this.httpClient.put(url, payload);
+      
+      return {
+        success: true,
+        timestamp: new Date(),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to update profile',
+        timestamp: new Date(),
+      };
+    }
+  }
+
+  /**
+   * Get received messages for a phone number
+   */
+  async getMessages(phoneNumber: string): Promise<SignalApiResponse<any[]>> {
+    try {
+      const url = `/v1/receive/${phoneNumber}`;
+      const response = await this.httpClient.get(url);
+      
+      return {
+        success: true,
+        data: response.data || [],
+        timestamp: new Date(),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get messages',
+        data: [],
+        timestamp: new Date(),
+      };
+    }
+  }
+
+  /**
    * Check if a phone number is registered with Signal
    */
   async isRegistered(phoneNumber: string): Promise<boolean> {

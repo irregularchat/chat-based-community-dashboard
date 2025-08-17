@@ -1,5 +1,116 @@
 # Lessons Learned
 
+## Signal CLI Integration (2025-08-17)
+
+### Overview
+Successfully integrated Signal CLI REST API for sending/receiving Signal messages through the admin dashboard.
+
+### Key Challenges & Solutions
+
+#### 1. Phone Number Registration & PIN Lock Issues
+**Problem**: Signal account got PIN locked with message "Account is pin locked, but pin data has been deleted on the server"
+**Solution**: 
+- Restart Signal CLI container to clear cached state
+- Implement better error handling for PIN lock scenarios
+- Add user-friendly guidance in UI for recovery
+
+#### 2. QR Code Generation Binary Data Handling
+**Problem**: Runtime error "Failed to decode path param(s)" when generating QR codes
+**Root Cause**: QR code API returns binary PNG data, but code tried to open it as URL with window.open()
+**Solution**:
+```typescript
+// Convert binary to base64 data URL
+const response = await this.httpClient.get(url, { responseType: 'arraybuffer' });
+const base64 = Buffer.from(response.data).toString('base64');
+const dataUrl = `data:image/png;base64,${base64}`;
+```
+
+#### 3. Account Status Checking API Limitations
+**Problem**: `/v1/accounts/{number}` endpoint returns 404 even for registered accounts
+**Solution**: Fallback to checking accounts list
+```typescript
+const accountsResponse = await this.httpClient.get('/v1/accounts');
+const accounts = accountsResponse.data || [];
+const isRegistered = accounts.includes(phoneNumber);
+```
+
+#### 4. tRPC Method Type Mismatches
+**Problem**: 405 Method Not Allowed - generateQRCode defined as query but called as mutation
+**Solution**: Changed from `.query()` to `.mutation()` to match client usage
+
+#### 5. Device Linking vs Direct Registration
+**Learning**: Device linking QR codes are for adding Signal CLI as secondary device to existing Signal account. For standalone bot operation, direct phone number registration is needed.
+
+### Best Practices Discovered
+
+1. **Environment Configuration**
+   - Keep phone numbers in E.164 format (+1234567890)
+   - Use separate phone number for Signal CLI bot
+   - Store sensitive configs in .env.local
+
+2. **Error Handling**
+   - Provide specific error messages for common scenarios
+   - Implement graceful fallbacks for API limitations
+   - Add retry logic for transient failures
+
+3. **User Experience**
+   - Show clear registration status indicators
+   - Provide step-by-step guidance for captcha process
+   - Display QR codes inline instead of popups
+   - Add visual feedback for all async operations
+
+4. **Docker Container Management**
+   - Use health checks to monitor container status
+   - Mount volumes for persistent data when needed
+   - Implement proper restart policies
+
+### Signal CLI REST API Insights
+
+1. **Available Endpoints**:
+   - `/v1/register/{number}` - Register new phone number
+   - `/v1/register/{number}/verify/{code}` - Verify with SMS code
+   - `/v2/send` - Send messages (supports groups, attachments)
+   - `/v1/receive/{number}` - Get received messages
+   - `/v1/qrcodelink` - Generate device linking QR code
+   - `/v1/profiles/{number}` - Update profile (name, avatar)
+
+2. **API Quirks**:
+   - Account details endpoint often returns 404
+   - Must include device_name parameter for QR generation
+   - Captcha required for new registrations
+   - Profile updates use PUT method
+
+3. **Message Sending Requirements**:
+   - Phone number must be registered
+   - Recipients array for v2/send endpoint
+   - International format required for all numbers
+
+### Performance Considerations
+
+- Signal CLI takes 1-8 seconds for operations
+- QR code generation ~1.3 seconds
+- Message sending ~8 seconds initially (includes encryption setup)
+- Subsequent messages faster (~1-2 seconds)
+
+### Security Notes
+
+1. Never expose Signal CLI API directly to internet
+2. Use authentication for admin endpoints
+3. Validate and normalize all phone numbers
+4. Don't log sensitive message content
+5. Implement rate limiting for message sending
+
+### Future Improvements Identified
+
+1. **Profile Management**: Add UI for setting bot name and avatar
+2. **Username Support**: Allow sending to Signal usernames
+3. **Two-way Conversations**: Implement message threads
+4. **Message History**: Store and display conversation history
+5. **Bulk Operations**: Support sending to multiple recipients
+6. **Media Support**: Handle image/file attachments
+7. **Group Management**: Create and manage Signal groups
+8. **Delivery Tracking**: Show read receipts and delivery status
+
 ## Matrix User Search and Multi-Select Implementation (2024-08-16)
 
 ### Issue Description

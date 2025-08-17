@@ -1322,7 +1322,26 @@ export const userRouter = createTRPCRouter({
         let verificationSent = false;
         let method = 'none';
 
-        const verificationMessage = `🔐 Phone Verification Code\n\nYou requested to update your phone number to: ${normalizedPhone.normalized}\n\nVerification Code: ${verificationHash}\n\nEnter this 6-digit code in the dashboard to complete verification.\n\nThis code expires in 15 minutes.`;
+        // Get user info for security context in message
+        const user = await ctx.prisma.user.findUnique({
+          where: { id: parseInt(ctx.session.user.id) },
+        });
+
+        const userDisplayName = user?.firstName && user?.lastName 
+          ? `${user.firstName} ${user.lastName}`
+          : user?.username || ctx.session.user.username || 'User';
+        
+        const verificationMessage = `🔐 Phone Verification Code
+
+Verification Code: ${verificationHash}
+
+Account: ${userDisplayName} (${ctx.session.user.email})
+
+Enter this 6-digit code in the Community Dashboard to complete phone verification.
+
+⚠️ SECURITY NOTICE: If you did not request this verification from the dashboard, someone may be trying to access your account. Do not share this code with anyone.
+
+This code expires in 15 minutes.`;
 
         // 1. First try Signal CLI REST API (preferred method)
         try {

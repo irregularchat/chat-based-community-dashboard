@@ -199,6 +199,7 @@ export class SignalApiClient {
    */
   async getAccount(phoneNumber: string): Promise<SignalApiResponse<SignalAccount>> {
     try {
+      // First try to get account details
       const url = `/v1/accounts/${phoneNumber}`;
       const response = await this.httpClient.get(url);
       
@@ -213,7 +214,30 @@ export class SignalApiClient {
         },
         timestamp: new Date(),
       };
-    } catch (error) {
+    } catch (error: any) {
+      // If account details endpoint fails, check if account exists in list
+      try {
+        const accountsResponse = await this.httpClient.get('/v1/accounts');
+        const accounts = accountsResponse.data || [];
+        const isRegistered = accounts.includes(phoneNumber);
+        
+        if (isRegistered) {
+          return {
+            success: true,
+            data: {
+              phoneNumber,
+              uuid: undefined,
+              deviceId: undefined,
+              isRegistered: true,
+              registrationTime: undefined,
+            },
+            timestamp: new Date(),
+          };
+        }
+      } catch (listError) {
+        console.warn('Could not check accounts list:', listError);
+      }
+      
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get account info',

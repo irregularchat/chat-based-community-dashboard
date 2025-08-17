@@ -1318,47 +1318,70 @@ export const userRouter = createTRPCRouter({
           },
         });
 
-        // Try to send verification via SignalBot first, fallback to Matrix
+        // Try to send verification via Signal CLI first, fallback to Matrix Signal bridge
         let verificationSent = false;
         let method = 'none';
 
-        // Send via SignalBot using direct phone number resolution
-        // This will resolve phone -> UUID -> @signal_{UUID}:domain -> send message
-        const { matrixService } = await import('@/lib/matrix');
-        
-        // Check environment variables directly to bypass SDK initialization issues
-        const homeserver = process.env.MATRIX_HOMESERVER;
-        const accessToken = process.env.MATRIX_ACCESS_TOKEN;
-        const userId = process.env.MATRIX_USER_ID;
-        const signalBridgeRoom = process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID;
-        
-        if (homeserver && accessToken && userId && signalBridgeRoom) {
-          try {
-            const verificationMessage = `🔐 Phone Verification Code\n\nYou requested to update your phone number to: ${normalizedPhone.normalized}\n\nVerification Code: ${verificationHash}\n\nEnter this 6-digit code in the dashboard to complete verification.\n\nThis code expires in 15 minutes.`;
+        const verificationMessage = `🔐 Phone Verification Code\n\nYou requested to update your phone number to: ${normalizedPhone.normalized}\n\nVerification Code: ${verificationHash}\n\nEnter this 6-digit code in the dashboard to complete verification.\n\nThis code expires in 15 minutes.`;
+
+        // 1. First try Signal CLI REST API (preferred method)
+        try {
+          const { SignalBotService } = await import('@/lib/signal/signal-bot-service');
+          const signalBot = new SignalBotService();
+          
+          if (signalBot.isConfigured() && signalBot.config.phoneNumber) {
+            console.log(`📞 Attempting Signal CLI verification for phone: ${normalizedPhone.normalized}`);
             
-            console.log(`📞 Attempting Signal verification for phone: ${normalizedPhone.normalized}`);
-            
-            // Use the phone-to-UUID resolution method which creates @signal_{UUID}:domain
-            const result = await matrixService.sendSignalMessageByPhone(normalizedPhone.normalized, verificationMessage);
+            const result = await signalBot.sendMessage(normalizedPhone.normalized, verificationMessage);
             if (result.success) {
               verificationSent = true;
-              method = 'signal';
-              console.log(`✅ Phone verification sent via Signal bridge to ${normalizedPhone.normalized}`);
+              method = 'signal-cli';
+              console.log(`✅ Phone verification sent via Signal CLI to ${normalizedPhone.normalized}`);
             } else {
-              console.warn(`❌ Signal verification failed: ${result.error}`);
-              // Don't fall back to regular Matrix user - Signal verification should only go to Signal
+              console.warn(`❌ Signal CLI verification failed: ${result}`);
             }
-          } catch (signalError) {
-            console.warn('❌ Signal verification failed with exception:', signalError);
+          } else {
+            console.log('⚠️ Signal CLI not configured, falling back to Matrix Signal bridge');
           }
-        } else {
-          console.warn('⚠️ Matrix service environment not configured for Signal verification');
-          console.warn('Missing environment variables:', {
-            MATRIX_HOMESERVER: !!homeserver,
-            MATRIX_ACCESS_TOKEN: !!accessToken,
-            MATRIX_USER_ID: !!userId,
-            MATRIX_SIGNAL_BRIDGE_ROOM_ID: !!signalBridgeRoom,
-          });
+        } catch (signalCliError) {
+          console.warn('❌ Signal CLI verification failed with exception:', signalCliError);
+        }
+
+        // 2. Fallback to Matrix Signal bridge if Signal CLI failed or not configured
+        if (!verificationSent) {
+          const { matrixService } = await import('@/lib/matrix');
+          
+          // Check environment variables directly to bypass SDK initialization issues
+          const homeserver = process.env.MATRIX_HOMESERVER;
+          const accessToken = process.env.MATRIX_ACCESS_TOKEN;
+          const userId = process.env.MATRIX_USER_ID;
+          const signalBridgeRoom = process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID;
+          
+          if (homeserver && accessToken && userId && signalBridgeRoom) {
+            try {
+              console.log(`📞 Attempting Matrix Signal bridge verification for phone: ${normalizedPhone.normalized}`);
+              
+              // Use the phone-to-UUID resolution method which creates @signal_{UUID}:domain
+              const result = await matrixService.sendSignalMessageByPhone(normalizedPhone.normalized, verificationMessage);
+              if (result.success) {
+                verificationSent = true;
+                method = 'signal-bridge';
+                console.log(`✅ Phone verification sent via Signal bridge to ${normalizedPhone.normalized}`);
+              } else {
+                console.warn(`❌ Signal bridge verification failed: ${result.error}`);
+              }
+            } catch (signalError) {
+              console.warn('❌ Signal bridge verification failed with exception:', signalError);
+            }
+          } else {
+            console.warn('⚠️ Matrix service environment not configured for Signal verification');
+            console.warn('Missing environment variables:', {
+              MATRIX_HOMESERVER: !!homeserver,
+              MATRIX_ACCESS_TOKEN: !!accessToken,
+              MATRIX_USER_ID: !!userId,
+              MATRIX_SIGNAL_BRIDGE_ROOM_ID: !!signalBridgeRoom,
+            });
+          }
         }
 
         if (!verificationSent) {
@@ -1368,11 +1391,17 @@ export const userRouter = createTRPCRouter({
           });
         }
 
+        const methodMessages = {
+          'signal-cli': 'Verification code sent via Signal CLI!',
+          'signal-bridge': 'Verification code sent via Matrix Signal bridge!',
+          'none': 'Verification code sent to your Signal account!'
+        };
+
         return { 
           success: true, 
           normalizedPhone: normalizedPhone.normalized,
           method,
-          message: 'Verification code sent to your Signal account!'
+          message: methodMessages[method as keyof typeof methodMessages] || methodMessages.none
         };
       } catch (error) {
         console.error('Error requesting phone verification:', error);

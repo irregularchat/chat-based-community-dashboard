@@ -271,13 +271,15 @@ export class SignalApiClient {
    */
   async generateQRCode(deviceName?: string): Promise<SignalApiResponse<string>> {
     try {
-      const params = deviceName ? `?device_name=${encodeURIComponent(deviceName)}` : '';
+      // Device name is required for QR code generation
+      const name = deviceName || 'Signal-CLI-Dashboard';
+      const params = `?device_name=${encodeURIComponent(name)}`;
       const url = `/v1/qrcodelink${params}`;
       const response = await this.httpClient.get(url);
       
       return {
         success: true,
-        data: response.data?.qrcode || response.request?.responseURL,
+        data: response.data?.qrcode || response.data || response.request?.responseURL,
         timestamp: new Date(),
       };
     } catch (error) {

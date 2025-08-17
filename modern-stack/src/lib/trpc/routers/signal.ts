@@ -210,10 +210,20 @@ export const signalRouter = createTRPCRouter({
           });
         }
 
-        if (!signalBot.isRegistered()) {
+        // Check if phone number is actually registered with Signal
+        if (!signalBot.config.phoneNumber) {
           throw new TRPCError({
             code: 'PRECONDITION_FAILED',
-            message: 'No registered phone number available for sending messages',
+            message: 'No phone number configured for sending messages',
+          });
+        }
+
+        // Check registration status with Signal API
+        const isRegistered = await signalBot.apiClient.isRegistered(signalBot.config.phoneNumber);
+        if (!isRegistered) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: `Phone number ${signalBot.config.phoneNumber} is not registered with Signal. Please complete registration first.`,
           });
         }
 
@@ -414,7 +424,7 @@ export const signalRouter = createTRPCRouter({
    * Generate QR code for device linking (admin only)
    */
   generateQRCode: adminProcedure
-    .query(async () => {
+    .mutation(async () => {
       try {
         const signalBot = new SignalBotService();
         

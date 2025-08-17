@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database (for development)
+  postgres:
+    image: postgres:15-alpine
+    container_name: community-dashboard-postgres-dev
+    environment:
+      POSTGRES_DB: dashboarddb
+      POSTGRES_USER: dashboard_user
+      POSTGRES_PASSWORD: dashboard_password
+    ports:
+      - "5436:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./prisma/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - dashboard-network-dev
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dashboard_user -d dashboarddb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Signal CLI REST API (for development)
+  signal-cli:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: community-dashboard-signal-dev
+    environment:
+      - MODE=normal
+    ports:
+      - "8081:8080"  # Expose on port 8081 for local development
+    volumes:
+      - signal_cli_dev_data:/home/.local/share/signal-cli
+    networks:
+      - dashboard-network-dev
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  postgres_dev_data:
+    driver: local
+  signal_cli_dev_data:
+    driver: local
+
+networks:
+  dashboard-network-dev:
+    driver: bridge

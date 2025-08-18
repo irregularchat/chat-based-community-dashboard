@@ -6,6 +6,7 @@ import { adminRouter } from './routers/admin';
 import { settingsRouter } from './routers/settings';
 import { inviteRouter } from './routers/invite';
 import { communityRouter } from './routers/community';
+import { signalRouter } from './routers/signal';
 
 export const appRouter = createTRPCRouter({
   auth: authRouter,
@@ -15,6 +16,7 @@ export const appRouter = createTRPCRouter({
   settings: settingsRouter,
   invite: inviteRouter,
   community: communityRouter,
+  signal: signalRouter,
 });
 
 export type AppRouter = typeof appRouter; 

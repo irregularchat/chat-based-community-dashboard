@@ -116,12 +116,38 @@ export const matrixRouter = createTRPCRouter({
         const endIndex = startIndex + input.limit;
         users = users.slice(startIndex, endIndex);
 
-        // Convert to expected format
-        const formattedUsers = users.map(user => ({
-          user_id: user.user_id,
-          display_name: user.display_name || user.user_id,
-          avatar_url: user.avatar_url,
-          is_signal_user: (user as Record<string, unknown>).is_signal_user,
+        // Convert to expected format and enhance Signal user display names
+        const formattedUsers = await Promise.all(users.map(async (user) => {
+          let displayName = user.display_name || user.user_id;
+          
+          // If this is a Signal user and we have a phone number configured, get enhanced display name
+          if ((user as Record<string, unknown>).is_signal_user && process.env.SIGNAL_PHONE_NUMBER) {
+            try {
+              const { enhancedSignalClient } = await import('@/lib/signal/enhanced-api-client');
+              enhancedSignalClient.setPhoneNumber(process.env.SIGNAL_PHONE_NUMBER);
+              
+              // Try to get enhanced display name from Signal profile
+              const enhancedDisplayName = enhancedSignalClient.getDisplayName(user.user_id);
+              
+              // Only use enhanced name if it's different from the formatted phone number pattern
+              if (enhancedDisplayName && 
+                  enhancedDisplayName !== user.user_id && 
+                  !enhancedDisplayName.match(/^\(\d{3}\) \d{3}-\d{4}$/) &&
+                  !enhancedDisplayName.startsWith('User ')) {
+                displayName = enhancedDisplayName;
+              }
+            } catch (error) {
+              console.error('Error getting enhanced Signal display name:', error);
+              // Fall back to original display_name
+            }
+          }
+          
+          return {
+            user_id: user.user_id,
+            display_name: displayName,
+            avatar_url: user.avatar_url,
+            is_signal_user: (user as Record<string, unknown>).is_signal_user as boolean | undefined,
+          };
         }));
 
         return formattedUsers;

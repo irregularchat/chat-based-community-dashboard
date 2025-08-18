@@ -1466,6 +1466,19 @@ export default function UserDashboard() {
                         </div>
                       </div>
                     </Button>
+                    <Button
+                      variant="outline"
+                      className="h-auto p-4 flex flex-col items-center gap-2"
+                      onClick={() => window.location.href = '/community-management'}
+                    >
+                      <div className="text-2xl">📱</div>
+                      <div className="text-center">
+                        <div className="font-medium">Signal Management</div>
+                        <div className="text-sm text-muted-foreground">
+                          Enhanced Signal community tools
+                        </div>
+                      </div>
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -1567,6 +1580,19 @@ export default function UserDashboard() {
                         </div>
                       </div>
                     </Button>
+                    <Button
+                      variant="outline"
+                      className="h-auto p-4 flex flex-col items-center gap-2"
+                      onClick={() => window.location.href = '/community-management'}
+                    >
+                      <div className="text-2xl">📱</div>
+                      <div className="text-center">
+                        <div className="font-medium">Signal Management</div>
+                        <div className="text-sm text-muted-foreground">
+                          Enhanced Signal community tools
+                        </div>
+                      </div>
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -1654,6 +1680,12 @@ export default function UserDashboard() {
                       <a href="/invites" className="flex items-center gap-2">
                         🎫 Invite Management
                         <span className="text-sm text-muted-foreground ml-auto">Create & manage invites</span>
+                      </a>
+                    </Button>
+                    <Button variant="outline" className="justify-start" asChild>
+                      <a href="/community-management" className="flex items-center gap-2">
+                        📱 Signal Management
+                        <span className="text-sm text-muted-foreground ml-auto">Enhanced Signal community tools</span>
                       </a>
                     </Button>
                   </div>

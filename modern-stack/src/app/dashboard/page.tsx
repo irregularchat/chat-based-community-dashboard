@@ -61,6 +61,8 @@ export default function UserDashboard() {
   
   const [selectedTab, setSelectedTab] = useState(getDefaultTab());
   const [messageToAdmin, setMessageToAdmin] = useState('');
+  const [joinRequestGroupId, setJoinRequestGroupId] = useState<string | null>(null);
+  const [joinRequestMessage, setJoinRequestMessage] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [newPhone, setNewPhone] = useState('');
@@ -128,8 +130,8 @@ export default function UserDashboard() {
   });
 
   // Signal Groups data
-  const { data: signalStatus, isLoading: signalStatusLoading } = trpc.user.getMySignalStatus.useQuery();
-  const { data: availableSignalGroups, isLoading: signalGroupsLoading } = trpc.user.getAvailableSignalGroups.useQuery();
+  const { data: signalStatus, isLoading: signalStatusLoading, refetch: refetchSignalStatus } = trpc.user.getMySignalStatus.useQuery();
+  const { data: availableSignalGroups, isLoading: signalGroupsLoading, refetch: refetchSignalGroups } = trpc.user.getAvailableSignalGroups.useQuery();
 
   // Mutations
   const sendAdminMessageMutation = trpc.user.sendAdminMessage.useMutation({
@@ -139,6 +141,21 @@ export default function UserDashboard() {
     },
     onError: (error) => {
       toast.error(`Failed to send message: ${error.message}`);
+    },
+  });
+
+  // Signal group join request mutation
+  const requestSignalGroupJoinMutation = trpc.user.requestSignalGroupJoin.useMutation({
+    onSuccess: (result) => {
+      toast.success(result.message);
+      setJoinRequestGroupId(null);
+      setJoinRequestMessage('');
+      // Refetch data to update UI
+      refetchSignalStatus();
+      refetchSignalGroups();
+    },
+    onError: (error) => {
+      toast.error(`Failed to submit join request: ${error.message}`);
     },
   });
 
@@ -461,6 +478,21 @@ export default function UserDashboard() {
       return (r.category as string)?.toLowerCase().includes(category.toLowerCase()) ||
         (r.topic as string)?.toLowerCase().includes(category.toLowerCase());
     });
+  };
+
+  // Signal group join request handler
+  const handleJoinRequest = async (groupId: string, requiresApproval: boolean) => {
+    if (joinRequestGroupId === groupId) {
+      // Submit the request
+      await requestSignalGroupJoinMutation.mutateAsync({
+        groupId,
+        message: joinRequestMessage.trim() || undefined
+      });
+    } else {
+      // Show input form
+      setJoinRequestGroupId(groupId);
+      setJoinRequestMessage(requiresApproval ? '' : ''); // Pre-fill for non-approval groups
+    }
   };
 
   if (!session) {
@@ -851,7 +883,7 @@ export default function UserDashboard() {
                                   )}
                                 </div>
                               </div>
-                              <div className="ml-4">
+                              <div className="ml-4 space-y-2">
                                 {group.userStatus === 'member' && (
                                   <Badge variant="outline" className="bg-green-50 text-green-700">
                                     Joined
@@ -863,9 +895,50 @@ export default function UserDashboard() {
                                   </Badge>
                                 )}
                                 {group.userStatus === 'available' && signalStatus?.isSignalVerified && (
-                                  <Button size="sm" variant="outline">
-                                    Request to Join
-                                  </Button>
+                                  <div className="flex flex-col items-end space-y-2">
+                                    {joinRequestGroupId === group.groupId ? (
+                                      <div className="w-48 space-y-2">
+                                        {group.requiresApproval && (
+                                          <Textarea
+                                            value={joinRequestMessage}
+                                            onChange={(e) => setJoinRequestMessage(e.target.value)}
+                                            placeholder="Why do you want to join? (optional)"
+                                            className="text-xs resize-none"
+                                            rows={2}
+                                            maxLength={500}
+                                          />
+                                        )}
+                                        <div className="flex gap-1">
+                                          <Button 
+                                            size="sm" 
+                                            onClick={() => handleJoinRequest(group.groupId, group.requiresApproval)}
+                                            disabled={requestSignalGroupJoinMutation.isPending}
+                                            className="flex-1"
+                                          >
+                                            {requestSignalGroupJoinMutation.isPending ? 'Sending...' : 'Submit Request'}
+                                          </Button>
+                                          <Button 
+                                            size="sm" 
+                                            variant="outline"
+                                            onClick={() => {
+                                              setJoinRequestGroupId(null);
+                                              setJoinRequestMessage('');
+                                            }}
+                                          >
+                                            Cancel
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <Button 
+                                        size="sm" 
+                                        variant="outline"
+                                        onClick={() => handleJoinRequest(group.groupId, group.requiresApproval)}
+                                      >
+                                        Request to Join
+                                      </Button>
+                                    )}
+                                  </div>
                                 )}
                                 {group.userStatus === 'available' && !signalStatus?.isSignalVerified && (
                                   <Button size="sm" variant="outline" disabled>

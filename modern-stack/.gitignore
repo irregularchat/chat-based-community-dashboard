@@ -41,6 +41,18 @@ yarn-error.log*
 .env.development.local
 .env.test.local
 .env.production.local
+.env.production
+.env.staging
+.env.*.local
+# Backup files - NEVER COMMIT THESE
+*.backup
+*.backup-*
+*.save
+.env.backup*
+.env.save
+# Only .env.example should be committed
+!.env.example
+!.env.signal.example
 
 # vercel
 .vercel

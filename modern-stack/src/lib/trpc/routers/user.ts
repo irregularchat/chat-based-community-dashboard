@@ -2616,6 +2616,182 @@ The invitation email has been sent. You'll be notified when they accept the invi
         action: actionDescription,
       };
     }),
+
+  // Signal Group Discovery & Management APIs (Phase 1)
+  
+  // Get user's Signal status and current group memberships
+  getMySignalStatus: protectedProcedure.query(async ({ ctx }) => {
+    try {
+      const userId = parseInt(ctx.session.user.id);
+      
+      // Get user's phone number/signal identity for verification status
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: userId },
+        select: { 
+          attributes: true,
+          signalIdentity: true
+        }
+      });
+
+      // Check if user has verified Signal phone
+      const phoneNumber = user?.attributes && typeof user.attributes === 'object' 
+        ? (user.attributes as any).phone_number 
+        : null;
+      const isSignalVerified = !!phoneNumber && phoneNumber.length > 10;
+
+      // Get user's current Signal group memberships
+      const groupMemberships = await ctx.prisma.signalGroupMembership.findMany({
+        where: { 
+          userId,
+          status: 'active'
+        },
+        orderBy: { joinedAt: 'desc' }
+      });
+
+      // Get pending join requests
+      const pendingRequests = await ctx.prisma.signalGroupJoinRequest.findMany({
+        where: {
+          userId,
+          status: 'pending'
+        },
+        orderBy: { requestedAt: 'desc' }
+      });
+
+      return {
+        isSignalVerified,
+        phoneNumber: phoneNumber || null,
+        groupCount: groupMemberships.length,
+        groupMemberships: groupMemberships.map(membership => ({
+          groupId: membership.groupId,
+          groupName: membership.groupName,
+          joinedAt: membership.joinedAt,
+          status: membership.status
+        })),
+        pendingRequests: pendingRequests.map(request => ({
+          groupId: request.groupId,
+          requestedAt: request.requestedAt,
+          message: request.message,
+          status: request.status
+        }))
+      };
+    } catch (error) {
+      console.error('Error getting Signal status:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get Signal status'
+      });
+    }
+  }),
+
+  // Get available Signal groups that user can join
+  getAvailableSignalGroups: protectedProcedure.query(async ({ ctx }) => {
+    try {
+      const userId = parseInt(ctx.session.user.id);
+
+      // Get all active public groups
+      const availableGroups = await ctx.prisma.signalAvailableGroup.findMany({
+        where: {
+          isActive: true,
+          isPublic: true
+        },
+        orderBy: [
+          { displayOrder: 'asc' },
+          { groupName: 'asc' }
+        ]
+      });
+
+      // Get user's current memberships to filter out joined groups
+      const userMemberships = await ctx.prisma.signalGroupMembership.findMany({
+        where: {
+          userId,
+          status: 'active'
+        },
+        select: { groupId: true }
+      });
+      
+      const userGroupIds = new Set(userMemberships.map(m => m.groupId));
+
+      // Get user's pending requests
+      const pendingRequests = await ctx.prisma.signalGroupJoinRequest.findMany({
+        where: {
+          userId,
+          status: 'pending'
+        },
+        select: { groupId: true }
+      });
+      
+      const pendingGroupIds = new Set(pendingRequests.map(r => r.groupId));
+
+      // Filter and enhance groups
+      const groupsWithStatus = availableGroups.map(group => ({
+        id: group.id,
+        groupId: group.groupId,
+        groupName: group.groupName,
+        description: group.description,
+        memberCount: group.memberCount,
+        maxMembers: group.maxMembers,
+        requiresApproval: group.requiresApproval,
+        userStatus: userGroupIds.has(group.groupId) 
+          ? 'member' 
+          : pendingGroupIds.has(group.groupId)
+          ? 'pending'
+          : 'available'
+      }));
+
+      return groupsWithStatus;
+    } catch (error) {
+      console.error('Error getting available Signal groups:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get available Signal groups'
+      });
+    }
+  }),
+
+  // Check specific Signal group membership for user
+  checkSignalMembership: protectedProcedure
+    .input(z.object({
+      groupId: z.string().min(1, 'Group ID is required')
+    }))
+    .query(async ({ ctx, input }) => {
+      try {
+        const userId = parseInt(ctx.session.user.id);
+
+        // Check membership
+        const membership = await ctx.prisma.signalGroupMembership.findUnique({
+          where: {
+            userId_groupId: {
+              userId,
+              groupId: input.groupId
+            }
+          }
+        });
+
+        // Check pending request
+        const pendingRequest = await ctx.prisma.signalGroupJoinRequest.findUnique({
+          where: {
+            userId_groupId: {
+              userId,
+              groupId: input.groupId
+            }
+          }
+        });
+
+        return {
+          isMember: membership?.status === 'active',
+          hasPendingRequest: pendingRequest?.status === 'pending',
+          membershipStatus: membership?.status || null,
+          joinedAt: membership?.joinedAt || null,
+          requestedAt: pendingRequest?.requestedAt || null
+        };
+      } catch (error) {
+        console.error('Error checking Signal membership:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to check Signal membership'
+        });
+      }
+    }),
 });
 
 // Helper function for password hashing

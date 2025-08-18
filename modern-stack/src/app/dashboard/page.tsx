@@ -127,6 +127,10 @@ export default function UserDashboard() {
     limit: 5,
   });
 
+  // Signal Groups data
+  const { data: signalStatus, isLoading: signalStatusLoading } = trpc.user.getMySignalStatus.useQuery();
+  const { data: availableSignalGroups, isLoading: signalGroupsLoading } = trpc.user.getAvailableSignalGroups.useQuery();
+
   // Mutations
   const sendAdminMessageMutation = trpc.user.sendAdminMessage.useMutation({
     onSuccess: (result) => {
@@ -485,7 +489,7 @@ export default function UserDashboard() {
       </div>
 
       <Tabs value={selectedTab} onValueChange={setSelectedTab} className="space-y-4">
-        <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-7 lg:overflow-x-visible">
+        <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-8 lg:overflow-x-visible">
           {/* Admin gets Admin tab first */}
           {session.user.isAdmin && (
             <TabsTrigger value="admin" className="flex items-center gap-2 min-w-0 flex-shrink-0">
@@ -508,6 +512,10 @@ export default function UserDashboard() {
           <TabsTrigger value="rooms" className="flex items-center gap-2 min-w-0 flex-shrink-0">
             <Users className="w-4 h-4 shrink-0" />
             <span className="hidden sm:inline">Rooms</span>
+          </TabsTrigger>
+          <TabsTrigger value="signal-groups" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+            <Phone className="w-4 h-4 shrink-0" />
+            <span className="hidden sm:inline">Signal Groups</span>
           </TabsTrigger>
           <TabsTrigger value="account" className="flex items-center gap-2 min-w-0 flex-shrink-0">
             <Settings className="w-4 h-4 shrink-0" />
@@ -693,6 +701,190 @@ export default function UserDashboard() {
                 <div className="text-center py-8">
                   <Users className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
                   <p className="text-muted-foreground">No rooms available at the moment</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Signal Groups Tab */}
+        <TabsContent value="signal-groups">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Phone className="w-5 h-5" />
+                Signal Groups
+              </CardTitle>
+              <CardDescription>
+                Discover and join Signal community groups
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {signalStatusLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Signal Status */}
+                  <div className="p-4 border rounded-lg bg-gray-50">
+                    <h3 className="font-semibold mb-2 flex items-center gap-2">
+                      📱 Your Signal Status
+                    </h3>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        {signalStatus?.isSignalVerified ? (
+                          <CheckCircle className="w-4 h-4 text-green-600" />
+                        ) : (
+                          <AlertCircle className="w-4 h-4 text-yellow-600" />
+                        )}
+                        <span className="text-sm">
+                          {signalStatus?.isSignalVerified 
+                            ? `Signal verified: ${signalStatus.phoneNumber}` 
+                            : 'Signal phone not verified'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Users className="w-4 h-4 text-blue-600" />
+                        <span className="text-sm">
+                          Member of {signalStatus?.groupCount || 0} Signal groups
+                        </span>
+                      </div>
+                    </div>
+                    {!signalStatus?.isSignalVerified && (
+                      <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-md">
+                        <p className="text-sm text-blue-800">
+                          <strong>Want to join Signal groups?</strong> Verify your Signal phone number in the Account tab to get started.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Current Groups */}
+                  {signalStatus?.groupMemberships && signalStatus.groupMemberships.length > 0 && (
+                    <div>
+                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+                        ✅ Your Signal Groups
+                      </h3>
+                      <div className="space-y-2">
+                        {signalStatus.groupMemberships.map((membership) => (
+                          <div key={membership.groupId} className="p-3 border rounded-lg">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="font-medium">{membership.groupName}</p>
+                                <p className="text-sm text-gray-600">
+                                  Joined {new Date(membership.joinedAt).toLocaleDateString()}
+                                </p>
+                              </div>
+                              <Badge variant="outline" className="bg-green-50 text-green-700">
+                                Member
+                              </Badge>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Pending Requests */}
+                  {signalStatus?.pendingRequests && signalStatus.pendingRequests.length > 0 && (
+                    <div>
+                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+                        ⏳ Pending Join Requests
+                      </h3>
+                      <div className="space-y-2">
+                        {signalStatus.pendingRequests.map((request) => (
+                          <div key={request.groupId} className="p-3 border rounded-lg bg-yellow-50">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="font-medium">Group ID: {request.groupId}</p>
+                                <p className="text-sm text-gray-600">
+                                  Requested {new Date(request.requestedAt).toLocaleDateString()}
+                                </p>
+                                {request.message && (
+                                  <p className="text-sm text-gray-700 mt-1">
+                                    Message: "{request.message}"
+                                  </p>
+                                )}
+                              </div>
+                              <Badge variant="outline" className="bg-yellow-50 text-yellow-700">
+                                Pending
+                              </Badge>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Available Groups */}
+                  <div>
+                    <h3 className="font-semibold mb-3 flex items-center gap-2">
+                      🌐 Available Signal Groups
+                    </h3>
+                    {signalGroupsLoading ? (
+                      <div className="flex items-center justify-center py-4">
+                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                      </div>
+                    ) : availableSignalGroups && availableSignalGroups.length > 0 ? (
+                      <div className="space-y-3">
+                        {availableSignalGroups.map((group) => (
+                          <div key={group.groupId} className="p-4 border rounded-lg">
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1">
+                                <h4 className="font-medium mb-1">{group.groupName}</h4>
+                                {group.description && (
+                                  <p className="text-sm text-gray-600 mb-2">{group.description}</p>
+                                )}
+                                <div className="flex items-center gap-4 text-sm text-gray-500">
+                                  <span className="flex items-center gap-1">
+                                    <Users className="w-3 h-3" />
+                                    {group.memberCount} members
+                                  </span>
+                                  {group.maxMembers && (
+                                    <span>Max: {group.maxMembers}</span>
+                                  )}
+                                  {group.requiresApproval && (
+                                    <Badge variant="outline" className="text-xs">
+                                      Requires Approval
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="ml-4">
+                                {group.userStatus === 'member' && (
+                                  <Badge variant="outline" className="bg-green-50 text-green-700">
+                                    Joined
+                                  </Badge>
+                                )}
+                                {group.userStatus === 'pending' && (
+                                  <Badge variant="outline" className="bg-yellow-50 text-yellow-700">
+                                    Pending
+                                  </Badge>
+                                )}
+                                {group.userStatus === 'available' && signalStatus?.isSignalVerified && (
+                                  <Button size="sm" variant="outline">
+                                    Request to Join
+                                  </Button>
+                                )}
+                                {group.userStatus === 'available' && !signalStatus?.isSignalVerified && (
+                                  <Button size="sm" variant="outline" disabled>
+                                    Verify Signal First
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-8 text-gray-500">
+                        <Phone className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+                        <p>No Signal groups available yet.</p>
+                        <p className="text-sm">Check back later or contact an admin.</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </CardContent>

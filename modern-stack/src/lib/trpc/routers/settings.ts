@@ -732,4 +732,104 @@ export const settingsRouter = createTRPCRouter({
 
       return { success: true };
     }),
+
+  // Get services configuration status - checks actual service status, not just database settings
+  getServicesConfig: publicProcedure.query(async () => {
+    // Helper function to check if environment variable is configured
+    const checkEnvVar = (varName: string) => Boolean(process.env[varName]);
+    
+    // Helper function to check if service is active via boolean env var
+    const isServiceActive = (varName: string) => process.env[varName] === 'true' || process.env[varName] === 'True';
+
+    return {
+      // Matrix Service
+      matrix: {
+        isConfigured: checkEnvVar('MATRIX_ACCESS_TOKEN') && checkEnvVar('MATRIX_URL'),
+        isActive: isServiceActive('MATRIX_ACTIVE'),
+        source: 'Environment Variables',
+        details: {
+          url: process.env.MATRIX_URL,
+          botUsername: process.env.MATRIX_BOT_USERNAME,
+          hasAccessToken: checkEnvVar('MATRIX_ACCESS_TOKEN'),
+          hasDefaultRoom: checkEnvVar('MATRIX_DEFAULT_ROOM_ID'),
+        }
+      },
+      
+      // Authentik Service  
+      authentik: {
+        isConfigured: checkEnvVar('AUTHENTIK_CLIENT_ID') && checkEnvVar('AUTHENTIK_CLIENT_SECRET') && checkEnvVar('AUTHENTIK_ISSUER'),
+        isActive: true, // Authentik is always active if configured
+        source: 'Environment Variables',
+        details: {
+          clientId: process.env.AUTHENTIK_CLIENT_ID,
+          issuer: process.env.AUTHENTIK_ISSUER,
+          baseUrl: process.env.AUTHENTIK_BASE_URL,
+          hasApiToken: checkEnvVar('AUTHENTIK_API_TOKEN'),
+          hasClientSecret: checkEnvVar('AUTHENTIK_CLIENT_SECRET'),
+        }
+      },
+
+      // Discourse Service
+      discourse: {
+        isConfigured: checkEnvVar('DISCOURSE_URL') && checkEnvVar('DISCOURSE_API_KEY') && checkEnvVar('DISCOURSE_API_USERNAME'),
+        isActive: isServiceActive('DISCOURSE_ACTIVE'),
+        source: 'Environment Variables',
+        details: {
+          url: process.env.DISCOURSE_URL,
+          apiUsername: process.env.DISCOURSE_API_USERNAME,
+          categoryId: process.env.DISCOURSE_CATEGORY_ID,
+          hasApiKey: checkEnvVar('DISCOURSE_API_KEY'),
+        }
+      },
+
+      // SMTP Service
+      smtp: {
+        isConfigured: checkEnvVar('SMTP_SERVER') && checkEnvVar('SMTP_USERNAME') && checkEnvVar('SMTP_PASSWORD'),
+        isActive: isServiceActive('SMTP_ACTIVE'),
+        source: 'Environment Variables',
+        details: {
+          server: process.env.SMTP_SERVER,
+          port: process.env.SMTP_PORT,
+          username: process.env.SMTP_USERNAME,
+          fromEmail: process.env.SMTP_FROM_EMAIL,
+          hasPassword: checkEnvVar('SMTP_PASSWORD'),
+        }
+      },
+
+      // Signal CLI Service
+      signal: {
+        isConfigured: checkEnvVar('SIGNAL_CLI_REST_API_BASE_URL') && checkEnvVar('SIGNAL_PHONE_NUMBER'),
+        isActive: isServiceActive('SIGNAL_CLI_ENABLED'),
+        source: 'Environment Variables',
+        details: {
+          apiUrl: process.env.SIGNAL_CLI_REST_API_BASE_URL,
+          phoneNumber: process.env.SIGNAL_PHONE_NUMBER,
+          deviceName: process.env.SIGNAL_CLI_DEVICE_NAME,
+          timeout: process.env.SIGNAL_CLI_TIMEOUT,
+        }
+      },
+
+      // AI APIs
+      ai: {
+        isConfigured: checkEnvVar('OPENAI_API_KEY'),
+        isActive: checkEnvVar('OPENAI_API_KEY'),
+        source: 'Environment Variables',
+        details: {
+          hasOpenAIKey: checkEnvVar('OPENAI_API_KEY'),
+          // Add other AI service checks here as needed
+        }
+      },
+
+      // Webhook Service
+      webhook: {
+        isConfigured: checkEnvVar('WEBHOOK_URL') && checkEnvVar('WEBHOOK_SECRET'),
+        isActive: isServiceActive('WEBHOOK_ACTIVE'),
+        source: 'Environment Variables',
+        details: {
+          url: process.env.WEBHOOK_URL,
+          hasSecret: checkEnvVar('WEBHOOK_SECRET'),
+        }
+      },
+    };
+  }),
 }); 

@@ -1,5 +1,42 @@
 # Lessons Learned
 
+## CRITICAL: Missing Signal CLI Configuration UI (2025-08-18)
+
+### Problem
+During configuration status fix implementation, discovered that **Signal CLI configuration tab is completely missing** from the admin configuration page (`/admin/configuration`). This is a critical gap because:
+
+1. **Signal is fully functional** via environment variables and API endpoints
+2. **Signal service shows as configured** in the new getServicesConfig endpoint  
+3. **But users cannot configure Signal through the admin UI** - there's no Signal tab
+
+### Root Cause
+Signal CLI was integrated through:
+- Environment variables (`.env`)
+- Backend API endpoints (`src/lib/trpc/routers/signal.ts`)
+- Community management functionality
+- But **NO admin configuration UI was ever created**
+
+### Impact
+- Users cannot register new Signal phone numbers through the UI
+- No way to update Signal CLI settings without editing environment files
+- Incomplete admin experience compared to other services (Matrix, Authentik, etc.)
+
+### Required Fix
+Must implement Signal CLI configuration tab with:
+1. Phone number registration/verification
+2. QR code linking for existing accounts  
+3. Signal CLI REST API URL configuration
+4. Device name and timeout settings
+5. Registration status display
+
+### Lesson for Future
+**NEVER delete or skip UI components without documentation**
+- Always implement complete admin UI for all integrated services
+- Document any missing UI components in todo lists
+- Verify all services have both backend AND frontend integration
+
+---
+
 ## Signal CLI Integration (2025-08-17)
 
 ### Overview

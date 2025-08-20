@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { createTRPCRouter, adminProcedure, moderatorProcedure } from '../trpc';
-import { matrixService } from '@/lib/matrix';
 import { createMatrixCacheService } from '@/lib/matrix-cache';
 import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
 
@@ -48,16 +47,22 @@ function getRoomCategory(roomName: string): string {
 export const matrixRouter = createTRPCRouter({
   // Get Matrix configuration status
   getConfig: moderatorProcedure.query(async ({ ctx: _ctx }) => {
-    const config = matrixService.getConfig();
-    if (!config) {
+    try {
+      const { matrixService } = await import('@/lib/matrix');
+      const config = matrixService.getConfig();
+      if (!config) {
+        return null;
+      }
+      
+      return {
+        homeserver: config.homeserver,
+        userId: config.userId,
+        isConfigured: matrixService.isConfigured(),
+      };
+    } catch (error) {
+      console.warn('Matrix service import failed:', error);
       return null;
     }
-    
-    return {
-      homeserver: config.homeserver,
-      userId: config.userId,
-      isConfigured: matrixService.isConfigured(),
-    };
   }),
 
   // Get list of Matrix users from cache
@@ -158,8 +163,9 @@ export const matrixRouter = createTRPCRouter({
     }),
 
   // Sync Matrix users to cache
-  syncMatrixUsers: moderatorProcedure.mutation(async ({ ctx: _ctx }) => {
+  syncMatrixUsers: moderatorProcedure.mutation(async ({ ctx }) => {
     try {
+      const { matrixService } = await import('@/lib/matrix');
       if (!matrixService.isConfigured()) {
         throw new Error('Matrix service not configured');
       }
@@ -207,8 +213,10 @@ export const matrixRouter = createTRPCRouter({
         
         // Get environment-configured rooms (from .env file)
         if (input.includeConfigured) {
-          const envRooms = matrixService.parseRooms();
-          const envCategories = matrixService.parseCategories();
+          try {
+            const { matrixService } = await import('@/lib/matrix');
+            const envRooms = matrixService.parseRooms();
+            const envCategories = matrixService.parseCategories();
           
           for (const envRoom of envRooms) {
             // Map categories to display names
@@ -225,10 +233,15 @@ export const matrixRouter = createTRPCRouter({
               configured: true,
             });
           }
+          } catch (matrixError) {
+            console.warn('Matrix service import failed for env rooms:', matrixError);
+          }
         }
         
         // Get rooms from database cache if Matrix is configured
-        if (matrixService.isConfigured() && input.includeDiscovered) {
+        try {
+          const { matrixService } = await import('@/lib/matrix');
+          if (matrixService.isConfigured() && input.includeDiscovered) {
           const cachedRooms = await cacheService.getCachedRooms({
             search: input.search,
             includeDirectRooms: false,
@@ -249,6 +262,9 @@ export const matrixRouter = createTRPCRouter({
           const envRoomIds = new Set(rooms.map(r => r.room_id));
           const newCacheRooms = cacheRoomData.filter(r => !envRoomIds.has(r.room_id));
           rooms = [...rooms, ...newCacheRooms];
+          }
+        } catch (matrixError) {
+          console.warn('Matrix service import failed for cached rooms:', matrixError);
         }
 
         // Apply search filter

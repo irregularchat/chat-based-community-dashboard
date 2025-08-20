@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { createTRPCRouter, publicProcedure, protectedProcedure, moderatorProcedure, adminProcedure } from '../trpc';
 import { authentikService } from '@/lib/authentik';
 import { emailService } from '@/lib/email';
-import { matrixService } from '@/lib/matrix';
 import { discourseService } from '@/lib/discourse';
 import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
 import { normalizePhoneNumber, formatPhoneForDisplay } from '@/lib/phone-utils';
@@ -967,20 +966,23 @@ export const userRouter = createTRPCRouter({
         }
 
         // Send Matrix welcome message if requested and Matrix service is configured
-        if (input.sendMatrixWelcome && matrixService.isConfigured()) {
+        if (input.sendMatrixWelcome) {
           try {
-            // Generate Matrix user ID format (this should be configurable)
-            const matrixUserId = `@${username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
-            const fullName = `${input.firstName || 'User'} ${input.lastName || ''}`.trim();
-            
-            await matrixService.sendWelcomeMessage(
-              matrixUserId,
-              username,
-              fullName,
-              authentikResult.temp_password || '',
-              discoursePostUrl
-            );
-            console.log(`Matrix welcome message sent to ${matrixUserId}`);
+            const { matrixService } = await import('@/lib/matrix');
+            if (matrixService.isConfigured()) {
+              // Generate Matrix user ID format (this should be configurable)
+              const matrixUserId = `@${username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
+              const fullName = `${input.firstName || 'User'} ${input.lastName || ''}`.trim();
+              
+              await matrixService.sendWelcomeMessage(
+                matrixUserId,
+                username,
+                fullName,
+                authentikResult.temp_password || '',
+                discoursePostUrl
+              );
+              console.log(`Matrix welcome message sent to ${matrixUserId}`);
+            }
           } catch (matrixError) {
             console.error('Error sending Matrix welcome message:', matrixError);
             // Don't fail the user creation if Matrix fails
@@ -988,13 +990,16 @@ export const userRouter = createTRPCRouter({
         }
 
         // Invite to recommended rooms if requested and Matrix service is configured
-        if (input.addToRecommendedRooms && matrixService.isConfigured() && input.interests) {
+        if (input.addToRecommendedRooms && input.interests) {
           try {
-            const matrixUserId = `@${username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
-            const interests = input.interests.split(',').map(i => i.trim());
-            
-            const inviteResult = await matrixService.inviteToRecommendedRooms(matrixUserId, interests);
-            console.log(`Room invitations sent: ${inviteResult.invitedRooms.length} successful, ${inviteResult.errors.length} errors`);
+            const { matrixService } = await import('@/lib/matrix');
+            if (matrixService.isConfigured()) {
+              const matrixUserId = `@${username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
+              const interests = input.interests.split(',').map(i => i.trim());
+              
+              const inviteResult = await matrixService.inviteToRecommendedRooms(matrixUserId, interests);
+              console.log(`Room invitations sent: ${inviteResult.invitedRooms.length} successful, ${inviteResult.errors.length} errors`);
+            }
           } catch (inviteError) {
             console.error('Error inviting to recommended rooms:', inviteError);
             // Don't fail the user creation if room invitations fail
@@ -1238,8 +1243,9 @@ export const userRouter = createTRPCRouter({
 
         // Send via SignalBot using direct phone number resolution
         // This will resolve phone -> UUID -> @signal_{UUID}:domain -> send message
-        if (matrixService.isConfigured()) {
-          try {
+        try {
+          const { matrixService } = await import('@/lib/matrix');
+          if (matrixService.isConfigured()) {
             const verificationMessage = `🔐 Phone Verification Code\n\nYou requested to update your phone number to: ${normalizedPhone.normalized}\n\nVerification Code: ${verificationHash}\n\nEnter this 6-digit code in the dashboard to complete verification.\n\nThis code expires in 15 minutes.`;
             
             console.log(`📞 Attempting Signal verification for phone: ${normalizedPhone.normalized}`);
@@ -1254,11 +1260,11 @@ export const userRouter = createTRPCRouter({
               console.warn(`❌ Signal verification failed: ${result.error}`);
               // Don't fall back to regular Matrix user - Signal verification should only go to Signal
             }
-          } catch (signalError) {
-            console.warn('❌ Signal verification failed with exception:', signalError);
+          } else {
+            console.warn('⚠️ Matrix service not configured for Signal verification');
           }
-        } else {
-          console.warn('⚠️ Matrix service not configured for Signal verification');
+        } catch (signalError) {
+          console.warn('❌ Signal verification failed with exception:', signalError);
         }
 
         if (!verificationSent) {
@@ -1704,13 +1710,18 @@ export const userRouter = createTRPCRouter({
         }
 
         // Also send via Matrix if configured
-        if (matrixService.isConfigured()) {
-          const indocRoom = process.env.MATRIX_INDOC_ROOM_ID || process.env.MATRIX_ADMIN_ROOM_ID;
-          if (indocRoom) {
-            const matrixMessage = `📨 **Message from User Dashboard**\n\n**User:** ${ctx.session.user.username} (${ctx.session.user.email})\n**Subject:** ${input.subject}\n\n**Message:**\n${input.message}`;
-            
-            await matrixService.sendRoomMessage(indocRoom, matrixMessage);
+        try {
+          const { matrixService } = await import('@/lib/matrix');
+          if (matrixService.isConfigured()) {
+            const indocRoom = process.env.MATRIX_INDOC_ROOM_ID || process.env.MATRIX_ADMIN_ROOM_ID;
+            if (indocRoom) {
+              const matrixMessage = `📨 **Message from User Dashboard**\n\n**User:** ${ctx.session.user.username} (${ctx.session.user.email})\n**Subject:** ${input.subject}\n\n**Message:**\n${input.message}`;
+              
+              await matrixService.sendRoomMessage(indocRoom, matrixMessage);
+            }
           }
+        } catch (matrixError) {
+          console.warn('Matrix service import failed:', matrixError);
         }
 
         // Log admin event
@@ -1726,8 +1737,13 @@ export const userRouter = createTRPCRouter({
         let emailSent = false;
         
         // Check what was actually sent
-        if (matrixService.isConfigured() && (process.env.MATRIX_INDOC_ROOM_ID || process.env.MATRIX_ADMIN_ROOM_ID)) {
-          matrixSent = true;
+        try {
+          const { matrixService } = await import('@/lib/matrix');
+          if (matrixService.isConfigured() && (process.env.MATRIX_INDOC_ROOM_ID || process.env.MATRIX_ADMIN_ROOM_ID)) {
+            matrixSent = true;
+          }
+        } catch {
+          // Matrix service not available
         }
         
         if (emailService.isConfigured() && (process.env.ADMIN_EMAIL || process.env.SMTP_FROM_EMAIL)) {
@@ -1893,8 +1909,9 @@ The IrregularChat Team`;
           }
 
           // Send Signal notification to inviter (via Matrix bot)
-          if (matrixService.isConfigured()) {
-            try {
+          try {
+            const { matrixService } = await import('@/lib/matrix');
+            if (matrixService.isConfigured()) {
               const matrixUserId = `@${inviter.username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
               const signalMessage = `✅ Invitation sent successfully!
 
@@ -1904,9 +1921,9 @@ Expires: ${expiryDate.toLocaleDateString()}
 The invitation email has been sent. You'll be notified when they accept the invitation.`;
 
               await matrixService.sendDirectMessage(matrixUserId, signalMessage);
-            } catch (matrixError) {
-              console.error('Error sending Signal notification:', matrixError);
             }
+          } catch (matrixError) {
+            console.error('Error sending Signal notification:', matrixError);
           }
         }
 
@@ -2797,7 +2814,7 @@ The invitation email has been sent. You'll be notified when they accept the invi
   requestSignalGroupJoin: protectedProcedure
     .input(z.object({
       groupId: z.string().min(1, 'Group ID is required').max(255),
-      message: z.string().optional().max(500, 'Message too long')
+      message: z.string().max(500, 'Message too long').optional()
     }))
     .mutation(async ({ ctx, input }) => {
       try {

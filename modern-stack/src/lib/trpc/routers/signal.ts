@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { createTRPCRouter, moderatorProcedure } from '../trpc';
+import { TRPCError } from '@trpc/server';
 import { enhancedSignalClient } from '@/lib/signal/enhanced-api-client';
 import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
 
@@ -160,6 +161,234 @@ export const signalRouter = createTRPCRouter({
       isConfigured: !!phoneNumber,
     };
   }),
+
+  // Get Signal CLI service health and registration status
+  getServiceStatus: moderatorProcedure.query(async () => {
+    const baseUrl = process.env.SIGNAL_CLI_REST_API_BASE_URL || 'http://localhost:50240';
+    const phoneNumber = process.env.SIGNAL_PHONE_NUMBER;
+    
+    if (!baseUrl || !phoneNumber) {
+      return {
+        isHealthy: false,
+        isRegistered: false,
+        error: 'Signal CLI not configured - missing base URL or phone number',
+        configuration: { baseUrl, phoneNumber }
+      };
+    }
+
+    try {
+      // Check service health
+      const healthResponse = await fetch(`${baseUrl}/v1/health`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(5000)
+      });
+
+      const isHealthy = healthResponse.status === 204 || healthResponse.status === 200;
+      
+      if (!isHealthy) {
+        return {
+          isHealthy: false,
+          isRegistered: false,
+          error: `Signal CLI service unhealthy (HTTP ${healthResponse.status})`,
+          configuration: { baseUrl, phoneNumber }
+        };
+      }
+
+      // Check if phone number is registered
+      let isRegistered = false;
+      let registrationError = null;
+
+      try {
+        const accountsResponse = await fetch(`${baseUrl}/v1/accounts`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(5000)
+        });
+
+        if (accountsResponse.ok) {
+          const accounts = await accountsResponse.json();
+          isRegistered = Array.isArray(accounts) && accounts.includes(phoneNumber);
+          
+          if (!isRegistered) {
+            registrationError = `Phone number ${phoneNumber} is not registered with Signal CLI`;
+          }
+        } else {
+          registrationError = `Failed to check account registration (HTTP ${accountsResponse.status})`;
+        }
+      } catch (regError) {
+        registrationError = `Failed to check registration: ${regError instanceof Error ? regError.message : 'Unknown error'}`;
+      }
+
+      // Try to get account info for more details if registered
+      let accountInfo = null;
+      if (isRegistered) {
+        try {
+          const accountResponse = await fetch(`${baseUrl}/v1/accounts/${encodeURIComponent(phoneNumber)}`, {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+            signal: AbortSignal.timeout(5000)
+          });
+          
+          if (accountResponse.ok) {
+            accountInfo = await accountResponse.json();
+          }
+        } catch (error) {
+          // Non-critical error, continue without account info
+          console.warn('Could not fetch account info:', error instanceof Error ? error.message : 'Unknown error');
+        }
+      }
+
+      return {
+        isHealthy,
+        isRegistered,
+        error: registrationError,
+        configuration: { baseUrl, phoneNumber },
+        accountInfo,
+        lastChecked: new Date().toISOString()
+      };
+
+    } catch (error) {
+      return {
+        isHealthy: false,
+        isRegistered: false,
+        error: `Signal CLI service unavailable: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        configuration: { baseUrl, phoneNumber }
+      };
+    }
+  }),
+
+  // Register a phone number with Signal CLI
+  registerPhoneNumber: moderatorProcedure
+    .input(z.object({
+      phoneNumber: z.string().regex(/^\+[1-9]\d{1,14}$/, 'Invalid phone number format. Must include country code (e.g., +1234567890)'),
+      voiceVerification: z.boolean().default(false),
+      captcha: z.string().optional()
+    }))
+    .mutation(async ({ input }) => {
+      const baseUrl = process.env.SIGNAL_CLI_REST_API_BASE_URL || 'http://localhost:50240';
+      
+      try {
+        // Step 1: Register the phone number
+        const registerUrl = `${baseUrl}/v1/register/${encodeURIComponent(input.phoneNumber)}`;
+        const registerBody: any = {
+          voice: input.voiceVerification
+        };
+        
+        if (input.captcha) {
+          registerBody.captcha = input.captcha;
+        }
+        
+        const registerResponse = await fetch(registerUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(registerBody),
+          signal: AbortSignal.timeout(30000)
+        });
+        
+        if (!registerResponse.ok) {
+          const errorText = await registerResponse.text();
+          throw new Error(`Registration failed: ${errorText || `HTTP ${registerResponse.status}`}`);
+        }
+        
+        return {
+          success: true,
+          message: `Verification code sent to ${input.phoneNumber} via ${input.voiceVerification ? 'voice call' : 'SMS'}`,
+          phoneNumber: input.phoneNumber,
+          requiresVerification: true
+        };
+      } catch (error) {
+        console.error('Error registering phone number:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to register phone number'
+        });
+      }
+    }),
+  
+  // Verify the registration with the SMS/voice code
+  verifyRegistration: moderatorProcedure
+    .input(z.object({
+      phoneNumber: z.string(),
+      verificationCode: z.string().regex(/^\d{6}$/, 'Verification code must be 6 digits'),
+      pin: z.string().optional()
+    }))
+    .mutation(async ({ input }) => {
+      const baseUrl = process.env.SIGNAL_CLI_REST_API_BASE_URL || 'http://localhost:50240';
+      
+      try {
+        // Step 2: Verify with the code
+        const verifyUrl = `${baseUrl}/v1/register/${encodeURIComponent(input.phoneNumber)}/verify/${input.verificationCode}`;
+        const verifyBody: any = {};
+        
+        if (input.pin) {
+          verifyBody.pin = input.pin;
+        }
+        
+        const verifyResponse = await fetch(verifyUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(verifyBody),
+          signal: AbortSignal.timeout(30000)
+        });
+        
+        if (!verifyResponse.ok) {
+          const errorText = await verifyResponse.text();
+          throw new Error(`Verification failed: ${errorText || `HTTP ${verifyResponse.status}`}`);
+        }
+        
+        // Update environment variable
+        process.env.SIGNAL_PHONE_NUMBER = input.phoneNumber;
+        
+        return {
+          success: true,
+          message: `Successfully registered ${input.phoneNumber} with Signal CLI`,
+          phoneNumber: input.phoneNumber
+        };
+      } catch (error) {
+        console.error('Error verifying registration:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to verify registration'
+        });
+      }
+    }),
+  
+  // Unregister a phone number
+  unregisterPhoneNumber: moderatorProcedure
+    .input(z.object({
+      phoneNumber: z.string(),
+      deleteLocalData: z.boolean().default(false)
+    }))
+    .mutation(async ({ input }) => {
+      const baseUrl = process.env.SIGNAL_CLI_REST_API_BASE_URL || 'http://localhost:50240';
+      
+      try {
+        const unregisterUrl = `${baseUrl}/v1/accounts/${encodeURIComponent(input.phoneNumber)}`;
+        const unregisterResponse = await fetch(unregisterUrl, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ deleteLocalData: input.deleteLocalData }),
+          signal: AbortSignal.timeout(30000)
+        });
+        
+        if (!unregisterResponse.ok && unregisterResponse.status !== 404) {
+          const errorText = await unregisterResponse.text();
+          throw new Error(`Failed to unregister: ${errorText || `HTTP ${unregisterResponse.status}`}`);
+        }
+        
+        return {
+          success: true,
+          message: `Successfully unregistered ${input.phoneNumber}`
+        };
+      } catch (error) {
+        console.error('Error unregistering phone number:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to unregister phone number'
+        });
+      }
+    }),
 
   // Phase 2: Group Join Management APIs
 
@@ -367,7 +596,7 @@ export const signalRouter = createTRPCRouter({
   denyJoinRequest: moderatorProcedure
     .input(z.object({
       requestId: z.number(),
-      reason: z.string().optional().max(500)
+      reason: z.string().max(500).optional()
     }))
     .mutation(async ({ ctx, input }) => {
       try {

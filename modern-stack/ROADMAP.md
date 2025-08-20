@@ -199,6 +199,7 @@
 #### v0.5.0 - User Experience
 - [ ] Mobile-responsive admin interface
 - [ ] Dark/light theme toggle
+- [ ] Fix tab active state highlighting (Issue #101)
 - [ ] Real-time message notifications
 - [ ] User presence indicators
 - [ ] Typing indicators

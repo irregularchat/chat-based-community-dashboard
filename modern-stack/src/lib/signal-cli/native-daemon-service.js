@@ -1104,7 +1104,7 @@ class NativeSignalBotService extends EventEmitter {
         const titleResults = titleData.query?.search || [];
         
         if (titleResults.length === 0) {
-          return `📚 **Wiki Search: "${searchTerm}"**\n\n` +
+          return `Wiki Search: "${searchTerm}"\n\n` +
                  `No results found.\n\n` +
                  `Try:\n` +
                  `• Different keywords\n` +
@@ -1117,39 +1117,70 @@ class NativeSignalBotService extends EventEmitter {
       }
       
       // Format results for Signal
-      let output = `📚 **Wiki Search: "${searchTerm}"**\n\n`;
+      let output = `Wiki Search: "${searchTerm}"\n\n`;
       
-      for (let i = 0; i < Math.min(5, results.length); i++) {
+      let displayCount = 0;
+      for (let i = 0; i < results.length && displayCount < 5; i++) {
         const result = results[i];
         
+        // Skip redirects (often have #REDIRECT in snippet)
+        if (result.snippet && result.snippet.includes('#REDIRECT')) {
+          continue;
+        }
+        
         // Clean title for display
-        const title = result.title.replace(/-/g, ' ');
+        const title = result.title.replace(/_/g, ' ');
         
         // Build direct URL
         const pageUrl = `https://irregularpedia.org/wiki/${encodeURIComponent(result.title.replace(/ /g, '_'))}`;
         
-        // Clean snippet (remove HTML tags)
-        const snippet = result.snippet ? 
-          result.snippet.replace(/<[^>]*>/g, '').substring(0, 60) : 
-          `${result.wordcount || 0} words`;
+        // Clean snippet - remove all HTML tags and entities
+        let snippet = '';
+        if (result.snippet) {
+          snippet = result.snippet
+            .replace(/<span[^>]*>/g, '') // Remove opening span tags
+            .replace(/<\/span>/g, '') // Remove closing span tags
+            .replace(/<[^>]*>/g, '') // Remove any other HTML tags
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/&amp;/g, '&')
+            .replace(/\s+/g, ' ') // Normalize whitespace
+            .trim();
+          
+          // Truncate to reasonable length
+          if (snippet.length > 80) {
+            snippet = snippet.substring(0, 77) + '...';
+          }
+        }
         
-        output += `${i + 1}. ${title}\n`;
+        displayCount++;
+        output += `${displayCount}. ${title}\n`;
         
-        // Add snippet if available
-        if (snippet && snippet.length > 5) {
-          output += `   "${snippet}..."\n`;
+        // Only add snippet if it's meaningful and clean
+        if (snippet && snippet.length > 10 && !snippet.includes('[[') && !snippet.includes('...g')) {
+          output += `   ${snippet}\n`;
         }
         
         output += `   ${pageUrl}\n\n`;
       }
       
+      // If no valid results after filtering
+      if (displayCount === 0) {
+        return `Wiki Search: "${searchTerm}"\n\n` +
+               `No results found.\n\n` +
+               `Browse all pages: https://irregularpedia.org/wiki/Special:AllPages\n` +
+               `Main page: https://irregularpedia.org`;
+      }
+      
       // Add summary
-      if (totalHits > 5) {
-        output += `📊 Showing 5 of ${totalHits} results\n`;
+      if (totalHits > displayCount) {
+        output += `Showing ${displayCount} of ${totalHits} results\n`;
       }
       
       // Add search link
-      output += `🔍 More: https://irregularpedia.org/wiki/Special:Search?search=${encodeURIComponent(searchTerm)}`;
+      output += `More: https://irregularpedia.org/wiki/Special:Search?search=${encodeURIComponent(searchTerm)}`;
       
       return output;
       
@@ -1157,7 +1188,7 @@ class NativeSignalBotService extends EventEmitter {
       console.error('Wiki search error:', error);
       
       // Fallback response
-      return `📚 **Wiki Search: "${searchTerm}"**\n\n` +
+      return `Wiki Search: "${searchTerm}"\n\n` +
              `Direct search:\n` +
              `https://irregularpedia.org/wiki/Special:Search?search=${encodeURIComponent(searchTerm)}\n\n` +
              `Browse all pages:\n` +

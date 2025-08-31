@@ -23,7 +23,6 @@ import {
   User, 
   BarChart3,
   MessageSquare,
-  UserPlus,
   Mail,
   Menu
 } from 'lucide-react';

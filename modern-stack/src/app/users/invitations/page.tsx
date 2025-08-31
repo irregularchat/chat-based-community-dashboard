@@ -7,7 +7,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -23,7 +22,7 @@ export default function InvitationsPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<'pending' | 'accepted' | 'expired' | 'cancelled' | undefined>(undefined);
-  const [limit, setLimit] = useState(25);
+  const [limit] = useState(25);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [copiedItems, setCopiedItems] = useState<Set<string>>(new Set());
 
@@ -60,7 +59,7 @@ export default function InvitationsPage() {
   });
 
   const createInviteMutation = trpc.invite.createInvite.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (_data) => {
       toast.success('Invite link created successfully!');
       setCreateInviteForm({ label: '', expiryDays: 7, groups: [] });
       refetch();
@@ -115,7 +114,7 @@ export default function InvitationsPage() {
           return newSet;
         });
       }, 2000);
-    } catch (err) {
+    } catch {
       toast.error('Failed to copy to clipboard');
     }
   };
@@ -467,7 +466,7 @@ export default function InvitationsPage() {
                 />
               </div>
               <Select value={status || 'all'} onValueChange={(value) => {
-                setStatus(value === 'all' ? undefined : value as any);
+                setStatus(value === 'all' ? undefined : value as 'pending' | 'accepted' | 'expired' | 'cancelled');
               }}>
                 <SelectTrigger className="w-[160px]">
                   <Filter className="w-4 h-4 mr-2" />

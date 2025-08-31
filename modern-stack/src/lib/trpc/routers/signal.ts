@@ -162,6 +162,72 @@ export const signalRouter = createTRPCRouter({
     };
   }),
 
+  // Get health status (alias for getServiceStatus for backward compatibility)  
+  getHealth: moderatorProcedure.query(async () => {
+    const baseUrl = process.env.SIGNAL_CLI_REST_API_BASE_URL || 'http://localhost:50240';
+    const phoneNumber = process.env.SIGNAL_BOT_PHONE_NUMBER || process.env.SIGNAL_PHONE_NUMBER;
+    
+    if (!baseUrl || !phoneNumber) {
+      return {
+        status: 'unhealthy',
+        containerStatus: 'unknown',
+        registrationStatus: 'unregistered',
+        apiResponseTime: null,
+        messagesSentToday: undefined
+      };
+    }
+
+    try {
+      const startTime = Date.now();
+      const response = await fetch(`${baseUrl}/v1/about`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000)
+      });
+      const apiResponseTime = Date.now() - startTime;
+
+      if (response.ok) {
+        // Check if phone number is registered
+        const accountsResponse = await fetch(`${baseUrl}/v1/accounts`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(5000)
+        });
+        
+        let registrationStatus = 'unregistered';
+        if (accountsResponse.ok) {
+          const accounts = await accountsResponse.json();
+          const isRegistered = Array.isArray(accounts) && accounts.some((acc: any) => 
+            acc.number === phoneNumber || acc === phoneNumber
+          );
+          registrationStatus = isRegistered ? 'registered' : 'unregistered';
+        }
+
+        return {
+          status: 'healthy',
+          containerStatus: 'running',
+          registrationStatus,
+          apiResponseTime,
+          messagesSentToday: 0 // TODO: implement message counting
+        };
+      } else {
+        return {
+          status: 'unhealthy',
+          containerStatus: 'error',
+          registrationStatus: 'unknown',
+          apiResponseTime,
+          messagesSentToday: undefined
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'unhealthy',
+        containerStatus: 'unreachable',
+        registrationStatus: 'unknown',
+        apiResponseTime: null,
+        messagesSentToday: undefined
+      };
+    }
+  }),
+
   // Get Signal CLI service health and registration status
   getServiceStatus: moderatorProcedure.query(async () => {
     const baseUrl = process.env.SIGNAL_CLI_REST_API_BASE_URL || 'http://localhost:50240';
@@ -258,6 +324,46 @@ export const signalRouter = createTRPCRouter({
     }
   }),
 
+  // Get account information
+  getAccountInfo: moderatorProcedure.query(async () => {
+    const baseUrl = process.env.SIGNAL_CLI_REST_API_BASE_URL || 'http://localhost:50240';
+    const phoneNumber = process.env.SIGNAL_BOT_PHONE_NUMBER || process.env.SIGNAL_PHONE_NUMBER;
+    
+    if (!baseUrl || !phoneNumber) {
+      return null;
+    }
+
+    try {
+      // Check accounts endpoint
+      const accountsResponse = await fetch(`${baseUrl}/v1/accounts`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000)
+      });
+
+      if (accountsResponse.ok) {
+        const accounts = await accountsResponse.json();
+        const account = Array.isArray(accounts) ? accounts.find((acc: any) => 
+          acc.number === phoneNumber || acc === phoneNumber
+        ) : null;
+        
+        if (account || (Array.isArray(accounts) && accounts.includes(phoneNumber))) {
+          return {
+            phoneNumber: phoneNumber,
+            uuid: account?.uuid || null,
+            deviceId: account?.deviceId || null,
+            registrationTime: account?.registrationTime || null,
+            displayName: 'Community Dashboard Bot' // Default name
+          };
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error getting account info:', error);
+      return null;
+    }
+  }),
+
   // Register a phone number with Signal CLI
   registerPhoneNumber: moderatorProcedure
     .input(z.object({
@@ -288,7 +394,21 @@ export const signalRouter = createTRPCRouter({
         
         if (!registerResponse.ok) {
           const errorText = await registerResponse.text();
-          throw new Error(`Registration failed: ${errorText || `HTTP ${registerResponse.status}`}`);
+          let errorData;
+          try {
+            errorData = JSON.parse(errorText);
+          } catch {
+            errorData = { error: errorText };
+          }
+          
+          // Provide helpful error messages for common issues
+          if (errorData.error?.includes('Invalid captcha given')) {
+            throw new Error('Invalid or expired captcha token. Please get a fresh captcha from https://signalcaptchas.org/registration/generate.html');
+          } else if (errorData.error?.includes('Captcha required')) {
+            throw new Error('Captcha is required for registration. Please get one from https://signalcaptchas.org/registration/generate.html');
+          } else {
+            throw new Error(`Registration failed: ${errorData.error || `HTTP ${registerResponse.status}`}`);
+          }
         }
         
         return {

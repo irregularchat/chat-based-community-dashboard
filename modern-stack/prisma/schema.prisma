@@ -30,6 +30,8 @@ model User {
   attributes        Json?
   authentikId       String?               @unique @map("authentik_id")
   signalIdentity    String?               @map("signal_identity")
+  // signalVerified    Boolean               @default(false) @map("signal_verified")
+  // signalPhoneNumber String?               @map("signal_phone_number")
   matrixUsername    String?               @map("matrix_username")
   
   // Relationships
@@ -37,9 +39,8 @@ model User {
   groups            UserGroup[]
   moderatorPermissions ModeratorPermission[]
   sentInvitations   UserInvitation[] @relation("UserInvitations")
-  signalGroupMemberships SignalGroupMembership[]
-  signalGroupJoinRequests SignalGroupJoinRequest[]
-  processedSignalRequests SignalGroupJoinRequest[] @relation("ProcessedRequests")
+  emailHistory      EmailHistory[]
+  verificationCodes SignalVerificationCode[]
   
   @@map("users")
 }
@@ -334,65 +335,51 @@ model MatrixUserCache {
   @@map("matrix_user_cache")
 }
 
-// Signal group memberships tracking
-model SignalGroupMembership {
-  id        Int      @id @default(autoincrement())
-  userId    Int      @map("user_id")
-  groupId   String   @map("group_id")
-  groupName String?  @map("group_name")
-  joinedAt  DateTime @default(now()) @map("joined_at")
-  status    String   @default("active") // active, left, removed
+// Email communication history tracking
+model EmailHistory {
+  id              Int      @id @default(autoincrement())
+  recipientId     Int?     @map("recipient_id") // User ID if recipient is a registered user
+  recipientEmail  String   @map("recipient_email")
+  senderUsername  String   @map("sender_username") // Admin who sent the email
+  subject         String
+  emailType       String   @map("email_type") // 'welcome', 'admin_message', 'invite', 'password_reset', 'custom'
+  status          String   @default("sent") // 'sent', 'failed', 'queued'
+  sentAt          DateTime @default(now()) @map("sent_at")
+  deliveredAt     DateTime? @map("delivered_at")
+  errorMessage    String?  @map("error_message")
+  messagePreview  String?  @map("message_preview") // First 200 chars for search/preview
   
-  // Relationships
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Relations
+  recipient       User?    @relation(fields: [recipientId], references: [id], onDelete: SetNull)
   
-  @@unique([userId, groupId])
-  @@index([userId])
-  @@index([groupId])
+  @@index([recipientId])
+  @@index([senderUsername])
+  @@index([sentAt])
+  @@index([emailType])
   @@index([status])
-  @@map("signal_group_memberships")
+  @@map("email_history")
 }
 
-// Available Signal groups that users can discover and join
-model SignalAvailableGroup {
-  id               Int      @id @default(autoincrement())
-  groupId          String   @unique @map("group_id")
-  groupName        String   @map("group_name")
-  description      String?
-  isPublic         Boolean  @default(true) @map("is_public")
-  requiresApproval Boolean  @default(false) @map("requires_approval")
-  maxMembers       Int?     @map("max_members")
-  memberCount      Int      @default(0) @map("member_count")
-  isActive         Boolean  @default(true) @map("is_active")
-  displayOrder     Int?     @map("display_order")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at")
+// Signal verification codes for account linking
+model SignalVerificationCode {
+  id            Int       @id @default(autoincrement())
+  userId        Int       @map("user_id")
+  phoneNumber   String    @map("phone_number")
+  code          String    // Hashed verification code
+  salt          String    // Salt for hashing
+  attempts      Int       @default(0)
+  maxAttempts   Int       @default(3) @map("max_attempts")
+  verified      Boolean   @default(false)
+  expiresAt     DateTime  @map("expires_at")
+  verifiedAt    DateTime? @map("verified_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
   
-  @@index([isPublic])
-  @@index([isActive])
-  @@index([displayOrder])
-  @@map("signal_available_groups")
-}
-
-// Signal group join requests
-model SignalGroupJoinRequest {
-  id          Int       @id @default(autoincrement())
-  userId      Int       @map("user_id")
-  groupId     String    @map("group_id")
-  message     String?   // Optional message from user
-  status      String    @default("pending") // pending, approved, denied
-  requestedAt DateTime  @default(now()) @map("requested_at")
-  processedAt DateTime? @map("processed_at")
-  processedBy Int?      @map("processed_by")
+  // Relations
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   
-  // Relationships
-  user      User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  processor User? @relation("ProcessedRequests", fields: [processedBy], references: [id])
-  
-  @@unique([userId, groupId])
   @@index([userId])
-  @@index([groupId])
-  @@index([status])
-  @@index([requestedAt])
-  @@map("signal_group_join_requests")
+  @@index([phoneNumber])
+  @@index([expiresAt])
+  @@index([verified])
+  @@map("signal_verification_codes")
 }

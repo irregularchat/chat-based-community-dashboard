@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { TimelineSkeleton, DashboardStatsSkeleton, ChartSkeleton } from '@/components/ui/skeleton';
+import { TimelineSkeleton } from '@/components/ui/skeleton';
 import { 
   Search, 
   Filter, 
@@ -16,32 +16,29 @@ import {
   Users, 
   TrendingUp, 
   Clock,
-  ArrowLeft,
   BarChart3
 } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 
 export default function CommunityTimelinePage() {
-  const router = useRouter();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
-  const [category, setCategory] = useState<string>('');
-  const [eventType, setEventType] = useState<string>('');
-  const [limit, setLimit] = useState(25);
+  const [category, setCategory] = useState<string>('all');
+  const [eventType] = useState<string>('');
+  const [limit] = useState(25);
 
   const { data: timelineData, isLoading, refetch, error } = trpc.community.getTimeline.useQuery({
     page,
     limit,
-    category: category || undefined,
+    category: category === 'all' ? undefined : category,
     eventType: eventType || undefined,
     username: search || undefined,
   });
 
-  const { data: stats, error: statsError } = trpc.community.getStats.useQuery({
+  const { data: stats } = trpc.community.getStats.useQuery({
     days: 7,
   });
 
-  const { data: categories, error: categoriesError } = trpc.community.getCategories.useQuery();
+  const { data: categories } = trpc.community.getCategories.useQuery();
 
   const formatDate = (date: Date | string) => {
     return new Date(date).toLocaleDateString('en-US', {
@@ -150,7 +147,7 @@ export default function CommunityTimelinePage() {
                       <SelectValue placeholder="All Categories" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">All Categories</SelectItem>
+                      <SelectItem value="all">All Categories</SelectItem>
                       {categories?.map((cat) => (
                         <SelectItem key={cat} value={cat}>
                           {cat.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}

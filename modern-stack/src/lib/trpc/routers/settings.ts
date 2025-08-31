@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { createTRPCRouter, publicProcedure, adminProcedure } from '../trpc';
 import { TRPCError } from '@trpc/server';
+import { authentikService } from '@/lib/authentik';
+import { emailService } from '@/lib/email';
 
 export const settingsRouter = createTRPCRouter({
   // Dashboard Settings
@@ -374,6 +376,10 @@ export const settingsRouter = createTRPCRouter({
       'matrix_default_room_id': process.env.MATRIX_DEFAULT_ROOM_ID,
       'matrix_welcome_room_id': process.env.MATRIX_WELCOME_ROOM_ID,
       'matrix_signal_bridge_room_id': process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID,
+      'matrix_enable_encryption': process.env.MATRIX_ENABLE_ENCRYPTION,
+      'matrix_security_key': process.env.MATRIX_SECURITY_KEY,
+      'matrix_device_id': process.env.MATRIX_DEVICE_ID,
+      'matrix_device_display_name': process.env.MATRIX_DEVICE_DISPLAY_NAME,
       'matrix_room_ids_name_category': process.env.MATRIX_ROOM_IDS_NAME_CATEGORY,
       'matrix_min_room_members': process.env.MATRIX_MIN_ROOM_MEMBERS,
       'matrix_message_notice': process.env.MATRIX_MESSAGE_NOTICE,
@@ -463,6 +469,72 @@ export const settingsRouter = createTRPCRouter({
     };
   }),
 
+  // Get service configurations status
+  getServicesConfig: adminProcedure.query(async ({ _ctx }) => {
+    // Import Matrix service
+    const { matrixService } = await import('@/lib/matrix');
+    
+    // Check Matrix configuration
+    const matrixConfig = matrixService.getConfig();
+    const matrixConfigured = matrixService.isConfigured();
+
+    // Check Authentik configuration
+    const authentikConfig = authentikService.getConfig();
+    const authentikConfigured = authentikService.isConfigured();
+
+    // Check Email/SMTP configuration
+    const emailConfig = emailService.getConfig();
+    const emailConfigured = emailService.isConfigured();
+
+    // Check Discourse configuration from environment
+    const discourseConfigured = !!(
+      process.env.DISCOURSE_URL &&
+      process.env.DISCOURSE_API_KEY &&
+      process.env.DISCOURSE_API_USERNAME
+    );
+
+    // Check AI configuration from environment
+    const aiConfigured = !!(
+      process.env.OPENAI_API_KEY ||
+      process.env.CLAUDE_API_KEY ||
+      process.env.LOCAL_AI_ENDPOINT
+    );
+
+    return {
+      matrix: {
+        isConfigured: matrixConfigured,
+        homeserver: matrixConfig?.homeserver,
+        userId: matrixConfig?.userId,
+        hasAccessToken: !!matrixConfig?.accessToken,
+      },
+      authentik: {
+        isConfigured: authentikConfigured,
+        apiUrl: authentikConfig?.apiUrl,
+        hasApiToken: !!authentikConfig?.apiToken,
+        mainGroupId: authentikConfig?.mainGroupId,
+      },
+      email: {
+        isConfigured: emailConfigured,
+        host: emailConfig?.host,
+        port: emailConfig?.port,
+        from: emailConfig?.from,
+        hasBcc: !!emailConfig?.bcc,
+      },
+      discourse: {
+        isConfigured: discourseConfigured,
+        url: process.env.DISCOURSE_URL,
+        hasApiKey: !!process.env.DISCOURSE_API_KEY,
+        apiUsername: process.env.DISCOURSE_API_USERNAME,
+      },
+      ai: {
+        isConfigured: aiConfigured,
+        hasOpenAI: !!process.env.OPENAI_API_KEY,
+        hasClaude: !!process.env.CLAUDE_API_KEY,
+        hasLocal: !!process.env.LOCAL_AI_ENDPOINT,
+      },
+    };
+  }),
+
   // Room Cards Management
   getRoomCards: publicProcedure
     .input(z.object({ isActive: z.boolean().optional() }))
@@ -513,7 +585,7 @@ export const settingsRouter = createTRPCRouter({
       if (setting?.value) {
         try {
           roomCards = JSON.parse(setting.value as string) || [];
-        } catch (error) {
+        } catch (_error) {
           console.error('Error parsing existing room cards:', error);
         }
       }
@@ -582,7 +654,7 @@ export const settingsRouter = createTRPCRouter({
       let roomCards = [];
       try {
         roomCards = JSON.parse(setting.value as string) || [];
-      } catch (error) {
+      } catch (_error) {
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Error parsing room cards data',
@@ -641,7 +713,7 @@ export const settingsRouter = createTRPCRouter({
       let roomCards = [];
       try {
         roomCards = JSON.parse(setting.value as string) || [];
-      } catch (error) {
+      } catch (_error) {
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Error parsing room cards data',
@@ -649,7 +721,7 @@ export const settingsRouter = createTRPCRouter({
       }
 
       // Find and remove the card
-      const cardIndex = roomCards.findIndex((card: any) => card.id === input.id);
+      const cardIndex = roomCards.findIndex((card: { id: number }) => card.id === input.id);
       if (cardIndex === -1) {
         throw new TRPCError({
           code: 'NOT_FOUND',
@@ -696,7 +768,7 @@ export const settingsRouter = createTRPCRouter({
       let roomCards = [];
       try {
         roomCards = JSON.parse(setting.value as string) || [];
-      } catch (error) {
+      } catch (_error) {
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
           message: 'Error parsing room cards data',
@@ -705,7 +777,7 @@ export const settingsRouter = createTRPCRouter({
 
       // Update order for each card
       input.cards.forEach(({ id, order }) => {
-        const cardIndex = roomCards.findIndex((card: any) => card.id === id);
+        const cardIndex = roomCards.findIndex((card: { id: number }) => card.id === id);
         if (cardIndex !== -1) {
           roomCards[cardIndex].order = order;
           roomCards[cardIndex].updatedAt = new Date().toISOString();
@@ -713,7 +785,7 @@ export const settingsRouter = createTRPCRouter({
       });
 
       // Sort by order
-      roomCards.sort((a: any, b: any) => a.order - b.order);
+      roomCards.sort((a: { order: number }, b: { order: number }) => a.order - b.order);
 
       // Save back to settings
       await ctx.prisma.dashboardSettings.update({
@@ -732,104 +804,4 @@ export const settingsRouter = createTRPCRouter({
 
       return { success: true };
     }),
-
-  // Get services configuration status - checks actual service status, not just database settings
-  getServicesConfig: publicProcedure.query(async () => {
-    // Helper function to check if environment variable is configured
-    const checkEnvVar = (varName: string) => Boolean(process.env[varName]);
-    
-    // Helper function to check if service is active via boolean env var
-    const isServiceActive = (varName: string) => process.env[varName] === 'true' || process.env[varName] === 'True';
-
-    return {
-      // Matrix Service
-      matrix: {
-        isConfigured: checkEnvVar('MATRIX_ACCESS_TOKEN') && checkEnvVar('MATRIX_URL'),
-        isActive: isServiceActive('MATRIX_ACTIVE'),
-        source: 'Environment Variables',
-        details: {
-          url: process.env.MATRIX_URL,
-          botUsername: process.env.MATRIX_BOT_USERNAME,
-          hasAccessToken: checkEnvVar('MATRIX_ACCESS_TOKEN'),
-          hasDefaultRoom: checkEnvVar('MATRIX_DEFAULT_ROOM_ID'),
-        }
-      },
-      
-      // Authentik Service  
-      authentik: {
-        isConfigured: checkEnvVar('AUTHENTIK_CLIENT_ID') && checkEnvVar('AUTHENTIK_CLIENT_SECRET') && checkEnvVar('AUTHENTIK_ISSUER'),
-        isActive: true, // Authentik is always active if configured
-        source: 'Environment Variables',
-        details: {
-          clientId: process.env.AUTHENTIK_CLIENT_ID,
-          issuer: process.env.AUTHENTIK_ISSUER,
-          baseUrl: process.env.AUTHENTIK_BASE_URL,
-          hasApiToken: checkEnvVar('AUTHENTIK_API_TOKEN'),
-          hasClientSecret: checkEnvVar('AUTHENTIK_CLIENT_SECRET'),
-        }
-      },
-
-      // Discourse Service
-      discourse: {
-        isConfigured: checkEnvVar('DISCOURSE_URL') && checkEnvVar('DISCOURSE_API_KEY') && checkEnvVar('DISCOURSE_API_USERNAME'),
-        isActive: isServiceActive('DISCOURSE_ACTIVE'),
-        source: 'Environment Variables',
-        details: {
-          url: process.env.DISCOURSE_URL,
-          apiUsername: process.env.DISCOURSE_API_USERNAME,
-          categoryId: process.env.DISCOURSE_CATEGORY_ID,
-          hasApiKey: checkEnvVar('DISCOURSE_API_KEY'),
-        }
-      },
-
-      // SMTP Service
-      smtp: {
-        isConfigured: checkEnvVar('SMTP_SERVER') && checkEnvVar('SMTP_USERNAME') && checkEnvVar('SMTP_PASSWORD'),
-        isActive: isServiceActive('SMTP_ACTIVE'),
-        source: 'Environment Variables',
-        details: {
-          server: process.env.SMTP_SERVER,
-          port: process.env.SMTP_PORT,
-          username: process.env.SMTP_USERNAME,
-          fromEmail: process.env.SMTP_FROM_EMAIL,
-          hasPassword: checkEnvVar('SMTP_PASSWORD'),
-        }
-      },
-
-      // Signal CLI Service
-      signal: {
-        isConfigured: checkEnvVar('SIGNAL_CLI_REST_API_BASE_URL') && checkEnvVar('SIGNAL_PHONE_NUMBER'),
-        isActive: isServiceActive('SIGNAL_CLI_ENABLED'),
-        source: 'Environment Variables',
-        details: {
-          apiUrl: process.env.SIGNAL_CLI_REST_API_BASE_URL,
-          phoneNumber: process.env.SIGNAL_PHONE_NUMBER,
-          deviceName: process.env.SIGNAL_CLI_DEVICE_NAME,
-          timeout: process.env.SIGNAL_CLI_TIMEOUT,
-        }
-      },
-
-      // AI APIs
-      ai: {
-        isConfigured: checkEnvVar('OPENAI_API_KEY'),
-        isActive: checkEnvVar('OPENAI_API_KEY'),
-        source: 'Environment Variables',
-        details: {
-          hasOpenAIKey: checkEnvVar('OPENAI_API_KEY'),
-          // Add other AI service checks here as needed
-        }
-      },
-
-      // Webhook Service
-      webhook: {
-        isConfigured: checkEnvVar('WEBHOOK_URL') && checkEnvVar('WEBHOOK_SECRET'),
-        isActive: isServiceActive('WEBHOOK_ACTIVE'),
-        source: 'Environment Variables',
-        details: {
-          url: process.env.WEBHOOK_URL,
-          hasSecret: checkEnvVar('WEBHOOK_SECRET'),
-        }
-      },
-    };
-  }),
 }); 

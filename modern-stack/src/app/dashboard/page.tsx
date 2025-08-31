@@ -1,7 +1,7 @@
 'use client';
 
 import { useSession } from 'next-auth/react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,7 +10,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { 
   Users, 
@@ -20,8 +19,6 @@ import {
   Phone, 
   Mail, 
   Lock, 
-  User,
-  Hash,
   Copy,
   CheckCircle,
   AlertCircle,
@@ -31,15 +28,9 @@ import {
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc/client';
 import { toast } from 'sonner';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
-interface MatrixRoom {
-  room_id: string;
-  name: string;
-  topic?: string;
-  member_count: number;
-  category?: string;
-  configured?: boolean;
-}
 
 interface CommunityLink {
   name: string;
@@ -50,19 +41,18 @@ interface CommunityLink {
 
 export default function UserDashboard() {
   const { data: session } = useSession();
+  const router = useRouter();
   
   // Set default tab based on user role
-  const getDefaultTab = () => {
+  const getDefaultTab = useCallback(() => {
     if (!session?.user) return 'links';
     if (session.user.isAdmin) return 'admin';
     if (session.user.isModerator) return 'moderation';
     return 'links'; // Regular users land on quick links
-  };
+  }, [session?.user]);
   
   const [selectedTab, setSelectedTab] = useState(getDefaultTab());
   const [messageToAdmin, setMessageToAdmin] = useState('');
-  const [joinRequestGroupId, setJoinRequestGroupId] = useState<string | null>(null);
-  const [joinRequestMessage, setJoinRequestMessage] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [newPhone, setNewPhone] = useState('');
@@ -71,6 +61,7 @@ export default function UserDashboard() {
   const [pendingVerification, setPendingVerification] = useState<'phone' | 'email' | null>(null);
   const [emailVerificationData, setEmailVerificationData] = useState<{email: string; fromEmail: string} | null>(null);
   const [copiedItems, setCopiedItems] = useState<Set<string>>(new Set());
+  const [selectedRooms, setSelectedRooms] = useState<Set<string>>(new Set());
   
   // Quicklinks admin editing state
   const [isEditingQuicklinks, setIsEditingQuicklinks] = useState(false);
@@ -102,7 +93,7 @@ export default function UserDashboard() {
 
   // Update invite form when dashboard settings load
   useEffect(() => {
-    const defaultInviteExpiry = (dashboardSettings as any)?.default_invite_expiry_days || 1;
+    const defaultInviteExpiry = (dashboardSettings as { default_invite_expiry_days?: number })?.default_invite_expiry_days || 1;
     setInviteForm(prev => ({ ...prev, expiryDays: defaultInviteExpiry }));
   }, [dashboardSettings]);
 
@@ -111,7 +102,7 @@ export default function UserDashboard() {
     if (session?.user) {
       setSelectedTab(getDefaultTab());
     }
-  }, [session?.user?.isAdmin, session?.user?.isModerator]);
+  }, [session?.user?.isAdmin, session?.user?.isModerator, getDefaultTab, session?.user]);
   
   // Get community bookmarks
   const { data: communityBookmarks } = trpc.settings.getCommunityBookmarks.useQuery({
@@ -119,19 +110,12 @@ export default function UserDashboard() {
   });
 
   // Get dashboard announcements
-  const { data: dashboardAnnouncements } = trpc.settings.getDashboardAnnouncements.useQuery({
-    isActive: true,
-  });
 
   // Get user's sent invitations
   const { data: myInvitations } = trpc.user.getMyInvitations.useQuery({
     page: 1,
     limit: 5,
   });
-
-  // Signal Groups data
-  const { data: signalStatus, isLoading: signalStatusLoading, refetch: refetchSignalStatus } = trpc.user.getMySignalStatus.useQuery();
-  const { data: availableSignalGroups, isLoading: signalGroupsLoading, refetch: refetchSignalGroups } = trpc.user.getAvailableSignalGroups.useQuery();
 
   // Mutations
   const sendAdminMessageMutation = trpc.user.sendAdminMessage.useMutation({
@@ -141,21 +125,6 @@ export default function UserDashboard() {
     },
     onError: (error) => {
       toast.error(`Failed to send message: ${error.message}`);
-    },
-  });
-
-  // Signal group join request mutation
-  const requestSignalGroupJoinMutation = trpc.user.requestSignalGroupJoin.useMutation({
-    onSuccess: (result) => {
-      toast.success(result.message);
-      setJoinRequestGroupId(null);
-      setJoinRequestMessage('');
-      // Refetch data to update UI
-      refetchSignalStatus();
-      refetchSignalGroups();
-    },
-    onError: (error) => {
-      toast.error(`Failed to submit join request: ${error.message}`);
     },
   });
 
@@ -273,16 +242,6 @@ export default function UserDashboard() {
     },
   });
 
-  const updateEmailMutation = trpc.user.updateEmail.useMutation({
-    onSuccess: () => {
-      toast.success('Email updated successfully!');
-      setNewEmail('');
-      refetchProfile();
-    },
-    onError: (error) => {
-      toast.error(`Failed to update email: ${error.message}`);
-    },
-  });
 
   const createInvitationMutation = trpc.user.createUserInvitation.useMutation({
     onSuccess: () => {
@@ -293,7 +252,7 @@ export default function UserDashboard() {
         inviteePhone: '',
         roomIds: [],
         message: '',
-        expiryDays: (dashboardSettings as any)?.default_invite_expiry_days || 1,
+        expiryDays: (dashboardSettings as { default_invite_expiry_days?: number })?.default_invite_expiry_days || 1,
       });
       // Refetch invitations to update the list
       if (myInvitations) {
@@ -302,6 +261,30 @@ export default function UserDashboard() {
     },
     onError: (error) => {
       toast.error(`Failed to send invitation: ${error.message}`);
+    },
+  });
+
+  const joinRoomsMutation = trpc.user.requestRoomJoin.useMutation({
+    onSuccess: (result) => {
+      toast.success(result.message);
+      setSelectedRooms(new Set());
+    },
+    onError: (error) => {
+      if (error.message === 'SIGNAL_VERIFICATION_REQUIRED') {
+        toast.error('Signal verification required to join rooms');
+        // Show a toast with redirect option
+        setTimeout(() => {
+          toast.info('Click here to verify your Signal account', {
+            action: {
+              label: 'Verify Signal',
+              onClick: () => setSelectedTab('account')
+            },
+            duration: 8000,
+          });
+        }, 1000);
+      } else {
+        toast.error(`Failed to join rooms: ${error.message}`);
+      }
     },
   });
 
@@ -359,7 +342,7 @@ export default function UserDashboard() {
           return newSet;
         });
       }, 2000);
-    } catch (err) {
+    } catch {
       toast.error(`Failed to copy ${itemName}`);
     }
   };
@@ -471,6 +454,36 @@ export default function UserDashboard() {
     });
   };
 
+  const handleRoomSelection = (roomId: string) => {
+    setSelectedRooms(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(roomId)) {
+        newSet.delete(roomId);
+      } else {
+        newSet.add(roomId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleJoinSelectedRooms = () => {
+    if (selectedRooms.size === 0) {
+      toast.error('Please select at least one room to join');
+      return;
+    }
+
+    joinRoomsMutation.mutate({
+      roomIds: Array.from(selectedRooms),
+    });
+  };
+
+  const checkSignalVerification = () => {
+    const userAttributes = userProfile?.attributes as Record<string, unknown> || {};
+    const phoneNumber = userAttributes.phoneNumber as string;
+    const hasSignalVerification = !!userProfile?.signalIdentity || !!phoneNumber;
+    return hasSignalVerification;
+  };
+
   const getRoomsByCategory = (category: string) => {
     if (!matrixRooms) return [];
     return matrixRooms.filter((room: unknown) => {
@@ -478,21 +491,6 @@ export default function UserDashboard() {
       return (r.category as string)?.toLowerCase().includes(category.toLowerCase()) ||
         (r.topic as string)?.toLowerCase().includes(category.toLowerCase());
     });
-  };
-
-  // Signal group join request handler
-  const handleJoinRequest = async (groupId: string, requiresApproval: boolean) => {
-    if (joinRequestGroupId === groupId) {
-      // Submit the request
-      await requestSignalGroupJoinMutation.mutateAsync({
-        groupId,
-        message: joinRequestMessage.trim() || undefined
-      });
-    } else {
-      // Show input form
-      setJoinRequestGroupId(groupId);
-      setJoinRequestMessage(requiresApproval ? '' : ''); // Pre-fill for non-approval groups
-    }
   };
 
   if (!session) {
@@ -515,13 +513,13 @@ export default function UserDashboard() {
         <div>
           <h1 className="text-3xl font-bold">Welcome back, {session.user.name || session.user.username}!</h1>
           <p className="text-muted-foreground">
-            Here's what's happening with your community
+            Here&apos;s what&apos;s happening with your community
           </p>
         </div>
       </div>
 
       <Tabs value={selectedTab} onValueChange={setSelectedTab} className="space-y-4">
-        <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-8 lg:overflow-x-visible">
+        <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-7 lg:overflow-x-visible">
           {/* Admin gets Admin tab first */}
           {session.user.isAdmin && (
             <TabsTrigger value="admin" className="flex items-center gap-2 min-w-0 flex-shrink-0">
@@ -544,10 +542,6 @@ export default function UserDashboard() {
           <TabsTrigger value="rooms" className="flex items-center gap-2 min-w-0 flex-shrink-0">
             <Users className="w-4 h-4 shrink-0" />
             <span className="hidden sm:inline">Rooms</span>
-          </TabsTrigger>
-          <TabsTrigger value="signal-groups" className="flex items-center gap-2 min-w-0 flex-shrink-0">
-            <Phone className="w-4 h-4 shrink-0" />
-            <span className="hidden sm:inline">Signal Groups</span>
           </TabsTrigger>
           <TabsTrigger value="account" className="flex items-center gap-2 min-w-0 flex-shrink-0">
             <Settings className="w-4 h-4 shrink-0" />
@@ -574,6 +568,59 @@ export default function UserDashboard() {
               <CardDescription>
                 Join Matrix rooms based on your interests and expertise
               </CardDescription>
+              {!checkSignalVerification() && (
+                <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                  <div className="flex items-start space-x-3">
+                    <div className="text-amber-600">
+                      🔐
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-amber-900">Signal Verification Required</h4>
+                      <p className="text-sm text-amber-700 mt-1">
+                        You need to verify your Signal account before joining community rooms. This ensures secure messaging and proper access to Matrix bridged channels.
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-3 border-amber-300 text-amber-700 hover:bg-amber-100"
+                        onClick={() => setSelectedTab('account')}
+                      >
+                        Verify Signal Account
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {checkSignalVerification() && selectedRooms.size > 0 && (
+                <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-semibold text-blue-900">
+                        {selectedRooms.size} room{selectedRooms.size === 1 ? '' : 's'} selected
+                      </h4>
+                      <p className="text-sm text-blue-700">
+                        Ready to join the selected rooms
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setSelectedRooms(new Set())}
+                      >
+                        Clear Selection
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleJoinSelectedRooms}
+                        disabled={joinRoomsMutation.isPending}
+                      >
+                        {joinRoomsMutation.isPending ? 'Joining...' : `Join ${selectedRooms.size} Room${selectedRooms.size === 1 ? '' : 's'}`}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </CardHeader>
             <CardContent>
               {roomsLoading ? (
@@ -594,35 +641,53 @@ export default function UserDashboard() {
                         const roomName = roomData.name as string;
                         const memberCount = roomData.member_count as number;
                         const roomTopic = roomData.topic as string;
+                        const isSignalVerified = checkSignalVerification();
+                        const isSelected = selectedRooms.has(roomId);
                         
                         return (
-                          <div key={roomId} className="flex items-center justify-between p-3 border rounded-lg">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                <h4 className="font-medium">{roomName}</h4>
-                                <Badge variant="secondary" className="text-xs">
-                                  {memberCount} members
-                                </Badge>
-                              </div>
-                              {roomTopic && (
-                                <p className="text-sm text-muted-foreground mt-1">
-                                  {roomTopic}
-                                </p>
+                          <div key={roomId} className={`flex items-center justify-between p-3 border rounded-lg transition-colors ${
+                            isSelected ? 'bg-blue-50 border-blue-200' : 'hover:bg-muted/50'
+                          }`}>
+                            <div className="flex items-center gap-3 flex-1">
+                              {isSignalVerified && (
+                                <Checkbox
+                                  id={`room-${roomId}`}
+                                  checked={isSelected}
+                                  onCheckedChange={() => handleRoomSelection(roomId)}
+                                />
                               )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
-                              >
-                                {copiedItems.has(`${roomName} Room ID`) ? (
-                                  <CheckCircle className="w-4 h-4 text-green-600" />
-                                ) : (
-                                  <Copy className="w-4 h-4" />
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                  <h4 className="font-medium">{roomName}</h4>
+                                  <Badge variant="secondary" className="text-xs">
+                                    {memberCount} members
+                                  </Badge>
+                                </div>
+                                {roomTopic && (
+                                  <p className="text-sm text-muted-foreground mt-1">
+                                    {roomTopic}
+                                  </p>
                                 )}
-                              </Button>
+                              </div>
                             </div>
+                            {!isSignalVerified && (
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="text-xs text-amber-600">
+                                  Signal verification required
+                                </Badge>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
+                                >
+                                  {copiedItems.has(`${roomName} Room ID`) ? (
+                                    <CheckCircle className="w-4 h-4 text-green-600" />
+                                  ) : (
+                                    <Copy className="w-4 h-4" />
+                                  )}
+                                </Button>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -641,35 +706,53 @@ export default function UserDashboard() {
                         const roomName = roomData.name as string;
                         const memberCount = roomData.member_count as number;
                         const roomTopic = roomData.topic as string;
+                        const isSignalVerified = checkSignalVerification();
+                        const isSelected = selectedRooms.has(roomId);
                         
                         return (
-                          <div key={roomId} className="flex items-center justify-between p-3 border rounded-lg">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                <h4 className="font-medium">{roomName}</h4>
-                                <Badge variant="secondary" className="text-xs">
-                                  {memberCount} members
-                                </Badge>
-                              </div>
-                              {roomTopic && (
-                                <p className="text-sm text-muted-foreground mt-1">
-                                  {roomTopic}
-                                </p>
+                          <div key={roomId} className={`flex items-center justify-between p-3 border rounded-lg transition-colors ${
+                            isSelected ? 'bg-blue-50 border-blue-200' : 'hover:bg-muted/50'
+                          }`}>
+                            <div className="flex items-center gap-3 flex-1">
+                              {isSignalVerified && (
+                                <Checkbox
+                                  id={`room-general-${roomId}`}
+                                  checked={isSelected}
+                                  onCheckedChange={() => handleRoomSelection(roomId)}
+                                />
                               )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
-                              >
-                                {copiedItems.has(`${roomName} Room ID`) ? (
-                                  <CheckCircle className="w-4 h-4 text-green-600" />
-                                ) : (
-                                  <Copy className="w-4 h-4" />
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                  <h4 className="font-medium">{roomName}</h4>
+                                  <Badge variant="secondary" className="text-xs">
+                                    {memberCount} members
+                                  </Badge>
+                                </div>
+                                {roomTopic && (
+                                  <p className="text-sm text-muted-foreground mt-1">
+                                    {roomTopic}
+                                  </p>
                                 )}
-                              </Button>
+                              </div>
                             </div>
+                            {!isSignalVerified && (
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="text-xs text-amber-600">
+                                  Signal verification required
+                                </Badge>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
+                                >
+                                  {copiedItems.has(`${roomName} Room ID`) ? (
+                                    <CheckCircle className="w-4 h-4 text-green-600" />
+                                  ) : (
+                                    <Copy className="w-4 h-4" />
+                                  )}
+                                </Button>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -689,40 +772,58 @@ export default function UserDashboard() {
                         const memberCount = roomData.member_count as number;
                         const roomTopic = roomData.topic as string;
                         const roomCategory = roomData.category as string;
+                        const isSignalVerified = checkSignalVerification();
+                        const isSelected = selectedRooms.has(roomId);
                         
                         return (
-                          <div key={roomId} className="flex items-center justify-between p-3 border rounded-lg">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                <h4 className="font-medium">{roomName}</h4>
-                                <Badge variant="secondary" className="text-xs">
-                                  {memberCount} members
-                                </Badge>
-                                {roomCategory && (
-                                  <Badge variant="outline" className="text-xs">
-                                    {roomCategory}
+                          <div key={roomId} className={`flex items-center justify-between p-3 border rounded-lg transition-colors ${
+                            isSelected ? 'bg-blue-50 border-blue-200' : 'hover:bg-muted/50'
+                          }`}>
+                            <div className="flex items-center gap-3 flex-1">
+                              {isSignalVerified && (
+                                <Checkbox
+                                  id={`room-all-${roomId}`}
+                                  checked={isSelected}
+                                  onCheckedChange={() => handleRoomSelection(roomId)}
+                                />
+                              )}
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                  <h4 className="font-medium">{roomName}</h4>
+                                  <Badge variant="secondary" className="text-xs">
+                                    {memberCount} members
                                   </Badge>
+                                  {roomCategory && (
+                                    <Badge variant="outline" className="text-xs">
+                                      {roomCategory}
+                                    </Badge>
+                                  )}
+                                </div>
+                                {roomTopic && (
+                                  <p className="text-sm text-muted-foreground mt-1">
+                                    {roomTopic}
+                                  </p>
                                 )}
                               </div>
-                              {roomTopic && (
-                                <p className="text-sm text-muted-foreground mt-1">
-                                  {roomTopic}
-                                </p>
-                              )}
                             </div>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
-                              >
-                                {copiedItems.has(`${roomName} Room ID`) ? (
-                                  <CheckCircle className="w-4 h-4 text-green-600" />
-                                ) : (
-                                  <Copy className="w-4 h-4" />
-                                )}
-                              </Button>
-                            </div>
+                            {!isSignalVerified && (
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="text-xs text-amber-600">
+                                  Signal verification required
+                                </Badge>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => copyToClipboard(roomId, `${roomName} Room ID`)}
+                                >
+                                  {copiedItems.has(`${roomName} Room ID`) ? (
+                                    <CheckCircle className="w-4 h-4 text-green-600" />
+                                  ) : (
+                                    <Copy className="w-4 h-4" />
+                                  )}
+                                </Button>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -733,231 +834,6 @@ export default function UserDashboard() {
                 <div className="text-center py-8">
                   <Users className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
                   <p className="text-muted-foreground">No rooms available at the moment</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Signal Groups Tab */}
-        <TabsContent value="signal-groups">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Phone className="w-5 h-5" />
-                Signal Groups
-              </CardTitle>
-              <CardDescription>
-                Discover and join Signal community groups
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {signalStatusLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                </div>
-              ) : (
-                <div className="space-y-6">
-                  {/* Signal Status */}
-                  <div className="p-4 border rounded-lg bg-gray-50">
-                    <h3 className="font-semibold mb-2 flex items-center gap-2">
-                      📱 Your Signal Status
-                    </h3>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        {signalStatus?.isSignalVerified ? (
-                          <CheckCircle className="w-4 h-4 text-green-600" />
-                        ) : (
-                          <AlertCircle className="w-4 h-4 text-yellow-600" />
-                        )}
-                        <span className="text-sm">
-                          {signalStatus?.isSignalVerified 
-                            ? `Signal verified: ${signalStatus.phoneNumber}` 
-                            : 'Signal phone not verified'}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Users className="w-4 h-4 text-blue-600" />
-                        <span className="text-sm">
-                          Member of {signalStatus?.groupCount || 0} Signal groups
-                        </span>
-                      </div>
-                    </div>
-                    {!signalStatus?.isSignalVerified && (
-                      <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-md">
-                        <p className="text-sm text-blue-800">
-                          <strong>Want to join Signal groups?</strong> Verify your Signal phone number in the Account tab to get started.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Current Groups */}
-                  {signalStatus?.groupMemberships && signalStatus.groupMemberships.length > 0 && (
-                    <div>
-                      <h3 className="font-semibold mb-3 flex items-center gap-2">
-                        ✅ Your Signal Groups
-                      </h3>
-                      <div className="space-y-2">
-                        {signalStatus.groupMemberships.map((membership) => (
-                          <div key={membership.groupId} className="p-3 border rounded-lg">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <p className="font-medium">{membership.groupName}</p>
-                                <p className="text-sm text-gray-600">
-                                  Joined {new Date(membership.joinedAt).toLocaleDateString()}
-                                </p>
-                              </div>
-                              <Badge variant="outline" className="bg-green-50 text-green-700">
-                                Member
-                              </Badge>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Pending Requests */}
-                  {signalStatus?.pendingRequests && signalStatus.pendingRequests.length > 0 && (
-                    <div>
-                      <h3 className="font-semibold mb-3 flex items-center gap-2">
-                        ⏳ Pending Join Requests
-                      </h3>
-                      <div className="space-y-2">
-                        {signalStatus.pendingRequests.map((request) => (
-                          <div key={request.groupId} className="p-3 border rounded-lg bg-yellow-50">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <p className="font-medium">Group ID: {request.groupId}</p>
-                                <p className="text-sm text-gray-600">
-                                  Requested {new Date(request.requestedAt).toLocaleDateString()}
-                                </p>
-                                {request.message && (
-                                  <p className="text-sm text-gray-700 mt-1">
-                                    Message: "{request.message}"
-                                  </p>
-                                )}
-                              </div>
-                              <Badge variant="outline" className="bg-yellow-50 text-yellow-700">
-                                Pending
-                              </Badge>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Available Groups */}
-                  <div>
-                    <h3 className="font-semibold mb-3 flex items-center gap-2">
-                      🌐 Available Signal Groups
-                    </h3>
-                    {signalGroupsLoading ? (
-                      <div className="flex items-center justify-center py-4">
-                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                      </div>
-                    ) : availableSignalGroups && availableSignalGroups.length > 0 ? (
-                      <div className="space-y-3">
-                        {availableSignalGroups.map((group) => (
-                          <div key={group.groupId} className="p-4 border rounded-lg">
-                            <div className="flex items-start justify-between">
-                              <div className="flex-1">
-                                <h4 className="font-medium mb-1">{group.groupName}</h4>
-                                {group.description && (
-                                  <p className="text-sm text-gray-600 mb-2">{group.description}</p>
-                                )}
-                                <div className="flex items-center gap-4 text-sm text-gray-500">
-                                  <span className="flex items-center gap-1">
-                                    <Users className="w-3 h-3" />
-                                    {group.memberCount} members
-                                  </span>
-                                  {group.maxMembers && (
-                                    <span>Max: {group.maxMembers}</span>
-                                  )}
-                                  {group.requiresApproval && (
-                                    <Badge variant="outline" className="text-xs">
-                                      Requires Approval
-                                    </Badge>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="ml-4 space-y-2">
-                                {group.userStatus === 'member' && (
-                                  <Badge variant="outline" className="bg-green-50 text-green-700">
-                                    Joined
-                                  </Badge>
-                                )}
-                                {group.userStatus === 'pending' && (
-                                  <Badge variant="outline" className="bg-yellow-50 text-yellow-700">
-                                    Pending
-                                  </Badge>
-                                )}
-                                {group.userStatus === 'available' && signalStatus?.isSignalVerified && (
-                                  <div className="flex flex-col items-end space-y-2">
-                                    {joinRequestGroupId === group.groupId ? (
-                                      <div className="w-48 space-y-2">
-                                        {group.requiresApproval && (
-                                          <Textarea
-                                            value={joinRequestMessage}
-                                            onChange={(e) => setJoinRequestMessage(e.target.value)}
-                                            placeholder="Why do you want to join? (optional)"
-                                            className="text-xs resize-none"
-                                            rows={2}
-                                            maxLength={500}
-                                          />
-                                        )}
-                                        <div className="flex gap-1">
-                                          <Button 
-                                            size="sm" 
-                                            onClick={() => handleJoinRequest(group.groupId, group.requiresApproval)}
-                                            disabled={requestSignalGroupJoinMutation.isPending}
-                                            className="flex-1"
-                                          >
-                                            {requestSignalGroupJoinMutation.isPending ? 'Sending...' : 'Submit Request'}
-                                          </Button>
-                                          <Button 
-                                            size="sm" 
-                                            variant="outline"
-                                            onClick={() => {
-                                              setJoinRequestGroupId(null);
-                                              setJoinRequestMessage('');
-                                            }}
-                                          >
-                                            Cancel
-                                          </Button>
-                                        </div>
-                                      </div>
-                                    ) : (
-                                      <Button 
-                                        size="sm" 
-                                        variant="outline"
-                                        onClick={() => handleJoinRequest(group.groupId, group.requiresApproval)}
-                                      >
-                                        Request to Join
-                                      </Button>
-                                    )}
-                                  </div>
-                                )}
-                                {group.userStatus === 'available' && !signalStatus?.isSignalVerified && (
-                                  <Button size="sm" variant="outline" disabled>
-                                    Verify Signal First
-                                  </Button>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-center py-8 text-gray-500">
-                        <Phone className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-                        <p>No Signal groups available yet.</p>
-                        <p className="text-sm">Check back later or contact an admin.</p>
-                      </div>
-                    )}
-                  </div>
                 </div>
               )}
             </CardContent>
@@ -1034,7 +910,7 @@ export default function UserDashboard() {
                             This verification is for <strong>Signal Messenger</strong>. Your phone number must be registered with Signal to receive verification codes.
                           </p>
                           <p className="text-sm text-blue-700 mt-2">
-                            <strong>Don't have Signal?</strong> You can join our Signal INDOC group to request manual verification from a moderator.
+                            <strong>Don&apos;t have Signal?</strong> You can join our Signal INDOC group to request manual verification from a moderator.
                           </p>
                         </div>
                       </div>
@@ -1105,7 +981,7 @@ export default function UserDashboard() {
                         className="text-center text-lg font-mono tracking-widest"
                       />
                       <p className="text-xs text-muted-foreground">
-                        Code expires in 15 minutes. If you don't receive it, try requesting a new code.
+                        Code expires in 15 minutes. If you don&apos;t receive it, try requesting a new code.
                       </p>
                     </div>
                     <div className="flex gap-2">
@@ -1154,7 +1030,7 @@ export default function UserDashboard() {
                         <div className="flex-1">
                           <h4 className="font-semibold text-blue-900">Email Verification Required</h4>
                           <p className="text-sm text-blue-700 mt-1">
-                            To ensure account security, we'll send a verification code to your new email address before updating it.
+                            To ensure account security, we&apos;ll send a verification code to your new email address before updating it.
                           </p>
                           <p className="text-sm text-blue-700 mt-2">
                             <strong>Verification emails will be sent from:</strong> {process.env.NEXT_PUBLIC_SMTP_FROM || emailVerificationData?.fromEmail || 'noreply@irregularchat.com'}
@@ -1193,7 +1069,7 @@ export default function UserDashboard() {
                         <span className="font-medium text-blue-900">Email Verification Required</span>
                       </div>
                       <p className="text-sm text-blue-800">
-                        We've sent a 6-digit verification code to: <strong>{emailVerificationData?.email}</strong>
+                        We&apos;ve sent a 6-digit verification code to: <strong>{emailVerificationData?.email}</strong>
                       </p>
                       <p className="text-sm text-blue-700 mt-1">
                         Check your email inbox (and spam folder) for the verification code.
@@ -1216,7 +1092,7 @@ export default function UserDashboard() {
                         className="text-center text-lg font-mono tracking-widest"
                       />
                       <p className="text-xs text-muted-foreground">
-                        Code expires in 15 minutes. If you don't receive the email, check your spam folder or request a new code.
+                        Code expires in 15 minutes. If you don&apos;t receive the email, check your spam folder or request a new code.
                       </p>
                     </div>
                     <div className="flex gap-2">
@@ -1261,7 +1137,7 @@ export default function UserDashboard() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="invitee-name">Friend's Name</Label>
+                  <Label htmlFor="invitee-name">Friend&apos;s Name</Label>
                   <Input
                     id="invitee-name"
                     type="text"
@@ -1271,7 +1147,7 @@ export default function UserDashboard() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="invitee-email">Friend's Email</Label>
+                  <Label htmlFor="invitee-email">Friend&apos;s Email</Label>
                   <Input
                     id="invitee-email"
                     type="email"
@@ -1281,7 +1157,7 @@ export default function UserDashboard() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="invitee-phone">Friend's Phone Number (Optional)</Label>
+                  <Label htmlFor="invitee-phone">Friend&apos;s Phone Number (Optional)</Label>
                   <Input
                     id="invitee-phone"
                     type="tel"
@@ -1414,12 +1290,12 @@ export default function UserDashboard() {
                     Your Recent Invitations
                   </CardTitle>
                   <CardDescription>
-                    Invitations you've sent recently
+                    Invitations you&apos;ve sent recently
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {myInvitations.invitations.slice(0, 3).map((invitation: any) => (
+                    {myInvitations.invitations.slice(0, 3).map((invitation: { id: string; inviteeName?: string; email: string; createdAt: string; status: string; }) => (
                       <div key={invitation.id} className="flex items-center justify-between p-3 border rounded-lg">
                         <div className="flex-1">
                           <p className="font-medium">{invitation.inviteeName || invitation.email}</p>
@@ -1442,7 +1318,7 @@ export default function UserDashboard() {
                   {myInvitations.total > 3 && (
                     <div className="mt-4 text-center">
                       <Button variant="outline" size="sm" asChild>
-                        <a href="/users/invitations">View All Invitations</a>
+                        <Link href="/users/invitations">View All Invitations</Link>
                       </Button>
                     </div>
                   )}
@@ -1609,7 +1485,7 @@ export default function UserDashboard() {
               <div className="grid gap-4 md:grid-cols-2">
                 {/* Database-managed community bookmarks */}
                 {communityBookmarks && communityBookmarks.length > 0 ? (
-                  communityBookmarks.map((bookmark: any) => (
+                  communityBookmarks.map((bookmark: { id: string; title: string; url: string; description: string; icon?: string; }) => (
                     <div key={bookmark.id} className="flex items-start gap-3 p-4 border rounded-lg hover:bg-muted/50 transition-colors relative">
                       <div className="text-2xl">{bookmark.icon || '🔗'}</div>
                       <div className="flex-1">
@@ -1731,19 +1607,6 @@ export default function UserDashboard() {
                         </div>
                       </div>
                     </Button>
-                    <Button
-                      variant="outline"
-                      className="h-auto p-4 flex flex-col items-center gap-2"
-                      onClick={() => window.location.href = '/community-management'}
-                    >
-                      <div className="text-2xl">📱</div>
-                      <div className="text-center">
-                        <div className="font-medium">Signal Management</div>
-                        <div className="text-sm text-muted-foreground">
-                          Enhanced Signal community tools
-                        </div>
-                      </div>
-                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -1845,19 +1708,6 @@ export default function UserDashboard() {
                         </div>
                       </div>
                     </Button>
-                    <Button
-                      variant="outline"
-                      className="h-auto p-4 flex flex-col items-center gap-2"
-                      onClick={() => window.location.href = '/community-management'}
-                    >
-                      <div className="text-2xl">📱</div>
-                      <div className="text-center">
-                        <div className="font-medium">Signal Management</div>
-                        <div className="text-sm text-muted-foreground">
-                          Enhanced Signal community tools
-                        </div>
-                      </div>
-                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -1945,12 +1795,6 @@ export default function UserDashboard() {
                       <a href="/invites" className="flex items-center gap-2">
                         🎫 Invite Management
                         <span className="text-sm text-muted-foreground ml-auto">Create & manage invites</span>
-                      </a>
-                    </Button>
-                    <Button variant="outline" className="justify-start" asChild>
-                      <a href="/community-management" className="flex items-center gap-2">
-                        📱 Signal Management
-                        <span className="text-sm text-muted-foreground ml-auto">Enhanced Signal community tools</span>
                       </a>
                     </Button>
                   </div>

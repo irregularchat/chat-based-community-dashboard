@@ -11,10 +11,9 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { UserCredentialDisplay } from '@/components/ui/user-credentials';
 import { SearchableMatrixUserSelect } from '@/components/ui/searchable-matrix-user-select';
-import { ArrowLeft, UserPlus, Save, Settings, Phone, Building2, Hash, Users, FileText, Copy, Shuffle, Home, RefreshCw, MessageSquare } from 'lucide-react';
+import { ArrowLeft, UserPlus, Save, Settings, Building2, Hash, Users, FileText, Copy, Shuffle, Home, RefreshCw, MessageSquare } from 'lucide-react';
 import { toast } from 'sonner';
 import { PasswordStrength } from '@/components/ui/password-strength';
 
@@ -80,12 +79,11 @@ export default function CreateUserPage() {
     email: string;
   } | null>(null);
 
-  // Matrix user state
-  const [matrixUsers, setMatrixUsers] = useState<MatrixUser[]>([]);
+  // Matrix user state - directly use query data, no duplicate state
   const [selectedMatrixUser, setSelectedMatrixUser] = useState<MatrixUser | null>(null);
 
   // Matrix user queries
-  const { data: matrixUsersData = [], isLoading: matrixUsersLoading, refetch: refetchMatrixUsers } = trpc.matrix.getUsers.useQuery({
+  const { data: matrixUsers = [], isLoading: matrixUsersLoading, refetch: refetchMatrixUsers } = trpc.matrix.getUsers.useQuery({
     includeSignalUsers: true,
     includeRegularUsers: true,
   });
@@ -99,13 +97,6 @@ export default function CreateUserPage() {
       toast.error('Failed to sync Matrix users: ' + error.message);
     },
   });
-
-  // Update Matrix users when data changes
-  useEffect(() => {
-    if (matrixUsersData) {
-      setMatrixUsers(matrixUsersData);
-    }
-  }, [matrixUsersData]);
 
   // Handle Matrix user selection
   const handleMatrixUserSelect = (userId: string) => {
@@ -351,7 +342,7 @@ export default function CreateUserPage() {
       toast.success('Local user created successfully');
       router.push('/users');
     },
-    onError: (error: any) => {
+    onError: (error: { message: string }) => {
       setErrors({ general: error.message });
       toast.error('Failed to create user');
     },
@@ -370,7 +361,7 @@ export default function CreateUserPage() {
         email: formData.email,
       });
     },
-    onError: (error: any) => {
+    onError: (error: { message: string }) => {
       setErrors({ general: error.message });
       toast.error('Failed to create SSO user');
     },
@@ -467,7 +458,7 @@ export default function CreateUserPage() {
           skipIndocRemoval: formData.skipIndocRemoval,
         });
       }
-    } catch (error) {
+    } catch {
       // Error handled in mutation
     } finally {
       setIsSubmitting(false);

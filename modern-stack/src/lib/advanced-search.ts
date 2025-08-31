@@ -46,7 +46,6 @@ function tokenize(query: string): string[] {
 
   for (let i = 0; i < query.length; i++) {
     const char = query[i];
-    const nextChar = query[i + 1];
 
     if ((char === '"' || char === "'") && !inQuotes) {
       inQuotes = true;
@@ -117,10 +116,10 @@ function isOperator(token: string): token is 'AND' | 'OR' | 'NOT' {
 /**
  * Convert parsed tokens to Prisma where conditions
  */
-function buildPrismaConditions(tokens: SearchToken[]): any {
+function buildPrismaConditions(tokens: SearchToken[]): Record<string, unknown> {
   if (tokens.length === 0) return {};
 
-  const conditions: any[] = [];
+  const conditions: Record<string, unknown>[] = [];
   let currentLogic: 'AND' | 'OR' = 'AND';
   let isNegated = false;
 
@@ -155,7 +154,7 @@ function buildPrismaConditions(tokens: SearchToken[]): any {
 /**
  * Build a condition for a specific field
  */
-function buildFieldCondition(token: SearchToken, isNegated: boolean = false): any {
+function buildFieldCondition(token: SearchToken, isNegated: boolean = false): Record<string, unknown> {
   const { field, value } = token;
 
   if (!field) {
@@ -196,7 +195,7 @@ function buildFieldCondition(token: SearchToken, isNegated: boolean = false): an
   } else {
     // Single field
     const fieldName = mappedFields as string;
-    let fieldCondition: any;
+    let fieldCondition: Record<string, unknown>;
 
     if (fieldName === 'isActive' || fieldName === 'isAdmin' || fieldName === 'isModerator') {
       // Boolean fields
@@ -214,7 +213,7 @@ function buildFieldCondition(token: SearchToken, isNegated: boolean = false): an
 /**
  * Main function to parse advanced search query
  */
-export function parseAdvancedSearch(query: string): { where: any; isAdvanced: boolean } {
+export function parseAdvancedSearch(query: string): { where: Record<string, unknown>; isAdvanced: boolean } {
   if (!query || query.trim() === '') {
     return { where: {}, isAdvanced: false };
   }

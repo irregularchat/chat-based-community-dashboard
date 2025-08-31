@@ -17,7 +17,7 @@ export const createInnerTRPCContext = ({ session }: CreateContextOptions) => {
 };
 
 // For Next.js Pages Router
-export const createTRPCContext = async ({ req, res }: CreateNextContextOptions) => {
+export const createTRPCContext = async ({ req: _req, res: _res }: CreateNextContextOptions) => {
   const session = await getServerSession(authOptions);
 
   return createInnerTRPCContext({
@@ -26,7 +26,7 @@ export const createTRPCContext = async ({ req, res }: CreateNextContextOptions) 
 };
 
 // For Next.js App Router
-export const createTRPCContextApp = async ({ req }: FetchCreateContextFnOptions) => {
+export const createTRPCContextApp = async ({ req: _req }: FetchCreateContextFnOptions) => {
   const session = await getServerSession(authOptions);
 
   return createInnerTRPCContext({

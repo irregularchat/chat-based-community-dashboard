@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { MessageTemplates } from './message-templates';
+import { prisma } from './prisma';
 
 interface EmailConfig {
   host: string;
@@ -30,6 +31,15 @@ interface WelcomeEmailData {
   password: string;
   topicId?: string;
   discoursePostUrl?: string;
+}
+
+interface EmailTrackingData {
+  recipientEmail: string;
+  senderUsername: string;
+  subject: string;
+  emailType: 'welcome' | 'admin_message' | 'invite' | 'password_reset' | 'custom';
+  messagePreview?: string;
+  recipientId?: number;
 }
 
 class EmailService {
@@ -114,6 +124,35 @@ class EmailService {
     return result;
   }
 
+  private async trackEmail(
+    trackingData: EmailTrackingData,
+    status: 'sent' | 'failed' = 'sent',
+    errorMessage?: string
+  ): Promise<void> {
+    try {
+      // Create message preview (first 200 chars)
+      const messagePreview = trackingData.messagePreview
+        ? trackingData.messagePreview.substring(0, 200)
+        : undefined;
+
+      await prisma.emailHistory.create({
+        data: {
+          recipientEmail: trackingData.recipientEmail,
+          senderUsername: trackingData.senderUsername,
+          subject: trackingData.subject,
+          emailType: trackingData.emailType,
+          status,
+          errorMessage,
+          messagePreview,
+          recipientId: trackingData.recipientId,
+        },
+      });
+    } catch (error) {
+      console.error('Failed to track email:', error);
+      // Don't throw - email tracking failure shouldn't block email sending
+    }
+  }
+
   public async sendWelcomeEmail(data: WelcomeEmailData): Promise<boolean> {
     if (!this.isActive || !this.transporter) {
       console.warn('Email service not configured');
@@ -121,6 +160,16 @@ class EmailService {
     }
 
     try {
+      // Debug logging for email template data
+      console.log('Email template data:', {
+        fullName: data.fullName,
+        username: data.username,
+        password: '[REDACTED]',
+        topicId: data.topicId,
+        discoursePostUrl: data.discoursePostUrl,
+        isLocalAccount: false,
+      });
+
       // Use the new MessageTemplates to generate the HTML content
       const welcomeTemplate = MessageTemplates.generateWelcomeEmailHTML({
         fullName: data.fullName,
@@ -150,6 +199,15 @@ class EmailService {
 
       await this.transporter.sendMail(mailOptions);
 
+      // Track the email
+      await this.trackEmail({
+        recipientEmail: data.to,
+        senderUsername: 'system',
+        subject: data.subject,
+        emailType: 'welcome',
+        messagePreview: `Welcome ${data.fullName}! Username: ${data.username}`,
+      });
+
       console.log(`Welcome email sent successfully to ${data.to}`);
       return true;
     } catch (error) {
@@ -162,6 +220,16 @@ class EmailService {
         user: this.config?.auth?.user,
         hasPassword: !!this.config?.auth?.pass
       });
+
+      // Track failed email
+      await this.trackEmail({
+        recipientEmail: data.to,
+        senderUsername: 'system',
+        subject: data.subject,
+        emailType: 'welcome',
+        messagePreview: `Welcome ${data.fullName}! Username: ${data.username}`,
+      }, 'failed', error instanceof Error ? error.message : 'Unknown error');
+
       return false;
     }
   }
@@ -171,12 +239,15 @@ class EmailService {
     subject: string,
     adminMessage: string,
     userData?: UserData,
-    isLocalAccount = false
+    _isLocalAccount = false
   ): Promise<boolean> {
     if (!this.isActive || !this.transporter) {
       console.warn('Email service not configured');
       return false;
     }
+
+    // Process variable substitution for the subject
+    const processedSubject = this.substituteVariables(subject, userData || {});
 
     try {
       // Use the new MessageTemplates to generate the HTML content
@@ -193,8 +264,6 @@ class EmailService {
         } : undefined,
       });
 
-      // Process variable substitution for the subject
-      const processedSubject = this.substituteVariables(subject, userData || {});
 
       const mailOptions: any = {
         from: this.config!.from,
@@ -210,10 +279,30 @@ class EmailService {
 
       await this.transporter.sendMail(mailOptions);
 
+      // Track the email
+      await this.trackEmail({
+        recipientEmail: to,
+        senderUsername: 'admin',
+        subject: processedSubject,
+        emailType: 'admin_message',
+        messagePreview: adminMessage.substring(0, 200),
+        recipientId: userData?.username ? undefined : undefined, // Would need user lookup
+      });
+
       console.log(`Admin email sent successfully to ${to}`);
       return true;
     } catch (error) {
       console.error('Error sending admin email:', error);
+
+      // Track failed email
+      await this.trackEmail({
+        recipientEmail: to,
+        senderUsername: 'admin',
+        subject: processedSubject,
+        emailType: 'admin_message',
+        messagePreview: adminMessage.substring(0, 200),
+      }, 'failed', error instanceof Error ? error.message : 'Unknown error');
+
       return false;
     }
   }
@@ -245,10 +334,29 @@ class EmailService {
 
       await this.transporter.sendMail(mailOptions);
 
+      // Track the email
+      await this.trackEmail({
+        recipientEmail: to,
+        senderUsername: 'system',
+        subject: subject,
+        emailType: 'custom',
+        messagePreview: htmlContent ? htmlContent.replace(/<[^>]*>/g, '').substring(0, 200) : textContent?.substring(0, 200),
+      });
+
       console.log(`Email sent successfully to ${to}`);
       return true;
     } catch (error) {
       console.error('Error sending email:', error);
+
+      // Track failed email
+      await this.trackEmail({
+        recipientEmail: to,
+        senderUsername: 'system',
+        subject: subject,
+        emailType: 'custom',
+        messagePreview: htmlContent ? htmlContent.replace(/<[^>]*>/g, '').substring(0, 200) : textContent?.substring(0, 200),
+      }, 'failed', error instanceof Error ? error.message : 'Unknown error');
+
       return false;
     }
   }
@@ -296,10 +404,30 @@ class EmailService {
       };
 
       await this.transporter.sendMail(mailOptions);
+
+      // Track the email
+      await this.trackEmail({
+        recipientEmail: to,
+        senderUsername: 'system',
+        subject: subject,
+        emailType: 'invite',
+        messagePreview: `Invitation for ${fullName}`,
+      });
+
       console.log(`Invite email sent successfully to ${to}`);
       return true;
     } catch (error) {
       console.error('Failed to send invite email:', error);
+
+      // Track failed email
+      await this.trackEmail({
+        recipientEmail: to,
+        senderUsername: 'system',
+        subject: subject,
+        emailType: 'invite',
+        messagePreview: `Invitation for ${fullName}`,
+      }, 'failed', error instanceof Error ? error.message : 'Unknown error');
+
       return false;
     }
   }
@@ -413,10 +541,30 @@ class EmailService {
       };
 
       await this.transporter.sendMail(mailOptions);
+
+      // Track the email
+      await this.trackEmail({
+        recipientEmail: data.to,
+        senderUsername: 'admin',
+        subject: data.subject,
+        emailType: 'password_reset',
+        messagePreview: `Password reset for ${data.fullName} (${data.username})`,
+      });
+
       console.log(`Password reset email sent successfully to ${data.to}`);
       return true;
     } catch (error) {
       console.error('Failed to send password reset email:', error);
+
+      // Track failed email
+      await this.trackEmail({
+        recipientEmail: data.to,
+        senderUsername: 'admin',
+        subject: data.subject,
+        emailType: 'password_reset',
+        messagePreview: `Password reset for ${data.fullName} (${data.username})`,
+      }, 'failed', error instanceof Error ? error.message : 'Unknown error');
+
       return false;
     }
   }

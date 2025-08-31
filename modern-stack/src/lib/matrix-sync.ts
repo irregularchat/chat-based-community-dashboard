@@ -1,6 +1,4 @@
 import { PrismaClient } from '@/generated/prisma';
-import { matrixService } from './matrix';
-import { MatrixClient, ClientEvent } from 'matrix-js-sdk';
 
 interface SyncResult {
   status: string;
@@ -38,7 +36,10 @@ class MatrixSyncService {
   }
 
   async fullSync(force: boolean = false): Promise<SyncResult> {
+    console.log(`Matrix fullSync called with force=${force}`);
+    
     if (this.syncInProgress && !force) {
+      console.log('Sync already in progress, skipping');
       return { status: 'skipped', reason: 'sync_in_progress' };
     }
 
@@ -56,12 +57,17 @@ class MatrixSyncService {
 
       // Check cache freshness unless forced or rapid manual sync
       if (!force && !isRapidManualSync) {
-        if (await this.isCacheFresh(30)) {
+        const isFresh = await this.isCacheFresh(30);
+        console.log(`Cache freshness check: ${isFresh}`);
+        if (isFresh) {
+          console.log('Cache is fresh, skipping sync');
           return { status: 'skipped', reason: 'cache_fresh' };
         }
       }
 
+      const { matrixService } = await import('./matrix');
       if (!matrixService.isConfigured()) {
+        console.log('Matrix service not configured');
         return { status: 'error', error: 'Matrix not configured' };
       }
 
@@ -130,7 +136,8 @@ class MatrixSyncService {
     }
   }
 
-  private async getMatrixClient(): Promise<MatrixClient | null> {
+  private async getMatrixClient(): Promise<any | null> {
+    const { matrixService } = await import('./matrix');
     const config = matrixService.getConfig();
     if (!config) {
       console.warn('Matrix service not configured');
@@ -168,7 +175,7 @@ class MatrixSyncService {
             }
           };
 
-          client.once(ClientEvent.Sync, handleSync);
+          client.once('sync', handleSync);
           
           // Also check current state immediately
           const currentState = client.getSyncState();
@@ -189,7 +196,7 @@ class MatrixSyncService {
     }
   }
 
-  private async syncRooms(client: MatrixClient | null, isRapidManualSync: boolean): Promise<{ roomsSync?: number }> {
+  private async syncRooms(client: any | null, isRapidManualSync: boolean): Promise<{ roomsSync?: number }> {
     if (!client) {
       console.warn('Matrix client not available for room sync');
       return { roomsSync: 0 };
@@ -222,7 +229,7 @@ class MatrixSyncService {
           const memberCount = room.getJoinedMemberCount();
           
           // Skip rooms with fewer than minimum members (configurable)
-          const minRoomMembers = parseInt(process.env.MATRIX_MIN_ROOM_MEMBERS || '3');
+          const minRoomMembers = parseInt(process.env.MATRIX_MIN_ROOM_MEMBERS || '10');
           if (memberCount <= minRoomMembers) {
             console.log(`Skipping room ${room.roomId} - only ${memberCount} members`);
             roomsSkipped++;
@@ -284,7 +291,7 @@ class MatrixSyncService {
     }
   }
 
-  private async syncUsersAndMemberships(client: MatrixClient | null, isRapidManualSync: boolean): Promise<{ usersSync?: number; membershipsSync?: number }> {
+  private async syncUsersAndMemberships(client: any | null, isRapidManualSync: boolean): Promise<{ usersSync?: number; membershipsSync?: number }> {
     if (!client) {
       console.warn('Matrix client not available for user/membership sync');
       return { usersSync: 0, membershipsSync: 0 };
@@ -301,7 +308,7 @@ class MatrixSyncService {
       for (const matrixRoom of matrixRooms) {
         try {
           const memberCount = matrixRoom.getJoinedMemberCount();
-          const minRoomMembers = parseInt(process.env.MATRIX_MIN_ROOM_MEMBERS || '3');
+          const minRoomMembers = parseInt(process.env.MATRIX_MIN_ROOM_MEMBERS || '10');
           
           if (memberCount <= minRoomMembers) {
             console.log(`Skipping membership sync for ${matrixRoom.roomId} - only ${memberCount} members`);
@@ -334,6 +341,7 @@ class MatrixSyncService {
             if (member.membership !== 'join') continue;
 
             // Get homeserver URL for avatar URL generation
+            const { matrixService } = await import('./matrix');
             const config = matrixService.getConfig();
             const homeserverUrl = config?.homeserver || '';
 

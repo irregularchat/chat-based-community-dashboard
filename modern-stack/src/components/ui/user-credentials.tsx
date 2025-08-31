@@ -38,7 +38,7 @@ export function UserCredentialDisplay({ credentials, userEmail, onClose }: UserC
           return newSet;
         });
       }, 2000);
-    } catch (err) {
+    } catch {
       toast.error(`Failed to copy ${fieldName}`);
     }
   };

@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
-import { ArrowLeft, MessageCircle, Users, Mail, Bot, Database, CheckCircle, AlertTriangle, Plus, Edit, Radio } from 'lucide-react';
+import { ArrowLeft, MessageCircle, Users, Mail, Bot, Database, CheckCircle, AlertTriangle, Plus, Edit } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
@@ -27,7 +27,6 @@ export default function AdminConfigurationPage() {
   const [showDiscourseDialog, setShowDiscourseDialog] = useState(false);
   const [showAIDialog, setShowAIDialog] = useState(false);
   const [showSMTPDialog, setShowSMTPDialog] = useState(false);
-  const [showSignalDialog, setShowSignalDialog] = useState(false);
 
   // Form states
   const [matrixForm, setMatrixForm] = useState({
@@ -35,7 +34,9 @@ export default function AdminConfigurationPage() {
     accessToken: '',
     userId: '',
     welcomeRoomId: '',
+    signalBridgeRoomId: '',
     enableEncryption: false,
+    securityKey: '',
   });
 
   const [authentikForm, setAuthentikForm] = useState({
@@ -71,75 +72,16 @@ export default function AdminConfigurationPage() {
     enableTLS: true,
   });
 
-  const [signalForm, setSignalForm] = useState({
-    apiUrl: '',
-    phoneNumber: '',
-    deviceName: '',
-    timeout: '30000',
-    enableDebug: false,
-  });
-
-  // Signal registration state
-  const [showSignalRegistration, setShowSignalRegistration] = useState(false);
-  const [registrationStep, setRegistrationStep] = useState<'phone' | 'verify'>('phone');
-  const [registrationPhone, setRegistrationPhone] = useState('');
-  const [verificationCode, setVerificationCode] = useState('');
-  const [useVoiceCall, setUseVoiceCall] = useState(false);
-  const [registrationPin, setRegistrationPin] = useState('');
-
   // Fetch data
   const { data: allSettings, refetch } = trpc.settings.getAllSettings.useQuery();
-  
-  // Fetch services configuration status
-  const { data: servicesConfig, refetch: refetchServicesConfig } = trpc.settings.getServicesConfig.useQuery();
-  
-  // Fetch Signal CLI service status
-  const { data: signalServiceStatus, refetch: refetchSignalStatus } = trpc.signal.getServiceStatus.useQuery();
-
-  // Mutations
-  const registerPhoneMutation = trpc.signal.registerPhoneNumber.useMutation({
-    onSuccess: (data) => {
-      toast.success(data.message);
-      setRegistrationStep('verify');
-      setRegistrationPhone(data.phoneNumber);
-    },
-    onError: (error) => {
-      toast.error(`Registration failed: ${error.message}`);
-    },
-  });
-
-  const verifyRegistrationMutation = trpc.signal.verifyRegistration.useMutation({
-    onSuccess: (data) => {
-      toast.success(data.message);
-      setShowSignalRegistration(false);
-      setRegistrationStep('phone');
-      setVerificationCode('');
-      refetchSignalStatus();
-      // Update the form with the registered phone number
-      setSignalForm(prev => ({ ...prev, phoneNumber: data.phoneNumber }));
-    },
-    onError: (error) => {
-      toast.error(`Verification failed: ${error.message}`);
-    },
-  });
-
-  const unregisterPhoneMutation = trpc.signal.unregisterPhoneNumber.useMutation({
-    onSuccess: (data) => {
-      toast.success(data.message);
-      refetchSignalStatus();
-    },
-    onError: (error) => {
-      toast.error(`Unregister failed: ${error.message}`);
-    },
-  });
+  const { data: matrixConfig } = trpc.matrix.getConfig.useQuery();
+  const { data: servicesConfig } = trpc.settings.getServicesConfig.useQuery();
 
   // Mutations
   const updateSettingMutation = trpc.settings.updateDashboardSetting.useMutation({
     onSuccess: () => {
       toast.success('Configuration saved successfully');
       refetch();
-      refetchServicesConfig();
-      refetchSignalStatus();
     },
     onError: (error) => {
       toast.error(`Failed to save configuration: ${error.message}`);
@@ -150,8 +92,6 @@ export default function AdminConfigurationPage() {
     onSuccess: (data) => {
       toast.success(`Initialized ${data.initialized} settings from environment variables`);
       refetch();
-      refetchServicesConfig();
-      refetchSignalStatus();
     },
     onError: (error) => {
       toast.error(`Failed to initialize from environment: ${error.message}`);
@@ -177,6 +117,9 @@ export default function AdminConfigurationPage() {
         accessToken: (allSettings.settings.matrix_access_token as string) || '',
         userId: (allSettings.settings.matrix_bot_username as string) || '',
         welcomeRoomId: (allSettings.settings.matrix_welcome_room_id as string) || '',
+        signalBridgeRoomId: (allSettings.settings.matrix_signal_bridge_room_id as string) || '',
+        enableEncryption: (allSettings.settings.matrix_enable_encryption as boolean) || false,
+        securityKey: (allSettings.settings.matrix_security_key as string) || '',
       }));
 
       // Populate SMTP form if settings exist
@@ -187,15 +130,6 @@ export default function AdminConfigurationPage() {
         user: (allSettings.settings.smtp_username as string) || '',
         from: (allSettings.settings.smtp_from_email as string) || '',
         bcc: (allSettings.settings.smtp_bcc as string) || '',
-      }));
-
-      // Populate Signal form if settings exist
-      setSignalForm(prev => ({
-        ...prev,
-        apiUrl: (allSettings.settings.signal_cli_rest_api_base_url as string) || '',
-        phoneNumber: (allSettings.settings.signal_phone_number as string) || '',
-        deviceName: (allSettings.settings.signal_cli_device_name as string) || '',
-        timeout: (allSettings.settings.signal_cli_timeout as string) || '30000',
       }));
     }
   }, [allSettings]);
@@ -217,7 +151,9 @@ export default function AdminConfigurationPage() {
       accessToken: matrixForm.accessToken,
       userId: matrixForm.userId,
       welcomeRoomId: matrixForm.welcomeRoomId,
+      signalBridgeRoomId: matrixForm.signalBridgeRoomId,
       enableEncryption: matrixForm.enableEncryption,
+      securityKey: matrixForm.securityKey,
     };
 
     updateSettingMutation.mutate({
@@ -297,23 +233,6 @@ export default function AdminConfigurationPage() {
     setShowSMTPDialog(false);
   };
 
-  const handleSaveSignalConfig = () => {
-    const signalConfig = {
-      apiUrl: signalForm.apiUrl,
-      phoneNumber: signalForm.phoneNumber,
-      deviceName: signalForm.deviceName,
-      timeout: signalForm.timeout,
-      enableDebug: signalForm.enableDebug,
-    };
-
-    updateSettingMutation.mutate({
-      key: 'signal_config',
-      value: signalConfig,
-    });
-
-    setShowSignalDialog(false);
-  };
-
   if (!session) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -340,9 +259,29 @@ export default function AdminConfigurationPage() {
     );
   }
 
-  // Helper function to check if a service is configured - using actual service status
-  const isServiceConfigured = (serviceName: keyof NonNullable<typeof servicesConfig>) => {
-    return servicesConfig?.[serviceName]?.isConfigured ?? false;
+  // Helper function to check if a service is configured
+  const isServiceConfigured = (configKey: string, requiredFields: string[]) => {
+    // Check actual service status from environment variables
+    if (configKey === 'matrix_config') {
+      return servicesConfig?.matrix?.isConfigured === true || matrixConfig?.isConfigured === true;
+    }
+    if (configKey === 'authentik_config') {
+      return servicesConfig?.authentik?.isConfigured === true;
+    }
+    if (configKey === 'discourse_config') {
+      return servicesConfig?.discourse?.isConfigured === true;
+    }
+    if (configKey === 'smtp_config') {
+      return servicesConfig?.email?.isConfigured === true;
+    }
+    if (configKey === 'ai_config') {
+      return servicesConfig?.ai?.isConfigured === true;
+    }
+    
+    // Fallback to database settings for unknown services
+    const config = allSettings?.settings?.[configKey] as Record<string, unknown>;
+    if (!config) return false;
+    return requiredFields.every(field => config[field] && config[field] !== '');
   };
 
   return (
@@ -379,7 +318,7 @@ export default function AdminConfigurationPage() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-6 lg:overflow-x-visible">
+          <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-5 lg:overflow-x-visible">
             <TabsTrigger value="matrix" className="flex items-center gap-2 min-w-0 flex-shrink-0">
               <MessageCircle className="w-4 h-4 shrink-0" />
               <span className="hidden sm:inline">Matrix</span>
@@ -391,10 +330,6 @@ export default function AdminConfigurationPage() {
             <TabsTrigger value="discourse" className="flex items-center gap-2 min-w-0 flex-shrink-0">
               <Database className="w-4 h-4 shrink-0" />
               <span className="hidden sm:inline">Discourse</span>
-            </TabsTrigger>
-            <TabsTrigger value="signal" className="flex items-center gap-2 min-w-0 flex-shrink-0">
-              <Radio className="w-4 h-4 shrink-0" />
-              <span className="hidden sm:inline">Signal CLI</span>
             </TabsTrigger>
             <TabsTrigger value="ai" className="flex items-center gap-2 min-w-0 flex-shrink-0">
               <Bot className="w-4 h-4 shrink-0" />
@@ -421,7 +356,7 @@ export default function AdminConfigurationPage() {
                     </CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
-                    {isServiceConfigured('matrix') ? (
+                    {isServiceConfigured('matrix_config', ['homeserver', 'accessToken', 'userId']) ? (
                       <Badge variant="default" className="bg-green-100 text-green-800">
                         <CheckCircle className="w-3 h-3 mr-1" />
                         Configured
@@ -435,7 +370,7 @@ export default function AdminConfigurationPage() {
                     <Dialog open={showMatrixDialog} onOpenChange={setShowMatrixDialog}>
                       <DialogTrigger asChild>
                         <Button onClick={() => {
-                          if (isServiceConfigured('matrix')) {
+                          if (isServiceConfigured('matrix_config', ['homeserver', 'accessToken', 'userId'])) {
                             const config = allSettings?.settings?.matrix_config as Record<string, unknown>;
                             if (config) {
                               setMatrixForm({
@@ -443,12 +378,13 @@ export default function AdminConfigurationPage() {
                                 accessToken: (config.accessToken as string) || '',
                                 userId: (config.userId as string) || '',
                                 welcomeRoomId: (config.welcomeRoomId as string) || '',
+                                signalBridgeRoomId: (config.signalBridgeRoomId as string) || '',
                                 enableEncryption: (config.enableEncryption as boolean) || false,
                               });
                             }
                           }
                         }}>
-                          {isServiceConfigured('matrix') ? (
+                          {isServiceConfigured('matrix_config', ['homeserver', 'accessToken', 'userId']) ? (
                             <>
                               <Edit className="w-4 h-4 mr-2" />
                               Edit Configuration
@@ -510,6 +446,16 @@ export default function AdminConfigurationPage() {
                             />
                             <p className="text-xs text-gray-500 mt-1">Default room for welcoming new users</p>
                           </div>
+                          <div>
+                            <Label htmlFor="matrix-signal-bridge-room">Signal Bridge Room ID</Label>
+                            <Input
+                              id="matrix-signal-bridge-room"
+                              value={matrixForm.signalBridgeRoomId}
+                              onChange={(e) => setMatrixForm({ ...matrixForm, signalBridgeRoomId: e.target.value })}
+                              placeholder="!signalroom:example.com"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Room ID for Signal bridge bot communication (required for Signal verification)</p>
+                          </div>
                           <div className="flex items-center space-x-2">
                             <Switch
                               id="matrix-encryption"
@@ -518,6 +464,19 @@ export default function AdminConfigurationPage() {
                             />
                             <Label htmlFor="matrix-encryption">Enable End-to-End Encryption</Label>
                           </div>
+                          {matrixForm.enableEncryption && (
+                            <div>
+                              <Label htmlFor="matrix-security-key">Matrix Security Key</Label>
+                              <Input
+                                id="matrix-security-key"
+                                type="password"
+                                value={matrixForm.securityKey || ''}
+                                onChange={(e) => setMatrixForm({ ...matrixForm, securityKey: e.target.value })}
+                                placeholder="Security key for encrypted rooms"
+                              />
+                              <p className="text-xs text-gray-500 mt-1">Security key for accessing encrypted rooms and Signal bridge</p>
+                            </div>
+                          )}
                           <div className="flex justify-end space-x-2">
                             <Button variant="outline" onClick={() => setShowMatrixDialog(false)}>
                               Cancel
@@ -533,24 +492,54 @@ export default function AdminConfigurationPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                {isServiceConfigured('matrix') ? (
+                {isServiceConfigured('matrix_config', ['homeserver', 'accessToken', 'userId']) ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Homeserver</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.matrix_config as Record<string, unknown>)?.homeserver as string}</p>
+                      <p className="text-sm text-gray-600">
+                        {matrixConfig?.homeserver || (allSettings?.settings?.matrix_config as Record<string, unknown>)?.homeserver as string}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Bot User ID</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.matrix_config as Record<string, unknown>)?.userId as string}</p>
+                      <p className="text-sm text-gray-600">
+                        {matrixConfig?.userId || (allSettings?.settings?.matrix_config as Record<string, unknown>)?.userId as string}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Welcome Room</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.matrix_config as Record<string, unknown>)?.welcomeRoomId as string || 'Not configured'}</p>
+                      <h4 className="font-medium text-gray-900 mb-2">Configuration Source</h4>
+                      <p className="text-sm text-gray-600">
+                        {matrixConfig?.isConfigured ? 'Environment Variables' : 'Database Settings'}
+                      </p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Status</h4>
+                      <p className="text-sm text-gray-600">Active and Connected</p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Signal Bridge Room</h4>
+                      <p className="text-sm text-gray-600">
+                        {(allSettings?.settings?.matrix_config as Record<string, unknown>)?.signalBridgeRoomId as string || 
+                         'Not configured'}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Encryption</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.matrix_config as Record<string, unknown>)?.enableEncryption as boolean ? 'Enabled' : 'Disabled'}</p>
+                      <p className="text-sm text-gray-600">
+                        {(allSettings?.settings?.matrix_config as Record<string, unknown>)?.enableEncryption ? 
+                         'Enabled' : 'Disabled'}
+                      </p>
                     </div>
+                    {(allSettings?.settings?.matrix_config as Record<string, unknown>)?.enableEncryption && (
+                      <div className="border rounded-lg p-4">
+                        <h4 className="font-medium text-gray-900 mb-2">Security Key</h4>
+                        <p className="text-sm text-gray-600">
+                          {(allSettings?.settings?.matrix_config as Record<string, unknown>)?.securityKey ? 
+                           '•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••' : 
+                           'Not configured'}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="text-center py-8 text-gray-500">
@@ -576,7 +565,7 @@ export default function AdminConfigurationPage() {
                     </CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
-                    {isServiceConfigured('authentik') ? (
+                    {isServiceConfigured('authentik_config', ['baseUrl', 'apiToken', 'clientId', 'clientSecret', 'issuer']) ? (
                       <Badge variant="default" className="bg-green-100 text-green-800">
                         <CheckCircle className="w-3 h-3 mr-1" />
                         Configured
@@ -590,7 +579,7 @@ export default function AdminConfigurationPage() {
                     <Dialog open={showAuthentikDialog} onOpenChange={setShowAuthentikDialog}>
                       <DialogTrigger asChild>
                         <Button onClick={() => {
-                          if (isServiceConfigured('authentik')) {
+                          if (isServiceConfigured('authentik_config', ['baseUrl', 'apiToken', 'clientId', 'clientSecret', 'issuer'])) {
                             const config = allSettings?.settings?.authentik_config as Record<string, unknown>;
                             if (config) {
                               setAuthentikForm({
@@ -603,7 +592,7 @@ export default function AdminConfigurationPage() {
                             }
                           }
                         }}>
-                          {isServiceConfigured('authentik') ? (
+                          {isServiceConfigured('authentik_config', ['baseUrl', 'apiToken', 'clientId', 'clientSecret', 'issuer']) ? (
                             <>
                               <Edit className="w-4 h-4 mr-2" />
                               Edit Configuration
@@ -691,23 +680,29 @@ export default function AdminConfigurationPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                {isServiceConfigured('authentik') ? (
+                {isServiceConfigured('authentik_config', ['baseUrl', 'apiToken', 'clientId', 'clientSecret', 'issuer']) ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Base URL</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.authentik_config as Record<string, unknown>)?.baseUrl as string}</p>
+                      <h4 className="font-medium text-gray-900 mb-2">API URL</h4>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.authentik?.apiUrl || (allSettings?.settings?.authentik_config as Record<string, unknown>)?.baseUrl as string}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Issuer</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.authentik_config as Record<string, unknown>)?.issuer as string}</p>
+                      <h4 className="font-medium text-gray-900 mb-2">Main Group ID</h4>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.authentik?.mainGroupId || 'Not configured'}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Client ID</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.authentik_config as Record<string, unknown>)?.clientId as string}</p>
+                      <h4 className="font-medium text-gray-900 mb-2">API Token</h4>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.authentik?.hasApiToken ? 'Configured' : 'Not set'}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Status</h4>
-                      <p className="text-sm text-gray-600">Connected and configured</p>
+                      <h4 className="font-medium text-gray-900 mb-2">Configuration Source</h4>
+                      <p className="text-sm text-gray-600">Environment Variables</p>
                     </div>
                   </div>
                 ) : (
@@ -734,7 +729,7 @@ export default function AdminConfigurationPage() {
                     </CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
-                    {isServiceConfigured('discourse') ? (
+                    {isServiceConfigured('discourse_config', ['baseUrl', 'apiKey', 'apiUsername']) ? (
                       <Badge variant="default" className="bg-green-100 text-green-800">
                         <CheckCircle className="w-3 h-3 mr-1" />
                         Configured
@@ -748,7 +743,7 @@ export default function AdminConfigurationPage() {
                     <Dialog open={showDiscourseDialog} onOpenChange={setShowDiscourseDialog}>
                       <DialogTrigger asChild>
                         <Button onClick={() => {
-                          if (isServiceConfigured('discourse')) {
+                          if (isServiceConfigured('discourse_config', ['baseUrl', 'apiKey', 'apiUsername'])) {
                             const config = allSettings?.settings?.discourse_config as Record<string, unknown>;
                             if (config) {
                               setDiscourseForm({
@@ -760,7 +755,7 @@ export default function AdminConfigurationPage() {
                             }
                           }
                         }}>
-                          {isServiceConfigured('discourse') ? (
+                          {isServiceConfigured('discourse_config', ['baseUrl', 'apiKey', 'apiUsername']) ? (
                             <>
                               <Edit className="w-4 h-4 mr-2" />
                               Edit Configuration
@@ -838,23 +833,29 @@ export default function AdminConfigurationPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                {isServiceConfigured('discourse') ? (
+                {isServiceConfigured('discourse_config', ['baseUrl', 'apiKey', 'apiUsername']) ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">Forum URL</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.discourse_config as Record<string, unknown>)?.baseUrl as string}</p>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.discourse?.url || (allSettings?.settings?.discourse_config as Record<string, unknown>)?.baseUrl as string}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">API Username</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.discourse_config as Record<string, unknown>)?.apiUsername as string}</p>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.discourse?.apiUsername || (allSettings?.settings?.discourse_config as Record<string, unknown>)?.apiUsername as string}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Webhook Secret</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.discourse_config as Record<string, unknown>)?.webhookSecret as string ? 'Configured' : 'Not set'}</p>
+                      <h4 className="font-medium text-gray-900 mb-2">API Key</h4>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.discourse?.hasApiKey ? 'Configured' : 'Not set'}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Status</h4>
-                      <p className="text-sm text-gray-600">Connected and configured</p>
+                      <h4 className="font-medium text-gray-900 mb-2">Configuration Source</h4>
+                      <p className="text-sm text-gray-600">Environment Variables</p>
                     </div>
                   </div>
                 ) : (
@@ -881,7 +882,7 @@ export default function AdminConfigurationPage() {
                     </CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
-                    {isServiceConfigured('ai') ? (
+                    {isServiceConfigured('ai_config', ['provider']) ? (
                       <Badge variant="default" className="bg-green-100 text-green-800">
                         <CheckCircle className="w-3 h-3 mr-1" />
                         Configured
@@ -895,7 +896,7 @@ export default function AdminConfigurationPage() {
                     <Dialog open={showAIDialog} onOpenChange={setShowAIDialog}>
                       <DialogTrigger asChild>
                         <Button onClick={() => {
-                          if (isServiceConfigured('ai')) {
+                          if (isServiceConfigured('ai_config', ['provider'])) {
                             const config = allSettings?.settings?.ai_config as Record<string, unknown>;
                             if (config) {
                               setAIForm({
@@ -908,7 +909,7 @@ export default function AdminConfigurationPage() {
                             }
                           }
                         }}>
-                          {isServiceConfigured('ai') ? (
+                          {isServiceConfigured('ai_config', ['provider']) ? (
                             <>
                               <Edit className="w-4 h-4 mr-2" />
                               Edit Configuration
@@ -1012,29 +1013,33 @@ export default function AdminConfigurationPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                {isServiceConfigured('ai') ? (
+                {isServiceConfigured('ai_config', ['provider']) ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Provider</h4>
-                      <p className="text-sm text-gray-600 capitalize">{(allSettings?.settings?.ai_config as Record<string, unknown>)?.provider as string}</p>
-                    </div>
-                    <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Model/Endpoint</h4>
+                      <h4 className="font-medium text-gray-900 mb-2">Available Providers</h4>
                       <p className="text-sm text-gray-600">
-                        {(allSettings?.settings?.ai_config as Record<string, unknown>)?.provider === 'openai' && (allSettings?.settings?.ai_config as Record<string, unknown>)?.model as string}
-                        {(allSettings?.settings?.ai_config as Record<string, unknown>)?.provider === 'claude' && 'Claude API'}
-                        {(allSettings?.settings?.ai_config as Record<string, unknown>)?.provider === 'local' && (allSettings?.settings?.ai_config as Record<string, unknown>)?.localEndpoint as string}
+                        {[
+                          servicesConfig?.ai?.hasOpenAI && 'OpenAI',
+                          servicesConfig?.ai?.hasClaude && 'Claude',
+                          servicesConfig?.ai?.hasLocal && 'Local'
+                        ].filter(Boolean).join(', ') || 'None'}
                       </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">API Key</h4>
+                      <h4 className="font-medium text-gray-900 mb-2">OpenAI</h4>
                       <p className="text-sm text-gray-600">
-                        {((allSettings?.settings?.ai_config as Record<string, unknown>)?.openaiApiKey as string || (allSettings?.settings?.ai_config as Record<string, unknown>)?.claudeApiKey as string) ? 'Configured' : 'Not set'}
+                        {servicesConfig?.ai?.hasOpenAI ? 'Configured' : 'Not configured'}
                       </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Status</h4>
-                      <p className="text-sm text-gray-600">Ready for use</p>
+                      <h4 className="font-medium text-gray-900 mb-2">Claude</h4>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.ai?.hasClaude ? 'Configured' : 'Not configured'}
+                      </p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Configuration Source</h4>
+                      <p className="text-sm text-gray-600">Environment Variables</p>
                     </div>
                   </div>
                 ) : (
@@ -1061,7 +1066,7 @@ export default function AdminConfigurationPage() {
                     </CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
-                    {isServiceConfigured('smtp') ? (
+                    {isServiceConfigured('smtp_config', ['host', 'port', 'user', 'password', 'from']) ? (
                       <Badge variant="default" className="bg-green-100 text-green-800">
                         <CheckCircle className="w-3 h-3 mr-1" />
                         Configured
@@ -1075,7 +1080,7 @@ export default function AdminConfigurationPage() {
                     <Dialog open={showSMTPDialog} onOpenChange={setShowSMTPDialog}>
                       <DialogTrigger asChild>
                         <Button onClick={() => {
-                          if (isServiceConfigured('smtp')) {
+                          if (isServiceConfigured('smtp_config', ['host', 'port', 'user', 'password', 'from'])) {
                             const config = allSettings?.settings?.smtp_config as Record<string, unknown>;
                             if (config) {
                               setSMTPForm({
@@ -1090,7 +1095,7 @@ export default function AdminConfigurationPage() {
                             }
                           }
                         }}>
-                          {isServiceConfigured('smtp') ? (
+                          {isServiceConfigured('smtp_config', ['host', 'port', 'user', 'password', 'from']) ? (
                             <>
                               <Edit className="w-4 h-4 mr-2" />
                               Edit Configuration
@@ -1197,23 +1202,30 @@ export default function AdminConfigurationPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                {isServiceConfigured('smtp') ? (
+                {isServiceConfigured('smtp_config', ['host', 'port', 'user', 'password', 'from']) ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">SMTP Host</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.host as string}:{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.port as string}</p>
-                    </div>
-                    <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Username</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.user as string}</p>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.email?.host ? `${servicesConfig.email.host}:${servicesConfig.email.port}` : 
+                         `${(allSettings?.settings?.smtp_config as Record<string, unknown>)?.host as string}:${(allSettings?.settings?.smtp_config as Record<string, unknown>)?.port as string}`}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-2">From Email</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.from as string}</p>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.email?.from || (allSettings?.settings?.smtp_config as Record<string, unknown>)?.from as string}
+                      </p>
                     </div>
                     <div className="border rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 mb-2">Security</h4>
-                      <p className="text-sm text-gray-600">{(allSettings?.settings?.smtp_config as Record<string, unknown>)?.enableTLS as boolean ? 'TLS Enabled' : 'TLS Disabled'}</p>
+                      <h4 className="font-medium text-gray-900 mb-2">BCC Email</h4>
+                      <p className="text-sm text-gray-600">
+                        {servicesConfig?.email?.hasBcc ? 'Configured' : 'Not set'}
+                      </p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-2">Configuration Source</h4>
+                      <p className="text-sm text-gray-600">Environment Variables</p>
                     </div>
                   </div>
                 ) : (
@@ -1224,405 +1236,7 @@ export default function AdminConfigurationPage() {
               </CardContent>
             </Card>
           </TabsContent>
-
-          {/* Signal CLI Configuration Tab */}
-          <TabsContent value="signal" className="space-y-4">
-            <Card>
-              <CardHeader>
-                <div className="flex justify-between items-center">
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      <Radio className="w-5 h-5" />
-                      Signal CLI Integration
-                    </CardTitle>
-                    <CardDescription>
-                      Configure Signal CLI for messaging and phone number registration
-                    </CardDescription>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {isServiceConfigured('signal') ? (
-                      <Badge variant="default" className="bg-green-100 text-green-800">
-                        <CheckCircle className="w-3 h-3 mr-1" />
-                        Configured
-                      </Badge>
-                    ) : (
-                      <Badge variant="destructive">
-                        <AlertTriangle className="w-3 h-3 mr-1" />
-                        Not Configured
-                      </Badge>
-                    )}
-                    <Dialog open={showSignalDialog} onOpenChange={setShowSignalDialog}>
-                      <DialogTrigger asChild>
-                        <Button onClick={() => {
-                          if (isServiceConfigured('signal')) {
-                            const config = allSettings?.settings?.signal_config as Record<string, unknown>;
-                            if (config) {
-                              setSignalForm({
-                                apiUrl: (config.apiUrl as string) || '',
-                                phoneNumber: (config.phoneNumber as string) || '',
-                                deviceName: (config.deviceName as string) || '',
-                                timeout: (config.timeout as string) || '30000',
-                                enableDebug: (config.enableDebug as boolean) || false,
-                              });
-                            }
-                          }
-                        }}>
-                          {isServiceConfigured('signal') ? (
-                            <>
-                              <Edit className="w-4 h-4 mr-2" />
-                              Edit Configuration
-                            </>
-                          ) : (
-                            <>
-                              <Plus className="w-4 h-4 mr-2" />
-                              Configure Signal CLI
-                            </>
-                          )}
-                        </Button>
-                      </DialogTrigger>
-                      <DialogContent className="max-w-2xl">
-                        <DialogHeader>
-                          <DialogTitle>Signal CLI Configuration</DialogTitle>
-                          <DialogDescription>
-                            Set up your Signal CLI REST API connection and phone number registration
-                          </DialogDescription>
-                        </DialogHeader>
-                        <div className="space-y-4">
-                          <div>
-                            <Label htmlFor="signal-api-url">Signal CLI REST API URL</Label>
-                            <Input
-                              id="signal-api-url"
-                              value={signalForm.apiUrl}
-                              onChange={(e) => setSignalForm({ ...signalForm, apiUrl: e.target.value })}
-                              placeholder="http://localhost:8080"
-                            />
-                            <p className="text-xs text-gray-500 mt-1">URL for Signal CLI REST API container</p>
-                          </div>
-                          <div>
-                            <Label htmlFor="signal-phone-number">Phone Number</Label>
-                            <Input
-                              id="signal-phone-number"
-                              value={signalForm.phoneNumber}
-                              onChange={(e) => setSignalForm({ ...signalForm, phoneNumber: e.target.value })}
-                              placeholder="+1234567890"
-                            />
-                            <p className="text-xs text-gray-500 mt-1">Phone number to register with Signal (include country code)</p>
-                          </div>
-                          <div>
-                            <Label htmlFor="signal-device-name">Device Name</Label>
-                            <Input
-                              id="signal-device-name"
-                              value={signalForm.deviceName}
-                              onChange={(e) => setSignalForm({ ...signalForm, deviceName: e.target.value })}
-                              placeholder="Community Dashboard Bot"
-                            />
-                            <p className="text-xs text-gray-500 mt-1">Name for this Signal CLI device</p>
-                          </div>
-                          <div>
-                            <Label htmlFor="signal-timeout">API Timeout (ms)</Label>
-                            <Input
-                              id="signal-timeout"
-                              value={signalForm.timeout}
-                              onChange={(e) => setSignalForm({ ...signalForm, timeout: e.target.value })}
-                              placeholder="30000"
-                            />
-                            <p className="text-xs text-gray-500 mt-1">Timeout for Signal CLI API requests</p>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <Switch
-                              id="signal-debug"
-                              checked={signalForm.enableDebug}
-                              onCheckedChange={(checked) => setSignalForm({ ...signalForm, enableDebug: checked })}
-                            />
-                            <Label htmlFor="signal-debug">Enable Debug Logging</Label>
-                          </div>
-                          <div className="flex justify-end space-x-2">
-                            <Button variant="outline" onClick={() => setShowSignalDialog(false)}>
-                              Cancel
-                            </Button>
-                            <Button onClick={handleSaveSignalConfig} disabled={updateSettingMutation.isPending}>
-                              {updateSettingMutation.isPending ? 'Saving...' : 'Save Configuration'}
-                            </Button>
-                          </div>
-                        </div>
-                      </DialogContent>
-                    </Dialog>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {isServiceConfigured('signal') ? (
-                  <div className="space-y-6">
-                    {/* Configuration Details */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="border rounded-lg p-4">
-                        <h4 className="font-medium text-gray-900 mb-2">API URL</h4>
-                        <p className="text-sm text-gray-600">{servicesConfig?.signal?.details?.apiUrl}</p>
-                      </div>
-                      <div className="border rounded-lg p-4">
-                        <h4 className="font-medium text-gray-900 mb-2">Phone Number</h4>
-                        <p className="text-sm text-gray-600">{servicesConfig?.signal?.details?.phoneNumber}</p>
-                      </div>
-                      <div className="border rounded-lg p-4">
-                        <h4 className="font-medium text-gray-900 mb-2">Device Name</h4>
-                        <p className="text-sm text-gray-600">{servicesConfig?.signal?.details?.deviceName}</p>
-                      </div>
-                      <div className="border rounded-lg p-4">
-                        <h4 className="font-medium text-gray-900 mb-2">Configuration Status</h4>
-                        <p className="text-sm text-gray-600">
-                          {servicesConfig?.signal?.isActive ? 'Active and configured' : 'Configured but inactive'}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Service Health and Registration Status */}
-                    <div className="border-t pt-6">
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-lg font-medium text-gray-900">Service Health & Registration Status</h3>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => refetchSignalStatus()}
-                          disabled={!signalServiceStatus}
-                        >
-                          Refresh Status
-                        </Button>
-                      </div>
-
-                      {signalServiceStatus ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="border rounded-lg p-4">
-                            <div className="flex items-center gap-2 mb-2">
-                              <h4 className="font-medium text-gray-900">Service Health</h4>
-                              {signalServiceStatus.isHealthy ? (
-                                <Badge variant="default" className="bg-green-100 text-green-800">
-                                  <CheckCircle className="w-3 h-3 mr-1" />
-                                  Healthy
-                                </Badge>
-                              ) : (
-                                <Badge variant="destructive">
-                                  <AlertTriangle className="w-3 h-3 mr-1" />
-                                  Unhealthy
-                                </Badge>
-                              )}
-                            </div>
-                            <p className="text-sm text-gray-600">
-                              Signal CLI REST API is {signalServiceStatus.isHealthy ? 'responding' : 'not responding'}
-                            </p>
-                          </div>
-
-                          <div className="border rounded-lg p-4">
-                            <div className="flex items-center gap-2 mb-2">
-                              <h4 className="font-medium text-gray-900">Phone Registration</h4>
-                              {signalServiceStatus.isRegistered ? (
-                                <Badge variant="default" className="bg-green-100 text-green-800">
-                                  <CheckCircle className="w-3 h-3 mr-1" />
-                                  Registered
-                                </Badge>
-                              ) : (
-                                <Badge variant="destructive">
-                                  <AlertTriangle className="w-3 h-3 mr-1" />
-                                  Not Registered
-                                </Badge>
-                              )}
-                            </div>
-                            <p className="text-sm text-gray-600">
-                              {signalServiceStatus.isRegistered 
-                                ? `Phone ${signalServiceStatus.configuration.phoneNumber} is registered with Signal CLI`
-                                : signalServiceStatus.error || 'Phone number not registered'
-                              }
-                            </p>
-                          </div>
-
-                          {signalServiceStatus.accountInfo && (
-                            <div className="border rounded-lg p-4 col-span-full">
-                              <h4 className="font-medium text-gray-900 mb-2">Account Details</h4>
-                              <div className="text-sm text-gray-600 space-y-1">
-                                {signalServiceStatus.accountInfo.deviceName && (
-                                  <p><strong>Device:</strong> {signalServiceStatus.accountInfo.deviceName}</p>
-                                )}
-                                {signalServiceStatus.accountInfo.uuid && (
-                                  <p><strong>UUID:</strong> {signalServiceStatus.accountInfo.uuid}</p>
-                                )}
-                                <p><strong>Last Checked:</strong> {new Date(signalServiceStatus.lastChecked).toLocaleString()}</p>
-                              </div>
-                            </div>
-                          )}
-
-                          {signalServiceStatus.error && !signalServiceStatus.isRegistered && (
-                            <div className="border border-red-200 rounded-lg p-4 col-span-full bg-red-50">
-                              <h4 className="font-medium text-red-900 mb-2 flex items-center gap-2">
-                                <AlertTriangle className="w-4 h-4" />
-                                Registration Required
-                              </h4>
-                              <p className="text-sm text-red-700">{signalServiceStatus.error}</p>
-                              <p className="text-sm text-red-600 mt-3">
-                                You need to register a phone number with Signal CLI to use this service.
-                              </p>
-                              <div className="mt-4 flex gap-2">
-                                <Button
-                                  onClick={() => {
-                                    setShowSignalRegistration(true);
-                                    setRegistrationStep('phone');
-                                    setRegistrationPhone(servicesConfig?.signal?.details?.phoneNumber || '');
-                                  }}
-                                  size="sm"
-                                >
-                                  <Plus className="w-4 h-4 mr-2" />
-                                  Register Phone Number
-                                </Button>
-                                {signalServiceStatus.configuration?.phoneNumber && (
-                                  <Button
-                                    onClick={() => {
-                                      if (confirm('Are you sure you want to unregister this phone number?')) {
-                                        unregisterPhoneMutation.mutate({
-                                          phoneNumber: signalServiceStatus.configuration.phoneNumber!,
-                                          deleteLocalData: true
-                                        });
-                                      }
-                                    }}
-                                    variant="destructive"
-                                    size="sm"
-                                    disabled={unregisterPhoneMutation.isPending}
-                                  >
-                                    Unregister
-                                  </Button>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="text-center py-4 text-gray-500">
-                          Loading service status...
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    Signal CLI is not configured. Click &quot;Configure Signal CLI&quot; to get started.
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
         </Tabs>
-
-        {/* Signal Registration Dialog */}
-        <Dialog open={showSignalRegistration} onOpenChange={setShowSignalRegistration}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>
-                {registrationStep === 'phone' ? 'Register Phone Number' : 'Verify Registration'}
-              </DialogTitle>
-              <DialogDescription>
-                {registrationStep === 'phone'
-                  ? 'Enter the phone number you want to register with Signal'
-                  : 'Enter the verification code sent to your phone'}
-              </DialogDescription>
-            </DialogHeader>
-
-            {registrationStep === 'phone' ? (
-              <div className="space-y-4">
-                <div>
-                  <Label htmlFor="registration-phone">Phone Number</Label>
-                  <Input
-                    id="registration-phone"
-                    value={registrationPhone}
-                    onChange={(e) => setRegistrationPhone(e.target.value)}
-                    placeholder="+1234567890"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Include country code (e.g., +1 for US, +44 for UK)
-                  </p>
-                </div>
-                
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="voice-call"
-                    checked={useVoiceCall}
-                    onCheckedChange={setUseVoiceCall}
-                  />
-                  <Label htmlFor="voice-call">Use voice call instead of SMS</Label>
-                </div>
-
-                <div className="flex justify-end space-x-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setShowSignalRegistration(false);
-                      setRegistrationStep('phone');
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    onClick={() => {
-                      registerPhoneMutation.mutate({
-                        phoneNumber: registrationPhone,
-                        voiceVerification: useVoiceCall,
-                      });
-                    }}
-                    disabled={!registrationPhone || registerPhoneMutation.isPending}
-                  >
-                    {registerPhoneMutation.isPending ? 'Sending...' : 'Send Verification Code'}
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div>
-                  <Label htmlFor="verification-code">Verification Code</Label>
-                  <Input
-                    id="verification-code"
-                    value={verificationCode}
-                    onChange={(e) => setVerificationCode(e.target.value)}
-                    placeholder="123456"
-                    maxLength={6}
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Enter the 6-digit code sent to {registrationPhone}
-                  </p>
-                </div>
-
-                <div>
-                  <Label htmlFor="registration-pin">Registration PIN (Optional)</Label>
-                  <Input
-                    id="registration-pin"
-                    value={registrationPin}
-                    onChange={(e) => setRegistrationPin(e.target.value)}
-                    placeholder="Leave empty if not set"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Only required if you previously set a registration lock PIN
-                  </p>
-                </div>
-
-                <div className="flex justify-end space-x-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => setRegistrationStep('phone')}
-                  >
-                    Back
-                  </Button>
-                  <Button
-                    onClick={() => {
-                      verifyRegistrationMutation.mutate({
-                        phoneNumber: registrationPhone,
-                        verificationCode,
-                        pin: registrationPin || undefined,
-                      });
-                    }}
-                    disabled={!verificationCode || verificationCode.length !== 6 || verifyRegistrationMutation.isPending}
-                  >
-                    {verifyRegistrationMutation.isPending ? 'Verifying...' : 'Verify & Complete'}
-                  </Button>
-                </div>
-              </div>
-            )}
-          </DialogContent>
-        </Dialog>
       </div>
     </div>
   );

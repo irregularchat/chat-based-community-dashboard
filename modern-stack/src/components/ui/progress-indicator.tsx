@@ -65,7 +65,7 @@ const StatusIcon = ({ status }: { status: ProgressStatus }) => {
 export function ProgressIndicator({ steps, className }: ProgressIndicatorProps) {
   return (
     <div className={cn("space-y-3", className)}>
-      {steps.map((step, index) => (
+      {steps.map((step, _index) => (
         <div key={step.id} className={progressVariants({ status: step.status })}>
           <StatusIcon status={step.status} />
           <div className="flex-1 min-w-0">

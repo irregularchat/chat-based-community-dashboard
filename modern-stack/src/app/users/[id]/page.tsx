@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ArrowLeft, Edit3, Save, X, Plus, Trash2, Calendar, Mail, User, Shield, MessageCircle } from 'lucide-react';
+import { ArrowLeft, Edit3, Save, X, Plus, Trash2, Calendar, User, Shield, MessageCircle, Phone, CheckCircle2, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface UserProfilePageProps {
@@ -30,6 +30,11 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
   const [newNote, setNewNote] = useState('');
   const [editingNote, setEditingNote] = useState<number | null>(null);
   const [editingNoteContent, setEditingNoteContent] = useState('');
+  
+  // Signal verification state
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
 
   const { data: user, isLoading, refetch } = trpc.user.getUser.useQuery(
     { id: userId },
@@ -42,7 +47,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
       refetch();
       setIsEditing(false);
     },
-    onError: (error: any) => {
+    onError: (_error: unknown) => {
       toast.error('Failed to update user');
     },
   });
@@ -54,7 +59,11 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
       setNewNote('');
     },
     onError: (error: any) => {
-      toast.error('Failed to add note');
+      if (error?.message?.includes('Matrix users')) {
+        toast.error('Cannot add notes to Matrix users. Please sync the user first.');
+      } else {
+        toast.error('Failed to add note');
+      }
     },
   });
 
@@ -65,7 +74,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
       setEditingNote(null);
       setEditingNoteContent('');
     },
-    onError: (error: any) => {
+    onError: (_error: unknown) => {
       toast.error('Failed to update note');
     },
   });
@@ -75,8 +84,48 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
       toast.success('Note deleted successfully');
       refetch();
     },
-    onError: (error: any) => {
+    onError: (_error: unknown) => {
       toast.error('Failed to delete note');
+    },
+  });
+
+  // Signal verification queries and mutations
+  const { data: signalStatus, refetch: refetchSignalStatus } = trpc.user.getSignalVerificationStatus.useQuery(
+    undefined,
+    { enabled: session?.user?.id === userId }
+  );
+
+  const initiateSignalVerificationMutation = trpc.user.initiateSignalVerification.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.message);
+      setIsVerifying(true);
+      refetchSignalStatus();
+    },
+    onError: (error) => {
+      toast.error(error.message || 'Failed to send verification code');
+    },
+  });
+
+  const verifySignalCodeMutation = trpc.user.verifySignalCode.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.message);
+      setIsVerifying(false);
+      setPhoneNumber('');
+      setVerificationCode('');
+      refetchSignalStatus();
+    },
+    onError: (error) => {
+      toast.error(error.message || 'Invalid verification code');
+    },
+  });
+
+  const removeSignalVerificationMutation = trpc.user.removeSignalVerification.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.message);
+      refetchSignalStatus();
+    },
+    onError: () => {
+      toast.error('Failed to remove Signal verification');
     },
   });
 
@@ -186,7 +235,7 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
         <Card className="w-full max-w-md">
           <CardHeader>
             <CardTitle>User Not Found</CardTitle>
-            <CardDescription>The user you're looking for doesn't exist</CardDescription>
+            <CardDescription>The user you&apos;re looking for doesn&apos;t exist</CardDescription>
           </CardHeader>
         </Card>
       </div>
@@ -235,6 +284,9 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
             <TabsTrigger value="profile">Profile</TabsTrigger>
             <TabsTrigger value="notes">Notes ({user.notes?.length || 0})</TabsTrigger>
             <TabsTrigger value="matrix">Matrix</TabsTrigger>
+            {session?.user?.id === userId && (
+              <TabsTrigger value="signal">Signal</TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="profile">
@@ -411,30 +463,38 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="newNote">Add New Note</Label>
-                    <Textarea
-                      id="newNote"
-                      value={newNote}
-                      onChange={(e) => setNewNote(e.target.value)}
-                      placeholder="Enter a note about this user..."
-                      rows={3}
-                    />
-                    <Button
-                      onClick={handleAddNote}
-                      disabled={!newNote.trim() || addNoteMutation.isPending}
-                      className="flex items-center gap-2"
-                    >
-                      <Plus className="w-4 h-4" />
-                      Add Note
-                    </Button>
-                  </div>
+                  {user.attributes?.source === 'matrix' ? (
+                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                      <p className="text-sm text-amber-800">
+                        📝 Notes are not available for Matrix users. Sync this user to the database to enable notes.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <Label htmlFor="newNote">Add New Note</Label>
+                      <Textarea
+                        id="newNote"
+                        value={newNote}
+                        onChange={(e) => setNewNote(e.target.value)}
+                        placeholder="Enter a note about this user..."
+                        rows={3}
+                      />
+                      <Button
+                        onClick={handleAddNote}
+                        disabled={!newNote.trim() || addNoteMutation.isPending}
+                        className="flex items-center gap-2"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Add Note
+                      </Button>
+                    </div>
+                  )}
 
                   {user.notes && user.notes.length > 0 ? (
                     <div className="space-y-4">
                       <Label>Existing Notes</Label>
                       <div className="space-y-3">
-                        {user.notes.map((note: any) => (
+                        {user.notes.map((note: { id: number; content: string; createdAt: Date }) => (
                           <div key={note.id} className="border rounded-md p-4 bg-gray-50">
                             <div className="flex justify-between items-start mb-2">
                               <div className="text-xs text-gray-500">
@@ -524,6 +584,162 @@ export default function UserProfilePage({ params }: UserProfilePageProps) {
               </CardContent>
             </Card>
           </TabsContent>
+
+          {session?.user?.id === userId && (
+            <TabsContent value="signal">
+              <Card>
+                <CardHeader>
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        <Phone className="w-5 h-5" />
+                        Signal Verification
+                      </CardTitle>
+                      <CardDescription>
+                        Connect and verify your Signal account for secure messaging
+                      </CardDescription>
+                    </div>
+                    {signalStatus?.isVerified && (
+                      <Badge className="bg-green-500/10 text-green-500 border-green-500/20">
+                        <CheckCircle2 className="w-4 h-4 mr-1" />
+                        Verified
+                      </Badge>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  {signalStatus?.isVerified ? (
+                    <div className="space-y-4">
+                      <div className="bg-green-50 dark:bg-green-950/20 p-4 rounded-lg">
+                        <div className="flex items-start gap-3">
+                          <CheckCircle2 className="w-5 h-5 text-green-600 dark:text-green-400 mt-0.5" />
+                          <div className="space-y-1">
+                            <p className="font-medium text-green-900 dark:text-green-100">
+                              Signal Account Verified
+                            </p>
+                            <p className="text-sm text-green-700 dark:text-green-300">
+                              Phone: {signalStatus.phoneNumber}
+                            </p>
+                            {signalStatus.signalIdentity && (
+                              <p className="text-xs text-green-600 dark:text-green-400 font-mono">
+                                ID: {signalStatus.signalIdentity}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          if (confirm('Are you sure you want to remove your Signal verification?')) {
+                            removeSignalVerificationMutation.mutate();
+                          }
+                        }}
+                        className="text-red-600 hover:text-red-700 border-red-200 hover:border-red-300"
+                      >
+                        <X className="w-4 h-4 mr-2" />
+                        Remove Verification
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      {signalStatus?.pendingVerification ? (
+                        <div className="space-y-4">
+                          <div className="bg-amber-50 dark:bg-amber-950/20 p-4 rounded-lg">
+                            <div className="flex items-start gap-3">
+                              <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 mt-0.5" />
+                              <div className="space-y-1">
+                                <p className="font-medium text-amber-900 dark:text-amber-100">
+                                  Verification Code Sent
+                                </p>
+                                <p className="text-sm text-amber-700 dark:text-amber-300">
+                                  Check your Signal messages for the 6-digit code
+                                </p>
+                                <p className="text-xs text-amber-600 dark:text-amber-400">
+                                  {signalStatus.pendingVerification.remainingAttempts} attempts remaining
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="space-y-4">
+                            <div className="space-y-2">
+                              <Label htmlFor="verification-code">Verification Code</Label>
+                              <Input
+                                id="verification-code"
+                                type="text"
+                                placeholder="Enter 6-digit code"
+                                value={verificationCode}
+                                onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                                maxLength={6}
+                                className="font-mono text-lg tracking-widest"
+                              />
+                            </div>
+                            
+                            <div className="flex gap-2">
+                              <Button
+                                onClick={() => verifySignalCodeMutation.mutate({ code: verificationCode })}
+                                disabled={verificationCode.length !== 6 || verifySignalCodeMutation.isPending}
+                              >
+                                <CheckCircle2 className="w-4 h-4 mr-2" />
+                                Verify Code
+                              </Button>
+                              <Button
+                                variant="outline"
+                                onClick={() => {
+                                  setIsVerifying(false);
+                                  setVerificationCode('');
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="phone-number">Phone Number</Label>
+                            <Input
+                              id="phone-number"
+                              type="tel"
+                              placeholder="+1234567890"
+                              value={phoneNumber}
+                              onChange={(e) => setPhoneNumber(e.target.value)}
+                            />
+                            <p className="text-sm text-muted-foreground">
+                              Enter your Signal phone number with country code
+                            </p>
+                          </div>
+                          
+                          <Button
+                            onClick={() => initiateSignalVerificationMutation.mutate({ phoneNumber })}
+                            disabled={!phoneNumber || phoneNumber.length < 10 || initiateSignalVerificationMutation.isPending}
+                          >
+                            <MessageCircle className="w-4 h-4 mr-2" />
+                            Send Verification Code
+                          </Button>
+                          
+                          <div className="bg-blue-50 dark:bg-blue-950/20 p-4 rounded-lg">
+                            <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">
+                              How it works:
+                            </h4>
+                            <ol className="space-y-1 text-sm text-blue-700 dark:text-blue-300">
+                              <li>1. Enter your Signal phone number</li>
+                              <li>2. We'll send you a 6-digit verification code via Signal</li>
+                              <li>3. Enter the code to verify your account</li>
+                              <li>4. Your Signal account will be linked to your profile</li>
+                            </ol>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
         </Tabs>
       </div>
     </div>

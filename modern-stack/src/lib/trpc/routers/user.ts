@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createTRPCRouter, publicProcedure, protectedProcedure, moderatorProcedure, adminProcedure } from '../trpc';
+import { createTRPCRouter, protectedProcedure, moderatorProcedure, adminProcedure } from '../trpc';
 import { authentikService } from '@/lib/authentik';
 import { emailService } from '@/lib/email';
 import { discourseService } from '@/lib/discourse';
@@ -26,7 +26,7 @@ export const userRouter = createTRPCRouter({
       const { page, limit, search, isActive, source } = input;
 
       // Helper function to transform Authentik users to our UI format
-      const transformAuthentikUser = (user: any, localUser?: any) => {
+      const transformAuthentikUser = (user: { pk: number; name?: string; email: string; is_active: boolean; }, localUser?: { firstName?: string; lastName?: string; phoneNumber?: string; } | null) => {
         const authentikIdString = String(user.pk);
         const [firstName, ...lastNameParts] = user.name?.split(' ') || [];
         
@@ -137,116 +137,124 @@ export const userRouter = createTRPCRouter({
       }
 
       if (source === 'both') {
-        // Fetch from both sources and combine results
+        // Resilient approach: Start with Matrix users and merge Authentik if available
+        const startTime = Date.now();
+        
+        // First, get Matrix users immediately (fast fallback)
+        let matrixUsers: any[] = [];
+        let authentikUsers: { pk: number; name?: string; email: string; is_active: boolean; username?: string; groups?: string[]; attributes?: any; last_login?: string; }[] = [];
+        let authentikError: string | null = null;
+        
         try {
-          // First, get all users from both sources to calculate proper pagination
-          let authentikUsers: any[] = [];
-          let authentikTotal = 0;
-          
-          // Fetch all Authentik users for proper pagination calculation
-          try {
-            const authentikResult = await authentikService.listUsers(search, 1, 1000); // Get a large batch
-            authentikUsers = authentikResult.users.filter(user => {
-              if (isActive !== undefined && user.is_active !== isActive) {
-                return false;
-              }
-              return true;
-            });
-            authentikTotal = authentikResult.total;
-          } catch (authentikError) {
-            console.error('Error fetching users from Authentik:', authentikError);
-            // Continue with local users only if Authentik fails
+          const { matrixService } = await import('@/lib/matrix');
+          const { matrixSyncService } = await import('@/lib/matrix-sync');
+          if (matrixService.isConfigured()) {
+            const cachedUsers = await matrixSyncService.getUsersFromPriorityRooms();
+            matrixUsers = cachedUsers
+              .filter(user => {
+                // Only include users with valid userId
+                if (!user.userId) return false;
+                
+                if (search) {
+                  const searchLower = search.toLowerCase();
+                  return user.displayName?.toLowerCase().includes(searchLower) ||
+                         user.userId?.toLowerCase().includes(searchLower);
+                }
+                return true;
+              })
+              .map(user => ({
+                id: parseInt(user.userId.replace(/[@:]/g, '').slice(0, 8), 36), // Generate numeric ID
+                username: user.userId.split(':')[0].substring(1),
+                email: `${user.userId.split(':')[0].substring(1)}@${user.userId.split(':')[1]}`,
+                firstName: user.displayName?.split(' ')[0] || '',
+                lastName: user.displayName?.split(' ').slice(1).join(' ') || '',
+                isActive: true,
+                isAdmin: false,
+                isModerator: false,
+                dateJoined: new Date(),
+                lastLogin: null,
+                authentikId: null,
+                groups: [],
+                notes: [],
+                attributes: { source: 'matrix', matrixUserId: user.userId },
+              }));
           }
-
-          // Get local user data
-          const { where: searchWhere } = parseAdvancedSearch(search || '');
-          const localWhere = {
-            ...searchWhere,
-            ...(isActive !== undefined && { isActive }),
-          };
-
-          const [localUsers, localTotal] = await Promise.all([
-            ctx.prisma.user.findMany({
-              where: localWhere,
-              orderBy: { dateJoined: 'desc' },
-              include: {
-                groups: {
-                  include: {
-                    group: true,
-                  },
-                },
-                notes: true,
-              },
-            }),
-            ctx.prisma.user.count({ where: localWhere }),
-          ]);
-
-          // Create a map of local users by authentikId for merging
-          const localUserMap = new Map(localUsers.map(u => [u.authentikId, u]));
-
-          // Transform Authentik users and merge with local data
-          const transformedAuthentikUsers = authentikUsers.map(user => 
-            transformAuthentikUser(user, localUserMap.get(String(user.pk)))
-          );
-
-          // Get local-only users (those without authentikId)
-          const localOnlyUsers = localUsers.filter(user => !user.authentikId);
-
-          // Combine all users
-          const allUsers = [...transformedAuthentikUsers, ...localOnlyUsers];
-
-          // Calculate pagination
-          const totalUsers = allUsers.length;
-          const totalPages = Math.ceil(totalUsers / limit);
-          const skip = (page - 1) * limit;
-          const paginatedUsers = allUsers.slice(skip, skip + limit);
-
-          return {
-            users: paginatedUsers,
-            total: totalUsers,
-            page,
-            limit,
-            totalPages,
-            source: 'both' as const,
-          };
-        } catch (error) {
-          console.error('Error fetching users from both sources:', error);
-          
-          // Fall back to local database only
-          const skip = (page - 1) * limit;
-          const { where: searchWhere } = parseAdvancedSearch(search || '');
-          const where = {
-            ...searchWhere,
-            ...(isActive !== undefined && { isActive }),
-          };
-
-          const [users, total] = await Promise.all([
-            ctx.prisma.user.findMany({
-              where,
-              skip,
-              take: limit,
-              orderBy: { dateJoined: 'desc' },
-              include: {
-                groups: {
-                  include: {
-                    group: true,
-                  },
-                },
-                notes: true,
-              },
-            }),
-            ctx.prisma.user.count({ where }),
-          ]);
-
-          return {
-            users,
-            total,
-            page,
-            limit,
-            totalPages: Math.ceil(total / limit),
-            source: 'local' as const,
-          };
+        } catch (matrixError) {
+          console.warn('Matrix users not available:', matrixError);
         }
+
+        // Try to fetch Authentik users with timeout (non-blocking)
+        try {
+          const authentikResult = await authentikService.listUsers(search, page, limit);
+          authentikUsers = authentikResult.users.filter(user => {
+            if (isActive !== undefined && user.is_active !== isActive) {
+              return false;
+            }
+            return true;
+          });
+          console.log(`✅ Authentik users fetched in ${Date.now() - startTime}ms`);
+        } catch (error) {
+          authentikError = error instanceof Error ? error.message : 'Unknown error';
+          console.warn(`⚠️ Authentik unavailable after ${Date.now() - startTime}ms:`, authentikError);
+        }
+
+        // Get local user data for additional info
+        const { where: searchWhere } = parseAdvancedSearch(search || '');
+        const localWhere = {
+          ...searchWhere,
+          ...(isActive !== undefined && { isActive }),
+        };
+
+        const localUsers = await ctx.prisma.user.findMany({
+          where: localWhere,
+          orderBy: { dateJoined: 'desc' },
+          include: {
+            groups: {
+              include: {
+                group: true,
+              },
+            },
+            notes: true,
+          },
+        });
+
+        // Create a map of local users by authentikId for merging
+        const localUserMap = new Map(localUsers.map(u => [u.authentikId, u]));
+
+        // Transform Authentik users and merge with local data
+        const transformedAuthentikUsers = authentikUsers.map(user => 
+          transformAuthentikUser(user, localUserMap.get(String(user.pk)))
+        );
+
+        // Get local-only users (those without authentikId or Matrix mapping)
+        const localOnlyUsers = localUsers.filter(user => !user.authentikId);
+
+        // Combine all users, prioritizing Authentik users if available
+        const allUsers = [
+          ...transformedAuthentikUsers,
+          ...localOnlyUsers,
+          // Only include Matrix users if we don't have many Authentik users
+          ...(authentikUsers.length < 10 ? matrixUsers : [])
+        ];
+
+        // Calculate pagination
+        const totalUsers = allUsers.length;
+        const totalPages = Math.ceil(totalUsers / limit);
+        const skip = (page - 1) * limit;
+        const paginatedUsers = allUsers.slice(skip, skip + limit);
+
+        return {
+          users: paginatedUsers,
+          total: totalUsers,
+          page,
+          limit,
+          totalPages,
+          source: 'both' as const,
+          loadTime: Date.now() - startTime,
+          authentikAvailable: !authentikError,
+          authentikError,
+          fallbackToMatrix: !!authentikError && matrixUsers.length > 0,
+        };
       }
 
       // This should never be reached, but just in case
@@ -260,7 +268,7 @@ export const userRouter = createTRPCRouter({
         forceSync: z.boolean().default(false),
       })
     )
-    .mutation(async ({ ctx, input }) => {
+    .mutation(async ({ ctx, input: _input }) => {
       try {
         console.log('Starting user sync from Authentik...');
         
@@ -299,7 +307,7 @@ export const userRouter = createTRPCRouter({
             };
 
             // Use upsert to handle both create and update cases, handling duplicate usernames
-            const result = await ctx.prisma.user.upsert({
+            await ctx.prisma.user.upsert({
               where: { authentikId: authentikIdString },
               update: userData,
               create: {
@@ -750,10 +758,47 @@ export const userRouter = createTRPCRouter({
         }
       } catch (error) {
         console.error('Error fetching user from Authentik:', error);
-        // Continue to return null if Authentik fetch fails
+        // Continue to check Matrix users if Authentik fetch fails
       }
 
-      // User not found in either source
+      // Finally, check if this might be a Matrix user
+      try {
+        const { matrixService } = await import('@/lib/matrix');
+        const { matrixSyncService } = await import('@/lib/matrix-sync');
+        if (matrixService.isConfigured()) {
+          const cachedUsers = await matrixSyncService.getUsersFromPriorityRooms();
+          const matrixUser = cachedUsers.find(user => {
+            if (!user.userId) return false;
+            const generatedId = parseInt(user.userId.replace(/[@:]/g, '').slice(0, 8), 36);
+            return generatedId === input.id;
+          });
+
+          if (matrixUser) {
+            // Return Matrix user in the expected format
+            return {
+              id: input.id,
+              username: matrixUser.userId.split(':')[0].substring(1),
+              email: `${matrixUser.userId.split(':')[0].substring(1)}@${matrixUser.userId.split(':')[1]}`,
+              firstName: matrixUser.displayName?.split(' ')[0] || '',
+              lastName: matrixUser.displayName?.split(' ').slice(1).join(' ') || '',
+              isActive: true,
+              isAdmin: false,
+              isModerator: false,
+              dateJoined: new Date(),
+              lastLogin: null,
+              authentikId: null,
+              groups: [],
+              notes: [],
+              attributes: { source: 'matrix', matrixUserId: matrixUser.userId },
+              moderatorPermissions: null,
+            };
+          }
+        }
+      } catch (matrixError) {
+        console.warn('Matrix users not available:', matrixError);
+      }
+
+      // User not found in any source
       return null;
     }),
 
@@ -899,6 +944,47 @@ export const userRouter = createTRPCRouter({
           throw new Error(`SSO user creation failed: ${authentikResult.error}`);
         }
 
+        // Use temporary password for immediate return
+        let finalPassword = authentikResult.temp_password || '';
+        
+        // Start password reset in background (non-blocking for faster response)
+        if (authentikResult.user_id) {
+          const passwordResetOperation = (async () => {
+            try {
+              const newPassword = await authentikService.generateSecurePassphrase();
+              const resetResult = await authentikService.resetUserPassword(String(authentikResult.user_id), newPassword);
+              
+              if (resetResult.success) {
+                console.log(`Password reset successful for user ${username} - new password: ${newPassword}`);
+                
+                // Update local user record with new password in background
+                try {
+                  await ctx.prisma.user.update({
+                    where: { authentikId: String(authentikResult.user_id) },
+                    data: { 
+                      attributes: {
+                        ...attributes,
+                        actualPassword: newPassword
+                      }
+                    }
+                  });
+                } catch (updateError) {
+                  console.error('Error updating user with new password:', updateError);
+                }
+              } else {
+                console.warn(`Password reset failed for user ${username}: ${resetResult.error}`);
+              }
+            } catch (passwordResetError) {
+              console.error('Error during password reset:', passwordResetError);
+            }
+          })();
+          
+          // Don't await - let it run in background
+          passwordResetOperation.catch(error => {
+            console.error('Background password reset failed:', error);
+          });
+        }
+
         // Create local user record for synchronization
         const localUser = await ctx.prisma.user.create({
           data: {
@@ -955,7 +1041,7 @@ export const userRouter = createTRPCRouter({
               subject: 'Welcome to IrregularChat!',
               fullName,
               username,
-              password: authentikResult.temp_password || '',
+              password: finalPassword,
               discoursePostUrl: discoursePostUrl,
             });
             console.log(`Welcome email sent to ${input.email}`);
@@ -966,23 +1052,21 @@ export const userRouter = createTRPCRouter({
         }
 
         // Send Matrix welcome message if requested and Matrix service is configured
-        if (input.sendMatrixWelcome) {
+        const { matrixService } = await import('@/lib/matrix');
+        if (input.sendMatrixWelcome && matrixService.isConfigured()) {
           try {
-            const { matrixService } = await import('@/lib/matrix');
-            if (matrixService.isConfigured()) {
-              // Generate Matrix user ID format (this should be configurable)
-              const matrixUserId = `@${username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
-              const fullName = `${input.firstName || 'User'} ${input.lastName || ''}`.trim();
-              
-              await matrixService.sendWelcomeMessage(
-                matrixUserId,
-                username,
-                fullName,
-                authentikResult.temp_password || '',
-                discoursePostUrl
-              );
-              console.log(`Matrix welcome message sent to ${matrixUserId}`);
-            }
+            // Generate Matrix user ID format (this should be configurable)
+            const matrixUserId = `@${username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
+            const fullName = `${input.firstName || 'User'} ${input.lastName || ''}`.trim();
+            
+            await matrixService.sendWelcomeMessage(
+              matrixUserId,
+              username,
+              fullName,
+              finalPassword,
+              discoursePostUrl
+            );
+            console.log(`Matrix welcome message sent to ${matrixUserId}`);
           } catch (matrixError) {
             console.error('Error sending Matrix welcome message:', matrixError);
             // Don't fail the user creation if Matrix fails
@@ -990,16 +1074,13 @@ export const userRouter = createTRPCRouter({
         }
 
         // Invite to recommended rooms if requested and Matrix service is configured
-        if (input.addToRecommendedRooms && input.interests) {
+        if (input.addToRecommendedRooms && matrixService.isConfigured() && input.interests) {
           try {
-            const { matrixService } = await import('@/lib/matrix');
-            if (matrixService.isConfigured()) {
-              const matrixUserId = `@${username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
-              const interests = input.interests.split(',').map(i => i.trim());
-              
-              const inviteResult = await matrixService.inviteToRecommendedRooms(matrixUserId, interests);
-              console.log(`Room invitations sent: ${inviteResult.invitedRooms.length} successful, ${inviteResult.errors.length} errors`);
-            }
+            const matrixUserId = `@${username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
+            const interests = input.interests.split(',').map(i => i.trim());
+            
+            const inviteResult = await matrixService.inviteToRecommendedRooms(matrixUserId, interests);
+            console.log(`Room invitations sent: ${inviteResult.invitedRooms.length} successful, ${inviteResult.errors.length} errors`);
           } catch (inviteError) {
             console.error('Error inviting to recommended rooms:', inviteError);
             // Don't fail the user creation if room invitations fail
@@ -1011,11 +1092,11 @@ export const userRouter = createTRPCRouter({
           user: localUser,
           ssoUserId: authentikResult.user_id,
           username: authentikResult.username,
-          tempPassword: authentikResult.temp_password,
+          tempPassword: finalPassword, // Return the final password that was actually set
           passwordResetLink: authentikResult.password_reset_link,
           credentials: {
             username: authentikResult.username,
-            password: authentikResult.temp_password,
+            password: finalPassword, // Return the final password that was actually set
             resetLink: authentikResult.password_reset_link,
           }
         };
@@ -1243,9 +1324,16 @@ export const userRouter = createTRPCRouter({
 
         // Send via SignalBot using direct phone number resolution
         // This will resolve phone -> UUID -> @signal_{UUID}:domain -> send message
-        try {
-          const { matrixService } = await import('@/lib/matrix');
-          if (matrixService.isConfigured()) {
+        const { matrixService } = await import('@/lib/matrix');
+        
+        // Check environment variables directly to bypass SDK initialization issues
+        const homeserver = process.env.MATRIX_HOMESERVER;
+        const accessToken = process.env.MATRIX_ACCESS_TOKEN;
+        const userId = process.env.MATRIX_USER_ID;
+        const signalBridgeRoom = process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID;
+        
+        if (homeserver && accessToken && userId && signalBridgeRoom) {
+          try {
             const verificationMessage = `🔐 Phone Verification Code\n\nYou requested to update your phone number to: ${normalizedPhone.normalized}\n\nVerification Code: ${verificationHash}\n\nEnter this 6-digit code in the dashboard to complete verification.\n\nThis code expires in 15 minutes.`;
             
             console.log(`📞 Attempting Signal verification for phone: ${normalizedPhone.normalized}`);
@@ -1260,11 +1348,17 @@ export const userRouter = createTRPCRouter({
               console.warn(`❌ Signal verification failed: ${result.error}`);
               // Don't fall back to regular Matrix user - Signal verification should only go to Signal
             }
-          } else {
-            console.warn('⚠️ Matrix service not configured for Signal verification');
+          } catch (signalError) {
+            console.warn('❌ Signal verification failed with exception:', signalError);
           }
-        } catch (signalError) {
-          console.warn('❌ Signal verification failed with exception:', signalError);
+        } else {
+          console.warn('⚠️ Matrix service environment not configured for Signal verification');
+          console.warn('Missing environment variables:', {
+            MATRIX_HOMESERVER: !!homeserver,
+            MATRIX_ACCESS_TOKEN: !!accessToken,
+            MATRIX_USER_ID: !!userId,
+            MATRIX_SIGNAL_BRIDGE_ROOM_ID: !!signalBridgeRoom,
+          });
         }
 
         if (!verificationSent) {
@@ -1710,18 +1804,14 @@ export const userRouter = createTRPCRouter({
         }
 
         // Also send via Matrix if configured
-        try {
-          const { matrixService } = await import('@/lib/matrix');
-          if (matrixService.isConfigured()) {
-            const indocRoom = process.env.MATRIX_INDOC_ROOM_ID || process.env.MATRIX_ADMIN_ROOM_ID;
-            if (indocRoom) {
-              const matrixMessage = `📨 **Message from User Dashboard**\n\n**User:** ${ctx.session.user.username} (${ctx.session.user.email})\n**Subject:** ${input.subject}\n\n**Message:**\n${input.message}`;
-              
-              await matrixService.sendRoomMessage(indocRoom, matrixMessage);
-            }
+        const { matrixService } = await import('@/lib/matrix');
+        if (matrixService.isConfigured()) {
+          const indocRoom = process.env.MATRIX_INDOC_ROOM_ID || process.env.MATRIX_ADMIN_ROOM_ID;
+          if (indocRoom) {
+            const matrixMessage = `📨 **Message from User Dashboard**\n\n**User:** ${ctx.session.user.username} (${ctx.session.user.email})\n**Subject:** ${input.subject}\n\n**Message:**\n${input.message}`;
+            
+            await matrixService.sendRoomMessage(indocRoom, matrixMessage);
           }
-        } catch (matrixError) {
-          console.warn('Matrix service import failed:', matrixError);
         }
 
         // Log admin event
@@ -1737,13 +1827,8 @@ export const userRouter = createTRPCRouter({
         let emailSent = false;
         
         // Check what was actually sent
-        try {
-          const { matrixService } = await import('@/lib/matrix');
-          if (matrixService.isConfigured() && (process.env.MATRIX_INDOC_ROOM_ID || process.env.MATRIX_ADMIN_ROOM_ID)) {
-            matrixSent = true;
-          }
-        } catch {
-          // Matrix service not available
+        if (matrixService.isConfigured() && (process.env.MATRIX_INDOC_ROOM_ID || process.env.MATRIX_ADMIN_ROOM_ID)) {
+          matrixSent = true;
         }
         
         if (emailService.isConfigured() && (process.env.ADMIN_EMAIL || process.env.SMTP_FROM_EMAIL)) {
@@ -1909,9 +1994,8 @@ The IrregularChat Team`;
           }
 
           // Send Signal notification to inviter (via Matrix bot)
-          try {
-            const { matrixService } = await import('@/lib/matrix');
-            if (matrixService.isConfigured()) {
+          if (matrixService.isConfigured()) {
+            try {
               const matrixUserId = `@${inviter.username}:${process.env.MATRIX_DOMAIN || 'matrix.org'}`;
               const signalMessage = `✅ Invitation sent successfully!
 
@@ -1921,9 +2005,9 @@ Expires: ${expiryDate.toLocaleDateString()}
 The invitation email has been sent. You'll be notified when they accept the invitation.`;
 
               await matrixService.sendDirectMessage(matrixUserId, signalMessage);
+            } catch (matrixError) {
+              console.error('Error sending Signal notification:', matrixError);
             }
-          } catch (matrixError) {
-            console.error('Error sending Signal notification:', matrixError);
           }
         }
 
@@ -2132,6 +2216,18 @@ The invitation email has been sent. You'll be notified when they accept the invi
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Check if user exists in the database
+      const userExists = await ctx.prisma.user.findUnique({
+        where: { id: input.userId },
+      });
+
+      if (!userExists) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Cannot add notes to Matrix users. Please sync the user to the database first.',
+        });
+      }
+
       const note = await ctx.prisma.userNote.create({
         data: {
           userId: input.userId,
@@ -2634,339 +2730,615 @@ The invitation email has been sent. You'll be notified when they accept the invi
       };
     }),
 
-  // Signal Group Discovery & Management APIs (Phase 1)
-  
-  // Get user's Signal status and current group memberships
-  getMySignalStatus: protectedProcedure.query(async ({ ctx }) => {
-    try {
-      const userId = parseInt(ctx.session.user.id);
+  // Get email history analytics
+  getEmailAnalytics: moderatorProcedure
+    .input(
+      z.object({
+        dateRange: z.object({
+          start: z.date().optional(),
+          end: z.date().optional(),
+        }).optional(),
+        emailType: z.enum(['welcome', 'admin_message', 'invite', 'password_reset', 'custom']).optional(),
+        status: z.enum(['sent', 'failed']).optional(),
+        recipientId: z.number().optional(),
+        senderUsername: z.string().optional(),
+        page: z.number().default(1),
+        limit: z.number().default(25),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const { page, limit, dateRange, emailType, status, recipientId, senderUsername } = input;
+      const skip = (page - 1) * limit;
+
+      const where: any = {};
       
-      // Get user's phone number/signal identity for verification status
-      const user = await ctx.prisma.user.findUnique({
-        where: { id: userId },
-        select: { 
-          attributes: true,
-          signalIdentity: true
-        }
+      if (dateRange?.start || dateRange?.end) {
+        where.sentAt = {};
+        if (dateRange.start) where.sentAt.gte = dateRange.start;
+        if (dateRange.end) where.sentAt.lte = dateRange.end;
+      }
+      
+      if (emailType) where.emailType = emailType;
+      if (status) where.status = status;
+      if (recipientId) where.recipientId = recipientId;
+      if (senderUsername) where.senderUsername = senderUsername;
+
+      const [emails, total] = await Promise.all([
+        ctx.prisma.emailHistory.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: { sentAt: 'desc' },
+          include: {
+            recipient: {
+              select: {
+                id: true,
+                username: true,
+                email: true,
+                firstName: true,
+                lastName: true,
+              },
+            },
+          },
+        }),
+        ctx.prisma.emailHistory.count({ where }),
+      ]);
+
+      return {
+        emails,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      };
+    }),
+
+  // Get email statistics summary
+  getEmailStats: moderatorProcedure
+    .input(
+      z.object({
+        dateRange: z.object({
+          start: z.date().optional(),
+          end: z.date().optional(),
+        }).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const { dateRange } = input;
+      
+      const where: any = {};
+      if (dateRange?.start || dateRange?.end) {
+        where.sentAt = {};
+        if (dateRange.start) where.sentAt.gte = dateRange.start;
+        if (dateRange.end) where.sentAt.lte = dateRange.end;
+      }
+
+      // Get total counts
+      const [totalEmails, sentEmails, failedEmails] = await Promise.all([
+        ctx.prisma.emailHistory.count({ where }),
+        ctx.prisma.emailHistory.count({ where: { ...where, status: 'sent' } }),
+        ctx.prisma.emailHistory.count({ where: { ...where, status: 'failed' } }),
+      ]);
+
+      // Get email type breakdown
+      const emailTypeStats = await ctx.prisma.emailHistory.groupBy({
+        by: ['emailType'],
+        where,
+        _count: { emailType: true },
+        orderBy: { _count: { emailType: 'desc' } },
       });
 
-      // Check if user has verified Signal phone
-      const phoneNumber = user?.attributes && typeof user.attributes === 'object' 
-        ? (user.attributes as any).phone_number 
-        : null;
-      const isSignalVerified = !!phoneNumber && phoneNumber.length > 10;
-
-      // Get user's current Signal group memberships
-      const groupMemberships = await ctx.prisma.signalGroupMembership.findMany({
-        where: { 
-          userId,
-          status: 'active'
-        },
-        orderBy: { joinedAt: 'desc' }
-      });
-
-      // Get pending join requests
-      const pendingRequests = await ctx.prisma.signalGroupJoinRequest.findMany({
+      // Get daily email counts for the last 30 days
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
+      const dailyStats = await ctx.prisma.emailHistory.groupBy({
+        by: ['sentAt'],
         where: {
-          userId,
-          status: 'pending'
+          ...where,
+          sentAt: {
+            gte: dateRange?.start || thirtyDaysAgo,
+            ...(dateRange?.end && { lte: dateRange.end }),
+          },
         },
-        orderBy: { requestedAt: 'desc' }
+        _count: { id: true },
+        orderBy: { sentAt: 'desc' },
+      });
+
+      // Get top senders
+      const topSenders = await ctx.prisma.emailHistory.groupBy({
+        by: ['senderUsername'],
+        where,
+        _count: { senderUsername: true },
+        orderBy: { _count: { senderUsername: 'desc' } },
+        take: 10,
+      });
+
+      // Get recent activity (last 24 hours)
+      const twentyFourHoursAgo = new Date();
+      twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+      
+      const recentActivity = await ctx.prisma.emailHistory.count({
+        where: {
+          ...where,
+          sentAt: { gte: twentyFourHoursAgo },
+        },
       });
 
       return {
-        isSignalVerified,
-        phoneNumber: phoneNumber || null,
-        groupCount: groupMemberships.length,
-        groupMemberships: groupMemberships.map(membership => ({
-          groupId: membership.groupId,
-          groupName: membership.groupName,
-          joinedAt: membership.joinedAt,
-          status: membership.status
+        totalEmails,
+        sentEmails,
+        failedEmails,
+        successRate: totalEmails > 0 ? (sentEmails / totalEmails) * 100 : 0,
+        emailTypeStats: emailTypeStats.map(stat => ({
+          emailType: stat.emailType,
+          count: stat._count.emailType,
         })),
-        pendingRequests: pendingRequests.map(request => ({
-          groupId: request.groupId,
-          requestedAt: request.requestedAt,
-          message: request.message,
-          status: request.status
-        }))
+        dailyStats: dailyStats.map(stat => ({
+          date: stat.sentAt,
+          count: stat._count.id,
+        })),
+        topSenders: topSenders.map(sender => ({
+          senderUsername: sender.senderUsername,
+          count: sender._count.senderUsername,
+        })),
+        recentActivity,
       };
-    } catch (error) {
-      console.error('Error getting Signal status:', error);
-      throw new TRPCError({
-        code: 'INTERNAL_SERVER_ERROR',
-        message: 'Failed to get Signal status'
-      });
-    }
-  }),
-
-  // Get available Signal groups that user can join
-  getAvailableSignalGroups: protectedProcedure.query(async ({ ctx }) => {
-    try {
-      const userId = parseInt(ctx.session.user.id);
-
-      // Get all active public groups
-      const availableGroups = await ctx.prisma.signalAvailableGroup.findMany({
-        where: {
-          isActive: true,
-          isPublic: true
-        },
-        orderBy: [
-          { displayOrder: 'asc' },
-          { groupName: 'asc' }
-        ]
-      });
-
-      // Get user's current memberships to filter out joined groups
-      const userMemberships = await ctx.prisma.signalGroupMembership.findMany({
-        where: {
-          userId,
-          status: 'active'
-        },
-        select: { groupId: true }
-      });
-      
-      const userGroupIds = new Set(userMemberships.map(m => m.groupId));
-
-      // Get user's pending requests
-      const pendingRequests = await ctx.prisma.signalGroupJoinRequest.findMany({
-        where: {
-          userId,
-          status: 'pending'
-        },
-        select: { groupId: true }
-      });
-      
-      const pendingGroupIds = new Set(pendingRequests.map(r => r.groupId));
-
-      // Filter and enhance groups
-      const groupsWithStatus = availableGroups.map(group => ({
-        id: group.id,
-        groupId: group.groupId,
-        groupName: group.groupName,
-        description: group.description,
-        memberCount: group.memberCount,
-        maxMembers: group.maxMembers,
-        requiresApproval: group.requiresApproval,
-        userStatus: userGroupIds.has(group.groupId) 
-          ? 'member' 
-          : pendingGroupIds.has(group.groupId)
-          ? 'pending'
-          : 'available'
-      }));
-
-      return groupsWithStatus;
-    } catch (error) {
-      console.error('Error getting available Signal groups:', error);
-      throw new TRPCError({
-        code: 'INTERNAL_SERVER_ERROR',
-        message: 'Failed to get available Signal groups'
-      });
-    }
-  }),
-
-  // Check specific Signal group membership for user
-  checkSignalMembership: protectedProcedure
-    .input(z.object({
-      groupId: z.string().min(1, 'Group ID is required')
-    }))
-    .query(async ({ ctx, input }) => {
-      try {
-        const userId = parseInt(ctx.session.user.id);
-
-        // Check membership
-        const membership = await ctx.prisma.signalGroupMembership.findUnique({
-          where: {
-            userId_groupId: {
-              userId,
-              groupId: input.groupId
-            }
-          }
-        });
-
-        // Check pending request
-        const pendingRequest = await ctx.prisma.signalGroupJoinRequest.findUnique({
-          where: {
-            userId_groupId: {
-              userId,
-              groupId: input.groupId
-            }
-          }
-        });
-
-        return {
-          isMember: membership?.status === 'active',
-          hasPendingRequest: pendingRequest?.status === 'pending',
-          membershipStatus: membership?.status || null,
-          joinedAt: membership?.joinedAt || null,
-          requestedAt: pendingRequest?.requestedAt || null
-        };
-      } catch (error) {
-        console.error('Error checking Signal membership:', error);
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: 'Failed to check Signal membership'
-        });
-      }
     }),
 
-  // Request to join a Signal group (Phase 2)
-  requestSignalGroupJoin: protectedProcedure
-    .input(z.object({
-      groupId: z.string().min(1, 'Group ID is required').max(255),
-      message: z.string().max(500, 'Message too long').optional()
-    }))
+  // Get user-specific email history
+  getUserEmailHistory: moderatorProcedure
+    .input(
+      z.object({
+        userId: z.number(),
+        page: z.number().default(1),
+        limit: z.number().default(10),
+        emailType: z.enum(['welcome', 'admin_message', 'invite', 'password_reset', 'custom']).optional(),
+        status: z.enum(['sent', 'failed']).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const { userId, page, limit, emailType, status } = input;
+      const skip = (page - 1) * limit;
+
+      const where: any = {
+        OR: [
+          { recipientId: userId },
+          { 
+            recipient: {
+              id: userId,
+            },
+          },
+        ],
+      };
+      
+      if (emailType) where.emailType = emailType;
+      if (status) where.status = status;
+
+      const [emails, total] = await Promise.all([
+        ctx.prisma.emailHistory.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: { sentAt: 'desc' },
+          include: {
+            recipient: {
+              select: {
+                id: true,
+                username: true,
+                email: true,
+                firstName: true,
+                lastName: true,
+              },
+            },
+          },
+        }),
+        ctx.prisma.emailHistory.count({ where }),
+      ]);
+
+      return {
+        emails,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      };
+    }),
+
+  // Signal account verification endpoints
+  initiateSignalVerification: protectedProcedure
+    .input(
+      z.object({
+        phoneNumber: z.string().min(10),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
+      const { generateVerificationCode, hashVerificationCode, createExpirationDate, formatPhoneForSignal, validatePhoneNumber, formatVerificationMessage } = await import('@/lib/verification-codes');
+      const { matrixService } = await import('@/lib/matrix');
+      
+      const userId = ctx.session.user.id;
+      const phoneNumber = formatPhoneForSignal(input.phoneNumber);
+      
+      // Validate phone number
+      if (!validatePhoneNumber(phoneNumber)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Invalid phone number format',
+        });
+      }
+      
+      // Check if user already has a verified Signal account
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: userId },
+        select: { /* signalVerified: true, signalPhoneNumber: true */ },
+      });
+      
+      if (false /* user?.signalVerified && user.signalPhoneNumber === phoneNumber */) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'This Signal account is already verified',
+        });
+      }
+      
+      // Check for existing pending verification
+      const existingCode = await ctx.prisma.signalVerificationCode.findFirst({
+        where: {
+          userId,
+          verified: false,
+          expiresAt: { gt: new Date() },
+        },
+      });
+      
+      if (existingCode) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'A verification code has already been sent. Please wait for it to expire before requesting a new one.',
+        });
+      }
+      
+      // Generate verification code
+      const code = generateVerificationCode();
+      const salt = crypto.randomBytes(16).toString('hex');
+      const hashedCode = hashVerificationCode(code, salt);
+      const expiresAt = createExpirationDate(10); // 10 minutes
+      
+      // Store verification code in database
+      await ctx.prisma.signalVerificationCode.create({
+        data: {
+          userId,
+          phoneNumber,
+          code: hashedCode,
+          salt,
+          expiresAt,
+        },
+      });
+      
+      // Send verification code via Matrix-Signal bridge
       try {
-        const userId = parseInt(ctx.session.user.id);
-
-        // Check if user has verified Signal phone
-        const user = await ctx.prisma.user.findUnique({
-          where: { id: userId },
-          select: { attributes: true }
-        });
-
-        const phoneNumber = user?.attributes && typeof user.attributes === 'object' 
-          ? (user.attributes as any).phone_number 
-          : null;
-        const isSignalVerified = !!phoneNumber && phoneNumber.length > 10;
-
-        if (!isSignalVerified) {
+        const message = formatVerificationMessage(code);
+        const result = await matrixService.sendSignalMessageByPhone(phoneNumber, message);
+        
+        if (!result.success) {
           throw new TRPCError({
-            code: 'PRECONDITION_FAILED',
-            message: 'Please verify your Signal phone number first'
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Failed to send verification code. Please try again.',
           });
         }
-
-        // Check if group exists and is available
-        const group = await ctx.prisma.signalAvailableGroup.findUnique({
-          where: { groupId: input.groupId }
-        });
-
-        if (!group) {
-          throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: 'Signal group not found'
-          });
-        }
-
-        if (!group.isActive) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'This group is not accepting new members'
-          });
-        }
-
-        if (!group.isPublic) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'This group is private and not available for joining'
-          });
-        }
-
-        // Check for existing membership
-        const existingMembership = await ctx.prisma.signalGroupMembership.findUnique({
-          where: {
-            userId_groupId: {
-              userId,
-              groupId: input.groupId
-            }
-          }
-        });
-
-        if (existingMembership && existingMembership.status === 'active') {
-          throw new TRPCError({
-            code: 'CONFLICT',
-            message: 'You are already a member of this group'
-          });
-        }
-
-        // Check for existing pending request
-        const existingRequest = await ctx.prisma.signalGroupJoinRequest.findUnique({
-          where: {
-            userId_groupId: {
-              userId,
-              groupId: input.groupId
-            }
-          }
-        });
-
-        if (existingRequest && existingRequest.status === 'pending') {
-          throw new TRPCError({
-            code: 'CONFLICT',
-            message: 'You already have a pending request for this group'
-          });
-        }
-
-        // Rate limiting: Check recent requests (max 5 requests per hour)
-        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-        const recentRequests = await ctx.prisma.signalGroupJoinRequest.count({
-          where: {
-            userId,
-            requestedAt: {
-              gte: oneHourAgo
-            }
-          }
-        });
-
-        if (recentRequests >= 5) {
-          throw new TRPCError({
-            code: 'TOO_MANY_REQUESTS',
-            message: 'Too many join requests. Please wait before making another request.'
-          });
-        }
-
-        // Create or update join request
-        const joinRequest = await ctx.prisma.signalGroupJoinRequest.upsert({
-          where: {
-            userId_groupId: {
-              userId,
-              groupId: input.groupId
-            }
-          },
-          update: {
-            message: input.message,
-            status: 'pending',
-            requestedAt: new Date(),
-            processedAt: null,
-            processedBy: null
-          },
-          create: {
-            userId,
-            groupId: input.groupId,
-            message: input.message,
-            status: 'pending'
-          }
-        });
-
-        // Log admin event for audit trail
-        await ctx.prisma.adminEvent.create({
-          data: {
-            eventType: 'signal_group_join_request',
-            username: ctx.session.user.username || 'unknown',
-            details: `Requested to join Signal group: ${group.groupName} (${input.groupId})`,
-          },
-        });
-
+        
+        // Log the event
+        await logCommunityEvent(
+          ctx.prisma,
+          'signal_verification_initiated',
+          ctx.session.user.username || 'Unknown User',
+          `Signal verification initiated for phone number ending in ${phoneNumber.slice(-4)}`
+        );
+        
         return {
           success: true,
-          requestId: joinRequest.id,
-          message: group.requiresApproval 
-            ? 'Join request submitted! A moderator will review your request.'
-            : 'Join request submitted! You will be added to the group shortly.'
+          message: 'Verification code sent successfully',
+          expiresIn: 600, // 10 minutes in seconds
         };
-
       } catch (error) {
-        console.error('Error requesting Signal group join:', error);
-        if (error instanceof TRPCError) {
-          throw error;
-        }
+        console.error('Error sending verification code:', error);
+        
+        // Clean up the stored code on failure
+        await ctx.prisma.signalVerificationCode.deleteMany({
+          where: {
+            userId,
+            phoneNumber,
+            verified: false,
+          },
+        });
+        
         throw new TRPCError({
           code: 'INTERNAL_SERVER_ERROR',
-          message: 'Failed to submit join request'
+          message: 'Failed to send verification code. Please try again.',
         });
       }
     }),
+
+  verifySignalCode: protectedProcedure
+    .input(
+      z.object({
+        code: z.string().length(6),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { verifyCode, isCodeExpired } = await import('@/lib/verification-codes');
+      const userId = ctx.session.user.id;
+      
+      // Find the most recent verification code for this user
+      const verificationRecord = await ctx.prisma.signalVerificationCode.findFirst({
+        where: {
+          userId,
+          verified: false,
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
+      
+      if (!verificationRecord) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'No verification code found. Please request a new one.',
+        });
+      }
+      
+      // Check if code has expired
+      if (isCodeExpired(verificationRecord.expiresAt)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Verification code has expired. Please request a new one.',
+        });
+      }
+      
+      // Check attempts
+      if (verificationRecord.attempts >= verificationRecord.maxAttempts) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Maximum verification attempts exceeded. Please request a new code.',
+        });
+      }
+      
+      // Increment attempts
+      await ctx.prisma.signalVerificationCode.update({
+        where: { id: verificationRecord.id },
+        data: { attempts: { increment: 1 } },
+      });
+      
+      // Verify the code
+      const isValid = verifyCode(input.code, verificationRecord.code, verificationRecord.salt);
+      
+      if (!isValid) {
+        const remainingAttempts = verificationRecord.maxAttempts - verificationRecord.attempts - 1;
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `Invalid verification code. ${remainingAttempts} attempts remaining.`,
+        });
+      }
+      
+      // Mark as verified and update user
+      await ctx.prisma.$transaction([
+        ctx.prisma.signalVerificationCode.update({
+          where: { id: verificationRecord.id },
+          data: {
+            verified: true,
+            verifiedAt: new Date(),
+          },
+        }),
+        ctx.prisma.user.update({
+          where: { id: userId },
+          data: {
+            // signalVerified: true,
+            signalPhoneNumber: verificationRecord.phoneNumber,
+            // Optionally set signalIdentity if we can resolve it
+          },
+        }),
+      ]);
+      
+      // Resolve Signal UUID if possible
+      const { matrixService } = await import('@/lib/matrix');
+      const signalUuid = await matrixService.resolvePhoneToSignalUuid(verificationRecord.phoneNumber);
+      
+      if (signalUuid) {
+        await ctx.prisma.user.update({
+          where: { id: userId },
+          data: {
+            signalIdentity: signalUuid,
+          },
+        });
+      }
+      
+      // Log the event
+      await logCommunityEvent(
+        ctx.prisma,
+        'signal_verification_completed',
+        ctx.session.user.username || 'Unknown User',
+        `Signal account successfully verified`
+      );
+      
+      return {
+        success: true,
+        message: 'Signal account successfully verified',
+      };
+    }),
+
+  getSignalVerificationStatus: protectedProcedure
+    .query(async ({ ctx }) => {
+      const userId = ctx.session.user.id;
+      
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          signalVerified: true,
+          signalPhoneNumber: true,
+          signalIdentity: true,
+        },
+      });
+      
+      // Check for pending verification
+      const pendingVerification = await ctx.prisma.signalVerificationCode.findFirst({
+        where: {
+          userId,
+          verified: false,
+          expiresAt: { gt: new Date() },
+        },
+        select: {
+          expiresAt: true,
+          attempts: true,
+          maxAttempts: true,
+        },
+      });
+      
+      return {
+        isVerified: false, // user?.signalVerified || false,
+        phoneNumber: user?.signalPhoneNumber,
+        signalIdentity: user?.signalIdentity,
+        pendingVerification: pendingVerification ? {
+          expiresAt: pendingVerification.expiresAt,
+          remainingAttempts: pendingVerification.maxAttempts - pendingVerification.attempts,
+        } : null,
+      };
+    }),
+
+  removeSignalVerification: protectedProcedure
+    .mutation(async ({ ctx }) => {
+      const userId = ctx.session.user.id;
+      
+      await ctx.prisma.$transaction([
+        // Remove verification records
+        ctx.prisma.signalVerificationCode.deleteMany({
+          where: { userId },
+        }),
+        // Update user
+        ctx.prisma.user.update({
+          where: { id: userId },
+          data: {
+            // signalVerified: false,
+            signalPhoneNumber: null,
+            signalIdentity: null,
+          },
+        }),
+      ]);
+      
+      // Log the event
+      await logCommunityEvent(
+        ctx.prisma,
+        'signal_verification_removed',
+        ctx.session.user.username || 'Unknown User',
+        `Signal account verification removed`
+      );
+      
+      return {
+        success: true,
+        message: 'Signal verification removed successfully',
+      };
+    }),
+
+  requestRoomJoin: protectedProcedure
+    .input(
+      z.object({
+        roomIds: z.array(z.string()).min(1, 'At least one room must be selected'),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.session.user.id;
+      
+      // Get user profile to check Signal verification
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          username: true,
+          signalIdentity: true,
+          attributes: true,
+        },
+      });
+      
+      if (!user) {
+        throw new Error('User not found');
+      }
+      
+      // Check if user has Signal verified
+      const userAttributes = user.attributes as Record<string, unknown> || {};
+      const phoneNumber = userAttributes.phoneNumber as string;
+      const hasSignalVerification = !!user.signalIdentity || !!phoneNumber;
+      
+      if (!hasSignalVerification) {
+        throw new Error('SIGNAL_VERIFICATION_REQUIRED');
+      }
+      
+      // Use Matrix service to invite user to rooms
+      const { matrixService } = await import('@/lib/matrix');
+      if (!matrixService.isConfigured()) {
+        throw new Error('Matrix service not configured');
+      }
+      
+      const results: { roomId: string; success: boolean; error?: string }[] = [];
+      
+      for (const roomId of input.roomIds) {
+        try {
+          // For regular users, we'll have the bot invite them using their Matrix username
+          // First, resolve user to Matrix username
+          let matrixUserId = userAttributes.matrixUsername as string;
+          
+          if (!matrixUserId && phoneNumber) {
+            // Try to resolve via Signal bridge if available
+            try {
+              const signalUuid = await matrixService.resolvePhoneToSignalUuid(phoneNumber);
+              if (signalUuid) {
+                // This would be the Signal bridge user ID format
+                matrixUserId = `@${signalUuid}:${process.env.MATRIX_HOMESERVER?.replace('https://', '') || 'matrix.org'}`;
+              }
+            } catch (signalError) {
+              console.warn('Could not resolve Signal UUID for user:', signalError);
+            }
+          }
+          
+          if (!matrixUserId) {
+            // Fallback: construct Matrix ID from username
+            const homeserver = process.env.MATRIX_HOMESERVER?.replace('https://', '') || 'matrix.org';
+            matrixUserId = `@${user.username}:${homeserver}`;
+          }
+          
+          const success = await matrixService.inviteToRoom(roomId, matrixUserId);
+          results.push({ roomId, success });
+          
+          if (success) {
+            // Log the room join request
+            await logCommunityEvent(
+              ctx.prisma,
+              'user_room_join_request',
+              user.username || 'Unknown User',
+              `Requested to join room: ${roomId}`
+            );
+          }
+          
+        } catch (error) {
+          console.error(`Failed to invite user ${userId} to room ${roomId}:`, error);
+          results.push({ 
+            roomId, 
+            success: false, 
+            error: error instanceof Error ? error.message : 'Unknown error'
+          });
+        }
+      }
+      
+      const successCount = results.filter(r => r.success).length;
+      const failedCount = results.length - successCount;
+      
+      if (successCount > 0) {
+        return {
+          success: true,
+          message: `Successfully requested to join ${successCount} room${successCount === 1 ? '' : 's'}${failedCount > 0 ? `, ${failedCount} failed` : ''}`,
+          results,
+        };
+      } else {
+        throw new Error('Failed to join any rooms. Please try again or contact an administrator.');
+      }
+    }),
+
 });
 
 // Helper function for password hashing

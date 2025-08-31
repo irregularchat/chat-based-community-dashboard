@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  signal-cli-rest-api:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: signal-cli-rest-api
+    ports:
+      - "50240:8080"
+    environment:
+      - MODE=json-rpc
+    volumes:
+      - signal-cli-data:/home/.local/share/signal-cli
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # PostgreSQL database for the dashboard
+  dashboard-postgres:
+    image: postgres:15-alpine
+    container_name: dashboard-postgres
+    ports:
+      - "5436:5432"
+    environment:
+      - POSTGRES_DB=dashboarddb
+      - POSTGRES_USER=dashboarduser
+      - POSTGRES_PASSWORD=password_for_db
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dashboarduser -d dashboarddb"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  signal-cli-data:
+    driver: local
+  postgres-data:
+    driver: local
+
+networks:
+  default:
+    name: community-dashboard-network

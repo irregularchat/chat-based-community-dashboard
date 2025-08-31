@@ -42,6 +42,10 @@ class NativeSignalBotService extends EventEmitter {
     this.questions = new Map(); // questionId -> {id, asker, question, title, answers, solved, timestamp, groupId, discourseTopicId}
     this.questionCounter = 0;
     this.userQuestions = new Map(); // userPhone -> [questionIds]
+    
+    // Onboarding/Request System
+    this.pendingRequests = new Map(); // phoneNumber -> {timestamp, groupId, requester, timeoutId}
+    this.requestTimeoutMinutes = process.env.REQUEST_TIMEOUT_MINUTES || 72 * 60; // Default 72 hours
     this.discourseApiUrl = process.env.DISCOURSE_API_URL || process.env.DISCOURSEURL || 'https://forum.irregularchat.com';
     this.discourseApiKey = process.env.DISCOURSE_API_KEY || process.env.DISCOURSEAPIKEY;
     this.discourseApiUsername = process.env.DISCOURSE_API_USERNAME || process.env.DISCOURSEAPIUSERNAME || 'system';
@@ -146,10 +150,11 @@ class NativeSignalBotService extends EventEmitter {
       // PDF Plugin Commands (1)
       { name: 'pdf', description: 'Process and summarize PDF files', handler: this.handlePdf.bind(this) },
       
-      // Onboarding Plugin Commands (3) 
+      // Onboarding Plugin Commands (4) 
       { name: 'request', description: 'Request introduction from user', handler: this.handleRequest.bind(this) },
       { name: 'gtg', description: 'Approve user for onboarding', adminOnly: true, handler: this.handleGtg.bind(this) },
       { name: 'sngtg', description: 'Special onboarding approval', handler: this.handleSngtg.bind(this) },
+      { name: 'pending', description: 'Show pending requests', adminOnly: true, handler: this.handlePending.bind(this) },
       
       // Admin Commands
       { name: 'addto', description: 'Add users to groups', adminOnly: true, handler: this.handleAddTo.bind(this) },
@@ -1737,9 +1742,108 @@ class NativeSignalBotService extends EventEmitter {
 
   // Onboarding Plugin Handlers
   async handleRequest(context) {
-    const { args, groupId } = context;
-    if (!args) return '❌ Usage: !request @user\nRequest introduction from a user';
-    return `👋 Introduction request sent to ${args}\n\n💡 They will receive instructions to introduce themselves.`;
+    const { args, groupId, sender, sourceNumber } = context;
+    
+    // Check if user is mentioning someone
+    if (args && args.length > 0 && args[0].startsWith('@')) {
+      // Admin requesting intro from specific user
+      const targetUser = args[0];
+      return this.sendOnboardingRequest(targetUser, groupId, sender);
+    }
+    
+    // User is requesting to join (providing their intro)
+    if (!args || args.length === 0) {
+      // Check if they have a pending request
+      if (this.pendingRequests.has(sourceNumber)) {
+        return `⏳ You already have a pending request. Please provide your introduction:\n\n` +
+               `1. NAME\n` +
+               `2. YOUR_ORGANIZATION\n` +
+               `3. Who invited you (mention them)\n` +
+               `4. EMAIL_OR_EMAIL_ALIAS\n` +
+               `5. YOUR_INTERESTS\n` +
+               `6. LinkedIn profile (optional)`;
+      }
+      
+      // Send the onboarding prompt
+      return this.sendOnboardingPrompt(sourceNumber, groupId, sender);
+    }
+    
+    // User is providing their introduction
+    const introText = args.join(' ');
+    
+    // Store the request with timeout
+    const timeoutMs = this.requestTimeoutMinutes * 60 * 1000;
+    const timeoutId = setTimeout(() => {
+      this.handleRequestTimeout(sourceNumber, groupId);
+    }, timeoutMs);
+    
+    this.pendingRequests.set(sourceNumber, {
+      timestamp: Date.now(),
+      groupId: groupId,
+      requester: sender,
+      introduction: introText,
+      timeoutId: timeoutId,
+      phoneNumber: sourceNumber
+    });
+    
+    // Notify admins
+    const adminNotification = `🆕 New member request from ${sender}:\n\n` +
+                            `${introText}\n\n` +
+                            `✅ Approve with: !gtg ${sourceNumber}\n` +
+                            `❌ Timeout in: ${this.requestTimeoutMinutes / 60} hours`;
+    
+    // Log to console for now (would send to admin channel)
+    console.log('📨 Admin notification:', adminNotification);
+    
+    return `✅ Your introduction has been submitted!\n\n` +
+           `An admin will review your request shortly.\n` +
+           `You'll be notified once approved.\n\n` +
+           `⏰ Request expires in ${this.requestTimeoutMinutes / 60} hours.`;
+  }
+  
+  async sendOnboardingPrompt(phoneNumber, groupId, sender) {
+    const prompt = `You've requested to join the IrregularChat Community.\n\n` +
+                  `Bonafides: Everyone in the chat has been invited by an irregularchat member.\n` +
+                  `So that we can add you to the right groups, we need to know:\n\n` +
+                  `1. NAME\n` +
+                  `2. YOUR_ORGANIZATION\n` +
+                  `3. Who invited you (Add & mention them in this chat)\n` +
+                  `4. EMAIL_OR_EMAIL_ALIAS\n` +
+                  `5. YOUR_INTERESTS\n` +
+                  `6. Link to your LinkedIn profile (if you want others to endorse your skills)\n\n` +
+                  `Reply with !request followed by your introduction.`;
+    
+    return prompt;
+  }
+  
+  async sendOnboardingRequest(targetUser, groupId, requester) {
+    // Send onboarding request to specific user
+    const message = `👋 Introduction request sent to ${targetUser}\n\n` +
+                   `They will receive instructions to introduce themselves.\n` +
+                   `Timeout: ${this.requestTimeoutMinutes / 60} hours`;
+    
+    // Would send DM to target user with onboarding prompt
+    // For now, just return confirmation
+    return message;
+  }
+  
+  async handleRequestTimeout(phoneNumber, groupId) {
+    console.log(`⏰ Request timeout for ${phoneNumber} in group ${groupId}`);
+    
+    // Remove from pending requests
+    const request = this.pendingRequests.get(phoneNumber);
+    if (request) {
+      clearTimeout(request.timeoutId);
+      this.pendingRequests.delete(phoneNumber);
+      
+      // Would remove user from group here
+      console.log(`🚫 Would remove ${phoneNumber} from group ${groupId} due to timeout`);
+      
+      // Notify admins
+      const notification = `⏰ Request timeout: ${phoneNumber} has been removed from pending list.\n` +
+                         `No !gtg was provided within ${this.requestTimeoutMinutes / 60} hours.`;
+      console.log(notification);
+    }
   }
 
   async handleGtg(context) {
@@ -1748,10 +1852,32 @@ class NativeSignalBotService extends EventEmitter {
     if (!isAdmin) return '🚫 Only administrators can approve users with !gtg';
     
     if (args.length < 1) {
-      return '❌ Usage: !gtg <username> [email] [firstname] [lastname]';
+      return '❌ Usage: !gtg <phone_or_username> [email] [firstname] [lastname]';
     }
     
-    const username = args[0];
+    const identifier = args[0];
+    
+    // Check if this is a phone number from pending requests
+    let username = identifier;
+    let pendingRequest = null;
+    
+    // Check if it's a phone number in pending requests
+    if (identifier.startsWith('+') || identifier.match(/^\d{10,}$/)) {
+      pendingRequest = this.pendingRequests.get(identifier);
+      if (pendingRequest) {
+        // Clear the timeout
+        clearTimeout(pendingRequest.timeoutId);
+        this.pendingRequests.delete(identifier);
+        
+        // Extract name from introduction if available
+        const intro = pendingRequest.introduction || '';
+        const nameMatch = intro.match(/name[:\s]+([^\n,]+)/i);
+        username = nameMatch ? nameMatch[1].trim().replace(/\s+/g, '_') : identifier;
+        
+        console.log(`✅ Approved pending request for ${identifier}`);
+      }
+    }
+    
     const email = args[1] || `${username}@irregularchat.com`;
     const firstName = args[2] || username;
     const lastName = args[3] || '';
@@ -1816,6 +1942,41 @@ class NativeSignalBotService extends EventEmitter {
     const isAdmin = this.isAdmin(sender);
     if (!isAdmin) return '🚫 Only administrators can use special approval !sngtg';
     return `✅ Special approval granted!\n\n🎆 User has been fast-tracked through onboarding.`;
+  }
+  
+  async handlePending(context) {
+    const { sender } = context;
+    const isAdmin = this.isAdmin(sender);
+    
+    if (!isAdmin) {
+      return '🚫 Only administrators can view pending requests';
+    }
+    
+    if (this.pendingRequests.size === 0) {
+      return '📭 No pending requests';
+    }
+    
+    let response = `📋 Pending Requests (${this.pendingRequests.size}):\n\n`;
+    
+    for (const [phoneNumber, request] of this.pendingRequests) {
+      const timeElapsed = Date.now() - request.timestamp;
+      const hoursElapsed = Math.floor(timeElapsed / (1000 * 60 * 60));
+      const hoursRemaining = Math.floor(this.requestTimeoutMinutes / 60) - hoursElapsed;
+      
+      response += `👤 ${request.requester || phoneNumber}\n`;
+      response += `📱 Phone: ${phoneNumber}\n`;
+      response += `⏰ Time remaining: ${hoursRemaining} hours\n`;
+      
+      if (request.introduction) {
+        const shortIntro = request.introduction.substring(0, 100);
+        response += `📝 Intro: ${shortIntro}${request.introduction.length > 100 ? '...' : ''}\n`;
+      }
+      
+      response += `✅ Approve: !gtg ${phoneNumber}\n`;
+      response += `───────────────\n`;
+    }
+    
+    return response;
   }
   
   async handleAddTo(context) {

@@ -8,6 +8,7 @@ services:
       - "50240:8080"
     environment:
       - MODE=normal
+      - AUTO_RECEIVE_SCHEDULE=*/10 * * * *
     volumes:
       - signal_cli_data:/home/.local/share/signal-cli
     restart: unless-stopped

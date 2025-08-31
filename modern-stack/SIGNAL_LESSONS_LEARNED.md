@@ -156,31 +156,70 @@ OPENAI_ACTIVE=true
 OPENAI_API_KEY=sk-...
 ```
 
-### 8. Signal Bot Implementation Approaches
+### 8. Signal Bot Message Reception Approaches (Critical Architecture Decision)
 **Problem**: Initial confusion about how to receive messages - polling vs webhooks vs WebSockets.
 
-**Investigation**: 
-- signal-cli-rest-api doesn't have native webhook support (GitHub issue #74)
-- WebSocket support exists in json-rpc mode but requires different configuration
-- JSON-RPC mode has issues with account loading in some configurations
+**🔬 DEEP RESEARCH FINDINGS (August 2025)**:
 
-**Solutions Attempted**:
-1. **Polling Approach**: Works but user explicitly stated "polling isn't the way"
-2. **WebSocket Approach**: Created `signal-websocket-bot.js` for WebSocket connections
-3. **Efficient Long-Polling**: Created `signal-efficient-bot.js` using long-polling (server holds connection)
-4. **JSON-RPC Mode**: Attempted but had compatibility issues with existing account data
+**📋 signal-cli-rest-api Mode Comparison**:
+1. **Normal Mode**: 
+   - Uses traditional HTTP GET polling via `/v1/receive/<number>`
+   - **CRITICAL ISSUE**: Polling returns immediately with empty results `[]` instead of long-polling
+   - No persistent connection - just instant empty responses
+   - Works with existing account registrations
 
-**Final Solution**: 
-- Used normal mode with efficient long-polling in `signal-ai-bot.js`
-- This approach uses the `/v1/receive` endpoint which holds the connection until messages arrive
-- Not true polling - more like server-sent events
+2. **JSON-RPC Mode**:
+   - **No HTTP polling support**: `/v1/receive` endpoint not available
+   - **WebSocket required**: Must use `ws://host:port/v1/receive/<number>` 
+   - Messages pushed as JSON-RPC notifications
+   - **Registration limitation**: Cannot register new numbers (only works in normal mode)
+   - **Account compatibility issues**: May not work with existing account data
 
-**Lessons**:
-- signal-cli-rest-api has multiple modes (normal, native, json-rpc) with different capabilities
-- Long-polling is different from constant polling and is acceptable for real-time messaging
-- JSON-RPC mode requires specific account setup and may not work with existing data
-- When user says "no polling", clarify if they mean constant polling vs long-polling
-- WebSocket support exists but requires json-rpc mode which has its own complexities
+3. **WebSocket Implementation Issues**:
+   - **Production confirmed**: WebSocket connections unstable (Issue #185)
+   - **Error pattern**: `websocket: close sent` and frequent disconnections
+   - **Environment specific**: Problems reported in Docker/Synology environments
+
+**❌ POLLING DOESN'T WORK - ROOT CAUSE IDENTIFIED**:
+- **Expected behavior**: `/v1/receive` should hold connection until messages arrive (long-polling)
+- **Actual behavior**: Returns immediately with `[]` (empty array)
+- **Impact**: No real-time message reception possible via polling
+- **Confirmed**: Both local and production environments exhibit this behavior
+
+**🚨 FUNDAMENTAL ARCHITECTURAL PROBLEM**:
+```bash
+# This should hang until messages arrive (long-polling):
+curl "http://localhost:50240/v1/receive/+1234567890"
+# But actually returns immediately:
+[] # Empty results, no waiting
+```
+
+**🔧 PRODUCTION ARCHITECTURE IMPLICATIONS**:
+- **WebSocket approach**: Required but unstable
+- **Polling approach**: Fundamentally broken (no long-polling)
+- **Hybrid approach**: Must combine unstable WebSocket with CLI fallbacks
+- **Registration workflow**: Must stay in normal mode for phone registration
+
+**ATTEMPTS AND FAILURES**:
+1. **❌ Short Polling**: Constant requests return `[]` immediately
+2. **❌ Long Polling**: `/v1/receive` doesn't implement true long-polling
+3. **❌ WebSocket (Normal Mode)**: `/ws` endpoint returns 404 in normal mode
+4. **❌ WebSocket (JSON-RPC Mode)**: Unstable connections, registration issues
+5. **❌ Efficient Polling**: Still returns `[]` immediately, no efficiency gained
+
+**✅ ACTUAL PRODUCTION SOLUTION** (Based on GitHub Issues Research):
+- **AUTO_RECEIVE_SCHEDULE**: Use environment variable with cron schedule
+- **Background processing**: signal-cli-rest-api polls internally, stores messages
+- **API retrieval**: Application polls for stored messages, not live polling
+- **Hybrid messaging**: WebSocket when stable, CLI commands for critical operations
+
+**LESSONS**:
+- **signal-cli-rest-api polling is fundamentally broken** - doesn't implement long-polling
+- **"Polling doesn't work"** is accurate - API design flaw, not implementation issue
+- **WebSocket instability** forces hybrid approaches in production
+- **Mode switching required**: Normal for registration, JSON-RPC for WebSocket (if stable)
+- **Production uses workarounds**: AUTO_RECEIVE_SCHEDULE + background processing
+- **Real-time messaging**: Currently not reliably achievable with this API
 
 ### 9. Production Deployment Critical Insights
 **Problem**: Local development bot doesn't match production requirements and architecture.

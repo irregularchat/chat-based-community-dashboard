@@ -1867,11 +1867,13 @@ class NativeSignalBotService extends EventEmitter {
   async handleQuestion(context) {
     const { sender, args, groupId, sourceNumber } = context;
     
-    if (!args || args.length === 0) {
-      return '❌ Usage: !q <your question>\n\nExample: !q How do I set up Signal bot authentication?';
+    if (!args || args.length === 0 || args.join(' ').trim() === '') {
+      return '❌ Usage: !q <your question>\n\n' +
+             'Example: !q How do I set up Signal bot authentication?\n\n' +
+             'To see existing questions, use: !questions';
     }
     
-    const questionText = args.join(' ');
+    const questionText = args.join(' ').trim();
     
     // Generate a unique question ID
     this.questionCounter++;
@@ -1924,15 +1926,17 @@ class NativeSignalBotService extends EventEmitter {
       
       // Post to Discourse if configured
       let forumLink = '';
+      let discourseError = null;
       if (this.discourseApiKey && this.discourseApiUrl) {
         try {
           const topicData = {
             title: title,
-            raw: `**Question from ${sender}:**\n\n${questionText}\n\n---\n*Posted via Signal Bot from ${groupId ? 'group chat' : 'direct message'}*`,
-            category: 5, // Q&A category ID - adjust as needed
+            raw: `Question from ${sender}:\n\n${questionText}\n\n---\n*Posted via Signal Bot from ${groupId ? 'group chat' : 'direct message'}*`,
+            category: 7, // Questions category - updated for IrregularChat forum
             tags: ['question', 'signal-bot']
           };
           
+          console.log('📤 Posting question to Discourse:', this.discourseApiUrl);
           const response = await fetch(`${this.discourseApiUrl}/posts.json`, {
             method: 'POST',
             headers: {
@@ -1947,23 +1951,40 @@ class NativeSignalBotService extends EventEmitter {
             const result = await response.json();
             question.discourseTopicId = result.topic_id;
             forumLink = `\n📎 Forum: ${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id}`;
+            console.log('✅ Question posted to Discourse:', result.topic_id);
+          } else {
+            const errorText = await response.text();
+            console.error('❌ Discourse API error:', response.status, errorText);
+            discourseError = `API ${response.status}`;
           }
         } catch (error) {
-          console.error('Failed to post to Discourse:', error);
+          console.error('❌ Failed to post to Discourse:', error);
+          discourseError = error.message;
         }
       }
       
-      return `❓ **Question ${questionId} Posted**\n\n` +
-             `📝 **Title:** ${title}\n` +
-             `👤 **Asked by:** ${sender}\n` +
-             `⏰ **Time:** ${new Date().toLocaleTimeString()}\n` +
-             `${forumLink}\n\n` +
-             `💬 Others can answer with: !answer ${questionId} <your answer>\n` +
-             `✅ Mark as solved with: !solved ${questionId}`;
+      // Return success message even if Discourse posting failed (question is stored locally)
+      let response = `❓ Question ${questionId} Posted\n\n` +
+                    `📝 Title: ${title}\n` +
+                    `👤 Asked by: ${sender}\n` +
+                    `⏰ Time: ${new Date().toLocaleTimeString()}`;
+      
+      if (forumLink) {
+        response += forumLink;
+      } else if (discourseError) {
+        response += `\n⚠️ Forum posting temporarily unavailable`;
+        console.log('⚠️ Question stored locally only due to forum error');
+      }
+      
+      response += `\n\n💬 Others can answer with: !answer ${questionId} <your answer>\n` +
+                 `✅ Mark as solved with: !solved ${questionId}`;
+      
+      return response;
              
     } catch (error) {
       console.error('Error handling question:', error);
-      return '❌ Failed to post question. Please try again.';
+      return '❌ Failed to post question. Please try again.\n' +
+             `Error: ${error.message}`;
     }
   }
   
@@ -1989,14 +2010,14 @@ class NativeSignalBotService extends EventEmitter {
       return showMine ? '📭 You haven\'t asked any questions yet.' : '📭 No questions have been asked yet.';
     }
     
-    let response = showMine ? '**Your Questions:**\n\n' : '**Recent Questions:**\n\n';
+    let response = showMine ? 'Your Questions:\n\n' : 'Recent Questions:\n\n';
     
     for (const q of questionsList) {
       const status = q.solved ? '✅' : '❓';
       const answerCount = q.answers.length;
       const timeAgo = this.getRelativeTime(q.timestamp);
       
-      response += `${status} **${q.id}:** ${q.title}\n`;
+      response += `${status} ${q.id}: ${q.title}\n`;
       response += `   👤 ${q.asker} • 💬 ${answerCount} answer${answerCount !== 1 ? 's' : ''} • ⏰ ${timeAgo}\n\n`;
     }
     

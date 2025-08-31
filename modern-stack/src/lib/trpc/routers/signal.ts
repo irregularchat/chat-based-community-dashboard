@@ -3,6 +3,22 @@ import { createTRPCRouter, moderatorProcedure } from '../trpc';
 import { TRPCError } from '@trpc/server';
 import { enhancedSignalClient } from '@/lib/signal/enhanced-api-client';
 import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
+import { NativeSignalBotService } from '@/lib/signal-cli/native-daemon-service';
+
+let nativeBot: NativeSignalBotService | null = null;
+
+function getNativeBot() {
+  if (!nativeBot) {
+    const config = {
+      phoneNumber: process.env.SIGNAL_PHONE_NUMBER || process.env.SIGNAL_BOT_PHONE_NUMBER,
+      aiEnabled: process.env.OPENAI_ACTIVE === 'true',
+      openAiApiKey: process.env.OPENAI_API_KEY,
+      dataDir: process.env.SIGNAL_CLI_DATA_DIR || './signal-data'
+    };
+    nativeBot = new NativeSignalBotService(config);
+  }
+  return nativeBot;
+}
 
 export const signalRouter = createTRPCRouter({
   // Get Signal groups with enhanced display names
@@ -160,6 +176,110 @@ export const signalRouter = createTRPCRouter({
       phoneNumber,
       isConfigured: !!phoneNumber,
     };
+  }),
+
+  // Native bot procedures (new approach)
+  startNativeBot: moderatorProcedure.mutation(async ({ ctx }) => {
+    try {
+      const bot = getNativeBot();
+      await bot.startListening();
+      
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'signal_bot_start',
+          username: ctx.session.user.username || 'unknown',
+          details: 'Started native Signal CLI bot daemon',
+        },
+      });
+      
+      return { success: true, message: 'Native Signal bot started successfully' };
+    } catch (error) {
+      console.error('Error starting native bot:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: error instanceof Error ? error.message : 'Failed to start native bot'
+      });
+    }
+  }),
+
+  stopNativeBot: moderatorProcedure.mutation(async ({ ctx }) => {
+    try {
+      const bot = getNativeBot();
+      await bot.stopListening();
+      
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'signal_bot_stop',
+          username: ctx.session.user.username || 'unknown',
+          details: 'Stopped native Signal CLI bot daemon',
+        },
+      });
+      
+      return { success: true, message: 'Native Signal bot stopped successfully' };
+    } catch (error) {
+      console.error('Error stopping native bot:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: error instanceof Error ? error.message : 'Failed to stop native bot'
+      });
+    }
+  }),
+
+  getNativeBotHealth: moderatorProcedure.query(async () => {
+    try {
+      const bot = getNativeBot();
+      return await bot.getHealth();
+    } catch (error) {
+      return {
+        status: 'unhealthy',
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }),
+
+  registerNativeAccount: moderatorProcedure
+    .input(z.object({
+      phoneNumber: z.string(),
+      captcha: z.string()
+    }))
+    .mutation(async ({ input }) => {
+      try {
+        const bot = getNativeBot();
+        return await bot.registerAccount(input.captcha);
+      } catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error instanceof Error ? error.message : 'Registration failed'
+        });
+      }
+    }),
+
+  verifyNativeAccount: moderatorProcedure
+    .input(z.object({
+      verificationCode: z.string()
+    }))
+    .mutation(async ({ input }) => {
+      try {
+        const bot = getNativeBot();
+        return await bot.verifyAccount(input.verificationCode);
+      } catch (error) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: error instanceof Error ? error.message : 'Verification failed'
+        });
+      }
+    }),
+
+  getNativeGroups: moderatorProcedure.query(async () => {
+    try {
+      const bot = getNativeBot();
+      return await bot.getGroups();
+    } catch (error) {
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: error instanceof Error ? error.message : 'Failed to get groups'
+      });
+    }
   }),
 
   // Get health status (alias for getServiceStatus for backward compatibility)  

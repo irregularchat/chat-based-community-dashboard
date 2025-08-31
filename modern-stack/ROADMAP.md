@@ -1,6 +1,6 @@
 # Community Dashboard Roadmap
 
-## Current Version: v0.2.0 (Signal CLI Integration)
+## Current Version: v0.3.0 (Native Signal CLI with AI Integration)
 
 ### ✅ Completed Features
 
@@ -86,11 +86,44 @@
 - JSON-RPC protocol for all messaging operations
 - Native daemon process management with auto-recovery
 
-- **v0.3.0**: Signal Self-Service Suite (Post bot fixes)
+#### v0.3.0 - AI Integration & Code Cleanup ✅ COMPLETED
+**🎯 GOAL**: Complete AI integration with local privacy options and comprehensive codebase cleanup
+
+**✅ ACHIEVEMENTS COMPLETED (August 31, 2025)**:
+
+1. **🤖 Dual AI Integration**
+   - ✅ GPT-5 integration with proper model names (gpt-5-mini, gpt-5-nano)
+   - ✅ Local AI integration with `irregularbot:latest` model for privacy-focused queries
+   - ✅ Context-aware AI responses with community knowledge
+   - ✅ Thinking process cleanup (removed `<think>` tags from responses)
+   - ✅ Self-message loop prevention to avoid infinite bot responses
+
+2. **💬 Enhanced User Experience**
+   - ✅ Display names instead of phone numbers in Q&A system
+   - ✅ Cleaned emoji formatting for better readability
+   - ✅ Command reorganization: `!summarize` for group messages, `!tldr` for URL content
+   - ✅ Message summarization with parameters (`-m 30` for count, `-h 2` for hours)
+   - ✅ Safety limits and parameter validation for resource protection
+
+3. **🧹 Major Codebase Cleanup**
+   - ✅ Archived 15+ obsolete bot implementations to `/archive/obsolete-bots/`
+   - ✅ Archived test files and development utilities to `/archive/test-files/`
+   - ✅ Archived experimental plugins to `/archive/experimental/`
+   - ✅ Created comprehensive archive documentation
+   - ✅ Updated README.md for production-ready presentation
+   - ✅ Streamlined project structure for maintainability
+
+4. **🔧 Technical Improvements**  
+   - ✅ Fixed API endpoints for local AI (`/api/v1/chat/completions`)
+   - ✅ Improved error handling and user-friendly error messages
+   - ✅ Enhanced logging with emoji-based visual indicators
+   - ✅ 72 total commands working (6 core + 66 plugin)
+
+**PRODUCTION STATUS**: ✅ v0.3.0 Complete - Production ready with dual AI integration
 
 ### 📋 Upcoming Features
 
-#### v0.3.0 - Signal Self-Service Suite
+#### v0.4.0 - Signal Self-Service Suite
 **🎯 GOAL**: Transform admin-only Signal management into complete self-service user experience
 
 **USER WORKFLOW**: *verify Signal → discover groups → join groups → invite friends → automated welcomes*

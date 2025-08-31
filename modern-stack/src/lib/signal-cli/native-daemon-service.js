@@ -1184,8 +1184,8 @@ ${content.content.substring(0, 3000)}...`;
           role: 'user',
           content: prompt
         }],
-        max_completion_tokens: 700, // GPT-5 requires minimum for processing
-        temperature: 0.3
+        max_completion_tokens: 700 // GPT-5 requires minimum for processing
+        // Note: GPT-5 only supports default temperature (1)
       });
       
       const summary = response.choices[0].message.content.trim();

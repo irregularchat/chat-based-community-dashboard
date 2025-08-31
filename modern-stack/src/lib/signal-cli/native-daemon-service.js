@@ -63,6 +63,17 @@ class NativeSignalBotService extends EventEmitter {
       dailyCounts: new Map() // date -> count
     };
     
+    // Custom news domains management
+    this.customNewsDomains = new Set();
+    this.newsDomainsFile = path.join(this.dataDir, 'news-domains.json');
+    this.loadCustomNewsDomains();
+    
+    // Discourse metadata cache
+    this.discourseTags = new Map(); // tag name -> tag object
+    this.discourseCategories = new Map(); // category id -> category object
+    this.discourseTagsLoaded = false;
+    this.discourseCategoriesLoaded = false;
+    
     // Onboarding/Request System
     this.pendingRequests = new Map(); // phoneNumber -> {timestamp, groupId, requester, timeoutId}
     this.requestTimeoutMinutes = process.env.REQUEST_TIMEOUT_MINUTES || 72 * 60; // Default 72 hours
@@ -661,6 +672,73 @@ class NativeSignalBotService extends EventEmitter {
       }
     });
     
+    // News domain management commands
+    commands.set('newsadd', {
+      name: 'newsadd',
+      description: 'Add a domain to auto-process news list',
+      execute: async (context) => {
+        const args = context.args;
+        
+        if (args.length === 0) {
+          return '❌ Usage: !newsadd <domain>\nExample: !newsadd techcrunch.com';
+        }
+        
+        const domain = args[0].toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0];
+        
+        if (this.customNewsDomains.has(domain)) {
+          return `ℹ️ Domain ${domain} is already in the news list`;
+        }
+        
+        this.customNewsDomains.add(domain);
+        this.saveCustomNewsDomains();
+        
+        return `✅ Added ${domain} to news domains\n📰 Total domains: ${this.customNewsDomains.size}`;
+      }
+    });
+    
+    commands.set('newslist', {
+      name: 'newslist',
+      description: 'Show all custom news domains',
+      execute: async (context) => {
+        if (this.customNewsDomains.size === 0) {
+          return '📰 No custom news domains configured\nUse !newsadd <domain> to add domains';
+        }
+        
+        let response = `📰 Custom News Domains (${this.customNewsDomains.size}):\n\n`;
+        const domains = Array.from(this.customNewsDomains).sort();
+        
+        domains.forEach(domain => {
+          response += `• ${domain}\n`;
+        });
+        
+        response += '\n💡 Links from these domains will be auto-processed';
+        return response;
+      }
+    });
+    
+    commands.set('newsremove', {
+      name: 'newsremove',
+      description: 'Remove a domain from news list',
+      execute: async (context) => {
+        const args = context.args;
+        
+        if (args.length === 0) {
+          return '❌ Usage: !newsremove <domain>\nExample: !newsremove example.com';
+        }
+        
+        const domain = args[0].toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0];
+        
+        if (!this.customNewsDomains.has(domain)) {
+          return `❌ Domain ${domain} is not in the news list`;
+        }
+        
+        this.customNewsDomains.delete(domain);
+        this.saveCustomNewsDomains();
+        
+        return `✅ Removed ${domain} from news domains\n📰 Remaining domains: ${this.customNewsDomains.size}`;
+      }
+    });
+    
     return commands;
   }
 
@@ -848,11 +926,11 @@ class NativeSignalBotService extends EventEmitter {
     
     // If any URLs were cleaned, send the cleaned version
     if (cleanedResults.length > 0) {
-      let response = `🧹 **Cleaned Tracking Links:** `;
+      let response = `🧹 Cleaned Tracking Links: `;
       response += cleanedResults.map(r => r.cleanedUrl).join(' ');
-      response += `\n\n💡 **Why?** Trackers help social media platforms illuminate networks and track user behavior across the web.`;
+      response += `\n\n💡 Why? Trackers help social media platforms illuminate networks and track user behavior across the web.`;
       
-      await this.sendSignalMessage(message.groupId, response);
+      await this.sendReply(message, response);
     }
   }
   
@@ -987,6 +1065,20 @@ class NativeSignalBotService extends EventEmitter {
   }
   
   isNewsUrl(url) {
+    try {
+      const urlObj = new URL(url);
+      const hostname = urlObj.hostname.toLowerCase();
+      
+      // Check custom domains first
+      for (const domain of this.customNewsDomains) {
+        if (hostname.includes(domain.toLowerCase())) {
+          return true;
+        }
+      }
+    } catch (error) {
+      // Invalid URL
+    }
+    
     const newsPatterns = [
       // Major news outlets
       /.*\.(reuters|ap|bbc|cnn|nytimes|washingtonpost|wsj|bloomberg|npr|pbs|abc|cbs|nbc|theguardian|usatoday|forbes|politico)\.com/i,
@@ -1067,16 +1159,16 @@ class NativeSignalBotService extends EventEmitter {
       const todayCount = this.newsStats.dailyCounts.get(today) || 0;
       this.newsStats.dailyCounts.set(today, todayCount + 1);
       
-      // Step 6: Send confirmation to Signal group
-      let response = `📰 **News Processed:** ${content.title}\n\n`;
-      response += `📝 **Summary:** ${summary}\n\n`;
-      response += `🔗 **Original:** ${cleanedUrl}\n`;
+      // Step 6: Send confirmation to Signal group (no markdown for Signal)
+      let response = `📰 ${content.title}\n`;
       if (discourseTopicId) {
-        response += `💬 **Discussion:** ${this.discourseApiUrl}/t/${discourseTopicId}\n`;
+        response += `💬 Forum: ${this.discourseApiUrl}/t/${discourseTopicId}\n\n`;
       }
-      response += `🔓 **Bypass:** ${bypassLinks.twelveft}`;
+      response += `📝 Summary: ${summary}\n\n`;
+      response += `🔗 Original: ${cleanedUrl}\n`;
+      response += `🔓 Bypass: ${bypassLinks.twelveft}`;
       
-      await this.sendSignalMessage(message.groupId, response);
+      await this.sendReply(message, response);
       
       console.log(`✅ Successfully processed news: ${content.title}`);
       
@@ -1205,6 +1297,13 @@ ${content.content.substring(0, 3000)}...`;
     }
     
     try {
+      // Extract tags from content
+      const tags = this.extractNewsTagsFromContent(content, summary);
+      tags.push('posted-link'); // Always add posted-link tag
+      
+      // Select appropriate category (default to news category 5)
+      const categoryId = this.selectDiscourseCategory(content, summary);
+      
       const title = `[News] ${content.title}`;
       const body = `${summary}
 
@@ -1217,7 +1316,8 @@ ${content.content.substring(0, 3000)}...`;
       const response = await axios.post(`${this.discourseApiUrl}/posts.json`, {
         title: title,
         raw: body,
-        category: 5, // Adjust category as needed
+        category: categoryId,
+        tags: tags.slice(0, 5), // Discourse typically limits to 5 tags
         created_at: new Date().toISOString()
       }, {
         headers: {
@@ -1520,10 +1620,133 @@ ${content.content.substring(0, 3000)}...`;
       await this.startDaemon();
       await this.connectSocket();
       console.log('✅ Signal bot is listening for messages');
+      
+      // Load Discourse metadata in background
+      this.loadDiscourseMetadata().catch(err => 
+        console.error('⚠️ Failed to load Discourse metadata:', err.message)
+      );
     } catch (error) {
       this.isListening = false;
       throw error;
     }
+  }
+
+  // Custom News Domains Management
+  loadCustomNewsDomains() {
+    try {
+      if (fs.existsSync(this.newsDomainsFile)) {
+        const data = fs.readFileSync(this.newsDomainsFile, 'utf8');
+        const domains = JSON.parse(data);
+        this.customNewsDomains = new Set(domains);
+        console.log(`📰 Loaded ${this.customNewsDomains.size} custom news domains`);
+      }
+    } catch (error) {
+      console.error('❌ Error loading custom news domains:', error.message);
+    }
+  }
+  
+  saveCustomNewsDomains() {
+    try {
+      const domains = Array.from(this.customNewsDomains);
+      fs.writeFileSync(this.newsDomainsFile, JSON.stringify(domains, null, 2));
+      console.log(`💾 Saved ${this.customNewsDomains.size} custom news domains`);
+    } catch (error) {
+      console.error('❌ Error saving custom news domains:', error.message);
+    }
+  }
+  
+  // Discourse Metadata Management
+  async loadDiscourseMetadata() {
+    if (!this.discourseApiKey || !this.discourseApiUrl) {
+      console.log('⚠️ Discourse API not configured, skipping metadata load');
+      return;
+    }
+    
+    console.log('📥 Loading Discourse tags and categories...');
+    
+    try {
+      // Load tags
+      const tagsResponse = await axios.get(`${this.discourseApiUrl}/tags.json`, {
+        headers: {
+          'Api-Key': this.discourseApiKey,
+          'Api-Username': this.discourseApiUsername
+        }
+      });
+      
+      if (tagsResponse.data && tagsResponse.data.tags) {
+        tagsResponse.data.tags.forEach(tag => {
+          this.discourseTags.set(tag.id, tag);
+        });
+        this.discourseTagsLoaded = true;
+        console.log(`✅ Loaded ${this.discourseTags.size} Discourse tags`);
+      }
+      
+      // Load categories
+      const categoriesResponse = await axios.get(`${this.discourseApiUrl}/categories.json`, {
+        headers: {
+          'Api-Key': this.discourseApiKey,
+          'Api-Username': this.discourseApiUsername
+        }
+      });
+      
+      if (categoriesResponse.data && categoriesResponse.data.category_list) {
+        categoriesResponse.data.category_list.categories.forEach(category => {
+          this.discourseCategories.set(category.id, category);
+        });
+        this.discourseCategoriesLoaded = true;
+        console.log(`✅ Loaded ${this.discourseCategories.size} Discourse categories`);
+      }
+      
+    } catch (error) {
+      console.error('❌ Error loading Discourse metadata:', error.message);
+    }
+  }
+  
+  extractNewsTagsFromContent(content, summary) {
+    const tags = [];
+    const text = `${content.title} ${summary} ${content.content}`.toLowerCase();
+    
+    // Technology tags
+    if (text.includes('ai') || text.includes('artificial intelligence')) tags.push('ai');
+    if (text.includes('cyber') || text.includes('security') || text.includes('hack')) tags.push('cybersecurity');
+    if (text.includes('data') || text.includes('privacy')) tags.push('privacy');
+    if (text.includes('cloud')) tags.push('cloud');
+    if (text.includes('software') || text.includes('development')) tags.push('software');
+    if (text.includes('blockchain') || text.includes('crypto')) tags.push('blockchain');
+    if (text.includes('quantum')) tags.push('quantum');
+    if (text.includes('5g') || text.includes('network')) tags.push('networking');
+    
+    // Government/Policy tags
+    if (text.includes('government') || text.includes('federal')) tags.push('government');
+    if (text.includes('defense') || text.includes('military')) tags.push('defense');
+    if (text.includes('policy') || text.includes('regulation')) tags.push('policy');
+    if (text.includes('china') || text.includes('russia') || text.includes('iran')) tags.push('geopolitics');
+    
+    // Threat tags
+    if (text.includes('ransomware')) tags.push('ransomware');
+    if (text.includes('breach') || text.includes('leak')) tags.push('data-breach');
+    if (text.includes('vulnerability') || text.includes('cve')) tags.push('vulnerability');
+    if (text.includes('malware') || text.includes('virus')) tags.push('malware');
+    
+    // Agency/Organization tags
+    if (text.includes('fbi') || text.includes('cia') || text.includes('nsa')) tags.push('intelligence');
+    if (text.includes('ice') || text.includes('immigration')) tags.push('immigration');
+    if (text.includes('dod') || text.includes('pentagon')) tags.push('defense');
+    
+    // Remove duplicates
+    return [...new Set(tags)];
+  }
+  
+  selectDiscourseCategory(content, summary) {
+    const text = `${content.title} ${summary}`.toLowerCase();
+    
+    // Category mapping (adjust IDs based on your Discourse setup)
+    if (text.includes('cyber') || text.includes('security') || text.includes('hack')) return 7; // Cybersecurity
+    if (text.includes('ai') || text.includes('machine learning')) return 8; // AI/ML
+    if (text.includes('policy') || text.includes('regulation')) return 9; // Policy
+    if (text.includes('defense') || text.includes('military')) return 10; // Defense
+    
+    return 5; // Default to general news category
   }
 
   async stopListening() {

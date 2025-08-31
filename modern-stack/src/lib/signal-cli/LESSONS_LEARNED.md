@@ -115,11 +115,23 @@ registerCommand('!help', async (message) => {
 **Problem**: User specifically requires GPT-5-mini model (not GPT-4).
 
 **Solution**: Explicitly configure model in all OpenAI calls:
+
+**Important API Changes for GPT-5**:
+- Use `max_completion_tokens` instead of `max_tokens` 
+- **GPT-5 is a thinking model - requires minimum 600-650 tokens for processing**
+- Recommended token settings:
+  - General AI responses: 700-800 tokens
+  - Summarization tasks: 800-900 tokens  
+  - Simple title generation: 650 tokens minimum
+- Can optionally set `temperature` (0.0-1.0) for response creativity
+- Error: "400 Unsupported parameter: 'max_tokens' is not supported with this model"
+- Error: "400 Could not finish the message because max_tokens or model output limit was reached" - increase token limit
 ```typescript
 const response = await openai.chat.completions.create({
   model: 'gpt-5-mini', // Always use gpt-5-mini as specified
   messages: [...],
-  max_tokens: 500
+  max_completion_tokens: 500, // GPT-5 uses max_completion_tokens instead of max_tokens
+  temperature: 0.7 // Optional: adjust for creativity (0.0 = deterministic, 1.0 = creative)
 });
 ```
 

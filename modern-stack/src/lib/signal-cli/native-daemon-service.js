@@ -217,7 +217,7 @@ class NativeSignalBotService extends EventEmitter {
       description: 'Show available commands',
       execute: async (context) => {
         const commandsByCategory = {
-          '🔧 Core': ['help', 'ping', 'ai', 'lai', 'summarize', 'msummarize', 'zeroeth'],
+          '🔧 Core': ['help', 'ping', 'ai', 'lai', 'summarize', 'tldr', 'zeroeth'],
           '❓ Q&A': ['q', 'question', 'questions', 'answer', 'solved'],
           '👥 Community': ['groups', 'join', 'leave', 'groupinfo', 'members', 'adduser', 'removeuser', 'invite'],
           '📚 Information': ['wiki', 'forum', 'events', 'resources', 'faq', 'docs', 'links'],
@@ -297,7 +297,7 @@ class NativeSignalBotService extends EventEmitter {
             { keywords: ['events', 'meetups', 'meetings'], command: 'events' },
             { keywords: ['members', 'who is in', 'list members'], command: 'members' },
             { keywords: ['faq', 'frequently asked'], command: 'faq' },
-            { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'msummarize' }
+            { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' }
           ];
           
           // Check if query matches any command mapping
@@ -407,7 +407,7 @@ class NativeSignalBotService extends EventEmitter {
             { keywords: ['events', 'meetups', 'meetings'], command: 'events' },
             { keywords: ['members', 'who is in', 'list members'], command: 'members' },
             { keywords: ['faq', 'frequently asked'], command: 'faq' },
-            { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'msummarize' }
+            { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' }
           ];
           
           // Check if query matches any command mapping
@@ -491,9 +491,18 @@ class NativeSignalBotService extends EventEmitter {
     }
     
     if (this.aiEnabled && this.openAiApiKey) {
-      // Add summarize command
+      // Add message summarization command (with parameters)
       commands.set('summarize', {
         name: 'summarize',
+        description: 'Summarize recent group messages (-m <count> or -h <hours>)',
+        execute: async (context) => {
+          return this.summarizeGroupMessages(context);
+        }
+      });
+      
+      // Add URL content summarization command  
+      commands.set('tldr', {
+        name: 'tldr',
         description: 'Summarize URL content with AI',
         execute: async (context) => {
           const { OpenAI } = require('openai');
@@ -501,7 +510,7 @@ class NativeSignalBotService extends EventEmitter {
           
           const url = context.args.join(' ');
           if (!url || !url.startsWith('http')) {
-            return '❌ Please provide a valid URL to summarize';
+            return '❌ Usage: !tldr <url>\n\nProvide a valid URL to summarize its content.';
           }
           
           try {
@@ -525,15 +534,6 @@ class NativeSignalBotService extends EventEmitter {
           } catch (error) {
             return `❌ Failed to summarize: ${error.message}`;
           }
-        }
-      });
-      
-      // Add group message summarization command  
-      commands.set('msummarize', {
-        name: 'msummarize',
-        description: 'Summarize recent group messages',
-        execute: async (context) => {
-          return this.summarizeGroupMessages(context);
         }
       });
     }
@@ -792,8 +792,9 @@ class NativeSignalBotService extends EventEmitter {
     
     try {
       const context = {
-        sender: message.sourceNumber,
+        sender: message.sourceName || message.sourceNumber, // Display name first, phone as fallback
         senderName: message.sourceName,
+        sourceNumber: message.sourceNumber, // Keep phone number for admin functions
         args: args,
         groupId: message.groupId,
         isGroup: !!message.groupId,
@@ -1690,7 +1691,6 @@ class NativeSignalBotService extends EventEmitter {
     const result = Math.random() < 0.5 ? 'heads' : 'tails';
     return `🪙 **Coin Flip**: ${result.toUpperCase()}!`; 
   }
-  async handleTldr(context) { return 'URL summarization placeholder - !tldr <url>'; }
   async handleWayback(context) { return 'Wayback Machine placeholder - !wayback <url> [date]'; }
 
   // Forum Plugin Handlers
@@ -2287,20 +2287,58 @@ class NativeSignalBotService extends EventEmitter {
   }
   
   async summarizeGroupMessages(context) {
-    const { groupId } = context;
+    const { groupId, args } = context;
     
     if (!groupId) {
-      return '❌ This command only works in group chats. Use !summarize <url> for URL summarization.';
+      return '❌ This command only works in group chats. Use !tldr <url> for URL summarization.';
     }
     
     const history = this.messageHistory.get(groupId) || [];
     
     if (history.length < 3) {
-      return '❌ Not enough recent messages to summarize. Need at least 3 messages.';
+      return '❌ Not enough recent messages to summarize. Need at least 3 messages.\n\n**Usage:**\n• !summarize - Last 20 messages\n• !summarize -m 30 - Last 30 messages\n• !summarize -h 2 - Messages from last 2 hours';
     }
     
-    // Get recent messages (last 20 or all if fewer)
-    const recentMessages = history.slice(-20);
+    // Parse arguments for -m (message count) or -h (hours)
+    let messageCount = 20; // Default
+    let hoursBack = null;
+    let maxMessages = 100; // Safety limit
+    let maxHours = 24; // Safety limit
+    
+    // Parse arguments
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-m' && i + 1 < args.length) {
+        const count = parseInt(args[i + 1]);
+        if (!isNaN(count) && count > 0) {
+          messageCount = Math.min(count, maxMessages); // Enforce max limit
+        }
+      } else if (args[i] === '-h' && i + 1 < args.length) {
+        const hours = parseFloat(args[i + 1]);
+        if (!isNaN(hours) && hours > 0) {
+          hoursBack = Math.min(hours, maxHours); // Enforce max limit
+        }
+      }
+    }
+    
+    let recentMessages;
+    
+    if (hoursBack) {
+      // Filter by time
+      const cutoffTime = Date.now() - (hoursBack * 60 * 60 * 1000);
+      recentMessages = history.filter(msg => msg.timestamp > cutoffTime);
+      
+      if (recentMessages.length === 0) {
+        return `❌ No messages found in the last ${hoursBack} hour${hoursBack !== 1 ? 's' : ''}.`;
+      }
+      
+      // Still apply message count limit for safety
+      if (recentMessages.length > maxMessages) {
+        recentMessages = recentMessages.slice(-maxMessages);
+      }
+    } else {
+      // Get recent messages by count
+      recentMessages = history.slice(-messageCount);
+    }
     
     // Check if we have AI capability (prefer local AI for privacy)
     const hasAi = this.useLocalAiForSummarization || (this.aiEnabled && this.openAiApiKey);
@@ -2365,12 +2403,20 @@ class NativeSignalBotService extends EventEmitter {
       }
       
       const participants = [...new Set(recentMessages.map(m => m.sender))].join(', ');
-      const messageCount = recentMessages.length;
+      const actualMessageCount = recentMessages.length;
       
       const summaryText = aiResponse.choices[0].message.content;
       const aiPrefix = this.useLocalAiForSummarization ? 'LocalAI:' : 'OpenAI:';
       
-      return `📝 **Group Chat Summary** (${messageCount} recent messages)\n\n👥 **Participants:** ${participants}\n\n${aiPrefix} ${summaryText}`;
+      // Build summary description
+      let summaryDesc;
+      if (hoursBack) {
+        summaryDesc = `${actualMessageCount} messages from last ${hoursBack} hour${hoursBack !== 1 ? 's' : ''}`;
+      } else {
+        summaryDesc = `last ${actualMessageCount} messages`;
+      }
+      
+      return `📝 **Group Chat Summary** (${summaryDesc})\n\n👥 **Participants:** ${participants}\n\n${aiPrefix} ${summaryText}`;
       
     } catch (error) {
       console.error('AI summarization failed:', error);
@@ -2515,20 +2561,20 @@ class NativeSignalBotService extends EventEmitter {
       }
       
       // Return success message even if Discourse posting failed (question is stored locally)
-      let response = `❓ Question ${questionId} Posted\n\n` +
-                    `📝 Title: ${title}\n` +
-                    `👤 Asked by: ${sender}\n` +
-                    `⏰ Time: ${new Date().toLocaleTimeString()}`;
+      let response = `❓ **Question ${questionId} Posted**\n\n` +
+                    `**Title:** ${title}\n` +
+                    `**Asked by:** ${sender}\n` +
+                    `**Time:** ${new Date().toLocaleTimeString()}`;
       
       if (forumLink) {
-        response += forumLink;
+        response += `\n**Forum:** ${forumLink}`;
       } else if (discourseError) {
         response += `\n⚠️ Forum posting temporarily unavailable`;
         console.log('⚠️ Question stored locally only due to forum error');
       }
       
-      response += `\n\n💬 Others can answer with: !answer ${questionId} <your answer>\n` +
-                 `✅ Mark as solved with: !solved ${questionId}`;
+      response += `\n\n**Others can answer with:** !answer ${questionId} <your answer>\n` +
+                 `**Mark as solved with:** !solved ${questionId}`;
       
       return response;
              

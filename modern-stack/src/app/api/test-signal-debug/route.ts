@@ -1,8 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { matrixService } from '@/lib/matrix';
+import { requireAuth, logSecurityEvent, isDangerousOperationsAllowed } from '@/lib/api-auth';
 
 export async function GET(request: NextRequest) {
   try {
+    // SECURITY: Require admin authentication for debug endpoints
+    const authResult = await requireAuth(request, 'admin');
+    if (authResult instanceof NextResponse) {
+      return authResult;
+    }
+    
+    // SECURITY: Only allow debug operations in development
+    if (!isDangerousOperationsAllowed()) {
+      await logSecurityEvent(
+        'debug_endpoint_blocked',
+        authResult.user.id,
+        'Debug endpoint access blocked in production',
+        'warning'
+      );
+      return NextResponse.json({
+        success: false,
+        error: 'Debug endpoints not available in production'
+      }, { status: 403 });
+    }
+    
+    // SECURITY: Log debug access
+    await logSecurityEvent(
+      'debug_endpoint_accessed',
+      authResult.user.id,
+      'Signal debug endpoint accessed',
+      'info'
+    );
     console.log('🧪 Starting Signal debug test...');
     
     // Get query params
@@ -20,17 +48,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       testParams: {
-        phoneNumber,
-        message: testMessage,
+        phoneNumber: phoneNumber.replace(/\d(?=\d{4})/g, '*'), // Mask phone number
+        message: testMessage.substring(0, 50) + '...', // Truncate message
       },
       result,
       debug: {
         matrixConfigured: matrixService.isConfigured(),
         environment: {
-          signalBridgeRoomId: process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID,
-          signalBotUsername: process.env.MATRIX_SIGNAL_BOT_USERNAME,
-          signalBridgeDelay: process.env.SIGNAL_BRIDGE_BOT_RESPONSE_DELAY,
-          matrixDomain: process.env.MATRIX_DOMAIN,
+          // SECURITY: Mask sensitive environment variables
+          signalBridgeRoomId: process.env.MATRIX_SIGNAL_BRIDGE_ROOM_ID ? '[SET]' : '[NOT_SET]',
+          signalBotUsername: process.env.MATRIX_SIGNAL_BOT_USERNAME ? '[SET]' : '[NOT_SET]',
+          signalBridgeDelay: process.env.SIGNAL_BRIDGE_BOT_RESPONSE_DELAY || 'default',
+          matrixDomain: process.env.MATRIX_DOMAIN ? '[SET]' : '[NOT_SET]',
         }
       }
     });

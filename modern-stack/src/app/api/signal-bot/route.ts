@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SignalMatrixIntegration } from '@/lib/signal-cli/integration';
+import { requireAuth, logSecurityEvent, checkRateLimit } from '@/lib/api-auth';
 
 // Store the integration instance
 let signalIntegration: SignalMatrixIntegration | null = null;
 
 export async function GET(request: NextRequest) {
   try {
+    // SECURITY: Require admin authentication for bot status
+    const authResult = await requireAuth(request, 'admin');
+    if (authResult instanceof NextResponse) {
+      return authResult;
+    }
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action');
 
@@ -32,6 +38,27 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    // SECURITY: Require admin authentication for bot control
+    const authResult = await requireAuth(request, 'admin');
+    if (authResult instanceof NextResponse) {
+      return authResult;
+    }
+    
+    // SECURITY: Rate limiting for bot operations
+    const rateLimit = await checkRateLimit(request, `signal-bot:${authResult.user.id}`, 10, 60000);
+    if (!rateLimit.success) {
+      await logSecurityEvent(
+        'rate_limit_exceeded',
+        authResult.user.id,
+        'Signal bot rate limit exceeded',
+        'warning'
+      );
+      return NextResponse.json({
+        success: false,
+        error: 'Rate limit exceeded. Try again later.'
+      }, { status: 429 });
+    }
+    
     const body = await request.json();
     const { action } = body;
 
@@ -42,6 +69,14 @@ export async function POST(request: NextRequest) {
           error: 'Signal bot is already running'
         });
       }
+
+      // SECURITY: Log bot start attempt
+      await logSecurityEvent(
+        'signal_bot_start',
+        authResult.user.id,
+        'Signal bot start requested',
+        'info'
+      );
 
       // Check configuration
       const phoneNumber = process.env.SIGNAL_BOT_PHONE_NUMBER;
@@ -62,6 +97,14 @@ export async function POST(request: NextRequest) {
 
       await signalIntegration.start();
 
+      // SECURITY: Log successful bot start
+      await logSecurityEvent(
+        'signal_bot_started',
+        authResult.user.id,
+        'Signal bot started successfully',
+        'info'
+      );
+
       return NextResponse.json({
         success: true,
         message: 'Signal bot started successfully'
@@ -76,8 +119,24 @@ export async function POST(request: NextRequest) {
         });
       }
 
+      // SECURITY: Log bot stop
+      await logSecurityEvent(
+        'signal_bot_stop',
+        authResult.user.id,
+        'Signal bot stop requested',
+        'info'
+      );
+
       await signalIntegration.stop();
       signalIntegration = null;
+
+      // SECURITY: Log successful bot stop
+      await logSecurityEvent(
+        'signal_bot_stopped',
+        authResult.user.id,
+        'Signal bot stopped successfully',
+        'info'
+      );
 
       return NextResponse.json({
         success: true,

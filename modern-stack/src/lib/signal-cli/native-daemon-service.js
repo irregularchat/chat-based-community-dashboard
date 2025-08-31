@@ -217,7 +217,7 @@ class NativeSignalBotService extends EventEmitter {
       description: 'Show available commands',
       execute: async (context) => {
         const commandsByCategory = {
-          '🔧 Core': ['help', 'ping', 'ai', 'summarize', 'msummarize', 'zeroeth'],
+          '🔧 Core': ['help', 'ping', 'ai', 'lai', 'summarize', 'msummarize', 'zeroeth'],
           '❓ Q&A': ['q', 'question', 'questions', 'answer', 'solved'],
           '👥 Community': ['groups', 'join', 'leave', 'groupinfo', 'members', 'adduser', 'removeuser', 'invite'],
           '📚 Information': ['wiki', 'forum', 'events', 'resources', 'faq', 'docs', 'links'],
@@ -361,6 +361,136 @@ class NativeSignalBotService extends EventEmitter {
         }
       });
       
+    }
+    
+    // Add Local AI command (!lai) if local AI is configured
+    if (this.localAiUrl && this.localAiApiKey) {
+      commands.set('lai', {
+        name: 'lai',
+        description: 'Context-aware Local AI responses (privacy-focused)',
+        execute: async (context) => {
+          const userQuery = context.args.join(' ') || 'Hello';
+          
+          // Zeroeth Law Implementation - Context Awareness
+          let contextInfo = '';
+          let responseMode = 'general'; // 'command', 'community', or 'general'
+          
+          // Define AI prefix based on context
+          const getAiPrefix = (mode) => mode === 'command' ? 'LocalAI [Commands]:' : mode === 'community' ? 'LocalAI [Community]:' : 'LocalAI:';
+          
+          // 1. Check if asking about bot commands
+          const commandKeywords = ['command', 'cmd', 'help', 'how to', 'how do i', 'what does !', 'list commands'];
+          const isCommandQuery = commandKeywords.some(keyword => userQuery.toLowerCase().includes(keyword));
+          
+          if (isCommandQuery) {
+            responseMode = 'command';
+            contextInfo = `User is asking about bot commands. Available commands: ${Array.from(this.plugins.keys()).join(', ')}`;
+          }
+          
+          // 2. Check if asking about IrregularChat community
+          const communityKeywords = ['irregular', 'community', 'irc', 'wiki', 'forum', 'member', 'rule', 'guideline', 'event', 'meetup', 'chatham', 'coi'];
+          const isCommunityQuery = communityKeywords.some(keyword => userQuery.toLowerCase().includes(keyword));
+          
+          if (isCommunityQuery && !isCommandQuery) {
+            responseMode = 'community';
+            contextInfo = `User is asking about the IrregularChat community. ${this.communityContext.description} Rules: ${this.communityContext.rules.join('; ')}`;
+          }
+          
+          // 3. Check if AI should execute a command internally
+          // Map of keywords to command names for internal execution
+          const commandMappings = [
+            { keywords: ['show me commands', 'list commands', 'what commands', 'available commands', 'help'], command: 'help' },
+            { keywords: ['what groups', 'list groups', 'show groups', 'available rooms'], command: 'groups' },
+            { keywords: ['rules', 'laws', 'zeroeth', 'zeroth', 'principles'], command: 'zeroeth' },
+            { keywords: ['wiki', 'documentation', 'docs'], command: 'wiki' },
+            { keywords: ['forum posts', 'latest posts', 'discussions'], command: 'flatest' },
+            { keywords: ['events', 'meetups', 'meetings'], command: 'events' },
+            { keywords: ['members', 'who is in', 'list members'], command: 'members' },
+            { keywords: ['faq', 'frequently asked'], command: 'faq' },
+            { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'msummarize' }
+          ];
+          
+          // Check if query matches any command mapping
+          for (const mapping of commandMappings) {
+            const matches = mapping.keywords.some(kw => userQuery.toLowerCase().includes(kw));
+            if (matches) {
+              // Execute the command internally
+              const cmd = this.plugins.get(mapping.command);
+              if (cmd) {
+                const cmdContext = { ...context, args: [] };
+                const result = await cmd.execute(cmdContext);
+                return `${getAiPrefix(responseMode)} ${result}`;
+              }
+            }
+          }
+          
+          // Also check for direct command execution requests
+          const commandPattern = /^(run|execute|do|perform) !?(\w+)(?:\s+(.*))?$/i;
+          const match = userQuery.match(commandPattern);
+          if (match) {
+            const cmdName = match[2].toLowerCase();
+            const cmdArgs = match[3] ? match[3].split(' ') : [];
+            const cmd = this.plugins.get(cmdName);
+            if (cmd) {
+              const cmdContext = { ...context, args: cmdArgs };
+              const result = await cmd.execute(cmdContext);
+              return `LocalAI: Executed !${cmdName}:\n\n${result}`;
+            }
+          }
+          
+          // 4. Check specifically for zeroeth law query
+          if (userQuery.toLowerCase().includes('zeroeth') || userQuery.toLowerCase().includes('zeroth')) {
+            return await this.handleZeroeth(context);
+          }
+          
+          // Build the AI prompt with context
+          const systemPrompt = responseMode === 'command' 
+            ? 'You are a helpful Signal bot assistant. Help users understand and use bot commands. Be concise and specific.'
+            : responseMode === 'community'
+            ? `You are the IrregularChat community assistant. Help users with community-related questions. Reference the wiki (${this.wikiUrl}) and forum (${this.forumUrl}) when appropriate. IrregularChat is a privacy-focused community.`
+            : 'You are a helpful AI assistant. Provide clear, concise responses.';
+          
+          const messages = [
+            { role: 'system', content: systemPrompt }
+          ];
+          
+          if (contextInfo) {
+            messages.push({ role: 'system', content: `Context: ${contextInfo}` });
+          }
+          
+          messages.push({ role: 'user', content: userQuery });
+          
+          // Use Local AI instead of OpenAI
+          try {
+            const response = await fetch(`${this.localAiUrl}/v1/chat/completions`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.localAiApiKey}`
+              },
+              body: JSON.stringify({
+                model: this.localAiModel,
+                messages: messages,
+                max_tokens: 800
+              })
+            });
+
+            if (!response.ok) {
+              throw new Error(`Local AI request failed: ${response.status} ${response.statusText}`);
+            }
+
+            const aiResponse = await response.json();
+            return `${getAiPrefix(responseMode)} ${aiResponse.choices[0].message.content}`;
+            
+          } catch (error) {
+            console.error('Local AI request failed:', error);
+            return `LocalAI: Sorry, the local AI service is currently unavailable. Error: ${error.message}`;
+          }
+        }
+      });
+    }
+    
+    if (this.aiEnabled && this.openAiApiKey) {
       // Add summarize command
       commands.set('summarize', {
         name: 'summarize',

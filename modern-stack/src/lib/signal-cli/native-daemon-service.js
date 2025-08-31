@@ -165,6 +165,9 @@ class NativeSignalBotService extends EventEmitter {
       { name: 'a', description: 'Answer a question (short)', handler: this.handleAnswer.bind(this) },
       { name: 'solved', description: 'Mark question as solved', handler: this.handleSolved.bind(this) },
       
+      // Advanced Search Command
+      { name: 'search', description: 'Advanced AI-powered search across all data', handler: this.handleAdvancedSearch.bind(this) },
+      
       // Fun/Social Plugin Commands (6)
       { name: 'joke', description: 'Random joke', handler: this.handleJoke.bind(this) },
       { name: 'quote', description: 'Random quote', handler: this.handleQuote.bind(this) },
@@ -1221,6 +1224,220 @@ class NativeSignalBotService extends EventEmitter {
              `https://irregularpedia.org/wiki/Special:Search?search=${encodeURIComponent(searchTerm)}\n\n` +
              `Browse all pages:\n` +
              `https://irregularpedia.org/wiki/Special:AllPages`;
+    }
+  }
+
+  async handleAdvancedSearch(context) {
+    const { args, groupId, sender } = context;
+    
+    if (!args || args.length === 0) {
+      return '🔍 Usage: !search <query>\n\n' +
+             'Advanced AI-powered search across:\n' +
+             '• Forum posts and discussions\n' +
+             '• Wiki articles and documentation\n' +
+             '• Q&A database\n' +
+             '• Message history (last 50 per group)\n' +
+             '• Community resources\n\n' +
+             'Example: !search how to setup authentication';
+    }
+    
+    const query = args.join(' ').trim();
+    console.log(`🔍 Advanced search for: "${query}" by ${sender}`);
+    
+    try {
+      // Collect data from multiple sources
+      const searchResults = {
+        forum: [],
+        wiki: [],
+        questions: [],
+        messages: [],
+        resources: []
+      };
+      
+      // 1. Search forum posts (if API configured)
+      if (this.discourseApiUrl && this.discourseApiKey) {
+        try {
+          const forumUrl = `${this.discourseApiUrl}/search.json?q=${encodeURIComponent(query)}`;
+          const forumResponse = await fetch(forumUrl, {
+            headers: {
+              'Api-Key': this.discourseApiKey,
+              'Api-Username': this.discourseApiUsername
+            }
+          });
+          
+          if (forumResponse.ok) {
+            const forumData = await forumResponse.json();
+            const posts = forumData.posts || [];
+            searchResults.forum = posts.slice(0, 3).map(post => ({
+              type: 'forum',
+              title: post.topic_title || 'Forum Post',
+              content: post.blurb || post.excerpt || '',
+              url: `https://forum.irregularchat.com/t/${post.topic_slug}/${post.topic_id}`
+            }));
+          }
+        } catch (error) {
+          console.error('Forum search error:', error);
+        }
+      }
+      
+      // 2. Search wiki
+      try {
+        const wikiUrl = `https://irregularpedia.org/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=3`;
+        const wikiResponse = await fetch(wikiUrl);
+        
+        if (wikiResponse.ok) {
+          const wikiData = await wikiResponse.json();
+          const articles = wikiData.query?.search || [];
+          searchResults.wiki = articles.map(article => ({
+            type: 'wiki',
+            title: article.title,
+            content: article.snippet?.replace(/<[^>]*>/g, '').substring(0, 100) || '',
+            url: `https://irregularpedia.org/wiki/${encodeURIComponent(article.title.replace(/ /g, '_'))}`
+          }));
+        }
+      } catch (error) {
+        console.error('Wiki search error:', error);
+      }
+      
+      // 3. Search Q&A database
+      const questionMatches = Array.from(this.questions.values())
+        .filter(q => {
+          const searchLower = query.toLowerCase();
+          return q.question.toLowerCase().includes(searchLower) ||
+                 q.title.toLowerCase().includes(searchLower) ||
+                 q.answers.some(a => a.text.toLowerCase().includes(searchLower));
+        })
+        .slice(0, 3)
+        .map(q => ({
+          type: 'question',
+          title: q.title,
+          content: q.question.substring(0, 100),
+          id: q.id,
+          solved: q.solved,
+          answers: q.answers.length
+        }));
+      searchResults.questions = questionMatches;
+      
+      // 4. Search recent message history (privacy-sensitive)
+      if (groupId && this.messageHistory.has(groupId)) {
+        const messages = this.messageHistory.get(groupId) || [];
+        const messageMatches = messages
+          .filter(msg => msg.message.toLowerCase().includes(query.toLowerCase()))
+          .slice(-3)
+          .map(msg => ({
+            type: 'message',
+            sender: msg.sender.substring(0, 10) + '***', // Partial anonymization
+            content: msg.message.substring(0, 80),
+            time: this.getRelativeTime(msg.timestamp)
+          }));
+        searchResults.messages = messageMatches;
+      }
+      
+      // 5. Prepare context for AI processing (using local AI for privacy)
+      const allResults = [
+        ...searchResults.forum,
+        ...searchResults.wiki,
+        ...searchResults.questions,
+        ...searchResults.messages
+      ];
+      
+      if (allResults.length === 0) {
+        return `🔍 No results found for: "${query}"\n\n` +
+               `Try:\n` +
+               `• Different keywords\n` +
+               `• !wiki for wiki search\n` +
+               `• !fsearch for forum search\n` +
+               `• !questions to see Q&A`;
+      }
+      
+      // 6. Use Local AI to synthesize results (for privacy)
+      let aiSummary = '';
+      if (this.localAiUrl && this.localAiApiKey) {
+        try {
+          const contextData = {
+            query: query,
+            results: allResults.map(r => ({
+              type: r.type,
+              title: r.title || '',
+              content: r.content || ''
+            }))
+          };
+          
+          const aiResponse = await fetch(`${this.localAiUrl}/v1/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${this.localAiApiKey}`
+            },
+            body: JSON.stringify({
+              model: this.localAiModel,
+              messages: [{
+                role: 'system',
+                content: 'You are a helpful search assistant. Synthesize the search results into a concise, useful response. Focus on answering the user\'s query based on the provided context. Keep it under 150 words.'
+              }, {
+                role: 'user',
+                content: `Query: "${query}"\n\nSearch Results:\n${JSON.stringify(contextData.results, null, 2)}\n\nProvide a helpful synthesis of these results.`
+              }],
+              max_tokens: 200,
+              temperature: 0.3
+            })
+          });
+          
+          if (aiResponse.ok) {
+            const aiData = await aiResponse.json();
+            aiSummary = aiData.choices[0]?.message?.content || '';
+          }
+        } catch (error) {
+          console.error('Local AI processing error:', error);
+        }
+      }
+      
+      // 7. Format response
+      let response = `🔍 Search Results for: "${query}"\n\n`;
+      
+      // Add AI summary if available
+      if (aiSummary) {
+        response += `LocalAI Summary:\n${aiSummary}\n\n───────────────\n\n`;
+      }
+      
+      // Add categorized results
+      if (searchResults.wiki.length > 0) {
+        response += `📚 Wiki Articles:\n`;
+        searchResults.wiki.forEach(r => {
+          response += `• ${r.title}\n  ${r.url}\n`;
+        });
+        response += '\n';
+      }
+      
+      if (searchResults.forum.length > 0) {
+        response += `💬 Forum Posts:\n`;
+        searchResults.forum.forEach(r => {
+          response += `• ${r.title}\n  ${r.url}\n`;
+        });
+        response += '\n';
+      }
+      
+      if (searchResults.questions.length > 0) {
+        response += `❓ Questions:\n`;
+        searchResults.questions.forEach(q => {
+          const status = q.solved ? '✅' : '❓';
+          response += `${status} ${q.id}: ${q.title} (${q.answers} answers)\n`;
+        });
+        response += '\n';
+      }
+      
+      if (searchResults.messages.length > 0) {
+        response += `💭 Recent Messages:\n`;
+        searchResults.messages.forEach(m => {
+          response += `• ${m.time} - ${m.content}...\n`;
+        });
+      }
+      
+      return response;
+      
+    } catch (error) {
+      console.error('Advanced search error:', error);
+      return `❌ Search error occurred. Please try again.\n\nYou can also try:\n• !wiki ${query}\n• !fsearch ${query}`;
     }
   }
 

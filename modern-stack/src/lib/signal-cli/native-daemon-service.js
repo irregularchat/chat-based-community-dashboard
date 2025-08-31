@@ -11,6 +11,8 @@ const net = require('net');
 const EventEmitter = require('events');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
+const cheerio = require('cheerio');
 
 class NativeSignalBotService extends EventEmitter {
   constructor(config) {
@@ -42,6 +44,24 @@ class NativeSignalBotService extends EventEmitter {
     this.questions = new Map(); // questionId -> {id, asker, question, title, answers, solved, timestamp, groupId, discourseTopicId}
     this.questionCounter = 0;
     this.userQuestions = new Map(); // userPhone -> [questionIds]
+    
+    // URL Cleaner System
+    this.cleanedUrls = new Map(); // timestamp -> {originalUrl, cleanedUrl, platform, trackersRemoved, user, groupId}
+    this.cleanerStats = {
+      totalCleaned: 0,
+      trackersSaved: 0,
+      platforms: new Map(), // platform -> count
+      dailyCounts: new Map() // date -> count
+    };
+    
+    // News Processing System
+    this.processedNews = new Map(); // url -> {timestamp, title, summary, discourseTopicId, bypassLinks}
+    this.newsStats = {
+      totalProcessed: 0,
+      successfulPosts: 0,
+      failedPosts: 0,
+      dailyCounts: new Map() // date -> count
+    };
     
     // Onboarding/Request System
     this.pendingRequests = new Map(); // phoneNumber -> {timestamp, groupId, requester, timeoutId}
@@ -138,7 +158,6 @@ class NativeSignalBotService extends EventEmitter {
       { name: 'calc', description: 'Calculator', handler: this.handleCalc.bind(this) },
       { name: 'random', description: 'Random number', handler: this.handleRandom.bind(this) },
       { name: 'flip', description: 'Flip coin', handler: this.handleFlip.bind(this) },
-      { name: 'tldr', description: 'Summarize URL content', handler: this.handleTldr.bind(this) },
       { name: 'wayback', description: 'Archive.org wayback lookup', handler: this.handleWayback.bind(this) },
       
       // Forum Plugin Commands (3)
@@ -217,7 +236,7 @@ class NativeSignalBotService extends EventEmitter {
       description: 'Show available commands',
       execute: async (context) => {
         const commandsByCategory = {
-          '🔧 Core': ['help', 'ping', 'ai', 'lai', 'summarize', 'tldr', 'zeroeth'],
+          '🔧 Core': ['help', 'ping', 'ai', 'lai', 'summarize', 'tldr', 'zeroeth', 'cleaner'],
           '❓ Q&A': ['q', 'question', 'questions', 'answer', 'solved'],
           '👥 Community': ['groups', 'join', 'leave', 'groupinfo', 'members', 'adduser', 'removeuser', 'invite'],
           '📚 Information': ['wiki', 'forum', 'events', 'resources', 'faq', 'docs', 'links'],
@@ -462,14 +481,14 @@ class NativeSignalBotService extends EventEmitter {
           
           // Use Local AI instead of OpenAI
           try {
-            const response = await fetch(`${this.localAiUrl}/v1/chat/completions`, {
+            const response = await fetch(`${this.localAiUrl}/api/v1/chat/completions`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${this.localAiApiKey}`
               },
               body: JSON.stringify({
-                model: this.localAiModel,
+                model: 'irregularbot:latest',
                 messages: messages,
                 max_tokens: 800
               })
@@ -480,7 +499,12 @@ class NativeSignalBotService extends EventEmitter {
             }
 
             const aiResponse = await response.json();
-            return `${getAiPrefix(responseMode)} ${aiResponse.choices[0].message.content}`;
+            let content = aiResponse.choices[0].message.content;
+            
+            // Clean up thinking process - remove <think>...</think> tags and content
+            content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+            
+            return `${getAiPrefix(responseMode)} ${content}`;
             
           } catch (error) {
             console.error('Local AI request failed:', error);
@@ -537,6 +561,105 @@ class NativeSignalBotService extends EventEmitter {
         }
       });
     }
+    
+    // URL Cleaner stats command
+    commands.set('cleaner', {
+      name: 'cleaner',
+      description: 'Show URL tracking removal statistics',
+      execute: async (context) => {
+        const today = new Date().toDateString();
+        const todayCount = this.cleanerStats.dailyCounts.get(today) || 0;
+        
+        let stats = `🧹 **URL Cleaner Statistics**\n\n`;
+        stats += `📊 **Overall Stats:**\n`;
+        stats += `• Total URLs cleaned: ${this.cleanerStats.totalCleaned}\n`;
+        stats += `• Trackers removed: ${this.cleanerStats.trackersSaved}\n`;
+        stats += `• Today: ${todayCount} URLs cleaned\n\n`;
+        
+        if (this.cleanerStats.platforms.size > 0) {
+          stats += `🌐 **Platforms Cleaned:**\n`;
+          const platformList = Array.from(this.cleanerStats.platforms.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10)
+            .map(([platform, count]) => `• ${platform}: ${count} URLs`)
+            .join('\n');
+          stats += platformList + '\n\n';
+        }
+        
+        stats += `💡 **Why remove trackers?**\n`;
+        stats += `Tracking parameters help social media platforms identify users across the web, `;
+        stats += `building detailed behavioral profiles for targeted advertising and data monetization.\n\n`;
+        
+        if (this.cleanedUrls.size > 0) {
+          stats += `🔄 **Recent Activity:** ${Math.min(3, this.cleanedUrls.size)} most recent cleanings\n`;
+          const recentUrls = Array.from(this.cleanedUrls.entries())
+            .sort((a, b) => b[0] - a[0])
+            .slice(0, 3);
+            
+          for (const [timestamp, data] of recentUrls) {
+            const timeAgo = Math.round((Date.now() - timestamp) / 60000);
+            stats += `• ${data.platform} - ${timeAgo}m ago (${data.trackersRemoved} trackers)\n`;
+          }
+        }
+        
+        return stats;
+      }
+    });
+    
+    // News processing stats command
+    commands.set('news', {
+      name: 'news',
+      description: 'Show news processing statistics and manually process URL',
+      execute: async (context) => {
+        const args = context.args;
+        
+        // If URL provided, manually process it
+        if (args.length > 0) {
+          const url = args.join(' ');
+          if (this.isNewsUrl(url)) {
+            await this.sendReply(context, `🔄 Processing news URL: ${url}`);
+            try {
+              await this.processNewsUrl(url, context);
+              return `✅ Successfully processed news URL!`;
+            } catch (error) {
+              return `❌ Error processing URL: ${error.message}`;
+            }
+          } else {
+            return `❌ URL doesn't match news patterns. Use !news to see stats.`;
+          }
+        }
+        
+        // Show statistics
+        const today = new Date().toDateString();
+        const todayCount = this.newsStats.dailyCounts.get(today) || 0;
+        
+        let stats = `📰 **News Processing Statistics**\n\n`;
+        stats += `📊 **Overall Stats:**\n`;
+        stats += `• Total news processed: ${this.newsStats.totalProcessed}\n`;
+        stats += `• Successful posts: ${this.newsStats.successfulPosts}\n`;
+        stats += `• Failed posts: ${this.newsStats.failedPosts}\n`;
+        stats += `• Today: ${todayCount} articles processed\n\n`;
+        
+        if (this.processedNews.size > 0) {
+          stats += `🔄 **Recent Activity:** ${Math.min(3, this.processedNews.size)} most recent articles\n`;
+          const recentNews = Array.from(this.processedNews.values())
+            .sort((a, b) => b.timestamp - a.timestamp)
+            .slice(0, 3);
+            
+          for (const news of recentNews) {
+            const timeAgo = Math.round((Date.now() - news.timestamp) / 60000);
+            const title = news.title.length > 50 ? news.title.substring(0, 50) + '...' : news.title;
+            stats += `• ${title} - ${timeAgo}m ago\n`;
+          }
+          stats += '\n';
+        }
+        
+        stats += `💡 **Usage:** Send \`!news <url>\` to manually process a news URL\n`;
+        stats += `🤖 **Auto-processing:** News URLs are automatically detected and processed`;
+        
+        return stats;
+      }
+    });
     
     return commands;
   }
@@ -675,6 +798,445 @@ class NativeSignalBotService extends EventEmitter {
     console.log('📬 Subscribed to message notifications');
   }
 
+  async checkAndCleanUrls(message) {
+    // URL regex to find URLs in the message
+    const urlRegex = /https?:\/\/[^\s]+/g;
+    const urls = message.message.match(urlRegex);
+    
+    if (!urls || urls.length === 0) return;
+    
+    const cleanedResults = [];
+    
+    for (const url of urls) {
+      const result = this.cleanUrl(url);
+      if (result.wasCleaned) {
+        cleanedResults.push(result);
+        
+        // Track statistics
+        this.cleanerStats.totalCleaned++;
+        this.cleanerStats.trackersSaved += result.trackersRemoved.length;
+        
+        // Update platform stats
+        const currentCount = this.cleanerStats.platforms.get(result.platform) || 0;
+        this.cleanerStats.platforms.set(result.platform, currentCount + 1);
+        
+        // Update daily stats
+        const today = new Date().toDateString();
+        const todayCount = this.cleanerStats.dailyCounts.get(today) || 0;
+        this.cleanerStats.dailyCounts.set(today, todayCount + 1);
+        
+        // Store cleaned URL data
+        this.cleanedUrls.set(Date.now() + Math.random(), {
+          originalUrl: url,
+          cleanedUrl: result.cleanedUrl,
+          platform: result.platform,
+          trackersRemoved: result.trackersRemoved.length,
+          user: message.sourceName || message.sourceNumber,
+          groupId: message.groupId
+        });
+        
+        // Cleanup old entries (keep last 100)
+        if (this.cleanedUrls.size > 100) {
+          const entries = Array.from(this.cleanedUrls.entries());
+          entries.sort((a, b) => a[0] - b[0]);
+          for (let i = 0; i < entries.length - 100; i++) {
+            this.cleanedUrls.delete(entries[i][0]);
+          }
+        }
+      }
+    }
+    
+    // If any URLs were cleaned, send the cleaned version
+    if (cleanedResults.length > 0) {
+      let response = `🧹 **Cleaned Tracking Links:** `;
+      response += cleanedResults.map(r => r.cleanedUrl).join(' ');
+      response += `\n\n💡 **Why?** Trackers help social media platforms illuminate networks and track user behavior across the web.`;
+      
+      await this.sendSignalMessage(message.groupId, response);
+    }
+  }
+  
+  cleanUrl(url) {
+    try {
+      const urlObj = new URL(url);
+      const originalUrl = url;
+      const trackersRemoved = [];
+      
+      // Define tracking parameters by platform
+      const trackingParams = {
+        // Universal tracking parameters
+        utm_source: 'UTM Source',
+        utm_medium: 'UTM Medium', 
+        utm_campaign: 'UTM Campaign',
+        utm_content: 'UTM Content',
+        utm_term: 'UTM Term',
+        gclid: 'Google Click ID',
+        fbclid: 'Facebook Click ID',
+        
+        // Social Media specific
+        igshid: 'Instagram Share ID',
+        igsh: 'Instagram Share',
+        si: 'Share Index',
+        
+        // LinkedIn
+        trackingId: 'LinkedIn Tracking',
+        lipi: 'LinkedIn Partner ID',
+        refId: 'LinkedIn Reference ID',
+        
+        // Twitter/X
+        ref_src: 'Twitter Source',
+        ref_url: 'Twitter Referrer',
+        
+        // YouTube
+        feature: 'YouTube Feature',
+        
+        // Reddit
+        share_id: 'Reddit Share ID',
+        
+        // Amazon
+        ref: 'Amazon Referral',
+        tag: 'Amazon Tag',
+        
+        // Microsoft
+        ocid: 'Microsoft Campaign ID',
+        
+        // Other common trackers
+        _hsenc: 'HubSpot Encrypted',
+        _hsmi: 'HubSpot Marketing',
+        mc_cid: 'MailChimp Campaign',
+        mc_eid: 'MailChimp Email',
+        rcm: 'Recommended Content Module'
+      };
+      
+      // Remove tracking parameters
+      const params = new URLSearchParams(urlObj.search);
+      for (const [param, description] of Object.entries(trackingParams)) {
+        if (params.has(param)) {
+          params.delete(param);
+          trackersRemoved.push(description);
+        }
+      }
+      
+      // Reconstruct URL without tracking parameters
+      urlObj.search = params.toString();
+      const cleanedUrl = urlObj.toString();
+      
+      // Determine platform
+      let platform = 'Unknown';
+      const hostname = urlObj.hostname.toLowerCase();
+      
+      if (hostname.includes('linkedin.com')) platform = 'LinkedIn';
+      else if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) platform = 'YouTube';
+      else if (hostname.includes('instagram.com')) platform = 'Instagram';
+      else if (hostname.includes('facebook.com') || hostname.includes('fb.com')) platform = 'Facebook';
+      else if (hostname.includes('twitter.com') || hostname.includes('x.com')) platform = 'Twitter/X';
+      else if (hostname.includes('reddit.com')) platform = 'Reddit';
+      else if (hostname.includes('amazon.com')) platform = 'Amazon';
+      else if (hostname.includes('tiktok.com')) platform = 'TikTok';
+      else if (hostname.includes('pinterest.com')) platform = 'Pinterest';
+      else platform = hostname.split('.').slice(-2).join('.');
+      
+      return {
+        originalUrl,
+        cleanedUrl,
+        platform,
+        trackersRemoved,
+        wasCleaned: trackersRemoved.length > 0
+      };
+      
+    } catch (error) {
+      console.error('Error cleaning URL:', error);
+      return {
+        originalUrl: url,
+        cleanedUrl: url,
+        platform: 'Unknown',
+        trackersRemoved: [],
+        wasCleaned: false
+      };
+    }
+  }
+
+  // News Processing System
+  async checkAndProcessNewsUrls(message) {
+    const urlRegex = /https?:\/\/[^\s]+/g;
+    const urls = message.message.match(urlRegex);
+    
+    if (!urls || urls.length === 0) return;
+    
+    for (const url of urls) {
+      if (this.isNewsUrl(url)) {
+        console.log(`📰 Detected news URL: ${url}`);
+        
+        // Check if we've already processed this URL recently (within 1 hour)
+        const existingProcessed = Array.from(this.processedNews.values())
+          .find(p => p.url === url && Date.now() - p.timestamp < 3600000);
+        
+        if (existingProcessed) {
+          console.log(`⏭️ URL already processed recently: ${url}`);
+          continue;
+        }
+        
+        try {
+          await this.processNewsUrl(url, message);
+        } catch (error) {
+          console.error(`❌ Error processing news URL ${url}:`, error.message);
+          this.newsStats.failedPosts++;
+        }
+      }
+    }
+  }
+  
+  isNewsUrl(url) {
+    const newsPatterns = [
+      // Major news outlets
+      /.*\.(reuters|ap|bbc|cnn|nytimes|washingtonpost|wsj|bloomberg|npr|pbs|abc|cbs|nbc|theguardian|usatoday|forbes|politico)\.com/i,
+      // Tech news
+      /.*\.(ars-technica|techcrunch|theverge|wired|engadget|gizmodo|zdnet|cnet|slashdot)\.com/i,
+      /.*\.(arstechnica|techrepublic|computerworld|infoworld|pcworld|macworld)\.com/i,
+      // Science & research
+      /.*\.(nature|science|newscientist|scientificamerican|mit|stanford|harvard)\.edu/i,
+      /.*\.(phys|eurekalert|sciencedaily|livescience)\.org/i,
+      // Cybersecurity
+      /.*\.(krebsonsecurity|darkreading|securityweek|infosecurity-magazine|bleepingcomputer|threatpost)\.com/i,
+      /.*\.(schneier|sans|owasp)\.org/i,
+      // Academic and government
+      /.*\.gov\/.*\/(news|press|announcement)/i,
+      /.*\.edu\/.*\/(news|press)/i,
+      // Common news path patterns  
+      /.*\/news\//i,
+      /.*\/articles?\//i,
+      /.*\/press[-_]?release/i,
+      /.*\/announcement/i
+    ];
+    
+    try {
+      const urlObj = new URL(url);
+      return newsPatterns.some(pattern => pattern.test(url) || pattern.test(urlObj.hostname));
+    } catch (error) {
+      return false;
+    }
+  }
+  
+  async processNewsUrl(url, message) {
+    console.log(`🔄 Processing news URL: ${url}`);
+    
+    try {
+      // Step 1: Clean URL and get bypass links
+      const cleanedUrl = this.cleanUrl(url).cleanedUrl;
+      const bypassLinks = this.generateBypassLinks(cleanedUrl);
+      
+      // Step 2: Scrape content
+      const content = await this.scrapeNewsContent(cleanedUrl, bypassLinks);
+      
+      if (!content || !content.title) {
+        console.log(`❌ Could not extract content from: ${url}`);
+        return;
+      }
+      
+      // Step 3: Generate AI summary
+      const summary = await this.generateNewsSummary(content);
+      
+      if (!summary) {
+        console.log(`❌ Could not generate summary for: ${url}`);
+        return;
+      }
+      
+      // Step 4: Post to Discourse
+      const discourseTopicId = await this.postToDiscourse(content, summary, cleanedUrl, bypassLinks);
+      
+      // Step 5: Store processed news
+      const processedData = {
+        url: cleanedUrl,
+        originalUrl: url,
+        timestamp: Date.now(),
+        title: content.title,
+        summary: summary,
+        discourseTopicId: discourseTopicId,
+        bypassLinks: bypassLinks,
+        user: message.sourceName || message.sourceNumber,
+        groupId: message.groupId
+      };
+      
+      this.processedNews.set(cleanedUrl, processedData);
+      this.newsStats.totalProcessed++;
+      if (discourseTopicId) this.newsStats.successfulPosts++;
+      else this.newsStats.failedPosts++;
+      
+      // Update daily stats
+      const today = new Date().toDateString();
+      const todayCount = this.newsStats.dailyCounts.get(today) || 0;
+      this.newsStats.dailyCounts.set(today, todayCount + 1);
+      
+      // Step 6: Send confirmation to Signal group
+      let response = `📰 **News Processed:** ${content.title}\n\n`;
+      response += `📝 **Summary:** ${summary}\n\n`;
+      response += `🔗 **Original:** ${cleanedUrl}\n`;
+      if (discourseTopicId) {
+        response += `💬 **Discussion:** ${this.discourseApiUrl}/t/${discourseTopicId}\n`;
+      }
+      response += `🔓 **Bypass:** ${bypassLinks.twelveft}`;
+      
+      await this.sendSignalMessage(message.groupId, response);
+      
+      console.log(`✅ Successfully processed news: ${content.title}`);
+      
+    } catch (error) {
+      console.error(`❌ Error processing news URL ${url}:`, error);
+      throw error;
+    }
+  }
+  
+  generateBypassLinks(url) {
+    const encoded = encodeURIComponent(url);
+    return {
+      twelveft: `https://12ft.io/proxy?q=${encoded}`,
+      archive: `https://web.archive.org/save/${url}`,
+      archiveView: `https://web.archive.org/web/${url}`
+    };
+  }
+  
+  async scrapeNewsContent(url, bypassLinks) {
+    const urls = [url, bypassLinks.twelveft, bypassLinks.archiveView];
+    
+    for (const attemptUrl of urls) {
+      try {
+        console.log(`🌐 Attempting to scrape: ${attemptUrl}`);
+        
+        const response = await axios.get(attemptUrl, {
+          timeout: 10000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; IrregularChatBot/1.0; +https://forum.irregularchat.com)'
+          }
+        });
+        
+        const $ = cheerio.load(response.data);
+        
+        // Extract title
+        let title = $('h1').first().text() || 
+                   $('title').text() || 
+                   $('meta[property="og:title"]').attr('content') ||
+                   $('meta[name="twitter:title"]').attr('content');
+        
+        // Extract content using multiple strategies
+        let content = '';
+        
+        // Try article tag first
+        const articleContent = $('article').text() || $('[role="article"]').text();
+        if (articleContent && articleContent.length > 200) {
+          content = articleContent;
+        } else {
+          // Try common content selectors
+          const contentSelectors = [
+            '.article-content', '.entry-content', '.post-content', 
+            '.story-content', '.article-body', '.content-body',
+            'main p', '.main-content p', '#content p'
+          ];
+          
+          for (const selector of contentSelectors) {
+            const selectorContent = $(selector).text();
+            if (selectorContent && selectorContent.length > content.length) {
+              content = selectorContent;
+            }
+          }
+        }
+        
+        // Clean up the content
+        content = content.replace(/\s+/g, ' ').trim();
+        title = title.replace(/\s+/g, ' ').trim();
+        
+        if (title && content && content.length > 100) {
+          console.log(`✅ Successfully scraped from: ${attemptUrl}`);
+          return { title, content };
+        }
+        
+      } catch (error) {
+        console.log(`❌ Failed to scrape ${attemptUrl}: ${error.message}`);
+        continue;
+      }
+    }
+    
+    console.log(`❌ Failed to scrape content from all sources for: ${url}`);
+    return null;
+  }
+  
+  async generateNewsSummary(content) {
+    if (!this.aiEnabled || !this.openAiApiKey) {
+      console.log('❌ AI not enabled, cannot generate summary');
+      return null;
+    }
+    
+    try {
+      const openai = require('openai');
+      const client = new openai({
+        apiKey: this.openAiApiKey
+      });
+      
+      const prompt = `Please provide a concise 1-paragraph summary of this news article for a technical community. Focus on key facts and implications. Keep it under 150 words.
+
+Title: ${content.title}
+
+Article content:
+${content.content.substring(0, 3000)}...`;
+      
+      const response = await client.chat.completions.create({
+        model: 'gpt-5-mini',
+        messages: [{
+          role: 'user',
+          content: prompt
+        }],
+        max_completion_tokens: 700, // GPT-5 requires minimum for processing
+        temperature: 0.3
+      });
+      
+      const summary = response.choices[0].message.content.trim();
+      console.log(`✅ Generated summary: ${summary.substring(0, 100)}...`);
+      return summary;
+      
+    } catch (error) {
+      console.error('❌ Error generating summary:', error.message);
+      return null;
+    }
+  }
+  
+  async postToDiscourse(content, summary, url, bypassLinks) {
+    if (!this.discourseApiKey || !this.discourseApiUrl) {
+      console.log('❌ Discourse API not configured');
+      return null;
+    }
+    
+    try {
+      const title = `[News] ${content.title}`;
+      const body = `${summary}
+
+**Source:** [${url}](${url})
+**Bypass:** [12ft.io](${bypassLinks.twelveft})
+**Archive:** [Web Archive](${bypassLinks.archiveView})
+
+*Posted automatically by Signal Bot*`;
+      
+      const response = await axios.post(`${this.discourseApiUrl}/posts.json`, {
+        title: title,
+        raw: body,
+        category: 5, // Adjust category as needed
+        created_at: new Date().toISOString()
+      }, {
+        headers: {
+          'Api-Key': this.discourseApiKey,
+          'Api-Username': this.discourseApiUsername,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      const topicId = response.data.topic_id;
+      console.log(`✅ Posted to Discourse: ${this.discourseApiUrl}/t/${topicId}`);
+      return topicId;
+      
+    } catch (error) {
+      console.error('❌ Error posting to Discourse:', error.message);
+      return null;
+    }
+  }
+
   async handleIncomingMessage(params) {
     if (!params || !params.envelope) return;
     
@@ -682,6 +1244,9 @@ class NativeSignalBotService extends EventEmitter {
     const dataMessage = envelope.dataMessage;
     
     if (!dataMessage || !dataMessage.message) return;
+    
+    // Ignore messages from the bot itself to prevent loops
+    if (envelope.sourceNumber === this.phoneNumber) return;
     
     // Check if this is a reply/quote to the bot's message
     const isReplyToBot = dataMessage.quote?.author === this.phoneNumber ||
@@ -703,6 +1268,12 @@ class NativeSignalBotService extends EventEmitter {
     this.storeMessageInHistory(message);
     
     console.log(`📨 Message from ${message.sourceName || message.sourceNumber}: ${message.message}`);
+    
+    // Check for URLs that need cleaning (automatic tracker removal)
+    await this.checkAndCleanUrls(message);
+    
+    // Check for news URLs and auto-process them
+    await this.checkAndProcessNewsUrls(message);
     
     // Process command if it starts with !
     if (message.message.startsWith('!')) {

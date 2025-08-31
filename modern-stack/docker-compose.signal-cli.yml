@@ -7,9 +7,9 @@ services:
     ports:
       - "50240:8080"
     environment:
-      - MODE=json-rpc
+      - MODE=normal
     volumes:
-      - signal-cli-data:/home/.local/share/signal-cli
+      - signal_cli_data:/home/.local/share/signal-cli
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/v1/health"]
@@ -38,7 +38,7 @@ services:
       retries: 3
 
 volumes:
-  signal-cli-data:
+  signal_cli_data:
     driver: local
   postgres-data:
     driver: local

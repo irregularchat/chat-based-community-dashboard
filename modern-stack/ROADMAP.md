@@ -39,7 +39,56 @@
 - [x] Signal bot profile fixes and validation
 
 ### 🚧 In Progress
-- **v0.3.0**: Signal Self-Service Suite (Phase 1-5 implementation)
+- **v0.2.2**: Signal CLI Bot Integration (Critical Production Fixes)
+
+#### v0.2.2 - Signal CLI Bot Production Ready
+**🎯 GOAL**: Implement production-grade Signal CLI bot with comprehensive command system
+
+**CRITICAL DISCOVERIES FROM PRODUCTION ANALYSIS**:
+
+1. **🚨 Signal CLI REST API Group Messaging Bug** (BLOCKER)
+   - **Issue**: bbernhard/signal-cli-rest-api has critical group messaging bug
+   - **Impact**: All group send attempts via `/v1/send` and `/v2/send` return 400 errors
+   - **Production Solution**: Hybrid approach - WebSocket for receiving, direct CLI for sending
+   - **Status**: Currently investigating workarounds
+
+2. **📱 Signal CLI WebSocket Receiving Works Perfectly**
+   - **Discovery**: WebSocket connection for receiving messages is stable
+   - **Architecture**: Use WebSocket for real-time message reception
+   - **Implementation**: Enhanced message processing with detailed logging
+
+3. **🔧 Production Bot Architecture Insights**
+   - **Plugin System**: Modular command system with SQLite storage
+   - **Command Types**: 50+ commands across 7 plugin categories (AI, knowledge, onboarding, utilities)
+   - **Database**: SQLite for sessions, plugin data, and persistent storage
+   - **WebSocket**: Real-time message reception with automatic reconnection
+
+4. **🆔 Group ID Format Complexity** (CRITICAL)
+   - **Issue**: Signal sends same group in 3 different ID formats
+   - **Formats**: Raw Base64, URL-safe Base64, with/without "group." prefix
+   - **Solution**: Group ID mapping module for consistent matching
+   - **Impact**: Commands fail randomly without proper ID normalization
+
+**IMPLEMENTATION PRIORITIES**:
+- [ ] Fix group messaging using direct CLI approach
+- [ ] Implement plugin-based command system  
+- [ ] Add Group ID normalization module
+- [ ] Create SQLite-based session storage
+- [ ] Build comprehensive command library (50+ commands)
+- [ ] Add WebSocket reconnection and health monitoring
+
+**PRODUCTION ARCHITECTURE LEARNINGS**:
+```javascript
+// Hybrid messaging approach
+sendGroupMessage() {
+  // Stop REST API container
+  // Execute signal-cli send command directly  
+  // Restart REST API container
+  // Reconnect WebSocket
+}
+```
+
+- **v0.3.0**: Signal Self-Service Suite (Post bot fixes)
 
 ### 📋 Upcoming Features
 

@@ -1134,19 +1134,42 @@ class NativeSignalBotService extends EventEmitter {
         // Build direct URL
         const pageUrl = `https://irregularpedia.org/wiki/${encodeURIComponent(result.title.replace(/ /g, '_'))}`;
         
-        // Clean snippet - remove all HTML tags and entities
+        // Clean snippet - aggressively remove ALL HTML artifacts
         let snippet = '';
         if (result.snippet) {
+          // First decode HTML entities to catch encoded tags
           snippet = result.snippet
-            .replace(/<span[^>]*>/g, '') // Remove opening span tags
-            .replace(/<\/span>/g, '') // Remove closing span tags
-            .replace(/<[^>]*>/g, '') // Remove any other HTML tags
             .replace(/&lt;/g, '<')
             .replace(/&gt;/g, '>')
             .replace(/&quot;/g, '"')
             .replace(/&#39;/g, "'")
-            .replace(/&amp;/g, '&')
+            .replace(/&amp;/g, '&');
+          
+          // Now remove all HTML tags (including those that were encoded)
+          snippet = snippet
+            .replace(/<[^>]*>/g, '') // Remove all HTML tags
+            .replace(/<\/[^>]*>/g, '') // Remove closing tags
+            .replace(/<[^>]*$/g, '') // Remove incomplete opening tags at end
+            .replace(/^[^<]*>/g, '') // Remove incomplete closing tags at start
             .replace(/\s+/g, ' ') // Normalize whitespace
+            .trim();
+          
+          // Remove any remaining artifacts that look like HTML
+          if (snippet.includes('<') || snippet.includes('>') || snippet.includes('/')) {
+            // Extract only the clean text content
+            const cleanParts = snippet.split(/[<>]/);
+            snippet = cleanParts
+              .filter(part => part && !part.includes('/') && !part.includes('span') && !part.includes('='))
+              .join(' ')
+              .replace(/\s+/g, ' ')
+              .trim();
+          }
+          
+          // Final cleanup - remove any leftover artifacts
+          snippet = snippet
+            .replace(/span\s+id="[^"]*"/g, '')
+            .replace(/\/span/g, '')
+            .replace(/="[^"]*"/g, '')
             .trim();
           
           // Truncate to reasonable length
@@ -1158,8 +1181,13 @@ class NativeSignalBotService extends EventEmitter {
         displayCount++;
         output += `${displayCount}. ${title}\n`;
         
-        // Only add snippet if it's meaningful and clean
-        if (snippet && snippet.length > 10 && !snippet.includes('[[') && !snippet.includes('...g')) {
+        // Only add snippet if it's meaningful and clean (no HTML artifacts)
+        if (snippet && snippet.length > 10 && 
+            !snippet.includes('[[') && 
+            !snippet.includes('span') && 
+            !snippet.includes('id=') &&
+            !snippet.includes('/>') &&
+            !snippet.includes('</')) {
           output += `   ${snippet}\n`;
         }
         

@@ -3339,6 +3339,212 @@ The invitation email has been sent. You'll be notified when they accept the invi
       }
     }),
 
+  // Signal Groups Self-Service Suite
+  // Get user's Signal status and available groups
+  getSignalStatus: protectedProcedure.query(async ({ ctx }) => {
+    if (!ctx.session?.user?.id) {
+      throw new TRPCError({
+        code: 'UNAUTHORIZED',
+        message: 'You must be logged in to view Signal status'
+      });
+    }
+
+    try {
+      const userId = parseInt(ctx.session.user.id);
+      
+      // Get user's Signal verification status and current memberships
+      const user = await ctx.prisma.user.findUnique({
+        where: { id: userId },
+        include: {
+          signalGroupMemberships: {
+            where: { status: 'active' },
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  username: true,
+                  firstName: true,
+                  lastName: true
+                }
+              }
+            }
+          },
+          signalGroupJoinRequests: {
+            where: { status: 'pending' },
+            orderBy: { requestedAt: 'desc' }
+          }
+        }
+      });
+
+      // Get available groups
+      const availableGroups = await ctx.prisma.signalAvailableGroup.findMany({
+        where: { 
+          isActive: true,
+          isPublic: true 
+        },
+        orderBy: { displayOrder: 'asc' },
+        include: {
+          admin: {
+            select: {
+              id: true,
+              username: true,
+              firstName: true,
+              lastName: true
+            }
+          },
+          _count: {
+            select: {
+              joinRequests: {
+                where: { status: 'pending' }
+              }
+            }
+          }
+        }
+      });
+
+      return {
+        user: {
+          id: user?.id,
+          username: user?.username,
+          signalVerified: !!user?.signalIdentity,
+          signalIdentity: user?.signalIdentity
+        },
+        currentMemberships: user?.signalGroupMemberships || [],
+        pendingRequests: user?.signalGroupJoinRequests || [],
+        availableGroups: availableGroups.map(group => ({
+          ...group,
+          userIsMember: user?.signalGroupMemberships.some(m => m.groupId === group.groupId) || false,
+          userHasPendingRequest: user?.signalGroupJoinRequests.some(r => r.groupId === group.groupId) || false,
+          pendingRequestsCount: group._count.joinRequests
+        }))
+      };
+    } catch (error) {
+      console.error('Error fetching Signal status:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to fetch Signal status'
+      });
+    }
+  }),
+
+  // Request to join a Signal group
+  requestToJoinSignalGroup: protectedProcedure
+    .input(z.object({
+      groupId: z.string().min(1, 'Group ID is required'),
+      message: z.string().optional()
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.session?.user?.id) {
+        throw new TRPCError({
+          code: 'UNAUTHORIZED',
+          message: 'You must be logged in to join groups'
+        });
+      }
+
+      const userId = parseInt(ctx.session.user.id);
+      
+      try {
+        // Check if user is verified with Signal
+        const user = await ctx.prisma.user.findUnique({
+          where: { id: userId },
+          select: {
+            id: true,
+            username: true,
+            signalIdentity: true,
+            signalGroupJoinRequests: {
+              where: {
+                groupId: input.groupId,
+                status: { in: ['pending', 'approved'] }
+              }
+            }
+          }
+        });
+
+        if (!user?.signalIdentity) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'You must verify your Signal account before joining groups'
+          });
+        }
+
+        // Check for existing requests
+        if (user.signalGroupJoinRequests.length > 0) {
+          const existingRequest = user.signalGroupJoinRequests[0];
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: existingRequest.status === 'approved' 
+              ? 'You are already a member of this group'
+              : 'You already have a pending request for this group'
+          });
+        }
+
+        // Rate limiting: check requests in last hour
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+        const recentRequests = await ctx.prisma.signalGroupJoinRequest.count({
+          where: {
+            userId,
+            requestedAt: { gte: oneHourAgo }
+          }
+        });
+
+        if (recentRequests >= 5) {
+          throw new TRPCError({
+            code: 'TOO_MANY_REQUESTS',
+            message: 'You can only make 5 join requests per hour. Please try again later.'
+          });
+        }
+
+        // Check if group exists and is available
+        const group = await ctx.prisma.signalAvailableGroup.findUnique({
+          where: { groupId: input.groupId }
+        });
+
+        if (!group || !group.isActive || !group.isPublic) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Group not found or not available for joining'
+          });
+        }
+
+        // Create join request
+        const joinRequest = await ctx.prisma.signalGroupJoinRequest.create({
+          data: {
+            userId,
+            groupId: input.groupId,
+            message: input.message,
+            status: 'pending'
+          }
+        });
+
+        // Log the request for community timeline
+        await logCommunityEvent(
+          ctx.prisma,
+          'signal_group_join_request',
+          user.username || 'Unknown User',
+          `Requested to join Signal group: ${group.name}`
+        );
+
+        return {
+          success: true,
+          message: group.requiresApproval 
+            ? `Join request submitted for "${group.name}". Awaiting admin approval.`
+            : `Successfully joined "${group.name}"!`,
+          requestId: joinRequest.id,
+          requiresApproval: group.requiresApproval
+        };
+
+      } catch (error) {
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        console.error('Error creating Signal group join request:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to process join request'
+        });
+      }
+    }),
+
 });
 
 // Helper function for password hashing

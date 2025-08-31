@@ -41,6 +41,10 @@ model User {
   sentInvitations   UserInvitation[] @relation("UserInvitations")
   emailHistory      EmailHistory[]
   verificationCodes SignalVerificationCode[]
+  signalGroupMemberships SignalGroupMembership[]
+  signalGroupJoinRequests SignalGroupJoinRequest[]
+  processedSignalRequests SignalGroupJoinRequest[] @relation("ProcessedRequests")
+  adminGroups SignalAvailableGroup[] @relation("GroupAdmin")
   
   @@map("users")
 }
@@ -382,4 +386,71 @@ model SignalVerificationCode {
   @@index([expiresAt])
   @@index([verified])
   @@map("signal_verification_codes")
+}
+
+// Signal group memberships tracking
+model SignalGroupMembership {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  groupId   String   @map("group_id")
+  groupName String?  @map("group_name")
+  joinedAt  DateTime @default(now()) @map("joined_at")
+  status    String   @default("active") // active, left, removed
+  
+  // Relationships
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, groupId])
+  @@index([userId])
+  @@index([groupId])
+  @@index([status])
+  @@map("signal_group_memberships")
+}
+
+// Available Signal groups that users can discover and join
+model SignalAvailableGroup {
+  id               Int      @id @default(autoincrement())
+  groupId          String   @unique @map("group_id")
+  name             String
+  description      String?
+  isPublic         Boolean  @default(true) @map("is_public")
+  requiresApproval Boolean  @default(false) @map("requires_approval")
+  maxMembers       Int?     @map("max_members")
+  adminUserId      Int?     @map("admin_user_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  displayOrder     Int      @default(0) @map("display_order")
+  isActive         Boolean  @default(true) @map("is_active")
+  
+  // Relationships
+  admin User? @relation("GroupAdmin", fields: [adminUserId], references: [id])
+  joinRequests SignalGroupJoinRequest[]
+  
+  @@index([isPublic])
+  @@index([isActive])
+  @@index([displayOrder])
+  @@map("signal_available_groups")
+}
+
+// Signal group join requests
+model SignalGroupJoinRequest {
+  id          Int       @id @default(autoincrement())
+  userId      Int       @map("user_id")
+  groupId     String    @map("group_id")
+  message     String?   // Optional message from user
+  status      String    @default("pending") // pending, approved, denied
+  requestedAt DateTime  @default(now()) @map("requested_at")
+  processedAt DateTime? @map("processed_at")
+  processedBy Int?      @map("processed_by")
+  
+  // Relationships
+  user      User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  processor User? @relation("ProcessedRequests", fields: [processedBy], references: [id])
+  group     SignalAvailableGroup @relation(fields: [groupId], references: [groupId])
+  
+  @@unique([userId, groupId])
+  @@index([userId])
+  @@index([groupId])
+  @@index([status])
+  @@index([requestedAt])
+  @@map("signal_group_join_requests")
 }

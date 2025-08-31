@@ -77,6 +77,9 @@ export default function UserDashboard() {
   
   // Get user profile data
   const { data: userProfile, refetch: refetchProfile } = trpc.user.getProfile.useQuery();
+  
+  // Get Signal Groups status
+  const { data: signalStatus, refetch: refetchSignalStatus } = trpc.user.getSignalStatus.useQuery();
 
   // Get dashboard settings
   const { data: dashboardSettings } = trpc.settings.getDashboardSettings.useQuery({});
@@ -217,6 +220,16 @@ export default function UserDashboard() {
       }
       
       toast.error(errorMessage);
+    },
+  });
+
+  const joinSignalGroupMutation = trpc.user.requestToJoinSignalGroup.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.message);
+      refetchSignalStatus();
+    },
+    onError: (error) => {
+      toast.error(error.message);
     },
   });
 
@@ -519,7 +532,7 @@ export default function UserDashboard() {
       </div>
 
       <Tabs value={selectedTab} onValueChange={setSelectedTab} className="space-y-4">
-        <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-7 lg:overflow-x-visible">
+        <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-8 lg:overflow-x-visible">
           {/* Admin gets Admin tab first */}
           {session.user.isAdmin && (
             <TabsTrigger value="admin" className="flex items-center gap-2 min-w-0 flex-shrink-0">
@@ -550,6 +563,10 @@ export default function UserDashboard() {
           <TabsTrigger value="invite" className="flex items-center gap-2 min-w-0 flex-shrink-0">
             <Mail className="w-4 h-4 shrink-0" />
             <span className="hidden sm:inline">Invite</span>
+          </TabsTrigger>
+          <TabsTrigger value="signal-groups" className="flex items-center gap-2 min-w-0 flex-shrink-0">
+            <Phone className="w-4 h-4 shrink-0" />
+            <span className="hidden sm:inline">Signal Groups</span>
           </TabsTrigger>
           <TabsTrigger value="contact" className="flex items-center gap-2 min-w-0 flex-shrink-0">
             <MessageSquare className="w-4 h-4 shrink-0" />

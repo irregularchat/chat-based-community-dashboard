@@ -1273,12 +1273,22 @@ class NativeSignalBotService extends EventEmitter {
           if (forumResponse.ok) {
             const forumData = await forumResponse.json();
             const posts = forumData.posts || [];
-            searchResults.forum = posts.slice(0, 3).map(post => ({
-              type: 'forum',
-              title: post.topic_title || 'Forum Post',
-              content: post.blurb || post.excerpt || '',
-              url: `https://forum.irregularchat.com/t/${post.topic_slug}/${post.topic_id}`
-            }));
+            const topics = forumData.topics || [];
+            
+            searchResults.forum = posts.slice(0, 3).map(post => {
+              const topic = topics.find(t => t.id === post.topic_id) || {};
+              const title = topic.title || post.topic_title || `Post #${post.id}`;
+              const slug = topic.slug || post.topic_slug || 'topic';
+              const topicId = post.topic_id || topic.id;
+              
+              return {
+                type: 'forum',
+                title: title,
+                content: post.blurb || post.excerpt || '',
+                url: topicId ? `https://forum.irregularchat.com/t/${slug}/${topicId}` : 
+                              `https://forum.irregularchat.com/p/${post.id}`
+              };
+            });
           }
         } catch (error) {
           console.error('Forum search error:', error);
@@ -1355,20 +1365,25 @@ class NativeSignalBotService extends EventEmitter {
                `• !questions to see Q&A`;
       }
       
-      // 6. Use Local AI to synthesize results (for privacy)
+      // 6. Use Local AI to synthesize results (for privacy) - with timeout
       let aiSummary = '';
-      if (this.localAiUrl && this.localAiApiKey) {
+      if (this.localAiUrl && this.localAiApiKey && allResults.length > 0) {
         try {
+          // Create a timeout promise
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('AI timeout')), 3000) // 3 second timeout
+          );
+          
           const contextData = {
             query: query,
-            results: allResults.map(r => ({
+            results: allResults.slice(0, 5).map(r => ({ // Limit to top 5 for speed
               type: r.type,
               title: r.title || '',
-              content: r.content || ''
+              content: (r.content || '').substring(0, 50) // Shorter content for speed
             }))
           };
           
-          const aiResponse = await fetch(`${this.localAiUrl}/v1/chat/completions`, {
+          const aiPromise = fetch(`${this.localAiUrl}/v1/chat/completions`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -1378,22 +1393,26 @@ class NativeSignalBotService extends EventEmitter {
               model: this.localAiModel,
               messages: [{
                 role: 'system',
-                content: 'You are a helpful search assistant. Synthesize the search results into a concise, useful response. Focus on answering the user\'s query based on the provided context. Keep it under 150 words.'
+                content: 'Synthesize search results in 2-3 sentences max. Be direct and helpful.'
               }, {
                 role: 'user',
-                content: `Query: "${query}"\n\nSearch Results:\n${JSON.stringify(contextData.results, null, 2)}\n\nProvide a helpful synthesis of these results.`
+                content: `Query: "${query}"\nResults: ${JSON.stringify(contextData.results)}`
               }],
-              max_tokens: 200,
+              max_tokens: 100, // Reduced for speed
               temperature: 0.3
             })
           });
+          
+          // Race between AI response and timeout
+          const aiResponse = await Promise.race([aiPromise, timeoutPromise]);
           
           if (aiResponse.ok) {
             const aiData = await aiResponse.json();
             aiSummary = aiData.choices[0]?.message?.content || '';
           }
         } catch (error) {
-          console.error('Local AI processing error:', error);
+          console.log('Skipping AI summary:', error.message);
+          // Continue without AI summary
         }
       }
       
@@ -1884,7 +1903,7 @@ class NativeSignalBotService extends EventEmitter {
     
     try {
       // Import the Authentik service if available
-      const { AuthentikService } = require('../../authentik');
+      const { AuthentikService } = require('../authentik');
       const authentik = AuthentikService.getInstance();
       
       if (authentik.isActive) {

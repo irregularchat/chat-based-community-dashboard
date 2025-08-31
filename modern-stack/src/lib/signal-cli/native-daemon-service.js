@@ -1398,8 +1398,7 @@ class NativeSignalBotService extends EventEmitter {
                 role: 'user',
                 content: `Query: "${query}"\nResults: ${JSON.stringify(contextData.results)}`
               }],
-              max_tokens: 100, // Reduced for speed
-              temperature: 0.3
+              max_tokens: 100 // Reduced for speed
             })
           });
           
@@ -2208,8 +2207,7 @@ class NativeSignalBotService extends EventEmitter {
               role: 'user',
               content: `Please summarize this group chat conversation:\n\n${messagesText}`
             }],
-            max_tokens: 500,
-            temperature: 0.3
+            max_tokens: 500
           })
         });
         
@@ -2232,8 +2230,7 @@ class NativeSignalBotService extends EventEmitter {
             role: 'user',
             content: `Please summarize this group chat conversation:\n\n${messagesText}` 
           }],
-          max_completion_tokens: 900,  // GPT-5 thinking model needs 600+ tokens
-          temperature: 0.3
+          max_completion_tokens: 900  // GPT-5 thinking model needs 600+ tokens
         });
       }
       
@@ -2320,8 +2317,7 @@ class NativeSignalBotService extends EventEmitter {
             role: 'user',
             content: questionText
           }],
-          max_completion_tokens: 650,  // GPT-5 thinking model minimum
-          temperature: 0.3
+          max_completion_tokens: 650  // GPT-5 thinking model minimum
         });
         
         title = titleResponse.choices[0].message.content.trim();

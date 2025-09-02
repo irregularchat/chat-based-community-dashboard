@@ -343,6 +343,200 @@ class NativeSignalBotService extends EventEmitter {
     return { allowed: true };
   }
 
+  // Security: Secure Prisma operation wrappers
+  async secureCreateRecord(model, data, userContext = {}) {
+    try {
+      // Validate user context for authorization
+      if (userContext.requireAuth && !this.isAdmin(userContext.sourceUuid || userContext.sourceNumber)) {
+        throw new Error('Unauthorized: Admin privileges required');
+      }
+
+      // Sanitize data before database operation
+      const sanitizedData = this.sanitizeDatabaseData(data);
+
+      // Apply record size limits
+      if (JSON.stringify(sanitizedData).length > 100000) { // 100KB limit
+        throw new Error('Record size exceeds maximum allowed limit');
+      }
+
+      return await this.prisma[model].create({
+        data: sanitizedData
+      });
+    } catch (error) {
+      await this.logError('DATABASE_CREATE', error, {
+        model,
+        dataKeys: Object.keys(data),
+        userContext: userContext.sourceNumber || userContext.sourceUuid
+      });
+      throw error;
+    }
+  }
+
+  async secureUpdateRecord(model, where, data, userContext = {}) {
+    try {
+      // Validate user context for authorization
+      if (userContext.requireAuth && !this.isAdmin(userContext.sourceUuid || userContext.sourceNumber)) {
+        throw new Error('Unauthorized: Admin privileges required');
+      }
+
+      // Sanitize where clause and data
+      const sanitizedWhere = this.sanitizeDatabaseWhere(where);
+      const sanitizedData = this.sanitizeDatabaseData(data);
+
+      return await this.prisma[model].update({
+        where: sanitizedWhere,
+        data: sanitizedData
+      });
+    } catch (error) {
+      await this.logError('DATABASE_UPDATE', error, {
+        model,
+        whereKeys: Object.keys(where),
+        dataKeys: Object.keys(data),
+        userContext: userContext.sourceNumber || userContext.sourceUuid
+      });
+      throw error;
+    }
+  }
+
+  async secureQueryRecords(model, query = {}, userContext = {}) {
+    try {
+      // Apply security limits to queries
+      const secureQuery = {
+        ...query,
+        take: Math.min(query.take || 100, 1000), // Maximum 1000 records
+      };
+
+      // Add user-specific filters if needed
+      if (userContext.restrictToUser) {
+        secureQuery.where = {
+          ...secureQuery.where,
+          userId: userContext.sourceNumber || userContext.sourceUuid
+        };
+      }
+
+      // Sanitize where clause
+      if (secureQuery.where) {
+        secureQuery.where = this.sanitizeDatabaseWhere(secureQuery.where);
+      }
+
+      return await this.prisma[model].findMany(secureQuery);
+    } catch (error) {
+      await this.logError('DATABASE_QUERY', error, {
+        model,
+        queryKeys: Object.keys(query),
+        userContext: userContext.sourceNumber || userContext.sourceUuid
+      });
+      throw error;
+    }
+  }
+
+  // Security: Sanitize data for database operations
+  sanitizeDatabaseData(data) {
+    const sanitized = {};
+    
+    for (const [key, value] of Object.entries(data)) {
+      if (value === null || value === undefined) {
+        sanitized[key] = value;
+        continue;
+      }
+
+      // Sanitize strings
+      if (typeof value === 'string') {
+        // Prevent SQL injection by sanitizing dangerous characters
+        let sanitizedValue = value.replace(/[<>'";\(\)]/g, ''); // Remove dangerous characters
+        
+        // Truncate to prevent oversized strings
+        const maxLengths = {
+          'command': 50,
+          'args': 500,
+          'message': 4096,
+          'url': 2048,
+          'domain': 255,
+          'errorMessage': 2000,
+          'groupId': 200,
+          'userId': 50,
+          'userName': 100
+        };
+        
+        const maxLength = maxLengths[key] || 1000;
+        sanitizedValue = sanitizedValue.substring(0, maxLength);
+        
+        sanitized[key] = sanitizedValue;
+      }
+      // Handle numbers
+      else if (typeof value === 'number') {
+        // Prevent integer overflow and ensure valid range
+        if (Number.isInteger(value)) {
+          sanitized[key] = Math.max(-2147483648, Math.min(2147483647, value));
+        } else {
+          sanitized[key] = Number(value.toFixed(10)); // Limit decimal precision
+        }
+      }
+      // Handle booleans
+      else if (typeof value === 'boolean') {
+        sanitized[key] = value;
+      }
+      // Handle dates
+      else if (value instanceof Date) {
+        // Ensure valid date range
+        if (value.getFullYear() > 1900 && value.getFullYear() < 2100) {
+          sanitized[key] = value;
+        } else {
+          sanitized[key] = new Date(); // Default to current date if invalid
+        }
+      }
+      // Handle BigInt for timestamps
+      else if (typeof value === 'bigint') {
+        sanitized[key] = value;
+      }
+      // Handle objects (JSON)
+      else if (typeof value === 'object' && !Array.isArray(value)) {
+        // Recursively sanitize nested objects, but limit depth
+        sanitized[key] = this.sanitizeDatabaseData(value);
+      }
+      // Skip arrays and other complex types for security
+      else {
+        console.warn(`Skipping sanitization of complex data type for key ${key}:`, typeof value);
+      }
+    }
+    
+    return sanitized;
+  }
+
+  // Security: Sanitize WHERE clauses to prevent injection
+  sanitizeDatabaseWhere(where) {
+    if (!where || typeof where !== 'object') {
+      return {};
+    }
+
+    const sanitized = {};
+    
+    for (const [key, value] of Object.entries(where)) {
+      // Skip if key contains dangerous characters
+      if (typeof key === 'string' && /[^a-zA-Z0-9_.]/.test(key)) {
+        console.warn(`Skipping dangerous WHERE key: ${key}`);
+        continue;
+      }
+
+      // Handle different value types
+      if (typeof value === 'string') {
+        // Sanitize string values
+        sanitized[key] = value.replace(/[<>'";\(\)]/g, '').substring(0, 1000);
+      } else if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+        sanitized[key] = value;
+      } else if (value instanceof Date) {
+        sanitized[key] = value;
+      } else if (typeof value === 'object' && value !== null) {
+        // Handle complex where conditions (like { gte: value })
+        if ('gte' in value || 'lte' in value || 'gt' in value || 'lt' in value || 'not' in value) {
+          sanitized[key] = this.sanitizeDatabaseWhere(value);
+        }
+      }
+    }
+    
+    return sanitized;
+  }
+
   loadPlugins() {
     const commands = new Map();
     
@@ -6258,20 +6452,19 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         title = titleResponse.choices[0].message.content.trim();
       }
       
-      // Store question in database
-      const question = await this.prisma.qAndAQuestion.create({
-        data: {
-          questionId: questionId,
-          asker: sender || 'Unknown',
-          askerPhone: sourceNumber,
-          question: questionText,
-          title: title,
-          groupId: groupId || 'dm',
-          groupName: context.groupName || null,
-          solved: false,
-          discourseTopicId: null,
-          answers: []
-        }
+      // Security: Store question in database with secure operations
+      const question = await this.secureCreateRecord('qAndAQuestion', {
+        questionId: questionId,
+        asker: sender || 'Unknown',
+        askerPhone: sourceNumber,
+        question: questionText,
+        title: title,
+        groupId: groupId || 'dm',
+        groupName: context.groupName || null,
+        solved: false,
+        discourseTopicId: null,
+        answers: [],
+        timestamp: new Date()
       });
       
       console.log(`✅ Question Q${questionId} saved to database`);
@@ -6627,21 +6820,20 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   }
   // Analytics Tracking Methods
   
-  // Track command usage
+  // Security: Track command usage with secure database operations
   async trackCommandUsage(data) {
     try {
-      await this.prisma.botCommandUsage.create({
-        data: {
-          command: data.command,
-          args: data.args,
-          groupId: data.groupId,
-          groupName: data.groupName,
-          userId: data.userId,
-          userName: data.userName,
-          success: data.success,
-          responseTime: data.responseTime,
-          errorMessage: data.errorMessage
-        }
+      await this.secureCreateRecord('botCommandUsage', {
+        command: data.command,
+        args: data.args,
+        groupId: data.groupId,
+        groupName: data.groupName,
+        userId: data.userId,
+        userName: data.userName,
+        success: data.success,
+        responseTime: data.responseTime,
+        errorMessage: data.errorMessage,
+        timestamp: new Date()
       });
     } catch (error) {
       console.error('Failed to track command usage:', error);

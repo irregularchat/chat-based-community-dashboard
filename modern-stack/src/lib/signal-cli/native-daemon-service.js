@@ -804,11 +804,15 @@ class NativeSignalBotService extends EventEmitter {
             { keywords: ['what groups', 'list groups', 'show groups', 'available rooms'], command: 'groups' },
             { keywords: ['rules', 'laws', 'zeroeth', 'zeroth', 'principles'], command: 'zeroeth' },
             { keywords: ['wiki', 'documentation', 'docs'], command: 'wiki' },
-            { keywords: ['forum posts', 'latest posts', 'discussions'], command: 'flatest' },
-            { keywords: ['events', 'meetups', 'meetings'], command: 'events' },
-            { keywords: ['members', 'who is in', 'list members'], command: 'members' },
-            { keywords: ['faq', 'frequently asked'], command: 'faq' },
-            { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' }
+            { keywords: ['forum post', 'latest post', 'recent post', 'forum discussion', 'latest forum', 'recent forum', 'new forum'], command: 'flatest' },
+            { keywords: ['events', 'meetups', 'meetings', 'upcoming event', 'next event'], command: 'events' },
+            { keywords: ['members', 'who is in', 'list members', 'group members'], command: 'members' },
+            { keywords: ['faq', 'frequently asked', 'common questions'], command: 'faq' },
+            { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' },
+            { keywords: ['weather', 'temperature', 'forecast'], command: 'weather' },
+            { keywords: ['joke', 'tell me a joke', 'funny'], command: 'joke' },
+            { keywords: ['unanswered', 'pending question', 'open question'], command: 'pending' },
+            { keywords: ['bookmark', 'saved link', 'stored link'], command: 'links' }
           ];
           
           // Phase 4: Use safe executor for automatic command mapping
@@ -1023,11 +1027,15 @@ class NativeSignalBotService extends EventEmitter {
             { keywords: ['what groups', 'list groups', 'show groups', 'available rooms'], command: 'groups' },
             { keywords: ['rules', 'laws', 'zeroeth', 'zeroth', 'principles'], command: 'zeroeth' },
             { keywords: ['wiki', 'documentation', 'docs'], command: 'wiki' },
-            { keywords: ['forum posts', 'latest posts', 'discussions'], command: 'flatest' },
-            { keywords: ['events', 'meetups', 'meetings'], command: 'events' },
-            { keywords: ['members', 'who is in', 'list members'], command: 'members' },
-            { keywords: ['faq', 'frequently asked'], command: 'faq' },
-            { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' }
+            { keywords: ['forum post', 'latest post', 'recent post', 'forum discussion', 'latest forum', 'recent forum', 'new forum'], command: 'flatest' },
+            { keywords: ['events', 'meetups', 'meetings', 'upcoming event', 'next event'], command: 'events' },
+            { keywords: ['members', 'who is in', 'list members', 'group members'], command: 'members' },
+            { keywords: ['faq', 'frequently asked', 'common questions'], command: 'faq' },
+            { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' },
+            { keywords: ['weather', 'temperature', 'forecast'], command: 'weather' },
+            { keywords: ['joke', 'tell me a joke', 'funny'], command: 'joke' },
+            { keywords: ['unanswered', 'pending question', 'open question'], command: 'pending' },
+            { keywords: ['bookmark', 'saved link', 'stored link'], command: 'links' }
           ];
           
           // Phase 4: Use safe executor for automatic command mapping
@@ -7486,19 +7494,21 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       
       // Query for recent news if asking about news/updates
       if (query.match(/news|update|latest|recent|happening|announcement/i)) {
-        // Get recent news summaries from memory (last 24 hours)
-        const recentNews = Array.from(this.newsSummaries.entries())
-          .filter(([url, data]) => Date.now() - data.timestamp < 86400000)
-          .slice(0, 3)
-          .map(([url, data]) => ({
-            url,
-            title: data.title,
-            summary: data.summary,
-            timestamp: new Date(data.timestamp)
-          }));
-        
-        dbContext.news = recentNews;
-        if (recentNews.length > 0) dbContext.hasRelevantData = true;
+        // Get recent news summaries from memory (last 24 hours) - check if initialized
+        if (this.newsSummaries && this.newsSummaries instanceof Map) {
+          const recentNews = Array.from(this.newsSummaries.entries())
+            .filter(([url, data]) => Date.now() - data.timestamp < 86400000)
+            .slice(0, 3)
+            .map(([url, data]) => ({
+              url,
+              title: data.title,
+              summary: data.summary,
+              timestamp: new Date(data.timestamp)
+            }));
+          
+          dbContext.news = recentNews;
+          if (recentNews.length > 0) dbContext.hasRelevantData = true;
+        }
       }
       
     } catch (error) {

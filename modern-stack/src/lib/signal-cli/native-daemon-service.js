@@ -599,7 +599,7 @@ class NativeSignalBotService extends EventEmitter {
       { name: 'topusers', description: 'Most active users', handler: this.handleTopUsers.bind(this), adminOnly: true },
       { name: 'errors', description: 'Recent bot errors', handler: this.handleErrors.bind(this), adminOnly: true },
       { name: 'newsstats', description: 'News link statistics', handler: this.handleNewsStats.bind(this), adminOnly: true },
-      { name: 'sentiment', description: 'Bot feedback sentiment', handler: this.handleSentiment.bind(this), adminOnly: true },
+      { name: 'feedback', description: 'Bot feedback sentiment', handler: this.handleSentiment.bind(this), adminOnly: true },
       { name: 'watchdomain', description: 'Manage watched security domains', handler: this.handleWatchedDomains.bind(this), adminOnly: true },
       
       // Utility Plugin Commands (12) 
@@ -708,7 +708,7 @@ class NativeSignalBotService extends EventEmitter {
         // Admin-only commands
         const adminCommandsByCategory = {
           '🔐 Admin': ['removeuser', 'addto', 'gtg', 'sngtg', 'pending'],
-          '📊 Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'sentiment', 'watchdomain']
+          '📊 Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'feedback', 'watchdomain']
         };
         
         let helpText = `🤖 **Signal Bot Commands**\n\n`;
@@ -2911,10 +2911,10 @@ ${content.content.substring(0, 3000)}...`;
   }
   
   formatRepositorySummary(repoData, originalUrl) {
-    let summary = `🔧 **Repository Snapshot**\n\n`;
+    let summary = `**Repository Snapshot**\n\n`;
     
     // Repository name and platform
-    summary += `📦 **${repoData.full_name}**`;
+    summary += `**${repoData.full_name}**`;
     if (repoData.is_private) {
       summary += ` 🔒`;
     }
@@ -2922,23 +2922,23 @@ ${content.content.substring(0, 3000)}...`;
       summary += ` 🍴`;
     }
     if (repoData.archived) {
-      summary += ` 📦 *Archived*`;
+      summary += ` *Archived*`;
     }
     summary += `\n`;
-    summary += `🏠 Platform: ${repoData.platform}\n`;
+    summary += `Platform: ${repoData.platform}\n`;
     
     // Description
     if (repoData.description) {
       const desc = repoData.description.length > 200 
         ? repoData.description.substring(0, 200) + '...'
         : repoData.description;
-      summary += `📝 ${desc}\n`;
+      summary += `${desc}\n`;
     }
     
     summary += `\n`;
     
     // Stats section
-    summary += `📊 **Stats:**\n`;
+    summary += `**Stats:**\n`;
     if (repoData.language && repoData.language !== 'Unknown') {
       summary += `• Language: ${repoData.language}\n`;
     }
@@ -2977,24 +2977,24 @@ ${content.content.substring(0, 3000)}...`;
         timeAgo = `${Math.floor(diffDays / 365)} years ago`;
       }
       
-      summary += `• 🕒 Last updated: ${timeAgo}\n`;
+      summary += `• Last updated: ${timeAgo}\n`;
     }
     
     // License
     if (repoData.license) {
-      summary += `• 📄 License: ${repoData.license}\n`;
+      summary += `• License: ${repoData.license}\n`;
     }
     
     // Topics/Tags
     if (repoData.topics && repoData.topics.length > 0) {
       const topicsList = repoData.topics.slice(0, 5).join(', ');
-      summary += `• 🏷️ Topics: ${topicsList}\n`;
+      summary += `• Topics: ${topicsList}\n`;
       if (repoData.topics.length > 5) {
         summary += `  (+${repoData.topics.length - 5} more)\n`;
       }
     }
     
-    summary += `\n📱 Quick access without clicking through`;
+    summary += `\nShare related repos with the group and tell us why you find them interesting!`;
     
     return summary;
   }

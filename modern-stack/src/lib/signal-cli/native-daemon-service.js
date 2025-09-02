@@ -182,9 +182,9 @@ class NativeSignalBotService extends EventEmitter {
       { name: 'logs', description: 'View system logs (admin)', handler: this.handleLogs.bind(this), adminOnly: true },
       { name: 'backup', description: 'Create data backup (admin)', handler: this.handleBackup.bind(this), adminOnly: true },
       { name: 'maintenance', description: 'Toggle maintenance mode (admin)', handler: this.handleMaintenance.bind(this), adminOnly: true },
-      { name: 'bypass', description: 'Authentication bypass (admin)', handler: this.handleBypass.bind(this), adminOnly: true },
+      { name: 'bypass', description: 'Authentication bypass', handler: this.handleBypass.bind(this) },
       
-      // Analytics Commands (6) - Admin Only
+      // Analytics Commands (7) - Admin Only
       { name: 'stats', description: 'Bot usage statistics', handler: this.handleStats.bind(this), adminOnly: true },
       { name: 'topcommands', description: 'Most used commands', handler: this.handleTopCommands.bind(this), adminOnly: true },
       { name: 'topusers', description: 'Most active users', handler: this.handleTopUsers.bind(this), adminOnly: true },

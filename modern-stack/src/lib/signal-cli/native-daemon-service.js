@@ -3634,16 +3634,28 @@ ${content.content.substring(0, 3000)}...`;
         return '❌ Unable to fetch groups or bot is not in any groups.';
       }
       
-      let response = '📱 Signal Groups (Bot Membership):\n\n';
+      // Calculate member counts and sort by member count (highest first)
+      const groupsWithCounts = groups.map(group => {
+        // Get actual member count from members array
+        const memberCount = group.members ? group.members.length : 
+                           group.memberCount ? group.memberCount : 0;
+        return {
+          ...group,
+          actualMemberCount: memberCount
+        };
+      });
       
-      groups.forEach((group, index) => {
-        // Use memberCount from cache, or count members array if available
-        const memberCount = group.memberCount || (group.members ? group.members.length : 0);
+      // Sort by member count (descending)
+      groupsWithCounts.sort((a, b) => b.actualMemberCount - a.actualMemberCount);
+      
+      let response = '📱 Signal Groups (Sorted by Size):\n\n';
+      
+      groupsWithCounts.forEach((group, index) => {
         const isAdmin = this.isBotAdmin(group);
         const adminIcon = isAdmin ? '👑' : '👤';
         
         response += `${index + 1}. ${group.name || 'Unnamed Group'} ${adminIcon}\n`;
-        response += `   Members: ${memberCount}`;
+        response += `   Members: ${group.actualMemberCount}`;
         if (isAdmin) {
           response += ' (Bot is Admin)';
         }
@@ -3651,13 +3663,17 @@ ${content.content.substring(0, 3000)}...`;
       });
       
       response += '────────────────\n';
+      
+      // Calculate total unique members across all groups
+      const totalMembers = groupsWithCounts.reduce((sum, group) => sum + group.actualMemberCount, 0);
+      response += `📊 Total: ${groupsWithCounts.length} groups, ~${totalMembers} total members\n`;
       response += '👑 = Bot has admin rights\n';
       response += '👤 = Bot is regular member\n\n';
       
-      const adminGroups = groups.filter(g => this.isBotAdmin(g));
+      const adminGroups = groupsWithCounts.filter(g => this.isBotAdmin(g));
       if (adminGroups.length > 0) {
         response += `✅ Bot can add users to ${adminGroups.length} group(s)\n`;
-        response += 'Use !addto <group-number> @user to add users\n';
+        response += 'Use !addto <group-number> @user to add users\n`;
       } else {
         response += '⚠️ Bot has no admin rights in any group\n';
         response += 'Cannot add users without admin permissions\n';
@@ -3762,7 +3778,7 @@ ${content.content.substring(0, 3000)}...`;
         method: 'listGroups',
         params: {
           account: this.phoneNumber,
-          'get-members': false  // Don't fetch members to speed up
+          'get-members': true  // Fetch members to get accurate count
         },
         id: Date.now()
       };

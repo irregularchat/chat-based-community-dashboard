@@ -360,6 +360,48 @@ The native Signal CLI daemon approach represents a complete architectural soluti
 4. Start bot daemon through interface
 5. Test bot commands via Signal app
 
+## Privacy-First User Management with UUIDs
+
+### The UUID-Only Paradigm
+**Critical Discovery**: Signal prioritizes privacy by hiding phone numbers. Most users only expose UUIDs.
+
+**The Mention Challenge**:
+When users @mention someone in Signal, the message structure is complex:
+```json
+{
+  "message": "!addto 5 ￼",  // Mention replaced with special character
+  "mentions": [
+    {
+      "uuid": "user-uuid-here",
+      "name": "Rodrick Daniels",
+      "start": 10,
+      "length": 1
+    }
+  ]
+}
+```
+
+**Implementation Requirements**:
+1. **Never use phone numbers for other users** - Privacy violation
+2. **Always extract UUIDs from mentions array** - The only reliable source
+3. **Handle the replacement character (￼)** - Signal's mention placeholder
+4. **Fetch groups with member details** - Include `get-members: true` for UUIDs
+
+**Correct signal-cli Usage**:
+```bash
+# ✅ CORRECT - Using UUID
+echo '{"jsonrpc":"2.0","method":"updateGroup","params":{"account":"+bot","groupId":"xxx","addMembers":["uuid-here"]},"id":1}' | nc -U /tmp/signal-cli-socket
+
+# ❌ WRONG - Using phone number (privacy violation)
+echo '{"jsonrpc":"2.0","method":"updateGroup","params":{"account":"+bot","groupId":"xxx","addMembers":["+1234567890"]},"id":1}' | nc -U /tmp/signal-cli-socket
+```
+
+**Key Implementation Points**:
+- Signal-cli accepts UUIDs directly in all member operations
+- The mentions array contains the actual UUID data
+- Group member lists also provide UUIDs for lookups
+- Empty result `{}` from updateGroup means success
+
 ## Key Learnings Summary
 - Always integrate new routers into main tRPC configuration
 - Use Docker containers for external service dependencies
@@ -368,3 +410,6 @@ The native Signal CLI daemon approach represents a complete architectural soluti
 - Check preconditions before starting background services
 - Test end-to-end workflows thoroughly
 - Keep captcha tokens fresh for registration processes
+- **CRITICAL: Always use UUIDs, never phone numbers for privacy**
+- **Handle Signal's mention replacement character (￼) properly**
+- **Extract user data from the mentions array, not the message text**

@@ -58,6 +58,9 @@
     "node-fetch": "^3.3.2",
     "nodemailer": "^6.10.1",
     "openai": "^5.16.0",
+    "pdf-parse": "^1.1.1",
+    "pdf2json": "^3.2.0",
+    "pdfjs-dist": "^5.4.149",
     "prisma": "^6.11.1",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
@@ -67,6 +70,7 @@
     "sqlite3": "^5.1.7",
     "superjson": "^2.2.2",
     "tailwind-merge": "^3.3.1",
+    "tesseract.js": "^6.0.1",
     "ws": "^8.18.3",
     "zod": "^4.0.5"
   },

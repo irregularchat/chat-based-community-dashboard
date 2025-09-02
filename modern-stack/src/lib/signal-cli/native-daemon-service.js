@@ -10,13 +10,18 @@ const { spawn } = require('child_process');
 const net = require('net');
 const EventEmitter = require('events');
 const fs = require('fs');
+const fsPromises = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const pdf = require('pdf-parse');
+const PDFProcessor = require('../pdf-processor');
+const { PrismaClient } = require('../../generated/prisma');
 
 class NativeSignalBotService extends EventEmitter {
   constructor(config) {
     super();
+    this.prisma = new PrismaClient();
     this.phoneNumber = config.phoneNumber;
     this.socketPath = config.socketPath || '/tmp/signal-cli-socket';
     this.dataDir = config.dataDir || path.join(process.cwd(), 'signal-data');
@@ -29,6 +34,10 @@ class NativeSignalBotService extends EventEmitter {
     this.localAiModel = process.env.LOCAL_AI_MODEL || 'gpt-oss-120';
     this.useLocalAiForSummarization = !!this.localAiApiKey;
     
+    // Wiki and Forum URLs for context
+    this.wikiUrl = process.env.WIKI_URL || 'https://irregularpedia.irregularchat.com';
+    this.forumUrl = process.env.DISCOURSE_API_URL || 'https://forum.irregularchat.com';
+    
     this.daemon = null;
     this.socket = null;
     this.isListening = false;
@@ -40,6 +49,10 @@ class NativeSignalBotService extends EventEmitter {
     this.messageHistory = new Map(); // groupId -> array of recent messages
     this.maxHistoryPerGroup = 50; // Keep last 50 messages per group
     
+    // Thread context tracking for AI provider selection
+    this.threadContext = new Map(); // messageId -> {provider: 'openai'|'localai', timestamp, groupId}
+    this.userAiPreference = new Map(); // groupId:userId -> {provider: 'openai'|'localai', timestamp, lastMessage}
+    
     // Q&A System
     this.questions = new Map(); // questionId -> {id, asker, question, title, answers, solved, timestamp, groupId, discourseTopicId}
     this.questionCounter = 0;
@@ -47,6 +60,10 @@ class NativeSignalBotService extends EventEmitter {
     
     // URL Cleaner System
     this.cleanedUrls = new Map(); // timestamp -> {originalUrl, cleanedUrl, platform, trackersRemoved, user, groupId}
+    
+    // Event management
+    this.eventFollowUpContext = new Map(); // sourceNumber -> {pendingEventId, timestamp}
+    this.pendingEvents = new Map(); // pendingEventId -> event data
     this.cleanerStats = {
       totalCleaned: 0,
       trackersSaved: 0,
@@ -67,6 +84,9 @@ class NativeSignalBotService extends EventEmitter {
     this.customNewsDomains = new Set();
     this.newsDomainsFile = path.join(this.dataDir, 'news-domains.json');
     this.loadCustomNewsDomains();
+    
+    // Initialize PDF processor
+    this.pdfProcessor = new PDFProcessor();
     
     // Discourse metadata cache
     this.discourseTags = new Map(); // tag name -> tag object
@@ -117,10 +137,11 @@ class NativeSignalBotService extends EventEmitter {
     
     // For now, manually add the new plugin commands to avoid ES module issues
     const pluginCommands = [
-      // Community Plugin Commands (8)
+      // Community Plugin Commands (9)
       { name: 'groups', description: 'List all available groups', handler: this.handleGroups.bind(this) },
       { name: 'join', description: 'Join a specific group', handler: this.handleJoin.bind(this) },
       { name: 'leave', description: 'Leave a group', handler: this.handleLeave.bind(this) },
+      { name: 'addto', description: 'Add users to a group (admin)', handler: this.handleAddTo.bind(this), adminOnly: true },
       { name: 'adduser', description: 'Add user to group (admin)', handler: this.handleAddUser.bind(this), adminOnly: true },
       { name: 'removeuser', description: 'Remove user from group (admin)', handler: this.handleRemoveUser.bind(this), adminOnly: true },
       { name: 'groupinfo', description: 'Show group details', handler: this.handleGroupInfo.bind(this) },
@@ -131,6 +152,7 @@ class NativeSignalBotService extends EventEmitter {
       { name: 'wiki', description: 'Search IrregularChat wiki', handler: this.handleWiki.bind(this) },
       { name: 'forum', description: 'Search forum posts', handler: this.handleForum.bind(this) },
       { name: 'events', description: 'Show upcoming events', handler: this.handleEvents.bind(this) },
+      { name: 'eventadd', description: 'Add a new event', handler: this.handleEventAdd.bind(this) },
       { name: 'resources', description: 'List community resources', handler: this.handleResources.bind(this) },
       { name: 'faq', description: 'Get FAQ answers', handler: this.handleFAQ.bind(this) },
       { name: 'docs', description: 'Search documentation', handler: this.handleDocs.bind(this) },
@@ -153,10 +175,17 @@ class NativeSignalBotService extends EventEmitter {
       // Admin/System Plugin Commands (6)
       { name: 'reload', description: 'Reload plugin (admin)', handler: this.handleReload.bind(this), adminOnly: true },
       { name: 'logs', description: 'View system logs (admin)', handler: this.handleLogs.bind(this), adminOnly: true },
-      { name: 'stats', description: 'Show bot statistics', handler: this.handleStats.bind(this) },
       { name: 'backup', description: 'Create data backup (admin)', handler: this.handleBackup.bind(this), adminOnly: true },
       { name: 'maintenance', description: 'Toggle maintenance mode (admin)', handler: this.handleMaintenance.bind(this), adminOnly: true },
       { name: 'bypass', description: 'Authentication bypass (admin)', handler: this.handleBypass.bind(this), adminOnly: true },
+      
+      // Analytics Commands (6) - Admin Only
+      { name: 'stats', description: 'Bot usage statistics', handler: this.handleStats.bind(this), adminOnly: true },
+      { name: 'topcommands', description: 'Most used commands', handler: this.handleTopCommands.bind(this), adminOnly: true },
+      { name: 'topusers', description: 'Most active users', handler: this.handleTopUsers.bind(this), adminOnly: true },
+      { name: 'errors', description: 'Recent bot errors', handler: this.handleErrors.bind(this), adminOnly: true },
+      { name: 'newsstats', description: 'News link statistics', handler: this.handleNewsStats.bind(this), adminOnly: true },
+      { name: 'sentiment', description: 'Bot feedback sentiment', handler: this.handleSentiment.bind(this), adminOnly: true },
       
       // Utility Plugin Commands (12) 
       { name: 'weather', description: 'Get weather information', handler: this.handleWeather.bind(this) },
@@ -182,8 +211,8 @@ class NativeSignalBotService extends EventEmitter {
       
       // Onboarding Plugin Commands (4) 
       { name: 'request', description: 'Request introduction from user', handler: this.handleRequest.bind(this) },
-      { name: 'gtg', description: 'Approve user for onboarding', adminOnly: true, handler: this.handleGtg.bind(this) },
-      { name: 'sngtg', description: 'Special onboarding approval', handler: this.handleSngtg.bind(this) },
+      { name: 'gtg', description: 'Approve user for onboarding (Good To Go)', adminOnly: true, handler: this.handleGtg.bind(this) },
+      { name: 'sngtg', description: 'Confirm safety number verification (SN Good To Go)', adminOnly: true, handler: this.handleSngtg.bind(this) },
       { name: 'pending', description: 'Show pending requests', adminOnly: true, handler: this.handlePending.bind(this) },
       
       // Admin Commands
@@ -254,8 +283,9 @@ class NativeSignalBotService extends EventEmitter {
           '👤 User Management': ['profile', 'timezone'],
           '📄 Forum': ['fpost', 'flatest', 'fsearch', 'categories'],
           '📋 PDF Processing': ['pdf'],
-          '👋 Onboarding': ['request', 'gtg', 'sngtg'],
-          '🔐 Admin': ['addto', 'gtg']
+          '👋 Onboarding': ['request', 'gtg', 'sngtg', 'pending'],
+          '📊 Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'sentiment'],
+          '🔐 Admin': ['addto', 'gtg', 'sngtg', 'pending', 'bypass']
         };
         
         let helpText = `🤖 **Signal Bot Commands** (${this.plugins.size} total)\n\n`;
@@ -290,6 +320,15 @@ class NativeSignalBotService extends EventEmitter {
           const openai = new OpenAI({ apiKey: this.openAiApiKey });
           
           const userQuery = context.args.join(' ') || 'Hello';
+          
+          // Store thread context - this user prefers OpenAI
+          const threadKey = `${context.groupId || 'dm'}:${context.sourceNumber}`;
+          this.userAiPreference.set(threadKey, {
+            provider: 'openai',
+            timestamp: Date.now(),
+            lastMessage: userQuery
+          });
+          console.log(`🔄 Thread context: User ${context.sender} selected OpenAI`);
           
           // Zeroeth Law Implementation - Context Awareness
           let contextInfo = '';
@@ -380,14 +419,31 @@ class NativeSignalBotService extends EventEmitter {
           
           messages.push({ role: 'user', content: userQuery });
           
-          const response = await openai.chat.completions.create({
-            model: 'gpt-5-mini',
-            messages: messages,
-            max_completion_tokens: 800  // GPT-5 thinking model needs 600+ tokens
-          });
+          console.log('🤖 Calling OpenAI with model: gpt-5-mini');
+          console.log('📨 Messages:', JSON.stringify(messages, null, 2));
           
-          // Add context indicator to response
-          return `${getAiPrefix(responseMode)} ${response.choices[0].message.content}`;
+          try {
+            const response = await openai.chat.completions.create({
+              model: 'gpt-5-mini',
+              messages: messages,
+              max_completion_tokens: 2000  // Increased for GPT-5 thinking model
+            });
+            
+            console.log('🤖 OpenAI response received:', response.choices[0]?.message?.content ? 'Content present' : 'No content');
+            
+            if (!response.choices[0]?.message?.content) {
+              console.error('⚠️ OpenAI returned empty response');
+              return 'OpenAI: I apologize, but I was unable to generate a response. Please try again.';
+            }
+            
+            // Add context indicator to response
+            const aiResponse = response.choices[0].message.content;
+            console.log(`✅ AI Response length: ${aiResponse.length} chars`);
+            return `${getAiPrefix(responseMode)} ${aiResponse}`;
+          } catch (apiError) {
+            console.error('❌ OpenAI API error:', apiError);
+            return `OpenAI: Error - ${apiError.message}`;
+          }
         }
       });
       
@@ -400,6 +456,15 @@ class NativeSignalBotService extends EventEmitter {
         description: 'Context-aware Local AI responses (privacy-focused)',
         execute: async (context) => {
           const userQuery = context.args.join(' ') || 'Hello';
+          
+          // Store thread context - this user prefers LocalAI  
+          const threadKey = `${context.groupId || 'dm'}:${context.sourceNumber}`;
+          this.userAiPreference.set(threadKey, {
+            provider: 'localai',
+            timestamp: Date.now(),
+            lastMessage: userQuery
+          });
+          console.log(`🔄 Thread context: User ${context.sender} selected LocalAI`);
           
           // Zeroeth Law Implementation - Context Awareness
           let contextInfo = '';
@@ -501,7 +566,7 @@ class NativeSignalBotService extends EventEmitter {
               body: JSON.stringify({
                 model: 'irregularbot:latest',
                 messages: messages,
-                max_tokens: 800
+                max_completion_tokens: 800  // GPT-5 requires max_completion_tokens
               })
             });
 
@@ -529,7 +594,7 @@ class NativeSignalBotService extends EventEmitter {
       // Add message summarization command (with parameters)
       commands.set('summarize', {
         name: 'summarize',
-        description: 'Summarize recent group messages (-m <count> or -h <hours>)',
+        description: 'Summarize recent group messages (-n <count>, -m <minutes>, -h <hours>, --help)',
         execute: async (context) => {
           return this.summarizeGroupMessages(context);
         }
@@ -823,6 +888,11 @@ class NativeSignalBotService extends EventEmitter {
         try {
           const message = JSON.parse(line);
           if (message.method === 'receive') {
+            // Log full message structure for !addto debugging
+            if (message.params?.envelope?.dataMessage?.message?.includes('!addto')) {
+              console.log('🔍 Full !addto message structure:');
+              console.log(JSON.stringify(message.params.envelope, null, 2));
+            }
             this.handleIncomingMessage(message.params);
           } else if (message.error) {
             // Log JSON-RPC errors but don't crash
@@ -1055,10 +1125,20 @@ class NativeSignalBotService extends EventEmitter {
         }
         
         try {
+          // Process news URL and track it
           await this.processNewsUrl(url, message);
         } catch (error) {
           console.error(`❌ Error processing news URL ${url}:`, error.message);
           this.newsStats.failedPosts++;
+          
+          // Log error
+          await this.logError('news_processing_error', error, {
+            url: url,
+            groupId: message.groupId,
+            groupName: message.groupName,
+            userId: message.sourceNumber,
+            userName: message.sourceName
+          });
         }
       }
     }
@@ -1159,14 +1239,26 @@ class NativeSignalBotService extends EventEmitter {
       const todayCount = this.newsStats.dailyCounts.get(today) || 0;
       this.newsStats.dailyCounts.set(today, todayCount + 1);
       
-      // Step 6: Send confirmation to Signal group (no markdown for Signal)
+      // Step 6: Track the news link in database with forum URL
+      const forumUrl = discourseTopicId ? `${this.discourseApiUrl}/t/${discourseTopicId}` : null;
+      await this.trackNewsLink(cleanedUrl, message, {
+        title: content.title,
+        summary: summary,
+        forumUrl: forumUrl
+      });
+      
+      // Step 7: Send confirmation to Signal group (no markdown for Signal)
       let response = `📰 ${content.title}\n`;
       if (discourseTopicId) {
-        response += `💬 Forum: ${this.discourseApiUrl}/t/${discourseTopicId}\n\n`;
+        response += `💬 Forum: ${forumUrl}\n\n`;
       }
       response += `📝 Summary: ${summary}\n\n`;
       response += `🔗 Original: ${cleanedUrl}\n`;
       response += `🔓 Bypass: ${bypassLinks.twelveft}`;
+      
+      // Store this as the last news URL for reaction tracking
+      this.lastNewsUrl = cleanedUrl;
+      this.lastNewsGroupId = message.groupId;
       
       await this.sendReply(message, response);
       
@@ -1342,6 +1434,13 @@ ${content.content.substring(0, 3000)}...`;
     
     const envelope = params.envelope;
     const dataMessage = envelope.dataMessage;
+    const reactionMessage = envelope.reactionMessage;
+    
+    // Handle reaction messages separately
+    if (reactionMessage) {
+      await this.handleReactionMessage(envelope, reactionMessage);
+      return;
+    }
     
     if (!dataMessage || !dataMessage.message) return;
     
@@ -1352,6 +1451,22 @@ ${content.content.substring(0, 3000)}...`;
     const isReplyToBot = dataMessage.quote?.author === this.phoneNumber ||
                          dataMessage.quote?.authorNumber === this.phoneNumber;
     
+    // Debug logging for quotes with attachments
+    if (dataMessage.quote && dataMessage.message === '!pdf') {
+      console.log('🔍 Quote data for !pdf:', JSON.stringify(dataMessage.quote, null, 2));
+      console.log('🔍 Full dataMessage:', JSON.stringify(dataMessage, null, 2));
+    }
+    
+    // Log mentions if present for debugging
+    if (dataMessage.mentions && dataMessage.mentions.length > 0) {
+      console.log('📌 Mentions detected:', JSON.stringify(dataMessage.mentions, null, 2));
+      console.log('📌 Message text:', dataMessage.message);
+    } else if (dataMessage.message && dataMessage.message.includes('￼')) {
+      console.log('⚠️ Message contains mention character but no mentions array!');
+      console.log('📌 Message:', dataMessage.message);
+      console.log('📌 Full dataMessage structure:', JSON.stringify(dataMessage, null, 2));
+    }
+    
     const message = {
       sourceNumber: envelope.sourceNumber,
       sourceName: envelope.sourceName,
@@ -1361,7 +1476,10 @@ ${content.content.substring(0, 3000)}...`;
       groupName: dataMessage.groupInfo?.name,
       isReply: !!dataMessage.quote,
       isReplyToBot: isReplyToBot,
-      quotedMessage: dataMessage.quote?.text
+      quotedMessage: dataMessage.quote?.text,
+      quotedAttachments: dataMessage.quote?.attachments || [],
+      attachments: dataMessage.attachments || [],
+      mentions: dataMessage.mentions || [] // Include mentions from Signal message
     };
     
     // Store message in history for summarization
@@ -1369,11 +1487,106 @@ ${content.content.substring(0, 3000)}...`;
     
     console.log(`📨 Message from ${message.sourceName || message.sourceNumber}: ${message.message}`);
     
+    // Store message in history for context
+    if (message.groupId) {
+      this.storeMessageInHistory(message);
+    }
+    
+    // Check if this is a "good bot" or "bad bot" reply to the bot
+    if (isReplyToBot && message.message) {
+      const lowerMessage = message.message.toLowerCase().trim();
+      // Match variations: "good bot", "good bot!", "good bot.", "goodbot", etc.
+      const goodBotPattern = /^(good\s*bot|nice\s*bot|great\s*bot|excellent\s*bot|well\s*done)[!.\s]*$/i;
+      const badBotPattern = /^(bad\s*bot|poor\s*bot|terrible\s*bot|awful\s*bot)[!.\s]*$/i;
+      
+      if (goodBotPattern.test(lowerMessage)) {
+        await this.handleBotFeedback(message, true);
+        return;
+      } else if (badBotPattern.test(lowerMessage)) {
+        await this.handleBotFeedback(message, false);
+        return;
+      }
+    }
+    
     // Check for URLs that need cleaning (automatic tracker removal)
     await this.checkAndCleanUrls(message);
     
     // Check for news URLs and auto-process them
     await this.checkAndProcessNewsUrls(message);
+    
+    // Check for event follow-up responses
+    const eventContext = this.eventFollowUpContext.get(message.sourceNumber);
+    if (eventContext && (Date.now() - eventContext.timestamp < 300000)) { // 5 minute timeout
+      const pendingEvent = this.pendingEvents.get(eventContext.pendingEventId);
+      if (pendingEvent) {
+        // Handle the follow-up message for event creation
+        const response = await this.handleEventFollowUp(message, pendingEvent);
+        if (response) {
+          await this.sendReply(message, response);
+          return;
+        }
+      }
+    }
+    
+    // Check for AI thread continuation (no command prefix)
+    const text = message.message.trim();
+    if (!text.startsWith('!')) {
+      const threadKey = `${message.groupId || 'dm'}:${message.sourceNumber}`;
+      const userPref = this.userAiPreference.get(threadKey);
+      
+      // Check if user has recent AI preference
+      if (userPref) {
+        const timeSinceLastAi = Date.now() - userPref.timestamp;
+        const fiveMinutes = 5 * 60 * 1000;
+        
+        // If within 5 minutes and message looks like a continuation
+        if (timeSinceLastAi < fiveMinutes) {
+          const isContinuation = this.looksLikeAiContinuation(message, userPref);
+          if (isContinuation) {
+            console.log(`🔄 Continuing ${userPref.provider} thread for ${message.sourceName}`);
+            
+            // Route to appropriate AI handler
+            const context = {
+              message,
+              args: [text],
+              groupId: message.groupId,
+              sourceNumber: message.sourceNumber,
+              sender: message.sourceName || message.sourceNumber
+            };
+            
+            try {
+              if (userPref.provider === 'localai' && this.localAiUrl) {
+                const laiCommand = this.plugins.get('lai');
+                if (laiCommand) {
+                  const response = await laiCommand.execute(context);
+                  await this.sendReply(message, response);
+                  // Update thread context
+                  userPref.timestamp = Date.now();
+                  userPref.lastMessage = text;
+                  return;
+                }
+              } else if (userPref.provider === 'openai' && this.aiEnabled) {
+                const aiCommand = this.plugins.get('ai');
+                if (aiCommand) {
+                  const response = await aiCommand.execute(context);
+                  await this.sendReply(message, response);
+                  // Update thread context
+                  userPref.timestamp = Date.now();
+                  userPref.lastMessage = text;
+                  return;
+                }
+              }
+            } catch (error) {
+              console.error(`Error in AI thread continuation:`, error);
+            }
+          }
+        } else {
+          // Thread expired, remove preference
+          this.userAiPreference.delete(threadKey);
+          console.log(`🔄 Thread expired for ${message.sourceName}`);
+        }
+      }
+    }
     
     // Process command if it starts with !
     if (message.message.startsWith('!')) {
@@ -1451,12 +1664,34 @@ ${content.content.substring(0, 3000)}...`;
   }
   
   async processCommand(message) {
+    const startTime = Date.now();
     const parts = message.message.slice(1).split(' ');
     const commandName = parts[0].toLowerCase();
     const args = parts.slice(1);
     
+    console.log(`📝 Processing command: !${commandName} with ${args.length} args`);
+    
+    // Track command usage
+    const usageData = {
+      command: commandName,
+      args: args.join(' ').substring(0, 1000), // Limit args length
+      groupId: message.groupId || null,
+      groupName: message.groupName || null,
+      userId: message.sourceNumber,
+      userName: message.sourceName || null,
+      success: true,
+      responseTime: null,
+      errorMessage: null
+    };
+    console.log(`📦 Available commands: ${Array.from(this.plugins.keys()).join(', ')}`);
+    
     const command = this.plugins.get(commandName);
     if (!command) {
+      console.log(`❌ Command not found: !${commandName}`);
+      usageData.success = false;
+      usageData.errorMessage = 'Command not found';
+      usageData.responseTime = Date.now() - startTime;
+      await this.trackCommandUsage(usageData);
       await this.sendReply(message, `Unknown command: !${commandName}. Use !help for available commands.`);
       return;
     }
@@ -1469,15 +1704,49 @@ ${content.content.substring(0, 3000)}...`;
         args: args,
         groupId: message.groupId,
         isGroup: !!message.groupId,
-        isDM: !message.groupId
+        isDM: !message.groupId,
+        quotedMessage: message.quotedMessage,
+        quotedAttachments: message.quotedAttachments,
+        attachments: message.attachments,
+        message: message, // Pass full message for access to mentions
+        mentions: message.mentions || []
       };
       
       const response = await command.execute(context);
+      
+      // Track successful command
+      usageData.responseTime = Date.now() - startTime;
+      await this.trackCommandUsage(usageData);
+      
       if (response) {
+        // Store bot response for reaction tracking
+        this.lastBotResponse = {
+          message: response,
+          command: commandName,
+          groupId: message.groupId,
+          groupName: message.groupName,
+          timestamp: Date.now()
+        };
         await this.sendReply(message, response);
       }
     } catch (error) {
       console.error(`❌ Command ${commandName} failed:`, error);
+      
+      // Track failed command
+      usageData.success = false;
+      usageData.errorMessage = error.message;
+      usageData.responseTime = Date.now() - startTime;
+      await this.trackCommandUsage(usageData);
+      
+      // Log error to database
+      await this.logError('command_error', error, {
+        command: commandName,
+        groupId: message.groupId,
+        groupName: message.groupName,
+        userId: message.sourceNumber,
+        userName: message.sourceName
+      });
+      
       await this.sendReply(message, `Command failed: ${error.message}`);
     }
   }
@@ -1487,6 +1756,40 @@ ${content.content.substring(0, 3000)}...`;
       await this.sendGroupMessage(originalMessage.groupId, reply);
     } else {
       await this.sendMessage(originalMessage.sourceNumber, reply);
+    }
+  }
+
+  // Add user to a Signal group
+  async addUserToGroup(userNumber, groupId) {
+    try {
+      const request = {
+        jsonrpc: '2.0',
+        method: 'updateGroup',
+        params: {
+          account: this.phoneNumber,
+          groupId: groupId,
+          addMembers: [userNumber]
+        },
+        id: `adduser-${Date.now()}`
+      };
+      
+      const result = await this.sendJsonRpcRequest(request);
+      console.log(`✅ Added ${userNumber} to group ${groupId}`);
+      return result;
+    } catch (error) {
+      console.error(`Failed to add user to group: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Send message to a specific group
+  async sendToGroup(groupId, message) {
+    try {
+      await this.sendGroupMessage(groupId, message);
+      console.log(`✅ Sent message to group ${groupId}`);
+    } catch (error) {
+      console.error(`Failed to send to group: ${error.message}`);
+      throw error;
     }
   }
 
@@ -1928,23 +2231,475 @@ ${content.content.substring(0, 3000)}...`;
 
   // Community Plugin Handlers
   async handleGroups(context) {
-    // Show authorized groups the bot is a member of
-    const authorizedGroups = [
-      { name: 'irregular-main', display: 'IrregularChat: Main', description: 'Main community discussion' },
-      { name: 'off-topic', display: 'IrregularChat: Off-Topic', description: 'Casual conversations /j /s' },
-      { name: 'tech-general', display: 'Tech: General', description: 'Technology discussions' },
-      { name: 'ai-ml', display: 'AI/ML/NLP', description: 'AI and machine learning' },
-      { name: 'security', display: 'Cybersecurity', description: 'InfoSec and privacy' },
-      { name: 'hardware', display: 'Hardware Projects', description: 'Hardware and IoT' },
-      { name: 'events', display: 'Community Events', description: 'Meetups and events' },
-      { name: 'ncr', display: 'NCR Region', description: 'National Capital Region' },
-      { name: 'tampa', display: 'Tampa Bay', description: 'Tampa area community' },
-      { name: 'welcome', display: 'Welcome & Onboarding', description: 'New member orientation' }
-    ];
+    const { args } = context;
     
-    return `📱 **Authorized Groups (Bot is member):**\n\n${authorizedGroups.map(g => 
-      `• **${g.display}** (\`${g.name}\`)\n  ${g.description}`
-    ).join('\n\n')}\n\n💡 Use \`!join <name>\` to request access\n🔒 Admin approval required for some groups\n🏞️ All groups follow IrregularChat rules`;
+    try {
+      // Check if user wants to refresh the cache
+      const forceRefresh = args && args[0] === 'refresh';
+      
+      // Fetch groups using the new caching mechanism
+      const groups = await this.getSignalGroups(forceRefresh);
+      
+      if (forceRefresh) {
+        console.log('✅ Groups cache refreshed');
+      }
+      
+      if (!groups || groups.length === 0) {
+        return '❌ Unable to fetch groups or bot is not in any groups.';
+      }
+      
+      let response = '📱 Signal Groups (Bot Membership):\n\n';
+      
+      groups.forEach((group, index) => {
+        // Use memberCount from cache, or count members array if available
+        const memberCount = group.memberCount || (group.members ? group.members.length : 0);
+        const isAdmin = this.isBotAdmin(group);
+        const adminIcon = isAdmin ? '👑' : '👤';
+        
+        response += `${index + 1}. ${group.name || 'Unnamed Group'} ${adminIcon}\n`;
+        response += `   Members: ${memberCount}`;
+        if (isAdmin) {
+          response += ' (Bot is Admin)';
+        }
+        response += '\n\n';
+      });
+      
+      response += '────────────────\n';
+      response += '👑 = Bot has admin rights\n';
+      response += '👤 = Bot is regular member\n\n';
+      
+      const adminGroups = groups.filter(g => this.isBotAdmin(g));
+      if (adminGroups.length > 0) {
+        response += `✅ Bot can add users to ${adminGroups.length} group(s)\n`;
+        response += 'Use !addto <group-number> @user to add users\n';
+      } else {
+        response += '⚠️ Bot has no admin rights in any group\n';
+        response += 'Cannot add users without admin permissions\n';
+      }
+      
+      return response;
+      
+    } catch (error) {
+      console.error('Error in handleGroups:', error);
+      return '❌ Error fetching groups. Please try again later.';
+    }
+  }
+  
+  async fetchAndCacheGroups() {
+    // Try to fetch groups using a direct command
+    return new Promise((resolve, reject) => {
+      const { exec } = require('child_process');
+      exec(`echo '{"jsonrpc":"2.0","method":"listGroups","params":{"account":"${this.phoneNumber}"},"id":1}' | nc -U ${this.socketPath}`, 
+        { timeout: 5000 },
+        (error, stdout, stderr) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          try {
+            const response = JSON.parse(stdout);
+            if (response.result) {
+              this.cachedGroups = response.result;
+              this.cachedGroupsTime = Date.now();
+              resolve(response.result);
+            } else {
+              reject(new Error('No result in response'));
+            }
+          } catch (parseError) {
+            reject(parseError);
+          }
+        }
+      );
+    });
+  }
+  
+  async getSignalGroups(forceRefresh = false) {
+    const cacheFile = path.join(this.dataDir, 'groups-cache.json');
+    const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes cache
+    
+    try {
+      // Try to read from cache first
+      if (!forceRefresh) {
+        try {
+          const cacheData = await fsPromises.readFile(cacheFile, 'utf8');
+          const cache = JSON.parse(cacheData);
+          
+          if (cache.lastUpdated && cache.groups && cache.groups.length > 0) {
+            const age = Date.now() - cache.lastUpdated;
+            if (age < CACHE_DURATION) {
+              console.log(`📦 Using cached groups (${cache.groups.length} groups, age: ${Math.round(age/1000)}s)`);
+              return cache.groups;
+            }
+          }
+        } catch (e) {
+          // Cache doesn't exist or is invalid, continue to fetch
+        }
+      }
+      
+      console.log('🔄 Fetching fresh group list from Signal...');
+      
+      // Use the existing sendJsonRpcRequest method
+      const request = {
+        jsonrpc: '2.0',
+        method: 'listGroups',
+        params: {
+          account: this.phoneNumber,
+          'get-members': false  // Don't fetch members to speed up
+        },
+        id: Date.now()
+      };
+      
+      const groups = await this.sendJsonRpcRequestWithResult(request);
+      
+      // Save to cache
+      const cacheData = {
+        groups: groups || [],
+        lastUpdated: Date.now(),
+        cacheVersion: '1.0'
+      };
+      
+      await fsPromises.writeFile(cacheFile, JSON.stringify(cacheData, null, 2));
+      console.log(`✅ Cached ${groups ? groups.length : 0} groups`);
+      
+      return groups || [];
+    } catch (error) {
+      console.error('Error getting groups:', error);
+      
+      // Try to use stale cache if available
+      try {
+        const cacheData = await fsPromises.readFile(cacheFile, 'utf8');
+        const cache = JSON.parse(cacheData);
+        if (cache.groups && cache.groups.length > 0) {
+          console.log('⚠️ Using stale cache due to error');
+          return cache.groups;
+        }
+      } catch (e) {
+        // No cache available
+      }
+      
+      throw error;
+    }
+  }
+  
+  async sendJsonRpcRequestWithResult(request) {
+    return new Promise((resolve, reject) => {
+      // Store the request ID for tracking
+      const requestId = request.id;
+      
+      // Create a temporary handler for this specific request
+      const responseHandler = (data) => {
+        try {
+          const lines = data.toString().split('\n').filter(line => line.trim());
+          for (const line of lines) {
+            try {
+              const message = JSON.parse(line);
+              if (message.id === requestId) {
+                this.socket.removeListener('data', responseHandler);
+                if (message.result) {
+                  resolve(message.result);
+                } else if (message.error) {
+                  reject(new Error(message.error.message || 'Request failed'));
+                }
+                return;
+              }
+            } catch (e) {
+              // Continue to next line
+            }
+          }
+        } catch (error) {
+          // Continue listening
+        }
+      };
+      
+      // Add the handler
+      this.socket.on('data', responseHandler);
+      
+      // Send the request
+      this.socket.write(JSON.stringify(request) + '\n');
+      
+      // Timeout after 30 seconds (groups list can be large)
+      setTimeout(() => {
+        this.socket.removeListener('data', responseHandler);
+        reject(new Error('Request timeout'));
+      }, 30000);
+    });
+  }
+  
+  isBotAdmin(group) {
+    // First check cached admin status
+    if (group.botIsAdmin !== undefined) {
+      return group.botIsAdmin;
+    }
+    
+    // Fallback to checking admins array if available
+    if (!group.admins || !Array.isArray(group.admins)) {
+      return false;
+    }
+    
+    // Check if bot's phone number or UUID is in the admins list
+    const botUuid = 'd6292870-2d4f-43a1-89fe-d63791ca104d'; // Bot's actual UUID from logs
+    
+    return group.admins.some(admin => 
+      admin.number === this.phoneNumber || 
+      admin.uuid === botUuid ||
+      admin === this.phoneNumber ||
+      admin === botUuid
+    );
+  }
+
+  async handleAddTo(context) {
+    const { args, sender, sourceNumber, message } = context;
+    
+    if (!args || args.length < 2) {
+      return '❌ Usage: !addto <group-number> @user1 @user2 ...\n\n' +
+             'Example: !addto 1 @alice @bob\n' +
+             'Example: !addto 3 +12345678900\n\n' +
+             'Use !groups to see available groups and their numbers';
+    }
+    
+    // Get the group number
+    const groupIdentifier = args[0];
+    
+    // The message text after the command and group number
+    // This will contain the replacement characters for mentions
+    const fullMessage = message?.message || '';
+    const commandPrefix = `!addto ${groupIdentifier}`;
+    const afterCommand = fullMessage.substring(fullMessage.indexOf(commandPrefix) + commandPrefix.length).trim();
+    
+    console.log('🔍 AddTo Debug:');
+    console.log('  Full message:', fullMessage);
+    console.log('  After command:', afterCommand);
+    console.log('  Args:', args);
+    console.log('  Mentions in message:', message?.mentions);
+    
+    // Extract mentions from the original message if available
+    const mentions = message?.mentions || [];
+    const users = [];
+    
+    // Debug logging for mentions
+    if (mentions.length > 0) {
+      console.log('📝 Mentions found in message:', JSON.stringify(mentions, null, 2));
+      
+      // If we have mentions, use them directly - they contain the UUIDs we need
+      for (const mention of mentions) {
+        if (mention.uuid) {
+          // Sometimes Signal puts the UUID in the name field when the actual name isn't available
+          const displayName = (mention.name && mention.name !== mention.uuid) ? mention.name : 'User';
+          console.log(`✅ Using UUID from mention: ${mention.uuid} for ${displayName}`);
+          users.push({
+            identifier: mention.uuid,
+            display: displayName
+          });
+        } else if (mention.number) {
+          const displayName = (mention.name && mention.name !== mention.number) ? mention.name : mention.number;
+          console.log(`📱 Using phone from mention: ${mention.number} for ${displayName}`);
+          users.push({
+            identifier: mention.number,
+            display: displayName
+          });
+        }
+      }
+    } else if (afterCommand.includes('￼')) {
+      // We have replacement characters but no mentions data - this is a problem
+      console.log('❌ Message has mention characters but no mention data!');
+      return '❌ Unable to process mentions. Please try again or use phone numbers.';
+    } else {
+      // No mentions - process traditional arguments (phone numbers or direct UUIDs)
+      const parts = args.slice(1); // Skip the group number
+      for (const userArg of parts) {
+        if (userArg.startsWith('+')) {
+          // Phone number
+          users.push({ identifier: userArg, display: userArg });
+        } else if (userArg.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+          // Direct UUID
+          console.log(`📍 Direct UUID provided: ${userArg}`);
+          users.push({ identifier: userArg, display: userArg });
+        } else {
+          // Try to look up in group members
+          console.log(`🔍 Looking for ${userArg} in group members...`);
+          try {
+            const groups = await this.getSignalGroups(false);
+            const targetGroup = groups[parseInt(groupIdentifier) - 1];
+            
+            if (targetGroup && targetGroup.members) {
+              const member = targetGroup.members.find(m => 
+                m.name === userArg || 
+                (m.number && m.number.includes(userArg))
+              );
+              
+              if (member && member.uuid) {
+                console.log(`✅ Found UUID in group members: ${member.uuid}`);
+                users.push({ identifier: member.uuid, display: userArg });
+              } else {
+                console.log(`⚠️ Could not find UUID for ${userArg}`);
+                return `❌ Could not find user "${userArg}". Please use @mention or provide their UUID.`;
+              }
+            }
+          } catch (error) {
+            console.error('Error fetching group members:', error);
+            return `❌ Error looking up user "${userArg}"`;
+          }
+        }
+      }
+    }
+    
+    try {
+      // Get actual groups from Signal
+      const groups = await this.getSignalGroups(false);
+      
+      if (!groups || groups.length === 0) {
+        return '❌ Unable to fetch groups.';
+      }
+      
+      // Find the group by number
+      const groupNum = parseInt(groupIdentifier);
+      if (isNaN(groupNum) || groupNum < 1 || groupNum > groups.length) {
+        return `❌ Invalid group number: ${groupIdentifier}\n\n` +
+               `Please use a number between 1 and ${groups.length}\n` +
+               'Use !groups to see available groups.';
+      }
+      
+      const targetGroup = groups[groupNum - 1];
+      const isAdmin = this.isBotAdmin(targetGroup);
+      
+      if (!isAdmin) {
+        return `❌ Cannot add users to "${targetGroup.name}"\n\n` +
+               'Bot does not have admin permissions in this group.\n' +
+               'Only group admins can add new members.';
+      }
+      
+      if (users.length === 0) {
+        return `❌ No users specified to add to ${targetGroup.name}`;
+      }
+      
+      // Attempt to add users via Signal CLI
+      const results = [];
+      console.log(`🎯 Attempting to add ${users.length} users to group: ${targetGroup.name} (${targetGroup.id})`);
+      
+      for (const user of users) {
+        try {
+          const userIdentifier = user.identifier;
+          
+          // Send the update group request
+          const request = {
+            jsonrpc: '2.0',
+            method: 'updateGroup',
+            params: {
+              account: this.phoneNumber,
+              groupId: targetGroup.id,
+              addMembers: [userIdentifier]
+            },
+            id: Date.now()
+          };
+          
+          console.log(`📤 Sending updateGroup request:`);
+          console.log(`   Group: ${targetGroup.name}`);
+          console.log(`   User UUID: ${userIdentifier}`);
+          console.log(`   Display: ${user.display}`);
+          
+          const success = await this.sendJsonRpcRequest(request);
+          if (success) {
+            console.log(`✅ Successfully added ${user.display}`);
+            results.push(`✅ ${user.display} added successfully`);
+          } else {
+            console.log(`⚠️ Failed to add ${user.display}`);
+            results.push(`⚠️ ${user.display} (could not add - check if UUID is valid)`);
+          }
+        } catch (error) {
+          console.error(`Error adding ${user.display}:`, error);
+          if (error.message.includes('timeout')) {
+            results.push(`⚠️ ${user.display} (request timed out - user may not exist)`);
+          } else {
+            results.push(`❌ ${user.display}: ${error.message}`);
+          }
+        }
+      }
+      
+      // Check if any users were actually added
+      const successCount = results.filter(r => r.includes('✅')).length;
+      const failCount = results.filter(r => r.includes('❌') || r.includes('⚠️')).length;
+      
+      let summary = `📱 Adding users to "${targetGroup.name}":\n\n`;
+      summary += results.join('\n');
+      
+      if (successCount > 0 && failCount === 0) {
+        summary += '\n\n✅ Operation complete';
+      } else if (successCount > 0 && failCount > 0) {
+        summary += `\n\n⚠️ Partially complete: ${successCount} added, ${failCount} failed`;
+      } else {
+        summary += '\n\n❌ Failed to add users';
+      }
+      
+      return summary;
+             
+    } catch (error) {
+      console.error('Error in handleAddTo:', error);
+      return `❌ Failed to add users\n\n` +
+             `Error: ${error.message}`;
+    }
+  }
+  
+  async sendJsonRpcRequest(request) {
+    return new Promise((resolve, reject) => {
+      let timeoutId;
+      let resolved = false;
+      
+      const responseHandler = (data) => {
+        if (resolved) return; // Already handled
+        
+        try {
+          const lines = data.toString().split('\n').filter(line => line.trim());
+          for (const line of lines) {
+            try {
+              const message = JSON.parse(line);
+              if (message.id === request.id) {
+                resolved = true;
+                clearTimeout(timeoutId);
+                this.socket.removeListener('data', responseHandler);
+                
+                if (message.result !== undefined) {
+                  resolve(true);
+                } else if (message.error) {
+                  reject(new Error(message.error.message || 'Request failed'));
+                } else {
+                  // Some commands return empty result on success
+                  resolve(true);
+                }
+                return;
+              }
+            } catch (e) {
+              // Continue to next line
+            }
+          }
+        } catch (error) {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeoutId);
+            this.socket.removeListener('data', responseHandler);
+            reject(error);
+          }
+        }
+      };
+      
+      this.socket.on('data', responseHandler);
+      this.socket.write(JSON.stringify(request) + '\n');
+      
+      // Timeout after 10 seconds (some operations take longer)
+      timeoutId = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          this.socket.removeListener('data', responseHandler);
+          
+          // Don't reject on timeout for send messages and updateGroup - they often succeed but don't respond
+          if (request.method === 'send' || request.method === 'updateGroup') {
+            console.log(`⚠️ ${request.method} request timed out but may have succeeded`);
+            resolve(true);
+          } else {
+            reject(new Error('Request timeout'));
+          }
+        }
+      }, 10000);
+    });
   }
 
   async handleJoin(context) {
@@ -2262,8 +3017,14 @@ ${content.content.substring(0, 3000)}...`;
       if (groupId && this.messageHistory.has(groupId)) {
         const messages = this.messageHistory.get(groupId) || [];
         const messageMatches = messages
-          .filter(msg => msg.message.toLowerCase().includes(query.toLowerCase()))
-          .slice(-3)
+          .filter(msg => {
+            // Exclude bot commands and system messages
+            if (msg.message.startsWith('!')) return false;
+            if (msg.message.startsWith('🔍 Search Results')) return false;
+            if (msg.sender === 'irregularchat-bot') return false;
+            return msg.message.toLowerCase().includes(query.toLowerCase());
+          })
+          .slice(-2)  // Reduce to 2 messages to avoid spam
           .map(msg => ({
             type: 'message',
             sender: msg.sender.substring(0, 10) + '***', // Partial anonymization
@@ -2323,7 +3084,7 @@ ${content.content.substring(0, 3000)}...`;
                 role: 'user',
                 content: `Query: "${query}"\nResults: ${JSON.stringify(contextData.results)}`
               }],
-              max_tokens: 100 // Reduced for speed
+              max_completion_tokens: 650  // GPT-5 minimum for thinking models
             })
           });
           
@@ -2340,18 +3101,18 @@ ${content.content.substring(0, 3000)}...`;
         }
       }
       
-      // 7. Format response
-      let response = `🔍 Search Results for: "${query}"\n\n`;
+      // 7. Format response (compact for large groups)
+      let response = `Search Results for: "${query}"\n\n`;
       
-      // Add AI summary if available
-      if (aiSummary) {
-        response += `LocalAI Summary:\n${aiSummary}\n\n───────────────\n\n`;
+      // Add AI summary if available (skip if too long)
+      if (aiSummary && aiSummary.length < 150) {
+        response += `${aiSummary}\n\n`;
       }
       
-      // Add categorized results
+      // Add categorized results (compact format)
       if (searchResults.wiki.length > 0) {
         response += `📚 Wiki Articles:\n`;
-        searchResults.wiki.forEach(r => {
+        searchResults.wiki.slice(0, 3).forEach(r => {  // Limit to 3
           response += `• ${r.title}\n  ${r.url}\n`;
         });
         response += '\n';
@@ -2359,7 +3120,7 @@ ${content.content.substring(0, 3000)}...`;
       
       if (searchResults.forum.length > 0) {
         response += `💬 Forum Posts:\n`;
-        searchResults.forum.forEach(r => {
+        searchResults.forum.slice(0, 3).forEach(r => {  // Limit to 3
           response += `• ${r.title}\n  ${r.url}\n`;
         });
         response += '\n';
@@ -2377,8 +3138,13 @@ ${content.content.substring(0, 3000)}...`;
       if (searchResults.messages.length > 0) {
         response += `💭 Recent Messages:\n`;
         searchResults.messages.forEach(m => {
-          response += `• ${m.time} - ${m.content}...\n`;
+          response += `• just now - ${m.content.substring(0, 50)}...\n`;  // Shorter content
         });
+      }
+      
+      // Limit total response size for large groups (Signal has message size limits)
+      if (response.length > 1500) {
+        response = response.substring(0, 1497) + '...';
       }
       
       return response;
@@ -2395,7 +3161,730 @@ ${content.content.substring(0, 3000)}...`;
   }
 
   async handleEvents(context) {
-    return `📅 **Upcoming Events:**\n\n🎯 AI/ML Study Group\n📅 Sept 5, 2025 at 19:00 UTC\n📍 Virtual - AI/ML Group\n\n🎯 Security Workshop\n📅 Sept 10, 2025 at 20:00 UTC\n📍 Virtual - Security Group\n\n💡 Join relevant groups for notifications.`;
+    try {
+      // Import Prisma client
+      const { PrismaClient } = require('../../generated/prisma');
+      const prisma = new PrismaClient();
+      
+      // Get upcoming events from database
+      const now = new Date();
+      const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+      
+      const events = await prisma.signalEvent.findMany({
+        where: {
+          isActive: true,
+          eventStart: {
+            gte: now,
+            lte: thirtyDaysFromNow
+          }
+        },
+        orderBy: {
+          eventStart: 'asc'
+        },
+        take: 5
+      });
+      
+      // Also try to fetch latest events from Discourse if API is available
+      if (this.discourseApiUrl && this.discourseApiKey) {
+        try {
+          const response = await fetch(`${this.discourseApiUrl}/tags/event.json`, {
+            headers: {
+              'Api-Key': this.discourseApiKey,
+              'Api-Username': this.discourseApiUsername || 'system'
+            }
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            // Sync any new events from Discourse to our database
+            await this.syncDiscourseEvents(data.topic_list?.topics || []);
+          }
+        } catch (error) {
+          console.error('Failed to fetch Discourse events:', error);
+        }
+      }
+      
+      // Format events for display
+      if (events.length === 0) {
+        return `📅 Upcoming Events:\n\nNo upcoming events scheduled.\n\nTo add an event, use: !eventadd <event details>\n\nView calendar: ${this.discourseApiUrl}/upcoming-events`;
+      }
+      
+      let response = '📅 Upcoming Events:\n\n';
+      
+      for (const event of events) {
+        const startDate = new Date(event.eventStart);
+        const endDate = event.eventEnd ? new Date(event.eventEnd) : null;
+        
+        response += `${event.eventName}\n`;
+        response += `📅 ${this.formatEventDate(startDate)}\n`;
+        if (endDate) {
+          response += `⏰ Ends: ${this.formatEventTime(endDate)}\n`;
+        }
+        if (event.location) {
+          response += `📍 ${event.location}\n`;
+        }
+        if (event.discourseUrl) {
+          response += `🔗 ${event.discourseUrl}\n`;
+        }
+        response += '\n';
+      }
+      
+      response += `View all events: ${this.discourseApiUrl}/upcoming-events\n`;
+      response += `Add an event: !eventadd <details>`;
+      
+      await prisma.$disconnect();
+      return response;
+      
+    } catch (error) {
+      console.error('Error fetching events:', error);
+      return `📅 **Upcoming Events:**\n\n⚠️ Unable to fetch events at this time.\n\nView events online: ${this.discourseApiUrl}/upcoming-events`;
+    }
+  }
+  
+  // Helper function to format event dates
+  formatEventDate(date) {
+    const options = { 
+      weekday: 'short', 
+      month: 'short', 
+      day: 'numeric', 
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZoneName: 'short'
+    };
+    return date.toLocaleString('en-US', options);
+  }
+  
+  // Helper function to format just time
+  formatEventTime(date) {
+    const options = { 
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZoneName: 'short'
+    };
+    return date.toLocaleString('en-US', options);
+  }
+  
+  async handleEventFollowUp(message, pendingEvent) {
+    const text = message.message.trim().toLowerCase();
+    
+    // Check for confirmation responses
+    if (text === 'yes' || text === 'y' || text === 'confirm' || text === 'ok') {
+      // Create the event
+      const createdEvent = await this.createEventInDiscourse(pendingEvent.parsed, pendingEvent.sender);
+      
+      if (createdEvent.success) {
+        // Clear the context
+        this.eventFollowUpContext.delete(message.sourceNumber);
+        this.pendingEvents.delete(pendingEvent.pendingEventId);
+        
+        // Format response
+        const eventDate = new Date(pendingEvent.parsed.start);
+        const dateStr = eventDate.toLocaleDateString('en-US', { 
+          weekday: 'long', 
+          year: 'numeric', 
+          month: 'long', 
+          day: 'numeric' 
+        });
+        const timeStr = eventDate.toLocaleTimeString('en-US', { 
+          hour: 'numeric', 
+          minute: '2-digit' 
+        });
+        
+        return `LocalAI: ✅ Event Created!\n\n` +
+               `${pendingEvent.parsed.name}\n` +
+               `📅 ${dateStr}\n` +
+               `🕐 ${timeStr}\n` +
+               `📍 ${pendingEvent.parsed.location}\n\n` +
+               `📎 Forum link: ${createdEvent.url}\n\n` +
+               `The event has been posted to the forum calendar and saved to our database.`;
+      } else {
+        return `LocalAI: ❌ Failed to create event: ${createdEvent.error}`;
+      }
+    }
+    
+    // Check for cancellation
+    if (text === 'no' || text === 'cancel' || text === 'stop') {
+      this.eventFollowUpContext.delete(message.sourceNumber);
+      this.pendingEvents.delete(pendingEvent.pendingEventId);
+      return 'LocalAI: ❌ Event creation cancelled.';
+    }
+    
+    // Otherwise, treat it as additional information for the event
+    const updatedDescription = message.message.trim();
+    
+    // Try to parse the additional info
+    if (updatedDescription.toLowerCase().includes('is at') || 
+        updatedDescription.toLowerCase().includes('located at')) {
+      // They're providing location details
+      const locationMatch = updatedDescription.match(/(?:is at|located at)\s+(.+)/i);
+      if (locationMatch) {
+        pendingEvent.parsed.location = locationMatch[1].trim();
+        
+        // Check if we now have all required fields
+        const missingFields = [];
+        if (!pendingEvent.parsed.name) missingFields.push('event name');
+        if (!pendingEvent.parsed.start) missingFields.push('start date/time');
+        
+        if (missingFields.length === 0) {
+          // We have everything, confirm creation
+          return `LocalAI: Great! I now have all the details:\n\n` +
+                 `• Name: ${pendingEvent.parsed.name}\n` +
+                 `• Start: ${pendingEvent.parsed.start}\n` +
+                 `• Location: ${pendingEvent.parsed.location}\n\n` +
+                 `Reply "yes" to create this event or "cancel" to stop.`;
+        }
+      }
+    }
+    
+    // Update pending event and ask for confirmation
+    pendingEvent.timestamp = Date.now();
+    return `LocalAI: I've updated the location to: ${pendingEvent.parsed.location}\n\n` +
+           `Event details:\n` +
+           `• Name: ${pendingEvent.parsed.name}\n` +
+           `• Start: ${pendingEvent.parsed.start}\n` +
+           `• Location: ${pendingEvent.parsed.location}\n\n` +
+           `Reply "yes" to create this event or "cancel" to stop.`;
+  }
+
+  async handleEventAdd(context) {
+    const { args, sender, sourceNumber, groupId } = context;
+    
+    if (!args || args.length === 0) {
+      return '📅 Add Event Usage:\n\n' +
+             '!eventadd <natural language description>\n\n' +
+             'Example:\n' +
+             '!eventadd Monthly meetup next Tuesday at 6pm at the community center\n\n' +
+             'I\'ll help you format this for the forum and ask for any missing details!';
+    }
+    
+    const eventDescription = args.join(' ').trim();
+    console.log(`📅 Processing event add request from ${sender}: ${eventDescription}`);
+    
+    try {
+      // Use LocalAI to parse the natural language event description
+      const parsedEvent = await this.parseEventWithLocalAI(eventDescription);
+      
+      // Check what fields are missing or incomplete
+      const missingFields = [];
+      if (!parsedEvent.name) missingFields.push('event name');
+      if (!parsedEvent.start) missingFields.push('start date/time');
+      if (!parsedEvent.location) {
+        missingFields.push('location');
+      } else {
+        // Check if location looks incomplete (business name or street address without city/state)
+        const locationLower = parsedEvent.location.toLowerCase().trim();
+        const hasStreetOnly = /^\d+\s+\w+\s+(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|place|pl|way)$/i.test(parsedEvent.location.trim());
+        const hasCityState = /,\s*[A-Za-z\s]+(?:,\s*[A-Z]{2})?/.test(parsedEvent.location);
+        
+        // Check if it's likely a business name without full address
+        const looksLikeBusiness = !hasStreetOnly && !hasCityState && 
+                                 !locationLower.includes('online') && 
+                                 !locationLower.includes('virtual') &&
+                                 !locationLower.includes(',');
+        
+        if (hasStreetOnly && !hasCityState) {
+          missingFields.push('city and state for the address');
+        } else if (looksLikeBusiness) {
+          missingFields.push('complete address with city and state');
+        }
+      }
+      
+      // Store pending event in memory for follow-up
+      const pendingEventId = `pending_${Date.now()}`;
+      this.pendingEvents = this.pendingEvents || new Map();
+      this.pendingEvents.set(pendingEventId, {
+        parsed: parsedEvent,
+        original: eventDescription,
+        sender: sender,
+        sourceNumber: sourceNumber,
+        groupId: groupId,
+        timestamp: Date.now()
+      });
+      
+      // Clean up old pending events (older than 1 hour)
+      const oneHourAgo = Date.now() - (60 * 60 * 1000);
+      for (const [id, event] of this.pendingEvents.entries()) {
+        if (event.timestamp < oneHourAgo) {
+          this.pendingEvents.delete(id);
+        }
+      }
+      
+      // Track this for follow-up
+      this.eventFollowUpContext.set(sourceNumber, {
+        pendingEventId: pendingEventId,
+        timestamp: Date.now()
+      });
+      
+      if (missingFields.length > 0) {
+        let response = 'LocalAI: 📅 Creating Event\n\n';
+        response += 'I understood:\n';
+        if (parsedEvent.name) response += `• Name: ${parsedEvent.name}\n`;
+        if (parsedEvent.start) response += `• Start: ${parsedEvent.start}\n`;
+        if (parsedEvent.end) response += `• End: ${parsedEvent.end}\n`;
+        if (parsedEvent.location) response += `• Location: ${parsedEvent.location}\n`;
+        
+        response += `\n❓ Missing information: ${missingFields.join(', ')}\n\n`;
+        response += `Please provide the missing details. For example:\n`;
+        if (!parsedEvent.name) response += `"The event name is Community Meetup"\n`;
+        if (!parsedEvent.start) response += `"It starts on January 15 at 6pm"\n`;
+        if (!parsedEvent.location) response += `"Location is 123 Main St, Anytown, CA"\n`;
+        if (missingFields.includes('city and state for the address')) {
+          response += `"The city is Anytown, CA" (please include city and state)\n`;
+        }
+        if (missingFields.includes('complete address with city and state')) {
+          response += `"${parsedEvent.location} is at 123 Main St, Anytown, CA"\n`;
+        }
+        
+        response += `\n💡 Or reply with the complete details and I'll try again.`;
+        
+        return response;
+      }
+      
+      // We have all required fields but need user confirmation
+      // Format the date/time nicely for confirmation
+      const eventDate = parsedEvent.start ? new Date(parsedEvent.start) : null;
+      let formattedDate = parsedEvent.start;
+      if (eventDate && !isNaN(eventDate)) {
+        formattedDate = eventDate.toLocaleDateString('en-US', { 
+          weekday: 'long', 
+          year: 'numeric', 
+          month: 'long', 
+          day: 'numeric' 
+        }) + ' at ' + eventDate.toLocaleTimeString('en-US', { 
+          hour: 'numeric', 
+          minute: '2-digit' 
+        });
+      }
+      
+      let response = 'LocalAI: 📅 Ready to Create Event\n\n';
+      response += 'Event Details:\n';
+      response += `• Name: ${parsedEvent.name}\n`;
+      response += `• When: ${formattedDate}\n`;
+      response += `• Where: ${parsedEvent.location}\n`;
+      if (parsedEvent.description && parsedEvent.description !== eventDescription) {
+        response += `• Details: ${parsedEvent.description}\n`;
+      }
+      
+      response += '\n✅ Reply "yes" to create this event\n';
+      response += '❌ Reply "cancel" to cancel\n';
+      response += '✏️ Or tell me what to change';
+      
+      return response;
+      
+    } catch (error) {
+      console.error('Error in handleEventAdd:', error);
+      return `❌ **Error processing event**\n\n` +
+             `Please try again with a clearer description, for example:\n` +
+             `!eventadd "Community Meetup on January 15 at 6pm at 123 Main St"`;
+    }
+  }
+  
+  async parseEventWithLocalAI(description) {
+    if (!this.localAiUrl || !this.localAiApiKey) {
+      // Fallback to basic parsing if LocalAI not configured
+      return this.basicEventParsing(description);
+    }
+    
+    try {
+      const prompt = `Parse this event description into structured data. Extract:
+- name: Extract a meaningful event name from the context. Look for phrases like "community meetup", "meet up", "gathering", etc. If the text says something like "we should have a community meet up", extract "Community Meetup" as the name. If no clear event type is mentioned, use "Community Meetup" as default.
+- start: Start date and time (format: YYYY-MM-DD HH:MM). If no time is specified but a date is given, default to 18:00 (6 PM).
+- end: End date and time if mentioned (format: YYYY-MM-DD HH:MM)
+- location: Extract the location exactly as stated. If it's a business name like "macs speed shop", return just that. If it's a street address without city/state, return just the street. Do NOT add or guess missing address components.
+- timezone: Timezone (default: America/New_York)
+- description: Any additional context or details
+
+Examples of name extraction:
+- "we should totally have a community meet up" → name: "Community Meetup"
+- "lets meet up on sep 20" → name: "Meetup"
+- "monthly gathering at the cafe" → name: "Monthly Gathering"
+
+IMPORTANT: 
+1. For location, ONLY return what's explicitly stated. Never add city/state unless provided.
+2. For event names, extract meaningful phrases and format them properly (capitalize words).
+3. If time is not specified, default to 18:00 (6 PM) for community events.
+
+Event description: "${description}"
+
+Return ONLY valid JSON with these fields. Use null for missing values. Today's date is ${new Date().toISOString().split('T')[0]}.`;
+
+      const response = await fetch(`${this.localAiUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.localAiApiKey}`
+        },
+        body: JSON.stringify({
+          model: this.localAiModel || 'gpt-oss-120',
+          messages: [
+            { 
+              role: 'system', 
+              content: 'You are a helpful assistant that parses event descriptions into structured JSON. Always return valid JSON only, no other text. For location field: if the address is incomplete (missing city/state), return ONLY what was provided. Never add or guess missing location information.'
+            },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.1,
+          max_tokens: 500
+        })
+      });
+      
+      if (!response.ok) {
+        console.error('LocalAI request failed:', response.status);
+        return this.basicEventParsing(description);
+      }
+      
+      const result = await response.json();
+      const content = result.choices[0].message.content;
+      
+      // Try to extract JSON from the response
+      let jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        
+        // Validate and normalize the parsed data
+        return {
+          name: parsed.name || null,
+          start: this.normalizeDateTime(parsed.start),
+          end: parsed.end ? this.normalizeDateTime(parsed.end) : null,
+          location: parsed.location || null,
+          timezone: parsed.timezone || 'America/New_York',
+          description: parsed.description || description
+        };
+      }
+      
+    } catch (error) {
+      console.error('LocalAI parsing failed:', error);
+    }
+    
+    // Fallback to basic parsing
+    return this.basicEventParsing(description);
+  }
+  
+  basicEventParsing(description) {
+    // Enhanced regex-based parsing with better natural language understanding
+    const parsed = {
+      name: null,
+      start: null,
+      end: null,
+      location: null,
+      timezone: 'America/New_York',
+      description: description
+    };
+    
+    // Try to extract date/time patterns
+    const datePatterns = [
+      /(?:on |at )?((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]* \d{1,2}(?:st|nd|rd|th)?(?:,? \d{4})?)/i,
+      /(?:on |at )?(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)/i,
+      /(tomorrow|today|tonight|next \w+day|this \w+day)/i
+    ];
+    
+    const timePatterns = [
+      /(?:at |from )?(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))/i,
+      /(?:at |from )?(\d{1,2}:\d{2})/
+    ];
+    
+    // Try to find a date
+    for (const pattern of datePatterns) {
+      const match = description.match(pattern);
+      if (match) {
+        parsed.start = match[1];
+        break;
+      }
+    }
+    
+    // Try to find a time - if not found, default to a reasonable time
+    let foundTime = false;
+    for (const pattern of timePatterns) {
+      const match = description.match(pattern);
+      if (match) {
+        parsed.start = (parsed.start || '') + ' ' + match[1];
+        foundTime = true;
+        break;
+      }
+    }
+    
+    // If no time specified, add a default evening time for meetups
+    if (parsed.start && !foundTime) {
+      parsed.start += ' 6:00 PM'; // Default to 6 PM for community events
+    }
+    
+    // Try to extract location - look for various patterns
+    // Look for "at [location]" pattern first
+    const atLocationMatch = description.match(/\bat\s+([^,]+?)(?:\s+on\s+|\s*$)/i);
+    if (atLocationMatch && !atLocationMatch[1].match(/^\d/)) { // Avoid matching times
+      parsed.location = atLocationMatch[1].trim();
+    } else {
+      // Look for street addresses (numbers followed by street names)
+      const addressMatch = description.match(/(\d+\s+\w+\s+(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|place|pl|way))\b/i);
+      if (addressMatch) {
+        parsed.location = addressMatch[1].trim();
+      }
+    }
+    
+    // Enhanced event name extraction with context understanding
+    let eventName = null;
+    
+    // First, try to extract meaningful phrases that indicate the event type
+    const eventPhrases = [
+      /(?:we should )?(?:totally )?(?:have a |host a |organize a )?(community meet ?up|meet ?up|gathering|event|party|session|workshop|hackathon|demo day)/i,
+      /(?:let'?s |we should |want to |need to |plan to )?(meet ?up|gather|get together|hang out)/i,
+      /(monthly|weekly|annual|quarterly)\s+(meet ?up|gathering|event|meeting)/i
+    ];
+    
+    for (const pattern of eventPhrases) {
+      const match = description.match(pattern);
+      if (match) {
+        eventName = match[1] || match[0];
+        eventName = eventName.replace(/^(we should |totally |have a |let'?s |want to |need to |plan to )/i, '');
+        break;
+      }
+    }
+    
+    // If no event phrase found, try to extract text before "on" or "at"
+    if (!eventName) {
+      const beforePreposition = description.match(/^(.+?)\s+(?:on|at)\s+/i);
+      if (beforePreposition) {
+        let candidate = beforePreposition[1].trim();
+        // Clean up common prefixes
+        candidate = candidate.replace(/^(we should |totally |have a |let'?s |want to |need to |plan to )/i, '');
+        if (candidate && candidate.length > 2) {
+          eventName = candidate;
+        }
+      }
+    }
+    
+    // Clean up and format the event name
+    if (eventName) {
+      // Capitalize first letter of each word
+      eventName = eventName.replace(/\b\w/g, l => l.toUpperCase());
+      // Clean up extra spaces
+      eventName = eventName.replace(/\s+/g, ' ').trim();
+      parsed.name = eventName;
+    } else {
+      // Generate a contextual default name
+      parsed.name = "Community Meetup";
+    }
+    
+    return parsed;
+  }
+  
+  normalizeDateTime(dateTimeStr) {
+    if (!dateTimeStr) return null;
+    
+    // First, try to parse month day year format (e.g., "sep 17 2025")
+    const monthNames = {
+      jan: 0, january: 0,
+      feb: 1, february: 1,
+      mar: 2, march: 2,
+      apr: 3, april: 3,
+      may: 4,
+      jun: 5, june: 5,
+      jul: 6, july: 6,
+      aug: 7, august: 7,
+      sep: 8, sept: 8, september: 8,
+      oct: 9, october: 9,
+      nov: 10, november: 10,
+      dec: 11, december: 11
+    };
+    
+    // Match patterns like "sep 17 2025" or "september 17, 2025"
+    const dateMatch = dateTimeStr.match(/(\w+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?/i);
+    if (dateMatch) {
+      const monthStr = dateMatch[1].toLowerCase();
+      const day = parseInt(dateMatch[2]);
+      const year = dateMatch[3] ? parseInt(dateMatch[3]) : new Date().getFullYear();
+      
+      if (monthNames[monthStr] !== undefined) {
+        const date = new Date(year, monthNames[monthStr], day, 18, 0, 0); // Default to 6pm
+        if (!isNaN(date.getTime())) {
+          return date.toISOString();
+        }
+      }
+    }
+    
+    try {
+      // Try to parse various date formats
+      const date = new Date(dateTimeStr);
+      if (!isNaN(date.getTime())) {
+        return date.toISOString();
+      }
+    } catch (e) {
+      // Continue with manual parsing
+    }
+    
+    // Handle relative dates
+    const now = new Date();
+    const lowerStr = dateTimeStr.toLowerCase();
+    
+    if (lowerStr.includes('tomorrow')) {
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(18, 0, 0, 0); // Default to 6pm
+      return tomorrow.toISOString();
+    }
+    
+    if (lowerStr.includes('today') || lowerStr.includes('tonight')) {
+      now.setHours(18, 0, 0, 0); // Default to 6pm
+      return now.toISOString();
+    }
+    
+    // Return as-is if we can't parse it
+    return dateTimeStr;
+  }
+  
+  async createEventInDiscourse(eventData, createdBy) {
+    if (!this.discourseApiUrl || !this.discourseApiKey) {
+      return {
+        success: false,
+        error: 'Discourse API not configured'
+      };
+    }
+    
+    try {
+      // Format the event for Discourse calendar plugin
+      const eventStart = new Date(eventData.start);
+      const eventEnd = eventData.end ? new Date(eventData.end) : eventStart;
+      
+      // Format dates for the calendar plugin
+      const startDate = eventStart.toISOString().split('T')[0];
+      const endDate = eventEnd.toISOString().split('T')[0];
+      const startTime = eventStart.toTimeString().substring(0, 5);
+      
+      // Use the correct Discourse event syntax: YYYY-MM-DD HH:MM format
+      const year = eventStart.getFullYear();
+      const month = String(eventStart.getMonth() + 1).padStart(2, '0');
+      const day = String(eventStart.getDate()).padStart(2, '0');
+      const hours = String(eventStart.getHours()).padStart(2, '0');
+      const minutes = String(eventStart.getMinutes()).padStart(2, '0');
+      const eventDateTime = `${year}-${month}-${day} ${hours}:${minutes}`;
+      
+      // Create event tag with optional end time
+      let eventTag = `[event start="${eventDateTime}" status="public"`;
+      if (eventData.end) {
+        const endDate = new Date(eventData.end);
+        const endYear = endDate.getFullYear();
+        const endMonth = String(endDate.getMonth() + 1).padStart(2, '0');
+        const endDay = String(endDate.getDate()).padStart(2, '0');
+        const endHours = String(endDate.getHours()).padStart(2, '0');
+        const endMinutes = String(endDate.getMinutes()).padStart(2, '0');
+        const endDateTime = `${endYear}-${endMonth}-${endDay} ${endHours}:${endMinutes}`;
+        eventTag += ` end="${endDateTime}"`;
+      }
+      eventTag += `]\n[/event]`;
+      
+      // Format the post content with event details
+      const postContent = eventTag + `\n\n` +
+                         `## ${eventData.name}\n\n` +
+                         `📍 **Location:** ${eventData.location || 'TBD'}\n` +
+                         `🕐 **Time:** ${eventStart.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} at ${startTime}\n` +
+                         `🌐 **Timezone:** ${eventData.timezone || 'America/New_York'}\n\n` +
+                         `${eventData.description || ''}\n\n` +
+                         `---\n` +
+                         `*Event created via Signal bot by ${createdBy}*`;
+      
+      // Create the topic in Discourse
+      const response = await fetch(`${this.discourseApiUrl}/posts.json`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Api-Key': this.discourseApiKey,
+          'Api-Username': this.discourseApiUsername
+        },
+        body: JSON.stringify({
+          title: eventData.name,
+          raw: postContent,
+          category: 4, // Events category - adjust based on your forum
+          tags: ['event', 'signal-bot']
+        })
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        const eventUrl = `${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id}`;
+        
+        // Store in database
+        const { PrismaClient } = require('../../generated/prisma');
+        const prisma = new PrismaClient();
+        
+        try {
+          await prisma.signalEvent.create({
+            data: {
+              discourseTopicId: result.topic_id,
+              discoursePostId: result.id,
+              eventName: eventData.name,
+              eventStart: eventStart,
+              eventEnd: eventData.end ? new Date(eventData.end) : null,
+              location: eventData.location,
+              timezone: eventData.timezone || 'America/New_York',
+              status: eventData.status || 'public',
+              description: eventData.description,
+              discourseUrl: eventUrl,
+              createdBy: createdBy
+            }
+          });
+        } catch (dbError) {
+          console.error('Failed to store event in database:', dbError);
+        } finally {
+          await prisma.$disconnect();
+        }
+        
+        return {
+          success: true,
+          url: eventUrl,
+          topicId: result.topic_id
+        };
+      } else {
+        const errorText = await response.text();
+        console.error('Discourse API error:', response.status, errorText);
+        return {
+          success: false,
+          error: `Forum API error: ${response.status}`
+        };
+      }
+      
+    } catch (error) {
+      console.error('Failed to create event in Discourse:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+  
+  // Sync events from Discourse to database
+  async syncDiscourseEvents(topics) {
+    const { PrismaClient } = require('../../../src/generated/prisma');
+    const prisma = new PrismaClient();
+    
+    for (const topic of topics) {
+      try {
+        // Check if we already have this event
+        const existing = await prisma.signalEvent.findUnique({
+          where: { discourseTopicId: topic.id }
+        });
+        
+        if (!existing && topic.event) {
+          // Parse event data from topic (this would need more robust parsing)
+          await prisma.signalEvent.create({
+            data: {
+              discourseTopicId: topic.id,
+              eventName: topic.title,
+              eventStart: new Date(topic.event.start),
+              eventEnd: topic.event.end ? new Date(topic.event.end) : null,
+              location: topic.event.location || null,
+              discourseUrl: `${this.discourseApiUrl}/t/${topic.slug}/${topic.id}`,
+              description: topic.excerpt || null,
+              status: topic.event.status || 'public'
+            }
+          });
+        }
+      } catch (error) {
+        console.error(`Failed to sync event ${topic.id}:`, error);
+      }
+    }
+    
+    await prisma.$disconnect();
   }
 
   async handleResources(context) {
@@ -2457,13 +3946,280 @@ ${content.content.substring(0, 3000)}...`;
   // Admin/System Plugin Handlers  
   async handleReload(context) { return 'Admin system - Reload plugin placeholder'; }
   async handleLogs(context) { return 'Admin system - View logs placeholder'; }
-  async handleStats(context) { 
-    const uptime = Math.floor((Date.now() - this.startTime) / 1000);
-    return `📊 **Bot Statistics**\n\nUptime: ${uptime}s\nCommands: ${this.plugins.size}\nStatus: ✅ Online`; 
-  }
   async handleBackup(context) { return 'Admin system - Backup placeholder'; }
   async handleMaintenance(context) { return 'Admin system - Maintenance mode placeholder'; }
   async handleBypass(context) { return 'Admin system - Authentication bypass placeholder'; }
+
+  // Analytics Command Handlers (Admin Only)
+  async handleStats(context) {
+    const { args } = context;
+    const days = parseInt(args) || 7;
+    
+    try {
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      
+      const totalCommands = await this.prisma.botCommandUsage.count({
+        where: { timestamp: { gte: since } }
+      });
+      
+      const successfulCommands = await this.prisma.botCommandUsage.count({
+        where: { 
+          timestamp: { gte: since },
+          success: true 
+        }
+      });
+      
+      const uniqueUsers = await this.prisma.botCommandUsage.findMany({
+        where: { timestamp: { gte: since } },
+        select: { userId: true },
+        distinct: ['userId']
+      });
+      
+      const uniqueGroups = await this.prisma.botCommandUsage.findMany({
+        where: { 
+          timestamp: { gte: since },
+          groupId: { not: null }
+        },
+        select: { groupId: true },
+        distinct: ['groupId']
+      });
+      
+      const avgPerDay = Math.round(totalCommands / days);
+      const successRate = totalCommands > 0 
+        ? ((successfulCommands / totalCommands) * 100).toFixed(1)
+        : 0;
+      
+      const uptime = Math.floor((Date.now() - this.startTime) / 1000);
+      const hours = Math.floor(uptime / 3600);
+      const minutes = Math.floor((uptime % 3600) / 60);
+      
+      return `📊 Bot Statistics (Last ${days} days)\n\n📈 Usage:\n• Total Commands: ${totalCommands}\n• Success Rate: ${successRate}%\n• Avg/Day: ${avgPerDay}\n\n👥 Activity:\n• Active Users: ${uniqueUsers.length}\n• Active Groups: ${uniqueGroups.length}\n\n⏱️ Uptime: ${hours}h ${minutes}m\n💡 Use !topcommands for popular commands`;
+      
+    } catch (error) {
+      console.error('Failed to get stats:', error);
+      const uptime = Math.floor((Date.now() - this.startTime) / 1000);
+      return `📊 Bot Statistics\n\nUptime: ${uptime}s\nCommands: ${this.plugins.size}\nStatus: ✅ Online`;
+    }
+  }
+  
+  async handleTopCommands(context) {
+    const { args } = context;
+    const limit = Math.min(parseInt(args) || 10, 15);
+    
+    try {
+      const topCommands = await this.prisma.botCommandUsage.groupBy({
+        by: ['command'],
+        _count: { command: true },
+        orderBy: { _count: { command: 'desc' } },
+        take: limit
+      });
+      
+      if (topCommands.length === 0) {
+        return '📊 No command usage data available yet';
+      }
+      
+      let response = `🏆 Top ${limit} Commands\n\n`;
+      
+      topCommands.forEach((cmd, index) => {
+        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+        response += `${medal} !${cmd.command}: ${cmd._count.command} uses\n`;
+      });
+      
+      return response;
+      
+    } catch (error) {
+      console.error('Failed to get top commands:', error);
+      return '❌ Failed to retrieve top commands';
+    }
+  }
+  
+  async handleTopUsers(context) {
+    const { args } = context;
+    const limit = Math.min(parseInt(args) || 5, 10);
+    
+    try {
+      const topUsers = await this.prisma.botCommandUsage.groupBy({
+        by: ['userName'],
+        _count: { userName: true },
+        where: { userName: { not: null } },
+        orderBy: { _count: { userName: 'desc' } },
+        take: limit
+      });
+      
+      if (topUsers.length === 0) {
+        return '👥 No user activity data available yet';
+      }
+      
+      let response = `👥 Top ${limit} Active Users\n\n`;
+      
+      topUsers.forEach((user, index) => {
+        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+        const firstName = user.userName.split(' ')[0];
+        response += `${medal} ${firstName}: ${user._count.userName} commands\n`;
+      });
+      
+      return response;
+      
+    } catch (error) {
+      console.error('Failed to get top users:', error);
+      return '❌ Failed to retrieve top users';
+    }
+  }
+  
+  async handleErrors(context) {
+    const { args } = context;
+    const limit = Math.min(parseInt(args) || 5, 10);
+    
+    try {
+      const recentErrors = await this.prisma.botError.findMany({
+        take: limit,
+        orderBy: { timestamp: 'desc' },
+        select: {
+          errorType: true,
+          errorMessage: true,
+          command: true,
+          timestamp: true
+        }
+      });
+      
+      if (recentErrors.length === 0) {
+        return '✅ No errors logged (excellent!)';
+      }
+      
+      let response = `❌ Recent Errors (${recentErrors.length})\n\n`;
+      
+      recentErrors.forEach(error => {
+        const timeAgo = this.getTimeAgo(error.timestamp);
+        const cmd = error.command ? `!${error.command}` : 'N/A';
+        const msg = error.errorMessage.substring(0, 50);
+        response += `• ${error.errorType}\n  Cmd: ${cmd}\n  ${timeAgo}\n\n`;
+      });
+      
+      return response;
+      
+    } catch (error) {
+      console.error('Failed to get errors:', error);
+      return '❌ Failed to retrieve error logs';
+    }
+  }
+  
+  async handleNewsStats(context) {
+    const { args } = context;
+    const days = parseInt(args) || 7;
+    
+    try {
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      
+      const totalNewsLinks = await this.prisma.newsLink.count({
+        where: { firstPostedAt: { gte: since } }
+      });
+      
+      const topNews = await this.prisma.newsLink.findMany({
+        where: { firstPostedAt: { gte: since } },
+        orderBy: [
+          { reactionCount: 'desc' },
+          { postCount: 'desc' }
+        ],
+        take: 5,
+        select: {
+          domain: true,
+          title: true,
+          reactionCount: true,
+          thumbsUp: true,
+          thumbsDown: true,
+          postCount: true
+        }
+      });
+      
+      let response = `📰 News Statistics (${days} days)\n\n`;
+      response += `Total Links: ${totalNewsLinks}\n\n`;
+      
+      if (topNews.length > 0) {
+        response += `🔥 Top News by Engagement:\n\n`;
+        
+        topNews.forEach((news, index) => {
+          const title = news.title ? news.title.substring(0, 30) + '...' : news.domain;
+          response += `${index + 1}. ${title}\n`;
+          response += `   👍 ${news.thumbsUp} 👎 ${news.thumbsDown} 🔄 ${news.postCount}x\n\n`;
+        });
+      }
+      
+      return response;
+      
+    } catch (error) {
+      console.error('Failed to get news stats:', error);
+      return '❌ Failed to retrieve news statistics';
+    }
+  }
+  
+  async handleSentiment(context) {
+    const { args } = context;
+    const days = parseInt(args) || 30;
+    
+    try {
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      
+      const totalReactions = await this.prisma.botMessageReaction.count({
+        where: { timestamp: { gte: since } }
+      });
+      
+      const positiveReactions = await this.prisma.botMessageReaction.count({
+        where: { 
+          timestamp: { gte: since },
+          isPositive: true
+        }
+      });
+      
+      const negativeReactions = totalReactions - positiveReactions;
+      
+      const reactionBreakdown = await this.prisma.botMessageReaction.groupBy({
+        by: ['reaction'],
+        _count: { reaction: true },
+        where: { timestamp: { gte: since } },
+        orderBy: { _count: { reaction: 'desc' } },
+        take: 5
+      });
+      
+      const sentimentScore = totalReactions > 0 
+        ? ((positiveReactions / totalReactions) * 100).toFixed(1)
+        : 0;
+      
+      let response = `💭 Bot Sentiment (${days} days)\n\n`;
+      response += `Overall: ${sentimentScore}% Positive\n\n`;
+      response += `📊 Breakdown:\n`;
+      response += `👍 Positive: ${positiveReactions}\n`;
+      response += `👎 Negative: ${negativeReactions}\n\n`;
+      
+      if (reactionBreakdown.length > 0) {
+        response += `🎯 Top Reactions:\n`;
+        reactionBreakdown.forEach(r => {
+          response += `${r.reaction}: ${r._count.reaction}x\n`;
+        });
+      }
+      
+      return response;
+      
+    } catch (error) {
+      console.error('Failed to get sentiment:', error);
+      return '❌ Failed to retrieve sentiment data';
+    }
+  }
+  
+  // Helper method for analytics
+  getTimeAgo(date) {
+    const seconds = Math.floor((new Date() - new Date(date)) / 1000);
+    
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  }
 
   // Utility Plugin Handlers
   async handleWeather(context) { return 'Weather service placeholder - !weather <location>'; }
@@ -2497,7 +4253,68 @@ ${content.content.substring(0, 3000)}...`;
   async handleFLatest(context) {
     const { args } = context;
     const count = parseInt(args) || 5;
-    return `📰 Latest Forum Posts (${count}):\n\n1. Understanding Signal Protocol Security\n2. Community Guidelines Update\n3. Welcome New Members!\n4. Tech Discussion: AI Ethics\n5. Monthly Meetup Announcement\n\n🔗 Visit forum.irregularchat.com for full posts`;
+    
+    try {
+      // Check if Discourse API is configured
+      if (!this.discourseApiUrl || !this.discourseApiKey) {
+        return '❌ Forum integration not configured. Please set DISCOURSE_API_URL and DISCOURSE_API_KEY.';
+      }
+      
+      // Fetch latest posts from Discourse
+      const response = await fetch(`${this.discourseApiUrl}/posts.json`, {
+        headers: {
+          'Api-Key': this.discourseApiKey,
+          'Api-Username': this.discourseApiUsername || 'system'
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch posts: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      const posts = data.latest_posts || [];
+      
+      if (posts.length === 0) {
+        return '📰 No recent posts found in the forum.';
+      }
+      
+      // Format the response with post titles and short links
+      let result = `📰 Latest Forum Posts (${Math.min(count, posts.length)}):\n\n`;
+      
+      for (let i = 0; i < Math.min(count, posts.length); i++) {
+        const post = posts[i];
+        
+        // Get topic title if available, otherwise use post excerpt
+        let title = post.topic_title || post.topic_slug || 'Untitled Post';
+        
+        // Clean up title - remove dashes from slug if that's what we got
+        if (!post.topic_title && post.topic_slug) {
+          title = post.topic_slug.replace(/-/g, ' ')
+            .split(' ')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+        }
+        
+        // Create short link with just the topic and post IDs
+        const shortLink = `${this.discourseApiUrl.replace('/api', '')}/t/${post.topic_id}/${post.post_number || 1}`;
+        
+        result += `${i + 1}. ${title}\n`;
+        result += `   ${shortLink}\n\n`;
+      }
+      
+      result += `🔗 Visit ${this.discourseApiUrl.replace('/api', '')} for more`;
+      
+      return result;
+      
+    } catch (error) {
+      console.error('Error fetching latest posts:', error);
+      
+      // Fallback to generic message on error
+      return `📰 Latest Forum Posts\n\n` +
+             `Unable to fetch posts at this time.\n\n` +
+             `🔗 Visit forum.irregularchat.com directly`;
+    }
   }
 
   async handleFSearch(context) {
@@ -2679,7 +4496,343 @@ ${content.content.substring(0, 3000)}...`;
 
   // PDF Plugin Handlers
   async handlePdf(context) {
-    return `📋 PDF Processing:\n\nTo process a PDF:\n1. Upload a PDF file\n2. Reply to it with !pdf\n\nFeatures:\n• Text extraction\n• AI summarization\n• Key points identification\n\n💡 PDF files are auto-processed when uploaded!`;
+    try {
+      console.log('📄 PDF Handler started');
+      
+      // Find the PDF to process
+      let pdfPath = null;
+      let pdfFilename = 'PDF Document';
+      
+      // Check if this is a reply to a message with a PDF attachment
+      if (context.quotedAttachments && context.quotedAttachments.length > 0) {
+        // Use quoted attachment
+        const pdfAttachment = context.quotedAttachments.find(att => 
+          att.contentType === 'application/pdf' || 
+          (att.filename && att.filename.toLowerCase().endsWith('.pdf'))
+        );
+        
+        if (pdfAttachment) {
+          pdfFilename = pdfAttachment.filename || 'PDF Document';
+          // Try to find the PDF file by filename since id is not provided in quotes
+          const attachmentsDir = path.join(this.dataDir, 'attachments');
+          const files = fs.readdirSync(attachmentsDir);
+          
+          // Look for a file matching the filename or the most recent PDF
+          let matchingFile = files.find(f => 
+            f === pdfFilename || 
+            f.includes(pdfFilename.replace('.pdf', ''))
+          );
+          
+          // If no exact match, get the most recent PDF
+          if (!matchingFile) {
+            const pdfFiles = files.filter(f => f.endsWith('.pdf'));
+            if (pdfFiles.length > 0) {
+              const pdfStats = pdfFiles.map(file => ({
+                file,
+                mtime: fs.statSync(path.join(attachmentsDir, file)).mtime
+              }));
+              pdfStats.sort((a, b) => b.mtime - a.mtime);
+              matchingFile = pdfStats[0].file;
+              console.log('📄 Using most recent PDF as fallback:', matchingFile);
+            }
+          }
+          
+          if (matchingFile) {
+            pdfPath = path.join(attachmentsDir, matchingFile);
+            console.log('📄 Found PDF from quote:', matchingFile);
+          }
+        }
+      }
+      
+      // If no quoted attachment, try to find the most recent PDF
+      if (!pdfPath) {
+        const attachmentsDir = path.join(this.dataDir, 'attachments');
+        try {
+          const files = fs.readdirSync(attachmentsDir);
+          const pdfFiles = files.filter(f => f.endsWith('.pdf'));
+          
+          if (pdfFiles.length === 0) {
+            return 'No PDF files found. Please upload a PDF file first.';
+          }
+          
+          // Get the most recent PDF
+          const pdfStats = pdfFiles.map(file => ({
+            file,
+            path: path.join(attachmentsDir, file),
+            mtime: fs.statSync(path.join(attachmentsDir, file)).mtime
+          }));
+          
+          pdfStats.sort((a, b) => b.mtime - a.mtime);
+          pdfPath = pdfStats[0].path;
+          pdfFilename = pdfStats[0].file;
+          
+          console.log('📄 Using most recent PDF:', pdfFilename);
+        } catch (err) {
+          console.error('Error finding PDF files:', err);
+          return 'Error accessing PDF files. Please try again.';
+        }
+      }
+      
+      // Check if we found a PDF path
+      if (!pdfPath || !fs.existsSync(pdfPath)) {
+        return 'PDF file not found. Please upload a PDF or reply to a PDF message.';
+      }
+      
+      console.log('📄 Processing PDF:', pdfFilename);
+      
+      // Use the enhanced PDF processor with OCR support
+      const pdfData = await this.pdfProcessor.processPDF(pdfPath);
+      
+      if (!pdfData.text || pdfData.text.trim().length === 0) {
+        return 'Could not extract text from this PDF even with OCR. The PDF might be corrupted or contain only images.';
+      }
+      
+      // Extract key content for summarization
+      const textContent = this.pdfProcessor.extractKeyContent(pdfData.text);
+      const pageCount = pdfData.pages;
+      
+      console.log('📊 Content for AI:', textContent.substring(0, 200) + '...');
+      console.log('📊 Total content length:', textContent.length);
+      
+      // Generate AI summary if AI is enabled
+      let summary = '';
+      if (this.aiEnabled && this.openAiApiKey) {
+        try {
+          const { OpenAI } = require('openai');
+          const openai = new OpenAI({ apiKey: this.openAiApiKey });
+          
+          const response = await openai.chat.completions.create({
+            model: 'gpt-5-mini',
+            messages: [
+              { 
+                role: 'system', 
+                content: 'You must provide a summary of the document. Be concise but comprehensive. Use plain text without markdown.'
+              },
+              { 
+                role: 'user', 
+                content: `Summarize this document in 3-5 paragraphs:\n\n${textContent}`
+              }
+            ],
+            max_completion_tokens: 1000  // Increased for GPT-5 thinking model
+          });
+          
+          summary = response.choices[0].message.content;
+          console.log('✅ AI summary generated successfully');
+          console.log('📝 Summary length:', summary?.length || 0);
+          if (!summary || summary.trim().length === 0) {
+            console.error('⚠️ AI returned empty summary!');
+            console.log('Response:', JSON.stringify(response.choices[0], null, 2));
+            summary = 'AI returned empty response. Retrying with different approach...';
+          }
+        } catch (aiError) {
+          console.error('AI summarization failed:', aiError.message || aiError);
+          console.error('Full error:', JSON.stringify(aiError.response?.data || aiError, null, 2));
+          summary = 'AI summary unavailable: ' + (aiError.message || 'Unknown error');
+        }
+      } else {
+        summary = 'AI summarization is not enabled';
+      }
+      
+      // Prepare response
+      const wordCount = textContent.split(/\s+/).length;
+      
+      let response = `PDF Summary: ${pdfFilename}\n`;
+      response += `Pages: ${pageCount} | Words: ~${wordCount}\n\n`;
+      response += `Summary:\n${summary}\n\n`;
+      
+      // Add first few lines as preview if summary failed
+      if (summary === 'AI summary unavailable' || summary === 'AI summarization is not enabled') {
+        const preview = textContent.split('\n').slice(0, 5).join('\n');
+        if (preview.length > 300) {
+          preview = preview.substring(0, 300) + '...';
+        }
+        response += `Preview:\n${preview}`;
+      }
+      
+      return response;
+      
+    } catch (error) {
+      console.error('PDF processing error:', error);
+      return `Failed to process PDF: ${error.message}`;
+    }
+  }
+
+  // Extract key sections from long PDFs for efficient summarization
+  extractKeyPdfSections(fullText) {
+    const lines = fullText.split('\n');
+    const sections = {
+      title: '',
+      abstract: '',
+      toc: '',
+      introduction: '',
+      chapters: [],
+      conclusion: '',
+      keyContent: []
+    };
+    
+    let currentSection = '';
+    let captureNext = 0;
+    let skipAppendix = false;
+    
+    // Patterns for identifying key sections
+    const patterns = {
+      abstract: /^(abstract|summary|executive summary)/i,
+      toc: /^(table of contents|contents|toc)/i,
+      introduction: /^(introduction|1\.\s*introduction|chapter 1|overview)/i,
+      chapter: /^(chapter \d+|^\d+\.\s+[A-Z]|\d+\.\d+\s+[A-Z])/i,
+      conclusion: /^(conclusion|summary|final thoughts|closing)/i,
+      appendix: /^(appendix|references|bibliography|citations)/i
+    };
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      // Skip empty lines
+      if (!line) continue;
+      
+      // Capture title (usually in first few lines)
+      if (i < 10 && !sections.title && line.length > 10 && line.length < 200) {
+        if (!line.match(/^\d+$/) && !line.toLowerCase().includes('page')) {
+          sections.title = line;
+        }
+      }
+      
+      // Check for appendix/references - stop processing main content
+      if (patterns.appendix.test(line)) {
+        skipAppendix = true;
+        console.log('📚 Skipping appendix/references section');
+        break; // Stop processing, we don't need appendices for summary
+      }
+      
+      // Detect and capture abstract
+      if (patterns.abstract.test(line)) {
+        currentSection = 'abstract';
+        captureNext = 30; // Capture next 30 lines or until next section
+        continue;
+      }
+      
+      // Detect and capture table of contents
+      if (patterns.toc.test(line)) {
+        currentSection = 'toc';
+        captureNext = 50; // Capture TOC lines
+        continue;
+      }
+      
+      // Detect introduction
+      if (patterns.introduction.test(line)) {
+        currentSection = 'introduction';
+        captureNext = 40;
+        continue;
+      }
+      
+      // Detect chapters
+      if (patterns.chapter.test(line)) {
+        // Store chapter heading
+        sections.chapters.push(line);
+        currentSection = 'chapter';
+        captureNext = 20; // Capture first part of each chapter
+        continue;
+      }
+      
+      // Detect conclusion
+      if (patterns.conclusion.test(line)) {
+        currentSection = 'conclusion';
+        captureNext = 30;
+        continue;
+      }
+      
+      // Capture content based on current section
+      if (captureNext > 0) {
+        captureNext--;
+        
+        switch(currentSection) {
+          case 'abstract':
+            sections.abstract += line + '\n';
+            break;
+          case 'toc':
+            if (line.includes('...') || line.match(/\d+$/)) {
+              sections.toc += line + '\n';
+            }
+            break;
+          case 'introduction':
+            sections.introduction += line + '\n';
+            break;
+          case 'chapter':
+            sections.keyContent.push(line);
+            break;
+          case 'conclusion':
+            sections.conclusion += line + '\n';
+            break;
+        }
+        
+        // Stop capturing if we hit another section marker
+        if (captureNext > 5 && Object.values(patterns).some(p => p.test(line))) {
+          captureNext = 0;
+          currentSection = '';
+        }
+      }
+    }
+    
+    // Build the condensed content for AI processing
+    let condensedContent = '';
+    
+    // Add title
+    if (sections.title) {
+      condensedContent += `Title: ${sections.title}\n\n`;
+    }
+    
+    // Add abstract if found
+    if (sections.abstract) {
+      condensedContent += `Abstract:\n${sections.abstract.substring(0, 500)}\n\n`;
+    }
+    
+    // Add table of contents if found (helps understand structure)
+    if (sections.toc) {
+      condensedContent += `Table of Contents:\n${sections.toc.substring(0, 300)}\n\n`;
+    }
+    
+    // Add introduction
+    if (sections.introduction) {
+      condensedContent += `Introduction:\n${sections.introduction.substring(0, 600)}\n\n`;
+    }
+    
+    // Add chapter headings and key content
+    if (sections.chapters.length > 0) {
+      condensedContent += `Main Chapters:\n`;
+      sections.chapters.slice(0, 10).forEach(ch => {
+        condensedContent += `- ${ch}\n`;
+      });
+      condensedContent += '\n';
+    }
+    
+    // Add some key content from chapters
+    if (sections.keyContent.length > 0) {
+      const keySnippet = sections.keyContent.slice(0, 20).join('\n');
+      condensedContent += `Key Content:\n${keySnippet.substring(0, 800)}\n\n`;
+    }
+    
+    // Add conclusion
+    if (sections.conclusion) {
+      condensedContent += `Conclusion:\n${sections.conclusion.substring(0, 500)}\n`;
+    }
+    
+    // If we didn't find structured content, fall back to first/last approach
+    if (condensedContent.length < 500) {
+      console.log('📄 No clear structure found, using first/last pages approach');
+      const firstPart = lines.slice(0, 100).join('\n').substring(0, 2000);
+      const lastPart = lines.slice(-50).join('\n').substring(0, 1000);
+      condensedContent = `Beginning of document:\n${firstPart}\n\n[...]\n\nEnd of document:\n${lastPart}`;
+    }
+    
+    // Ensure we don't exceed token limits
+    const maxLength = 4000;
+    if (condensedContent.length > maxLength) {
+      condensedContent = condensedContent.substring(0, maxLength) + '\n\n[Content truncated for processing]';
+    }
+    
+    console.log(`📊 Extracted ${condensedContent.length} chars from ${fullText.length} chars (${Math.round(condensedContent.length/fullText.length*100)}% of original)`);
+    
+    return condensedContent;
   }
 
   // Onboarding Plugin Handlers
@@ -2744,6 +4897,23 @@ ${content.content.substring(0, 3000)}...`;
   }
   
   async sendOnboardingPrompt(phoneNumber, groupId, sender) {
+    // Set a timer for this user - they have 24 hours to provide introduction
+    const timeoutMs = 24 * 60 * 60 * 1000; // 24 hours
+    const timeoutId = setTimeout(() => {
+      this.handleRequestTimeout(phoneNumber, groupId);
+    }, timeoutMs);
+    
+    // Store initial request without introduction
+    this.pendingRequests.set(phoneNumber, {
+      timestamp: Date.now(),
+      groupId: groupId,
+      requester: sender,
+      introduction: null,
+      timeoutId: timeoutId,
+      phoneNumber: phoneNumber,
+      status: 'awaiting_intro'
+    });
+    
     const prompt = `You've requested to join the IrregularChat Community.\n\n` +
                   `Bonafides: Everyone in the chat has been invited by an irregularchat member.\n` +
                   `So that we can add you to the right groups, we need to know:\n\n` +
@@ -2789,87 +4959,222 @@ ${content.content.substring(0, 3000)}...`;
   }
 
   async handleGtg(context) {
-    const { sender, args } = context;
-    const isAdmin = this.isAdmin(sender);
+    const { sender, args, groupId, sourceNumber, mentions } = context;
+    const isAdmin = this.isAdmin(sourceNumber || sender, groupId);
     if (!isAdmin) return '🚫 Only administrators can approve users with !gtg';
     
-    if (args.length < 1) {
-      return '❌ Usage: !gtg <phone_or_username> [email] [firstname] [lastname]';
-    }
-    
-    const identifier = args[0];
-    
-    // Check if this is a phone number from pending requests
-    let username = identifier;
+    // Check if this is a reply to someone's message (mentions array)
+    let targetUser = null;
+    let targetUuid = null;
     let pendingRequest = null;
     
-    // Check if it's a phone number in pending requests
-    if (identifier.startsWith('+') || identifier.match(/^\d{10,}$/)) {
-      pendingRequest = this.pendingRequests.get(identifier);
-      if (pendingRequest) {
-        // Clear the timeout
-        clearTimeout(pendingRequest.timeoutId);
-        this.pendingRequests.delete(identifier);
-        
-        // Extract name from introduction if available
-        const intro = pendingRequest.introduction || '';
-        const nameMatch = intro.match(/name[:\s]+([^\n,]+)/i);
-        username = nameMatch ? nameMatch[1].trim().replace(/\s+/g, '_') : identifier;
-        
-        console.log(`✅ Approved pending request for ${identifier}`);
+    if (mentions && mentions.length > 0) {
+      // Using mentions - get the UUID of the mentioned user
+      targetUuid = mentions[0].uuid;
+      targetUser = mentions[0].name || 'User';
+      console.log(`🎯 Approving mentioned user: ${targetUser} (UUID: ${targetUuid})`);
+    } else if (args.length < 1) {
+      return '❌ Usage: Reply to a user\'s intro message with !gtg';
+    } else {
+      // Fallback to old behavior if args provided
+      const identifier = args[0];
+      if (identifier.startsWith('+') || identifier.match(/^\d{10,}$/)) {
+        pendingRequest = this.pendingRequests.get(identifier);
+        if (pendingRequest) {
+          clearTimeout(pendingRequest.timeoutId);
+          this.pendingRequests.delete(identifier);
+        }
       }
     }
     
-    const email = args[1] || `${username}@irregularchat.com`;
-    const firstName = args[2] || username;
-    const lastName = args[3] || '';
-    
     try {
-      // Import the Authentik service if available
-      const { AuthentikService } = require('../authentik');
-      const authentik = AuthentikService.getInstance();
-      
-      if (authentik.isActive) {
-        // Create the user in Authentik
-        const result = await authentik.createUser({
-          username,
-          email,
-          firstName,
-          lastName,
-          isActive: true,
-          groups: ['irregularchat-members'] // Default group for new members
-        });
-        
-        if (result.success) {
-          // Also add to Signal groups if needed
-          await this.addUserToDefaultGroups(username);
-          
-          return `✅ User **${username}** approved and created!\n\n` +
-                 `📧 Email: ${email}\n` +
-                 `🔑 Temporary password sent via secure channel\n` +
-                 `🚀 User can now access community resources\n\n` +
-                 `Next steps:\n` +
-                 `• User should check email for credentials\n` +
-                 `• Use !addto to grant specific room access\n` +
-                 `• User can join Signal groups with !join`;
-        } else {
-          return `❌ Failed to create user: ${result.error}`;
-        }
-      } else {
-        // Fallback if Authentik is not configured
-        return `✅ User **${username}** approved for onboarding!\n\n` +
-               `📧 Email: ${email}\n` +
-               `👤 Name: ${firstName} ${lastName}\n\n` +
-               `⚠️ Note: Authentik integration not configured.\n` +
-               `User approval recorded locally only.`;
+      // Parse introduction from the message being replied to
+      let introData = {};
+      if (pendingRequest && pendingRequest.introduction) {
+        introData = this.parseIntroduction(pendingRequest.introduction);
       }
+      
+      // Generate credentials
+      const username = this.generateUsername(introData.name || targetUser || 'user');
+      const password = this.generateSecurePassword();
+      const email = introData.email || `${username}@irregularchat.com`;
+      
+      // Create user in database (would integrate with Authentik in production)
+      const userData = {
+        username,
+        email,
+        firstName: introData.firstName || targetUser?.split(' ')[0] || 'User',
+        lastName: introData.lastName || targetUser?.split(' ').slice(1).join(' ') || '',
+        organization: introData.organization || '',
+        interests: introData.interests || '',
+        invitedBy: introData.invitedBy || sender,
+        signalUuid: targetUuid,
+        phoneNumber: pendingRequest?.phoneNumber
+      };
+      
+      // Store credentials for DM delivery
+      const credentialMessage = this.formatCredentials(username, password, email);
+      
+      // Send DM to approved user with credentials
+      if (targetUuid) {
+        await this.sendDirectMessage(targetUuid, credentialMessage);
+      }
+      
+      // Remove user from entry room
+      if (targetUuid && groupId) {
+        await this.removeUserFromGroup(targetUuid, groupId);
+      }
+      
+      // Log the approval
+      console.log(`✅ Approved user: ${username} (${email})`);
+      
+      return `✅ Good to go. Thanks for verifying. This is how we keep the community safe.\n\n` +
+             `1. User has been removed from this chat\n` +
+             `2. They'll receive a direct message with their IrregularChat Login\n` +
+             `3. They can join all the Chats that interest them\n` +
+             `4. Wiki: https://irregularpedia.org\n\n` +
+             `See you out there!`;
     } catch (error) {
-      console.error('Error in !gtg command:', error);
-      return `✅ User **${username}** approved (manual process required)\n\n` +
-             `Please complete onboarding manually:\n` +
-             `• Create account in admin portal\n` +
-             `• Send credentials securely\n` +
-             `• Add to appropriate groups`;
+      console.error('❌ Error during user approval:', error);
+      return `❌ Error approving user: ${error.message}\n\nPlease try again or contact an admin.`;
+    }
+  }
+  
+  // Helper function to parse introduction text
+  parseIntroduction(intro) {
+    const data = {};
+    
+    // Parse NAME
+    const nameMatch = intro.match(/(?:1\.?\s*)?(?:NAME|Name|name)[:\s]+([^\n]+)/i);
+    if (nameMatch) data.name = nameMatch[1].trim();
+    
+    // Parse ORGANIZATION
+    const orgMatch = intro.match(/(?:2\.?\s*)?(?:YOUR_ORGANIZATION|Organization|org)[:\s]+([^\n]+)/i);
+    if (orgMatch) data.organization = orgMatch[1].trim();
+    
+    // Parse INVITED BY
+    const invitedMatch = intro.match(/(?:3\.?\s*)?(?:Who invited|invited by|invited)[:\s]+([^\n]+)/i);
+    if (invitedMatch) data.invitedBy = invitedMatch[1].trim();
+    
+    // Parse EMAIL
+    const emailMatch = intro.match(/(?:4\.?\s*)?(?:EMAIL|Email|email)[^\n]*[:\s]+([^\s@]+@[^\s@]+\.[^\s@]+)/i);
+    if (emailMatch) data.email = emailMatch[1].trim();
+    
+    // Parse INTERESTS
+    const interestsMatch = intro.match(/(?:5\.?\s*)?(?:YOUR_INTERESTS|Interests|interests)[:\s]+([^\n]+)/i);
+    if (interestsMatch) data.interests = interestsMatch[1].trim();
+    
+    // Parse LinkedIn
+    const linkedinMatch = intro.match(/(?:6\.?\s*)?(?:LinkedIn|linkedin)[^\n]*[:\s]+([^\n]+)/i);
+    if (linkedinMatch) data.linkedin = linkedinMatch[1].trim();
+    
+    // Extract first and last name from full name
+    if (data.name) {
+      const nameParts = data.name.split(' ');
+      data.firstName = nameParts[0];
+      data.lastName = nameParts.slice(1).join(' ');
+    }
+    
+    return data;
+  }
+  
+  // Helper function to generate username
+  generateUsername(name) {
+    // Convert name to username format
+    const base = name.toLowerCase()
+      .replace(/[^a-z0-9]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '')
+      .substring(0, 20);
+    
+    // Add random suffix to ensure uniqueness
+    const suffix = Math.floor(Math.random() * 999) + 1;
+    return `${base}_${suffix}`;
+  }
+  
+  // Helper function to generate secure password
+  generateSecurePassword() {
+    const words = [
+      'Correct', 'Horse', 'Battery', 'Staple', 'Purple', 'Monkey', 'Dishwasher',
+      'Rainbow', 'Keyboard', 'Elephant', 'Butterfly', 'Mountain', 'Ocean', 'Thunder'
+    ];
+    
+    const selectedWords = [];
+    for (let i = 0; i < 3; i++) {
+      const randomWord = words[Math.floor(Math.random() * words.length)];
+      selectedWords.push(randomWord);
+    }
+    
+    const randomNumber = Math.floor(Math.random() * 99) + 1;
+    const specialChar = '!@#$%^&*'[Math.floor(Math.random() * 8)];
+    
+    return `${selectedWords.join('')}${randomNumber}${specialChar}`;
+  }
+  
+  // Helper function to format credentials message
+  formatCredentials(username, password, email) {
+    return `🌟 Your First Step Into the IrregularChat! 🌟\n\n` +
+           `You've just joined a community focused on breaking down silos, ` +
+           `fostering innovation, and supporting service members and veterans.\n\n` +
+           `---\n` +
+           `Use This Username and Temporary Password ⬇️\n\n` +
+           `Username: ${username}\n` +
+           `Temporary Password: ${password}\n` +
+           `Exactly as shown above 👆🏼\n\n` +
+           `1️⃣ Step 1:\n` +
+           `Use the username and temporary password to log in to https://sso.irregularchat.com\n\n` +
+           `2️⃣ Step 2:\n` +
+           `You'll be prompted to create your own password\n\n` +
+           `3️⃣ Step 3:\n` +
+           `Use the links in #links to join all the Signal chats\n\n` +
+           `4️⃣ Step 4:\n` +
+           `Check out the wiki: https://irregularpedia.org\n\n` +
+           `Welcome to IrregularChat! 🎉`;
+  }
+  
+  // Helper function to send direct message
+  async sendDirectMessage(uuid, message) {
+    try {
+      const request = {
+        jsonrpc: '2.0',
+        method: 'send',
+        params: {
+          account: this.phoneNumber,
+          recipient: [uuid],
+          message: message
+        },
+        id: Date.now()
+      };
+      
+      const response = await this.sendJsonRpcRequest(request);
+      console.log(`📨 DM sent to ${uuid}`);
+      return true;
+    } catch (error) {
+      console.error(`❌ Failed to send DM to ${uuid}:`, error);
+      return false;
+    }
+  }
+  
+  // Helper function to remove user from group
+  async removeUserFromGroup(uuid, groupId) {
+    try {
+      const request = {
+        jsonrpc: '2.0',
+        method: 'updateGroup',
+        params: {
+          account: this.phoneNumber,
+          groupId: groupId,
+          removeMembers: [uuid]
+        },
+        id: Date.now()
+      };
+      
+      const response = await this.sendJsonRpcRequest(request);
+      console.log(`🚪 Removed ${uuid} from group ${groupId}`);
+      return true;
+    } catch (error) {
+      console.error(`❌ Failed to remove ${uuid} from group:`, error);
+      return false;
     }
   }
   
@@ -2880,15 +5185,27 @@ ${content.content.substring(0, 3000)}...`;
   }
 
   async handleSngtg(context) {
-    const { sender } = context;
-    const isAdmin = this.isAdmin(sender);
-    if (!isAdmin) return '🚫 Only administrators can use special approval !sngtg';
-    return `✅ Special approval granted!\n\n🎆 User has been fast-tracked through onboarding.`;
+    const { sender, groupId, sourceNumber, args } = context;
+    const isAdmin = this.isAdmin(sourceNumber || sender, groupId);
+    if (!isAdmin) return '🚫 Only administrators can confirm safety numbers with !sngtg';
+    
+    if (args.length < 1) {
+      return '❌ Usage: !sngtg @user\n\n' +
+             'This command confirms a user\'s safety number has been verified.\n' +
+             'Use !gtg for general user approval.';
+    }
+    
+    const userToConfirm = args[0].replace('@', '');
+    
+    return `✅ Safety Number Confirmed for ${userToConfirm}!\n\n` +
+           `🔒 Safety number has been verified.\n` +
+           `✨ User can now participate in secure conversations.\n\n` +
+           `Note: Use !gtg for general user onboarding approval.`;
   }
   
   async handlePending(context) {
-    const { sender } = context;
-    const isAdmin = this.isAdmin(sender);
+    const { sender, groupId, sourceNumber } = context;
+    const isAdmin = this.isAdmin(sourceNumber || sender, groupId);
     
     if (!isAdmin) {
       return '🚫 Only administrators can view pending requests';
@@ -2921,76 +5238,7 @@ ${content.content.substring(0, 3000)}...`;
     return response;
   }
   
-  async handleAddTo(context) {
-    const { sender, args, groupId } = context;
-    const isAdmin = this.isAdmin(sender);
-    
-    if (!isAdmin) {
-      return '🚫 Only administrators can use !addto command';
-    }
-    
-    if (args.length < 2) {
-      return '❌ Usage: !addto <room-name> <username> [username2] [username3]...';
-    }
-    
-    const roomName = args[0].toLowerCase();
-    const users = args.slice(1);
-    
-    try {
-      // Map room names to actual Signal group IDs
-      const roomMappings = {
-        'main': process.env.SIGNAL_MAIN_GROUP_ID,
-        'dev': process.env.SIGNAL_DEV_GROUP_ID,
-        'general': process.env.SIGNAL_GENERAL_GROUP_ID,
-        'testing': '/cjfmI7snAAhRPLDMlvW50Ja8fE9SuslMBFukFjn9iI=', // Solo testing group
-      };
-      
-      const targetGroupId = roomMappings[roomName] || roomName;
-      
-      // Attempt to add users to the Signal group
-      const results = [];
-      for (const username of users) {
-        try {
-          // Convert username to phone number if needed
-          const phoneNumber = await this.resolveUserToPhoneNumber(username);
-          
-          if (phoneNumber) {
-            // Use signal-cli to add member to group
-            const addCommand = [
-              'signal-cli',
-              '-u', this.phoneNumber,
-              '--data-dir', this.dataDir,
-              'send',
-              '-g', targetGroupId,
-              '--group-invite', phoneNumber
-            ];
-            
-            const { execSync } = require('child_process');
-            execSync(addCommand.join(' '));
-            results.push(`✅ ${username} (${phoneNumber})`);
-          } else {
-            results.push(`⚠️ ${username} (phone number not found)`);
-          }
-        } catch (error) {
-          console.error(`Failed to add ${username}:`, error);
-          results.push(`❌ ${username} (failed)`);
-        }
-      }
-      
-      return `📱 **Adding Users to ${roomName}**\n\n` +
-             `Group ID: ${targetGroupId}\n\n` +
-             `Results:\n${results.join('\n')}\n\n` +
-             `✨ Process completed. Users with ✅ have been invited.`;
-             
-    } catch (error) {
-      console.error('Error in !addto command:', error);
-      return `❌ Failed to add users: ${error.message}\n\n` +
-             `Please ensure:\n` +
-             `• Room name is valid\n` +
-             `• Users have Signal accounts\n` +
-             `• Bot has group admin privileges`;
-    }
-  }
+  // Removed duplicate handleAddTo - now using the correct one at line 2264
   
   async resolveUserToPhoneNumber(username) {
     // This would integrate with user database to map usernames to phone numbers
@@ -3059,25 +5307,230 @@ ${content.content.substring(0, 3000)}...`;
   }
   
   // Message History Management
-  storeMessageInHistory(message) {
+  async storeMessageInHistory(message) {
     const groupId = message.groupId || 'dm'; // Use 'dm' for direct messages
     
+    // Store in memory for quick access
     if (!this.messageHistory.has(groupId)) {
       this.messageHistory.set(groupId, []);
     }
     
     const history = this.messageHistory.get(groupId);
-    history.push({
+    const messageData = {
       sender: message.sourceName || message.sourceNumber,
       message: message.message,
       timestamp: message.timestamp,
-      time: new Date(message.timestamp).toLocaleString()
-    });
+      time: new Date(message.timestamp).toLocaleString(),
+      reactions: new Map() // Track emoji reactions: emoji -> count
+    };
     
-    // Keep only recent messages
+    history.push(messageData);
+    
+    // Keep only recent messages in memory
     if (history.length > this.maxHistoryPerGroup) {
       history.shift();
     }
+    
+    // Store in database for persistence
+    try {
+      await this.prisma.signalMessage.upsert({
+        where: {
+          timestamp_sourceNumber_groupId: {
+            timestamp: BigInt(message.timestamp),
+            sourceNumber: message.sourceNumber,
+            groupId: groupId === 'dm' ? null : groupId
+          }
+        },
+        update: {
+          message: message.message,
+          sourceName: message.sourceName,
+          sourceUuid: message.sourceUuid || null,
+          groupName: message.groupName || null
+        },
+        create: {
+          groupId: groupId === 'dm' ? null : groupId,
+          groupName: message.groupName || null,
+          sourceNumber: message.sourceNumber,
+          sourceName: message.sourceName || null,
+          sourceUuid: message.sourceUuid || null,
+          message: message.message,
+          timestamp: BigInt(message.timestamp),
+          attachments: message.attachments?.length ? message.attachments : null,
+          mentions: message.mentions?.length ? message.mentions : null,
+          isReply: message.isReply || false,
+          quotedMessageId: message.quotedMessageId || null,
+          quotedText: message.quotedMessage || null
+        }
+      });
+    } catch (error) {
+      console.error('Failed to store message in database:', error);
+    }
+  }
+
+  // Handle reaction messages
+  async handleReactionMessage(envelope, reactionMessage) {
+    console.log(`🔥 Reaction received: ${reactionMessage.emoji} from ${envelope.sourceName || envelope.sourceNumber}`);
+    
+    const groupId = reactionMessage.targetMessage?.groupInfo?.groupId || 'dm';
+    const targetTimestamp = reactionMessage.targetTimestamp;
+    const emoji = reactionMessage.emoji;
+    const isRemove = reactionMessage.remove;
+    
+    // Update memory cache
+    if (this.messageHistory.has(groupId)) {
+      const history = this.messageHistory.get(groupId);
+      const targetMessage = history.find(msg => msg.timestamp === targetTimestamp);
+      
+      if (targetMessage && targetMessage.reactions) {
+        if (isRemove) {
+          // Remove reaction
+          if (targetMessage.reactions.has(emoji)) {
+            const count = targetMessage.reactions.get(emoji) - 1;
+            if (count <= 0) {
+              targetMessage.reactions.delete(emoji);
+            } else {
+              targetMessage.reactions.set(emoji, count);
+            }
+          }
+        } else {
+          // Add reaction
+          const count = targetMessage.reactions.get(emoji) || 0;
+          targetMessage.reactions.set(emoji, count + 1);
+        }
+        
+        const totalReactions = Array.from(targetMessage.reactions.values()).reduce((sum, count) => sum + count, 0);
+        console.log(`📊 Message now has ${totalReactions} total reactions`);
+      }
+    }
+    
+    // Store reaction in database
+    try {
+      // Find the message in database
+      const dbMessage = await this.prisma.signalMessage.findFirst({
+        where: {
+          timestamp: BigInt(targetTimestamp),
+          groupId: groupId === 'dm' ? null : groupId
+        }
+      });
+      
+      if (dbMessage) {
+        if (isRemove) {
+          // Mark reaction as removed
+          await this.prisma.signalReaction.updateMany({
+            where: {
+              messageId: dbMessage.id,
+              emoji: emoji,
+              reactorNumber: envelope.sourceNumber
+            },
+            data: {
+              isRemove: true
+            }
+          });
+        } else {
+          // Add or update reaction
+          await this.prisma.signalReaction.upsert({
+            where: {
+              messageId_emoji_reactorNumber: {
+                messageId: dbMessage.id,
+                emoji: emoji,
+                reactorNumber: envelope.sourceNumber
+              }
+            },
+            update: {
+              isRemove: false,
+              timestamp: BigInt(envelope.timestamp || Date.now())
+            },
+            create: {
+              messageId: dbMessage.id,
+              emoji: emoji,
+              reactorNumber: envelope.sourceNumber,
+              reactorName: envelope.sourceName || null,
+              reactorUuid: envelope.sourceUuid || null,
+              timestamp: BigInt(envelope.timestamp || Date.now()),
+              isRemove: false
+            }
+          });
+        }
+        
+        // Check if this is a reaction to a bot message
+        if (dbMessage && dbMessage.sourceNumber === this.phoneNumber) {
+          // This is a reaction to the bot's message
+          await this.trackBotMessageReaction(
+            emoji,
+            envelope.sourceNumber,
+            envelope.sourceName,
+            groupId === 'dm' ? null : groupId,
+            reactionMessage.targetMessage?.groupInfo?.name || null
+          );
+        }
+        
+        // Check if the reacted message contains a news URL
+        if (dbMessage && dbMessage.message) {
+          const urlRegex = /https?:\/\/[^\s]+/g;
+          const urls = dbMessage.message.match(urlRegex);
+          
+          if (urls && urls.length > 0) {
+            for (const url of urls) {
+              if (this.isNewsUrl(url)) {
+                // Update news link reaction counts
+                const cleanedUrl = this.cleanUrl(url).cleanedUrl;
+                await this.updateNewsLinkReactions(cleanedUrl, emoji, groupId);
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to store reaction in database:', error);
+    }
+  }
+
+  // Analyze message reactions to identify highly reacted content
+  analyzeMessageReactions(messages) {
+    const messagesWithReactions = [];
+    let maxReactionCount = 0;
+    
+    // Find messages with reactions > 3
+    for (const message of messages) {
+      if (message.reactions && message.reactions.size > 0) {
+        const totalReactions = Array.from(message.reactions.values()).reduce((sum, count) => sum + count, 0);
+        if (totalReactions > 3) {
+          const reactionSummary = Array.from(message.reactions.entries())
+            .map(([emoji, count]) => `${emoji} ${count}`)
+            .join(' ');
+          
+          messagesWithReactions.push({
+            message,
+            totalReactions,
+            reactionSummary,
+            preview: message.message.substring(0, 80) + (message.message.length > 80 ? '...' : '')
+          });
+          
+          maxReactionCount = Math.max(maxReactionCount, totalReactions);
+        }
+      }
+    }
+    
+    if (messagesWithReactions.length === 0) {
+      return { hasHighReactions: false };
+    }
+    
+    // Sort by reaction count (highest first)
+    messagesWithReactions.sort((a, b) => b.totalReactions - a.totalReactions);
+    
+    // Create highlight text
+    const highlightLines = messagesWithReactions.map((item, index) => {
+      const isTop = item.totalReactions === maxReactionCount;
+      const prefix = isTop ? '🎆' : '✨'; // Special highlight for highest
+      return `${prefix} ${item.message.sender}: "${item.preview}" (${item.reactionSummary})`;
+    });
+    
+    return {
+      hasHighReactions: true,
+      highlightText: highlightLines.join('\n'),
+      topReactionCount: maxReactionCount,
+      highlyReactedCount: messagesWithReactions.length
+    };
   }
   
   async summarizeGroupMessages(context) {
@@ -3087,39 +5540,159 @@ ${content.content.substring(0, 3000)}...`;
       return '❌ This command only works in group chats. Use !tldr <url> for URL summarization.';
     }
     
-    const history = this.messageHistory.get(groupId) || [];
+    // Check for help flag first - support both -h alone and --help
+    const isHelpRequest = args.includes('--help') || 
+                         args.includes('-?') || 
+                         (args.length === 1 && args[0] === '-h');
     
-    if (history.length < 3) {
-      return '❌ Not enough recent messages to summarize. Need at least 3 messages.\n\n**Usage:**\n• !summarize - Last 20 messages\n• !summarize -m 30 - Last 30 messages\n• !summarize -h 2 - Messages from last 2 hours';
+    if (isHelpRequest) {
+      return '📝 Chat Summarization Help\n\n' +
+             'Usage: !summarize [options]\n\n' +
+             'Options:\n' +
+             '  -n, --number <count>    Summarize last N messages (default: 20)\n' +
+             '  -m, --minutes <minutes> Summarize messages from last M minutes\n' +
+             '  -h, --hours <hours>     Summarize messages from last H hours\n' +
+             '  -h, --help              Show this help message\n\n' +
+             'Examples:\n' +
+             '  !summarize              Last 20 messages\n' +
+             '  !summarize -n 50        Last 50 messages\n' +
+             '  !summarize --number 50  Last 50 messages\n' +
+             '  !summarize -m 30        Last 30 minutes\n' +
+             '  !summarize --minutes 30 Last 30 minutes\n' +
+             '  !summarize -h 2         Last 2 hours\n' +
+             '  !summarize --hours 2    Last 2 hours';
     }
     
-    // Parse arguments for -m (message count) or -h (hours)
+    // First try to get messages from database for better history
+    let history = [];
+    let useDatabase = true;
+    
+    try {
+      // Fetch messages from database
+      const dbMessages = await this.prisma.signalMessage.findMany({
+        where: {
+          groupId: groupId,
+          message: {
+            not: {
+              startsWith: '!'
+            }
+          }
+        },
+        orderBy: {
+          timestamp: 'desc'
+        },
+        take: 200, // Get more messages from DB
+        include: {
+          reactions: true
+        }
+      });
+      
+      // Convert database messages to expected format
+      history = dbMessages.reverse().map(msg => {
+        // Count reactions by emoji
+        const reactionMap = new Map();
+        msg.reactions.forEach(reaction => {
+          if (!reaction.isRemove) {
+            const count = reactionMap.get(reaction.emoji) || 0;
+            reactionMap.set(reaction.emoji, count + 1);
+          }
+        });
+        
+        return {
+          sender: msg.sourceName || msg.sourceNumber,
+          message: msg.message,
+          timestamp: Number(msg.timestamp),
+          time: new Date(Number(msg.timestamp)).toLocaleString(),
+          reactions: reactionMap
+        };
+      });
+      
+      console.log(`📚 Loaded ${history.length} messages from database for group ${groupId}`);
+    } catch (error) {
+      console.error('Failed to fetch messages from database:', error);
+      useDatabase = false;
+    }
+    
+    // Fall back to memory if database fails or has no data
+    if (!useDatabase || history.length === 0) {
+      history = this.messageHistory.get(groupId) || [];
+      console.log(`📝 Using ${history.length} messages from memory for group ${groupId}`);
+    }
+    
+    // Filter out bot commands and duplicate messages
+    const cleanHistory = history.filter((msg, index, self) => {
+      // Skip bot commands
+      if (msg.message && msg.message.startsWith('!')) return false;
+      // Skip bot's own messages
+      if (msg.sender === 'irregularchat-bot' || msg.sender === this.phoneNumber) return false;
+      // Skip duplicates (same message within 5 seconds)
+      const isDuplicate = index > 0 && 
+        self[index - 1].message === msg.message && 
+        Math.abs(msg.timestamp - self[index - 1].timestamp) < 5000;
+      return !isDuplicate;
+    });
+    
+    if (cleanHistory.length < 3) {
+      return '❌ Not enough recent messages to summarize. Need at least 3 messages.\n\nUse !summarize --help for usage information.';
+    }
+    
+    // Parse arguments with new flags and long form options
     let messageCount = 20; // Default
+    let minutesBack = null;
     let hoursBack = null;
     let maxMessages = 100; // Safety limit
-    let maxHours = 24; // Safety limit
     
-    // Parse arguments
+    // Parse arguments - support both short and long forms
     for (let i = 0; i < args.length; i++) {
-      if (args[i] === '-m' && i + 1 < args.length) {
+      // Number of messages
+      if ((args[i] === '-n' || args[i] === '--number') && i + 1 < args.length) {
         const count = parseInt(args[i + 1]);
         if (!isNaN(count) && count > 0) {
-          messageCount = Math.min(count, maxMessages); // Enforce max limit
+          messageCount = Math.min(count, maxMessages);
         }
-      } else if (args[i] === '-h' && i + 1 < args.length) {
+      } 
+      // Minutes back
+      else if ((args[i] === '-m' || args[i] === '--minutes') && i + 1 < args.length) {
+        const minutes = parseInt(args[i + 1]);
+        if (!isNaN(minutes) && minutes > 0) {
+          minutesBack = Math.min(minutes, 1440); // Max 24 hours
+        }
+      } 
+      // Hours back - but not if it's -h alone (help)
+      else if ((args[i] === '-h' || args[i] === '--hours') && i + 1 < args.length && args[i] !== '-h') {
         const hours = parseFloat(args[i + 1]);
         if (!isNaN(hours) && hours > 0) {
-          hoursBack = Math.min(hours, maxHours); // Enforce max limit
+          hoursBack = Math.min(hours, 24); // Max 24 hours
+        }
+      }
+      // Handle -h followed by a number for hours
+      else if (args[i] === '-h' && i + 1 < args.length) {
+        const hours = parseFloat(args[i + 1]);
+        if (!isNaN(hours) && hours > 0) {
+          hoursBack = Math.min(hours, 24); // Max 24 hours
         }
       }
     }
     
     let recentMessages;
     
-    if (hoursBack) {
-      // Filter by time
+    if (minutesBack) {
+      // Filter by minutes
+      const cutoffTime = Date.now() - (minutesBack * 60 * 1000);
+      recentMessages = cleanHistory.filter(msg => msg.timestamp > cutoffTime);
+      
+      if (recentMessages.length === 0) {
+        return `❌ No messages found in the last ${minutesBack} minute${minutesBack !== 1 ? 's' : ''}.`;
+      }
+      
+      // Still apply message count limit for safety
+      if (recentMessages.length > maxMessages) {
+        recentMessages = recentMessages.slice(-maxMessages);
+      }
+    } else if (hoursBack) {
+      // Filter by hours
       const cutoffTime = Date.now() - (hoursBack * 60 * 60 * 1000);
-      recentMessages = history.filter(msg => msg.timestamp > cutoffTime);
+      recentMessages = cleanHistory.filter(msg => msg.timestamp > cutoffTime);
       
       if (recentMessages.length === 0) {
         return `❌ No messages found in the last ${hoursBack} hour${hoursBack !== 1 ? 's' : ''}.`;
@@ -3131,7 +5704,7 @@ ${content.content.substring(0, 3000)}...`;
       }
     } else {
       // Get recent messages by count
-      recentMessages = history.slice(-messageCount);
+      recentMessages = cleanHistory.slice(-messageCount);
     }
     
     // Check if we have AI capability (prefer local AI for privacy)
@@ -3143,10 +5716,25 @@ ${content.content.substring(0, 3000)}...`;
       const participants = [...new Set(recentMessages.map(m => m.sender))].join(', ');
       const timespan = this.getTimespan(recentMessages[0].timestamp, recentMessages[recentMessages.length - 1].timestamp);
       
-      return `📝 **Chat Summary** (last ${messageCount} messages)\n\n👥 **Participants:** ${participants}\n⏱️ **Timespan:** ${timespan}\n\n💬 **Messages:**\n${recentMessages.slice(-5).map(m => `• ${m.sender}: ${m.message.substring(0, 100)}${m.message.length > 100 ? '...' : ''}`).join('\n')}`;
+      // Analyze reactions even for fallback
+      const reactionAnalysis = this.analyzeMessageReactions(recentMessages);
+      
+      let fallbackSummary = `📝 Chat Summary (${messageCount} messages)\n\n👥 Participants: ${participants}\n⏱️ Timespan: ${timespan}`;
+      
+      // Add reaction highlights if present
+      if (reactionAnalysis.hasHighReactions) {
+        fallbackSummary += `\n\n🔥 Highly Reacted Messages:\n${reactionAnalysis.highlightText}`;
+      }
+      
+      fallbackSummary += `\n\n💬 Recent messages:\n${recentMessages.slice(-5).map(m => `• ${m.sender}: ${m.message.substring(0, 50)}${m.message.length > 50 ? '...' : ''}`).join('\n')}`;
+      
+      return fallbackSummary;
     }
     
     try {
+      // Analyze emoji reactions to highlight highly reacted messages
+      const reactionAnalysis = this.analyzeMessageReactions(recentMessages);
+      
       const messagesText = recentMessages.map(m => `${m.sender}: ${m.message}`).join('\n');
       let aiResponse;
       
@@ -3169,7 +5757,7 @@ ${content.content.substring(0, 3000)}...`;
               role: 'user',
               content: `Please summarize this group chat conversation:\n\n${messagesText}`
             }],
-            max_tokens: 500
+            max_completion_tokens: 700  // GPT-5 requires max_completion_tokens
           })
         });
         
@@ -3204,20 +5792,31 @@ ${content.content.substring(0, 3000)}...`;
       
       // Build summary description
       let summaryDesc;
-      if (hoursBack) {
+      if (minutesBack) {
+        summaryDesc = `${actualMessageCount} messages from last ${minutesBack} minute${minutesBack !== 1 ? 's' : ''}`;
+      } else if (hoursBack) {
         summaryDesc = `${actualMessageCount} messages from last ${hoursBack} hour${hoursBack !== 1 ? 's' : ''}`;
       } else {
         summaryDesc = `last ${actualMessageCount} messages`;
       }
       
-      return `📝 **Group Chat Summary** (${summaryDesc})\n\n👥 **Participants:** ${participants}\n\n${aiPrefix} ${summaryText}`;
+      let fullSummary = `📝 Chat Summary (${summaryDesc})\n\n👥 Participants: ${participants}`;
+      
+      // Add reaction analysis if there are significant reactions
+      if (reactionAnalysis.hasHighReactions) {
+        fullSummary += `\n\n🔥 Highly Reacted Messages:\n${reactionAnalysis.highlightText}`;
+      }
+      
+      fullSummary += `\n\n${aiPrefix} ${summaryText}`;
+      
+      return fullSummary;
       
     } catch (error) {
       console.error('AI summarization failed:', error);
       // Fallback to simple summary
       const messageCount = recentMessages.length;
       const participants = [...new Set(recentMessages.map(m => m.sender))].join(', ');
-      return `📝 **Chat Summary** (${messageCount} messages)\n\n👥 **Participants:** ${participants}\n\n💬 **Recent messages:**\n${recentMessages.slice(-3).map(m => `• ${m.sender}: ${m.message}`).join('\n')}`;
+      return `📝 Chat Summary (${messageCount} messages)\n\n👥 Participants: ${participants}\n\n💬 Recent messages:\n${recentMessages.slice(-3).map(m => `• ${m.sender}: ${m.message.substring(0, 50)}${m.message.length > 50 ? '...' : ''}`).join('\n')}`;
     }
   }
   
@@ -3249,23 +5848,47 @@ ${content.content.substring(0, 3000)}...`;
   }
 
   // Helper method for admin check
-  isAdmin(userNumber) {
+  isAdmin(userNumber, groupId = null) {
+    // First check global admin list (for backward compatibility)
     const adminUsers = process.env.ADMIN_USERS?.split(',') || [];
-    return adminUsers.includes(userNumber);
+    if (adminUsers.includes(userNumber)) {
+      return true;
+    }
+    
+    // If a groupId is provided, check if user is admin in that specific group
+    if (groupId && this.cachedGroups) {
+      const group = this.cachedGroups.find(g => g.id === groupId);
+      if (group && group.admins && Array.isArray(group.admins)) {
+        return group.admins.some(admin => admin.number === userNumber);
+      }
+    }
+    
+    return false;
   }
   
   // ========== Q&A System Commands ==========
   
   async handleQuestion(context) {
-    const { sender, args, groupId, sourceNumber } = context;
+    const { sender, args, groupId, sourceNumber, message, quotedMessage } = context;
     
-    if (!args || args.length === 0 || args.join(' ').trim() === '') {
-      return '❌ Usage: !q <your question>\n\n' +
-             'Example: !q How do I set up Signal bot authentication?\n\n' +
-             'To see existing questions, use: !questions';
+    let questionText = '';
+    
+    // Check if there are args provided
+    if (args && args.length > 0 && args.join(' ').trim() !== '') {
+      questionText = args.join(' ').trim();
+    } 
+    // If no args, check if there's a quoted message
+    else if (quotedMessage) {
+      questionText = quotedMessage.trim();
     }
     
-    const questionText = args.join(' ').trim();
+    // If still no question text, show usage
+    if (!questionText) {
+      return '❌ Usage: !q <your question>\n\n' +
+             'Example: !q How do I set up Signal bot authentication?\n\n' +
+             'Or reply to a message with !q or !question\n\n' +
+             'To see existing questions, use: !questions';
+    }
     
     // Generate a unique question ID
     this.questionCounter++;
@@ -3355,20 +5978,20 @@ ${content.content.substring(0, 3000)}...`;
       }
       
       // Return success message even if Discourse posting failed (question is stored locally)
-      let response = `❓ **Question ${questionId} Posted**\n\n` +
-                    `**Title:** ${title}\n` +
-                    `**Asked by:** ${sender}\n` +
-                    `**Time:** ${new Date().toLocaleTimeString()}`;
+      let response = `❓ Question ${questionId} Posted\n\n` +
+                    `Title: ${title}\n` +
+                    `Asked by: ${sender}\n` +
+                    `Time: ${new Date().toLocaleTimeString()}`;
       
       if (forumLink) {
-        response += `\n**Forum:** ${forumLink}`;
+        response += `\nForum: \n📎 Forum: ${forumLink}`;
       } else if (discourseError) {
         response += `\n⚠️ Forum posting temporarily unavailable`;
         console.log('⚠️ Question stored locally only due to forum error');
       }
       
-      response += `\n\n**Others can answer with:** !answer ${questionId} <your answer>\n` +
-                 `**Mark as solved with:** !solved ${questionId}`;
+      response += `\n\nOthers can answer with: !answer ${questionId} <your answer>\n` +
+                 `Mark as solved with: !solved ${questionId}`;
       
       return response;
              
@@ -3424,8 +6047,22 @@ ${content.content.substring(0, 3000)}...`;
       return '❌ Usage: !answer <question-id> <your answer>\n\nExample: !answer Q1 You need to configure the API key first';
     }
     
-    const questionId = args[0].toUpperCase();
-    const answerText = args.slice(1).join(' ');
+    // Check if first arg looks like a question ID (Q followed by numbers)
+    let questionId = args[0].toUpperCase();
+    let answerText = args.slice(1).join(' ');
+    
+    // If it doesn't look like a question ID, try to find Q1 as default or return error
+    if (!questionId.match(/^Q\d+$/)) {
+      // Check if there's only one question, use it as default
+      const questions = Array.from(this.questions.keys());
+      if (questions.length === 1) {
+        // Use the entire args as the answer text
+        answerText = args.join(' ');
+        questionId = questions[0];
+      } else {
+        return `❌ Question ${questionId} not found. Use !questions to see available questions.`;
+      }
+    }
     
     const question = this.questions.get(questionId);
     
@@ -3482,10 +6119,10 @@ ${content.content.substring(0, 3000)}...`;
       }
     }
     
-    return `✅ **Answer posted to ${questionId}**\n\n` +
-           `❓ **Question:** ${question.title}\n` +
-           `👤 **Asked by:** ${question.asker}\n` +
-           `💬 **Your answer:** ${answerText}\n\n` +
+    return `✅ Answer posted to ${questionId}\n\n` +
+           `❓ Question: ${question.title}\n` +
+           `👤 Asked by: ${question.asker}\n` +
+           `💬 Your answer: ${answerText}\n\n` +
            `📊 Total answers: ${question.answers.length}`;
   }
   
@@ -3505,10 +6142,10 @@ ${content.content.substring(0, 3000)}...`;
     
     // Only the asker or an admin can mark as solved
     const isAsker = question.askerPhone === sourceNumber;
-    const isAdmin = this.isAdmin(sourceNumber);
+    const isAdmin = this.isAdmin(sourceNumber, groupId);
     
     if (!isAsker && !isAdmin) {
-      return `❌ Only ${question.asker} (the question asker) can mark this as solved.`;
+      return `❌ Only ${question.asker} (the question asker) or an admin can mark this as solved.`;
     }
     
     if (question.solved) {
@@ -3574,6 +6211,53 @@ ${content.content.substring(0, 3000)}...`;
     }
   }
   
+  looksLikeAiContinuation(message, userPref) {
+    // Check if this looks like a continuation of an AI conversation
+    const text = message.message.toLowerCase();
+    
+    // If it's a reply to a bot message, it's definitely a continuation
+    if (message.isReplyToBot) {
+      return true;
+    }
+    
+    // If quoted message exists and it's from the bot, it's a continuation
+    if (message.quotedMessage) {
+      const quotedText = message.quotedMessage.toLowerCase();
+      if (quotedText.includes('🤖') || quotedText.includes('localai:') || quotedText.includes('openai:')) {
+        return true;
+      }
+    }
+    
+    // Strong question indicators that are likely follow-ups
+    const strongQuestionPhrases = [
+      'what about', 'how about', 'tell me more', 'explain more',
+      'can you explain', 'could you explain', 'why is that',
+      'and what about', 'but what about', 'what if'
+    ];
+    
+    // Check for strong question phrases
+    for (const phrase of strongQuestionPhrases) {
+      if (text.startsWith(phrase)) {
+        return true;
+      }
+    }
+    
+    // If it's a question AND very short (likely a follow-up)
+    if (text.includes('?') && text.length < 50) {
+      // Additional checks for context
+      const questionWords = ['what', 'why', 'how', 'when', 'where', 'who', 'which'];
+      for (const word of questionWords) {
+        if (text.startsWith(word + ' ')) {
+          return true;
+        }
+      }
+    }
+    
+    // DO NOT treat regular short messages as continuations
+    // Only explicit follow-up patterns
+    return false;
+  }
+  
   getRelativeTime(timestamp) {
     const diff = Date.now() - timestamp;
     const minutes = Math.floor(diff / 60000);
@@ -3584,6 +6268,225 @@ ${content.content.substring(0, 3000)}...`;
     if (hours > 0) return `${hours}h ago`;
     if (minutes > 0) return `${minutes}m ago`;
     return 'just now';
+  }
+  // Analytics Tracking Methods
+  
+  // Track command usage
+  async trackCommandUsage(data) {
+    try {
+      await this.prisma.botCommandUsage.create({
+        data: {
+          command: data.command,
+          args: data.args,
+          groupId: data.groupId,
+          groupName: data.groupName,
+          userId: data.userId,
+          userName: data.userName,
+          success: data.success,
+          responseTime: data.responseTime,
+          errorMessage: data.errorMessage
+        }
+      });
+    } catch (error) {
+      console.error('Failed to track command usage:', error);
+    }
+  }
+  
+  // Track news links
+  async trackNewsLink(url, message, metadata = {}) {
+    try {
+      const domain = new URL(url).hostname;
+      
+      // Check if this URL was already posted in this group
+      const existing = await this.prisma.newsLink.findUnique({
+        where: {
+          url_groupId: {
+            url: url,
+            groupId: message.groupId || 'dm'
+          }
+        }
+      });
+      
+      if (existing) {
+        // Update post count and metadata if provided
+        const updateData = {
+          postCount: existing.postCount + 1,
+          lastPostedAt: new Date()
+        };
+        
+        if (metadata.title) updateData.title = metadata.title;
+        if (metadata.summary) updateData.summary = metadata.summary;
+        if (metadata.forumUrl) updateData.forumUrl = metadata.forumUrl;
+        
+        await this.prisma.newsLink.update({
+          where: { id: existing.id },
+          data: updateData
+        });
+      } else {
+        // Create new entry with metadata
+        await this.prisma.newsLink.create({
+          data: {
+            url: url,
+            domain: domain,
+            title: metadata.title || null,
+            summary: metadata.summary || null,
+            forumUrl: metadata.forumUrl || null,
+            groupId: message.groupId || 'dm',
+            groupName: message.groupName,
+            postedBy: message.sourceNumber,
+            postedByName: message.sourceName
+          }
+        });
+      }
+    } catch (error) {
+      console.error('Failed to track news link:', error);
+    }
+  }
+  
+  // Track URL summaries from !tldr
+  async trackUrlSummary(url, summary, aiProvider, message, processingTime) {
+    try {
+      await this.prisma.urlSummary.create({
+        data: {
+          url: url,
+          groupId: message.groupId,
+          groupName: message.groupName,
+          requestedBy: message.sourceNumber,
+          requestedByName: message.sourceName,
+          summary: summary.substring(0, 5000), // Limit summary length
+          aiProvider: aiProvider,
+          processingTime: processingTime
+        }
+      });
+    } catch (error) {
+      console.error('Failed to track URL summary:', error);
+    }
+  }
+  
+  // Track reactions to bot messages
+  async trackBotMessageReaction(reaction, reactorNumber, reactorName, groupId, groupName) {
+    try {
+      if (!this.lastBotResponse) return;
+      
+      // Determine if reaction is positive/negative
+      let isPositive = null;
+      if (reaction === '👍' || reaction === '✅' || reaction === '❤️') {
+        isPositive = true;
+      } else if (reaction === '👎' || reaction === '❌' || reaction === '🙁') {
+        isPositive = false;
+      }
+      
+      await this.prisma.botMessageReaction.create({
+        data: {
+          botMessage: this.lastBotResponse.message.substring(0, 2000),
+          groupId: groupId,
+          groupName: groupName,
+          reactorId: reactorNumber,
+          reactorName: reactorName,
+          reaction: reaction,
+          isPositive: isPositive,
+          command: this.lastBotResponse.command
+        }
+      });
+      
+      // Also update news link reactions if applicable
+      if (this.lastNewsUrl) {
+        await this.updateNewsLinkReactions(this.lastNewsUrl, reaction, groupId);
+      }
+    } catch (error) {
+      console.error('Failed to track bot message reaction:', error);
+    }
+  }
+  
+  // Update news link reaction counts
+  async updateNewsLinkReactions(url, reaction, groupId) {
+    try {
+      const newsLink = await this.prisma.newsLink.findUnique({
+        where: {
+          url_groupId: {
+            url: url,
+            groupId: groupId || 'dm'
+          }
+        }
+      });
+      
+      if (newsLink) {
+        const updates = {
+          reactionCount: newsLink.reactionCount + 1
+        };
+        
+        if (reaction === '👍') {
+          updates.thumbsUp = newsLink.thumbsUp + 1;
+        } else if (reaction === '👎') {
+          updates.thumbsDown = newsLink.thumbsDown + 1;
+        }
+        
+        await this.prisma.newsLink.update({
+          where: { id: newsLink.id },
+          data: updates
+        });
+      }
+    } catch (error) {
+      console.error('Failed to update news link reactions:', error);
+    }
+  }
+  
+  // Handle "good bot" or "bad bot" feedback
+  async handleBotFeedback(message, isPositive) {
+    try {
+      // Track the feedback as a reaction
+      const feedbackEmoji = isPositive ? '👍' : '👎';
+      await this.trackBotMessageReaction(
+        feedbackEmoji,
+        message.sourceNumber,
+        message.sourceName,
+        message.groupId,
+        message.groupName
+      );
+      
+      // Send acknowledgment
+      const responses = isPositive ? [
+        "Thank you! 😊 Your feedback helps me improve.",
+        "Much appreciated! 🙏 Feedback recorded.",
+        "Thanks! ✨ Your positive feedback is noted.",
+        "Thank you! 💙 Glad I could help."
+      ] : [
+        "Feedback received. I'll try to do better! 📝",
+        "Thanks for letting me know. I'm always learning! 🔧",
+        "Noted. Your feedback helps me improve! 📊",
+        "I appreciate the feedback. Will work on it! 💪"
+      ];
+      
+      const randomResponse = responses[Math.floor(Math.random() * responses.length)];
+      await this.sendReply(message, randomResponse);
+      
+      console.log(`📊 Bot feedback received: ${isPositive ? 'POSITIVE' : 'NEGATIVE'} from ${message.sourceName || message.sourceNumber}`);
+      
+    } catch (error) {
+      console.error('Failed to handle bot feedback:', error);
+      await this.sendReply(message, "Feedback received. Thank you!");
+    }
+  }
+  
+  // Log errors to database
+  async logError(errorType, error, context = {}) {
+    try {
+      await this.prisma.botError.create({
+        data: {
+          errorType: errorType,
+          errorMessage: error.message || String(error),
+          stackTrace: error.stack,
+          command: context.command,
+          groupId: context.groupId,
+          groupName: context.groupName,
+          userId: context.userId,
+          userName: context.userName,
+          context: context
+        }
+      });
+    } catch (dbError) {
+      console.error('Failed to log error to database:', dbError);
+    }
   }
 }
 

@@ -2321,30 +2321,62 @@ ${content.content.substring(0, 3000)}...`;
   }
   
   async fetchAndCacheGroups() {
-    // Try to fetch groups using a direct command
+    // Use secure spawn instead of exec to prevent command injection
     return new Promise((resolve, reject) => {
-      const { exec } = require('child_process');
-      exec(`echo '{"jsonrpc":"2.0","method":"listGroups","params":{"account":"${this.phoneNumber}"},"id":1}' | nc -U ${this.socketPath}`, 
-        { timeout: 5000 },
-        (error, stdout, stderr) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          try {
-            const response = JSON.parse(stdout);
-            if (response.result) {
-              this.cachedGroups = response.result;
-              this.cachedGroupsTime = Date.now();
-              resolve(response.result);
-            } else {
-              reject(new Error('No result in response'));
-            }
-          } catch (parseError) {
-            reject(parseError);
-          }
+      const { spawn } = require('child_process');
+      
+      // Create JSON-RPC payload securely
+      const payload = JSON.stringify({
+        jsonrpc: "2.0",
+        method: "listGroups",
+        params: { account: this.phoneNumber },
+        id: 1
+      });
+      
+      // Use spawn with controlled arguments instead of shell exec
+      const nc = spawn('nc', ['-U', this.socketPath], {
+        timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      
+      let stdout = '';
+      let stderr = '';
+      
+      nc.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+      
+      nc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+      
+      nc.on('close', (code) => {
+        if (code !== 0) {
+          reject(new Error(`nc process exited with code ${code}: ${stderr}`));
+          return;
         }
-      );
+        
+        try {
+          const response = JSON.parse(stdout);
+          if (response.result) {
+            this.cachedGroups = response.result;
+            this.cachedGroupsTime = Date.now();
+            resolve(response.result);
+          } else {
+            reject(new Error('No result in response'));
+          }
+        } catch (parseError) {
+          reject(parseError);
+        }
+      });
+      
+      nc.on('error', (error) => {
+        reject(error);
+      });
+      
+      // Send the payload to nc via stdin
+      nc.stdin.write(payload);
+      nc.stdin.end();
     });
   }
   

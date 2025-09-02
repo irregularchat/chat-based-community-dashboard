@@ -289,7 +289,7 @@ class NativeSignalBotService extends EventEmitter {
           '❓ Q&A': ['q', 'question', 'questions', 'answer', 'solved'],
           '👥 Community': ['groups', 'join', 'invite'],
           '📚 Information': ['wiki', 'forum', 'events', 'faq', 'docs', 'links'],
-          '👤 User Management': ['profile'],
+          '👤 User Management': ['profile', 'bypass'],
           '📄 Forum': ['fpost', 'flatest', 'fsearch', 'categories'],
           '📋 PDF Processing': ['pdf'],
           '👋 Onboarding': ['request']
@@ -297,8 +297,8 @@ class NativeSignalBotService extends EventEmitter {
         
         // Admin-only commands
         const adminCommandsByCategory = {
-          '🔐 Admin': ['removeuser', 'addto', 'gtg', 'sngtg', 'pending', 'bypass'],
-          '📊 Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'sentiment']
+          '🔐 Admin': ['removeuser', 'addto', 'gtg', 'sngtg', 'pending'],
+          '📊 Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'sentiment', 'watchdomain']
         };
         
         let helpText = `🤖 **Signal Bot Commands**\n\n`;

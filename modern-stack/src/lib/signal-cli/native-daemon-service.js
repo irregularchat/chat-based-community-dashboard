@@ -765,6 +765,9 @@ class NativeSignalBotService extends EventEmitter {
           // Phase 1: Command Registry Access
           const commandRegistry = this.getCommandRegistry(context);
           
+          // Phase 2: Database Query Capabilities
+          const dbContext = await this.getAIDatabaseContext(userQuery, context);
+          
           // Zeroeth Law Implementation - Context Awareness
           let contextInfo = '';
           let responseMode = 'general'; // 'command', 'community', or 'general'
@@ -856,6 +859,41 @@ class NativeSignalBotService extends EventEmitter {
             messages.push({ role: 'system', content: `Context: ${contextInfo}` });
           }
           
+          // Add database context if relevant data found
+          if (dbContext.hasRelevantData) {
+            let dbContextStr = 'Relevant information from database:\n';
+            
+            if (dbContext.questions.length > 0) {
+              dbContextStr += '\nRecent Q&A:\n';
+              dbContext.questions.forEach(q => {
+                dbContextStr += `Q: ${q.question}\nA: ${q.answer || 'Unanswered'}\n`;
+              });
+            }
+            
+            if (dbContext.events.length > 0) {
+              dbContextStr += '\nUpcoming Events:\n';
+              dbContext.events.forEach(e => {
+                dbContextStr += `- ${e.name} on ${e.start} at ${e.location || 'TBD'}\n`;
+              });
+            }
+            
+            if (dbContext.links.length > 0) {
+              dbContextStr += '\nRelevant Links:\n';
+              dbContext.links.forEach(l => {
+                dbContextStr += `- ${l.title}: ${l.url}\n`;
+              });
+            }
+            
+            if (dbContext.news.length > 0) {
+              dbContextStr += '\nRecent News:\n';
+              dbContext.news.forEach(n => {
+                dbContextStr += `- ${n.title} (${n.timestamp})\n`;
+              });
+            }
+            
+            messages.push({ role: 'system', content: dbContextStr });
+          }
+          
           messages.push({ role: 'user', content: userQuery });
           
           console.log('🤖 Calling OpenAI with model: gpt-5-mini');
@@ -905,6 +943,12 @@ class NativeSignalBotService extends EventEmitter {
           });
           console.log(`🔄 Thread context: User ${context.sender} selected LocalAI`);
           
+          // Phase 1: Command Registry Access
+          const commandRegistry = this.getCommandRegistry(context);
+          
+          // Phase 2: Database Query Capabilities
+          const dbContext = await this.getAIDatabaseContext(userQuery, context);
+          
           // Zeroeth Law Implementation - Context Awareness
           let contextInfo = '';
           let responseMode = 'general'; // 'command', 'community', or 'general'
@@ -918,7 +962,11 @@ class NativeSignalBotService extends EventEmitter {
           
           if (isCommandQuery) {
             responseMode = 'command';
-            contextInfo = `User is asking about bot commands. Available commands: ${Array.from(this.plugins.keys()).join(', ')}`;
+            // Enhanced command context with descriptions and permissions
+            const commandList = commandRegistry.available.map(cmd => 
+              `!${cmd.name} - ${cmd.description}${cmd.adminOnly ? ' (admin)' : ''}${cmd.moderatorOnly ? ' (mod)' : ''}`
+            ).join('\n');
+            contextInfo = `User is asking about bot commands. They ${commandRegistry.isAdmin ? 'ARE an admin' : commandRegistry.isModerator ? 'ARE a moderator' : 'are NOT admin/moderator'}.\n\nAvailable commands:\n${commandList}`;
           }
           
           // 2. Check if asking about IrregularChat community
@@ -990,6 +1038,41 @@ class NativeSignalBotService extends EventEmitter {
           
           if (contextInfo) {
             messages.push({ role: 'system', content: `Context: ${contextInfo}` });
+          }
+          
+          // Add database context if relevant data found
+          if (dbContext.hasRelevantData) {
+            let dbContextStr = 'Relevant information from database:\n';
+            
+            if (dbContext.questions.length > 0) {
+              dbContextStr += '\nRecent Q&A:\n';
+              dbContext.questions.forEach(q => {
+                dbContextStr += `Q: ${q.question}\nA: ${q.answer || 'Unanswered'}\n`;
+              });
+            }
+            
+            if (dbContext.events.length > 0) {
+              dbContextStr += '\nUpcoming Events:\n';
+              dbContext.events.forEach(e => {
+                dbContextStr += `- ${e.name} on ${e.start} at ${e.location || 'TBD'}\n`;
+              });
+            }
+            
+            if (dbContext.links.length > 0) {
+              dbContextStr += '\nRelevant Links:\n';
+              dbContext.links.forEach(l => {
+                dbContextStr += `- ${l.title}: ${l.url}\n`;
+              });
+            }
+            
+            if (dbContext.news.length > 0) {
+              dbContextStr += '\nRecent News:\n';
+              dbContext.news.forEach(n => {
+                dbContextStr += `- ${n.title} (${n.timestamp})\n`;
+              });
+            }
+            
+            messages.push({ role: 'system', content: dbContextStr });
           }
           
           messages.push({ role: 'user', content: userQuery });
@@ -7233,6 +7316,120 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     };
     
     return examples[name] || [];
+  }
+  
+  // AI Database Context: Query database for relevant information
+  async getAIDatabaseContext(query, context) {
+    const dbContext = {
+      questions: [],
+      events: [],
+      links: [],
+      news: [],
+      hasRelevantData: false
+    };
+    
+    try {
+      // Query for Q&A based on keywords
+      if (query.match(/question|answer|q&a|help|how|what|why|when/i)) {
+        const questions = await this.prisma.question.findMany({
+          where: {
+            OR: [
+              { question: { contains: query.slice(0, 50), mode: 'insensitive' } },
+              { answer: { contains: query.slice(0, 50), mode: 'insensitive' } }
+            ]
+          },
+          take: 5,
+          orderBy: { createdAt: 'desc' },
+          include: {
+            user: true
+          }
+        });
+        
+        dbContext.questions = questions.map(q => ({
+          id: q.id,
+          question: q.question,
+          answer: q.answer,
+          status: q.status,
+          askedBy: q.user?.username || 'Unknown',
+          createdAt: q.createdAt
+        }));
+        
+        if (questions.length > 0) dbContext.hasRelevantData = true;
+      }
+      
+      // Query for events if asking about events/meetings
+      if (query.match(/event|meeting|meetup|happening|schedule|when is/i)) {
+        const now = new Date();
+        const events = await this.prisma.discourseEvent.findMany({
+          where: {
+            eventStart: {
+              gte: now
+            }
+          },
+          take: 5,
+          orderBy: { eventStart: 'asc' }
+        });
+        
+        dbContext.events = events.map(e => ({
+          id: e.id,
+          name: e.name,
+          start: e.eventStart,
+          end: e.eventEnd,
+          location: e.eventLocation,
+          description: e.description
+        }));
+        
+        if (events.length > 0) dbContext.hasRelevantData = true;
+      }
+      
+      // Query for bookmarks/links if asking about resources
+      if (query.match(/link|resource|bookmark|url|website|doc|documentation/i)) {
+        const links = await this.prisma.communityBookmark.findMany({
+          where: {
+            OR: [
+              { title: { contains: query.slice(0, 50), mode: 'insensitive' } },
+              { description: { contains: query.slice(0, 50), mode: 'insensitive' } },
+              { tags: { has: query.split(' ')[0] } }
+            ]
+          },
+          take: 5,
+          orderBy: { createdAt: 'desc' }
+        });
+        
+        dbContext.links = links.map(l => ({
+          id: l.id,
+          title: l.title,
+          url: l.url,
+          description: l.description,
+          tags: l.tags,
+          category: l.category
+        }));
+        
+        if (links.length > 0) dbContext.hasRelevantData = true;
+      }
+      
+      // Query for recent news if asking about news/updates
+      if (query.match(/news|update|latest|recent|happening|announcement/i)) {
+        // Get recent news summaries from memory (last 24 hours)
+        const recentNews = Array.from(this.newsSummaries.entries())
+          .filter(([url, data]) => Date.now() - data.timestamp < 86400000)
+          .slice(0, 3)
+          .map(([url, data]) => ({
+            url,
+            title: data.title,
+            summary: data.summary,
+            timestamp: new Date(data.timestamp)
+          }));
+        
+        dbContext.news = recentNews;
+        if (recentNews.length > 0) dbContext.hasRelevantData = true;
+      }
+      
+    } catch (error) {
+      console.error('Error fetching AI database context:', error);
+    }
+    
+    return dbContext;
   }
   
   // ========== Q&A System Commands ==========

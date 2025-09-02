@@ -1044,6 +1044,18 @@ class NativeSignalBotService extends EventEmitter {
           if (!url || !url.startsWith('http')) {
             return '❌ Usage: !tldr <url>\n\nProvide a valid URL to summarize its content.';
           }
+
+          // If it's a repository URL, use repository processing instead
+          if (this.isRepositoryUrl(url)) {
+            await this.sendReply(context, `🔄 Detected repository URL, processing with repository analyzer...`);
+            try {
+              await this.processRepositoryUrl(url, context);
+              return `✅ Repository processed! See details above.`;
+            } catch (error) {
+              console.error('Repository processing failed, falling back to standard TLDR:', error);
+              // Fall through to normal TLDR processing
+            }
+          }
           
           try {
             // Basic URL fetch and summarization

@@ -697,6 +697,7 @@ class NativeSignalBotService extends EventEmitter {
           '🔧 Core': ['help', 'ping', 'ai', 'lai', 'summarize', 'tldr', 'zeroeth', 'cleaner'],
           '❓ Q&A': ['q', 'question', 'questions', 'answer', 'solved'],
           '👥 Community': ['groups', 'join', 'invite'],
+          '📰 News & Repos': ['news', 'newsadd', 'newslist', 'newsremove', 'repo'],
           '📚 Information': ['wiki', 'forum', 'events', 'faq', 'docs', 'links'],
           '👤 User Management': ['profile', 'bypass'],
           '📄 Forum': ['fpost', 'flatest', 'fsearch', 'categories'],
@@ -1232,6 +1233,64 @@ class NativeSignalBotService extends EventEmitter {
         this.saveCustomNewsDomains();
         
         return `✅ Removed ${domain} from news domains\n📰 Remaining domains: ${this.customNewsDomains.size}`;
+      }
+    });
+
+    commands.set('repo', {
+      name: 'repo',
+      description: 'Show repository processing statistics and manually process URL',
+      execute: async (context) => {
+        const args = context.args;
+        
+        // If URL provided, manually process it
+        if (args.length > 0) {
+          const url = args.join(' ');
+          if (this.isRepositoryUrl(url)) {
+            await this.sendReply(context, `🔄 Processing repository URL: ${url}`);
+            try {
+              await this.processRepositoryUrl(url, context);
+              return `✅ Successfully processed repository URL!`;
+            } catch (error) {
+              return `❌ Error processing URL: ${error.message}`;
+            }
+          } else {
+            return `❌ URL doesn't match repository patterns. Use !repo to see stats.`;
+          }
+        }
+        
+        // Show statistics
+        const today = new Date().toDateString();
+        const todayCount = this.repositoryStats.dailyCounts.get(today) || 0;
+        
+        let stats = `🔧 **Repository Processing Statistics**\n\n`;
+        stats += `📊 **Overall Stats:**\n`;
+        stats += `• Total repositories processed: ${this.repositoryStats.totalProcessed}\n`;
+        stats += `• Repositories today: ${todayCount}\n`;
+        
+        if (this.repositoryStats.platforms.size > 0) {
+          stats += `\n🏠 **Platforms:**\n`;
+          const sortedPlatforms = Array.from(this.repositoryStats.platforms.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5);
+          for (const [platform, count] of sortedPlatforms) {
+            stats += `• ${platform}: ${count}\n`;
+          }
+        }
+        
+        if (this.repositoryStats.languages.size > 0) {
+          stats += `\n💻 **Top Languages:**\n`;
+          const sortedLanguages = Array.from(this.repositoryStats.languages.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 7);
+          for (const [language, count] of sortedLanguages) {
+            stats += `• ${language}: ${count}\n`;
+          }
+        }
+        
+        stats += `\n💡 **Usage:** Send \`!repo <url>\` to manually process a repository URL\n`;
+        stats += `🤖 **Auto-processing:** Repository URLs are automatically detected and processed`;
+        
+        return stats;
       }
     });
     

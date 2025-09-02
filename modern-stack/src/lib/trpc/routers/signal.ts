@@ -1116,7 +1116,7 @@ export const signalRouter = createTRPCRouter({
       }
     }),
 
-  // Request to join a Signal group (for Phase 2)
+  // Request to join a Signal group with automatic approval for authorized users
   requestSignalGroupJoin: protectedProcedure
     .input(z.object({
       groupId: z.string(),
@@ -1178,23 +1178,108 @@ export const signalRouter = createTRPCRouter({
           });
         }
 
-        // Create join request
-        const joinRequest = await ctx.prisma.signalGroupJoinRequest.create({
-          data: {
+        // Check if user is authorized (has existing group memberships = authorized)
+        const existingMemberships = await ctx.prisma.signalGroupMembership.findMany({
+          where: { 
             userId,
-            groupId: input.groupId,
-            message: input.message,
-            status: 'pending'
+            status: 'active'
           }
         });
 
-        return {
-          success: true,
-          requestId: joinRequest.id,
-          message: group.requiresApproval 
-            ? 'Join request submitted for approval' 
-            : 'Join request submitted'
-        };
+        const isAuthorizedUser = existingMemberships.length > 0; // All current groups are authorized
+
+        if (isAuthorizedUser) {
+          // Auto-approve and add user directly to the group
+          const result = await ctx.prisma.$transaction(async (prisma) => {
+            // Create approved join request record
+            const joinRequest = await prisma.signalGroupJoinRequest.create({
+              data: {
+                userId,
+                groupId: input.groupId,
+                message: input.message,
+                status: 'approved',
+                processedAt: new Date()
+              }
+            });
+
+            // Create group membership
+            const membership = await prisma.signalGroupMembership.create({
+              data: {
+                userId,
+                groupId: input.groupId,
+                groupName: group.groupName,
+                status: 'active'
+              }
+            });
+
+            return { joinRequest, membership };
+          });
+
+          // Add user to actual Signal group via native bot
+          let signalJoinSuccess = false;
+          let signalError = null;
+          try {
+            const bot = getNativeBot();
+            const userPhone = ctx.session.user.attributes && typeof ctx.session.user.attributes === 'object'
+              ? (ctx.session.user.attributes as any).phone_number
+              : null;
+
+            if (userPhone) {
+              // Add user to Signal group
+              await bot.addUserToGroup(input.groupId, userPhone);
+              signalJoinSuccess = true;
+              console.log(`✅ Added user ${userPhone} to Signal group ${input.groupId}`);
+            } else {
+              signalError = 'No phone number found in user profile';
+              console.warn(`⚠️ Cannot add user to Signal group - no phone number`);
+            }
+          } catch (error) {
+            signalError = error instanceof Error ? error.message : 'Unknown Signal error';
+            console.error('❌ Failed to add user to Signal group:', error);
+          }
+
+          // Log admin event
+          await ctx.prisma.adminEvent.create({
+            data: {
+              eventType: 'signal_group_auto_join',
+              username: ctx.session.user.username || 'unknown',
+              details: `Auto-approved and joined ${group.groupName}${signalJoinSuccess ? '' : ` (Signal add failed: ${signalError})`}`,
+            },
+          });
+
+          return {
+            success: true,
+            autoApproved: true,
+            joined: signalJoinSuccess,
+            requestId: result.joinRequest.id,
+            membershipId: result.membership.id,
+            message: signalJoinSuccess 
+              ? `Successfully joined ${group.groupName}!` 
+              : `Approved for ${group.groupName}, but Signal group add failed. Contact admin.`,
+            signalError
+          };
+
+        } else {
+          // Create pending join request for manual approval
+          const joinRequest = await ctx.prisma.signalGroupJoinRequest.create({
+            data: {
+              userId,
+              groupId: input.groupId,
+              message: input.message,
+              status: 'pending'
+            }
+          });
+
+          return {
+            success: true,
+            autoApproved: false,
+            joined: false,
+            requestId: joinRequest.id,
+            message: group.requiresApproval 
+              ? 'Join request submitted for admin approval'
+              : 'Join request submitted'
+          };
+        }
 
       } catch (error) {
         console.error('Error requesting group join:', error);

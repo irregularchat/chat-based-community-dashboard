@@ -8664,6 +8664,148 @@ Are you sure this is what you wanted to post?
     
     return '❌ Usage: !watchdomain [add <domain> <country>|remove <domain>|list]';
   }
+
+  // ============================================================================
+  // Signal Group Management (v0.4.0 Phase 2)
+  // ============================================================================
+
+  /**
+   * Add a user to a Signal group
+   * @param {string} groupId - The Signal group ID
+   * @param {string} userPhoneNumber - The user's phone number to add
+   * @returns {Promise<boolean>} - Success status
+   */
+  async addUserToGroup(groupId, userPhoneNumber) {
+    return new Promise((resolve, reject) => {
+      try {
+        console.log(`🔄 Adding user ${userPhoneNumber} to group ${groupId}`);
+        
+        // Use signal-cli to add user to group
+        // The updateGroup command with --member flag adds users to existing groups
+        const signalCliPath = process.env.SIGNAL_CLI_PATH || 'signal-cli';
+        const args = [
+          '-a', this.phoneNumber,
+          '--config', this.dataDir,
+          'updateGroup',
+          '--group-id', groupId,
+          '--member', userPhoneNumber
+        ];
+
+        console.log(`📞 Executing: ${signalCliPath} ${args.join(' ')}`);
+        
+        const process = spawn(signalCliPath, args, {
+          stdio: ['pipe', 'pipe', 'pipe']
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        process.stdout.on('data', (data) => {
+          stdout += data.toString();
+        });
+
+        process.stderr.on('data', (data) => {
+          stderr += data.toString();
+        });
+
+        process.on('close', (code) => {
+          console.log(`📋 signal-cli updateGroup exit code: ${code}`);
+          console.log(`📤 stdout: ${stdout}`);
+          if (stderr) console.log(`📥 stderr: ${stderr}`);
+          
+          if (code === 0) {
+            console.log(`✅ Successfully added ${userPhoneNumber} to group ${groupId}`);
+            resolve(true);
+          } else {
+            const errorMsg = stderr || stdout || `Process exited with code ${code}`;
+            console.error(`❌ Failed to add user to group: ${errorMsg}`);
+            reject(new Error(`Signal CLI error: ${errorMsg}`));
+          }
+        });
+
+        process.on('error', (error) => {
+          console.error(`❌ Failed to spawn signal-cli process: ${error.message}`);
+          reject(error);
+        });
+
+        // Set timeout for the operation
+        setTimeout(() => {
+          if (!process.killed) {
+            process.kill();
+            reject(new Error('Signal CLI operation timed out'));
+          }
+        }, 30000); // 30 second timeout
+
+      } catch (error) {
+        console.error(`❌ Error in addUserToGroup: ${error.message}`);
+        reject(error);
+      }
+    });
+  }
+
+  /**
+   * Get group information including member list
+   * @param {string} groupId - The Signal group ID
+   * @returns {Promise<object>} - Group information
+   */
+  async getGroupInfo(groupId) {
+    return new Promise((resolve, reject) => {
+      try {
+        console.log(`🔍 Getting info for group ${groupId}`);
+        
+        const signalCliPath = process.env.SIGNAL_CLI_PATH || 'signal-cli';
+        const args = [
+          '-a', this.phoneNumber,
+          '--config', this.dataDir,
+          'listGroups',
+          '--detailed'
+        ];
+
+        const process = spawn(signalCliPath, args, {
+          stdio: ['pipe', 'pipe', 'pipe']
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        process.stdout.on('data', (data) => {
+          stdout += data.toString();
+        });
+
+        process.stderr.on('data', (data) => {
+          stderr += data.toString();
+        });
+
+        process.on('close', (code) => {
+          if (code === 0) {
+            try {
+              // Parse the output to find our specific group
+              const groups = JSON.parse(stdout);
+              const targetGroup = groups.find(g => g.id === groupId);
+              
+              if (targetGroup) {
+                console.log(`✅ Found group info for ${groupId}`);
+                resolve(targetGroup);
+              } else {
+                reject(new Error(`Group ${groupId} not found`));
+              }
+            } catch (parseError) {
+              console.error(`❌ Failed to parse group list: ${parseError.message}`);
+              reject(new Error('Failed to parse group information'));
+            }
+          } else {
+            const errorMsg = stderr || stdout || `Process exited with code ${code}`;
+            console.error(`❌ Failed to get group info: ${errorMsg}`);
+            reject(new Error(`Signal CLI error: ${errorMsg}`));
+          }
+        });
+
+      } catch (error) {
+        console.error(`❌ Error in getGroupInfo: ${error.message}`);
+        reject(error);
+      }
+    });
+  }
 }
 
 module.exports = { NativeSignalBotService };

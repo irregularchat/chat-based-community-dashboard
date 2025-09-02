@@ -811,60 +811,69 @@ class NativeSignalBotService extends EventEmitter {
             { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' }
           ];
           
-          // Phase 3: Permission-aware command execution
+          // Phase 4: Use safe executor for automatic command mapping
           for (const mapping of commandMappings) {
             const matches = mapping.keywords.some(kw => userQuery.toLowerCase().includes(kw));
             if (matches) {
-              const cmd = this.plugins.get(mapping.command);
-              if (cmd) {
-                // Check permissions before execution
-                const cmdInfo = commandRegistry.all.find(c => c.name === mapping.command);
-                if (cmdInfo) {
-                  if (cmdInfo.adminOnly && !commandRegistry.isAdmin) {
-                    return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires admin privileges. You can ask an admin to run it for you.`;
-                  }
-                  if (cmdInfo.moderatorOnly && !commandRegistry.isModerator) {
-                    return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires moderator privileges. You can ask a moderator to run it for you.`;
-                  }
-                }
-                
-                // Safe to execute
-                const cmdContext = { ...context, args: [] };
-                const result = await cmd.execute(cmdContext);
-                console.log(`🤖 AI executed !${mapping.command} for user ${context.sourceNumber}`);
-                return `${getAiPrefix(responseMode)} ${result}`;
+              // Use safe command executor
+              const execResult = await this.safeCommandExecutor(mapping.command, [], context, 'openai');
+              
+              if (execResult.success) {
+                return `${getAiPrefix(responseMode)} ${execResult.result}`;
+              } else if (execResult.needsPermission) {
+                return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires ${execResult.needsPermission} privileges. You can ask an ${execResult.needsPermission} to run it for you.`;
+              } else if (execResult.blocked) {
+                return `${getAiPrefix(responseMode)} The !${mapping.command} command is blocked for safety reasons.`;
               }
+              // If command not found, continue to next mapping
             }
           }
           
-          // Also check for direct command execution requests with permission checking
-          const commandPattern = /^(run|execute|do|perform) !?(\w+)(?:\s+(.*))?$/i;
+          // Phase 4: Enhanced command execution with safe executor
+          // Check for direct command execution requests
+          const commandPattern = /^(run|execute|do|perform|use) !?(\w+)(?:\s+(.*))?$/i;
           const match = userQuery.match(commandPattern);
           if (match) {
             const cmdName = match[2].toLowerCase();
             const cmdArgs = match[3] ? match[3].split(' ') : [];
-            const cmd = this.plugins.get(cmdName);
             
-            if (cmd) {
-              // Permission check
-              const cmdInfo = commandRegistry.all.find(c => c.name === cmdName);
-              if (cmdInfo) {
-                if (cmdInfo.adminOnly && !commandRegistry.isAdmin) {
-                  return `OpenAI: Cannot execute !${cmdName} - admin privileges required. You don't have admin access.`;
-                }
-                if (cmdInfo.moderatorOnly && !commandRegistry.isModerator) {
-                  return `OpenAI: Cannot execute !${cmdName} - moderator privileges required. You don't have moderator access.`;
-                }
-              }
-              
-              // Log execution for audit
-              console.log(`🤖 AI executing !${cmdName} for user ${context.sourceNumber} with args:`, cmdArgs);
-              
-              const cmdContext = { ...context, args: cmdArgs };
-              const result = await cmd.execute(cmdContext);
-              return `OpenAI: Executed !${cmdName}:\n\n${result}`;
+            // Use safe command executor for all AI command executions
+            const execResult = await this.safeCommandExecutor(cmdName, cmdArgs, context, 'openai');
+            
+            if (execResult.success) {
+              return `OpenAI: Executed !${cmdName}:\n\n${execResult.result}`;
+            } else if (execResult.needsPermission) {
+              return `OpenAI: Cannot execute !${cmdName} - ${execResult.needsPermission} privileges required. You don't have ${execResult.needsPermission} access.`;
+            } else if (execResult.blocked) {
+              return `OpenAI: Command !${cmdName} is blocked for safety reasons. Please execute it manually if needed.`;
             } else {
-              return `OpenAI: Command !${cmdName} not found. Use !help to see available commands.`;
+              return `OpenAI: ${execResult.message}`;
+            }
+          }
+          
+          // Also check for implicit command requests (e.g., "add user X to group Y")
+          const implicitPatterns = [
+            { pattern: /add (?:user )?(\S+) to (?:group )?(\S+)/i, command: 'addto', extractArgs: (m) => [m[2], m[1]] },
+            { pattern: /remove (?:user )?(\S+) from (?:group )?(\S+)/i, command: 'removefrom', extractArgs: (m) => [m[2], m[1]] },
+            { pattern: /(?:create|make|add) (?:a )?(?:new )?group (?:called |named )?(\S+)/i, command: 'creategroup', extractArgs: (m) => [m[1]] },
+            { pattern: /(?:send|message) (?:to )?(\S+) (?:saying |with message |:)(.+)/i, command: 'send', extractArgs: (m) => [m[1], m[2]] },
+            { pattern: /(?:list|show) members (?:of|in) (?:group )?(\S+)/i, command: 'members', extractArgs: (m) => [m[1]] }
+          ];
+          
+          for (const implicitCmd of implicitPatterns) {
+            const implicitMatch = userQuery.match(implicitCmd.pattern);
+            if (implicitMatch) {
+              const cmdArgs = implicitCmd.extractArgs(implicitMatch);
+              const execResult = await this.safeCommandExecutor(implicitCmd.command, cmdArgs, context, 'openai');
+              
+              if (execResult.success) {
+                return `OpenAI: ${execResult.result}`;
+              } else if (execResult.needsPermission) {
+                return `OpenAI: That action requires ${execResult.needsPermission} privileges, which you don't have.`;
+              } else {
+                // Don't reveal the command failed, just say we can't do it
+                return `OpenAI: I'm unable to perform that action. ${execResult.needsPermission ? `It requires ${execResult.needsPermission} privileges.` : 'Please try a different approach.'}`;
+              }
             }
           }
           
@@ -1021,43 +1030,69 @@ class NativeSignalBotService extends EventEmitter {
             { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' }
           ];
           
-          // Phase 3: Permission-aware command execution
+          // Phase 4: Use safe executor for automatic command mapping
           for (const mapping of commandMappings) {
             const matches = mapping.keywords.some(kw => userQuery.toLowerCase().includes(kw));
             if (matches) {
-              const cmd = this.plugins.get(mapping.command);
-              if (cmd) {
-                // Check permissions before execution
-                const cmdInfo = commandRegistry.all.find(c => c.name === mapping.command);
-                if (cmdInfo) {
-                  if (cmdInfo.adminOnly && !commandRegistry.isAdmin) {
-                    return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires admin privileges. You can ask an admin to run it for you.`;
-                  }
-                  if (cmdInfo.moderatorOnly && !commandRegistry.isModerator) {
-                    return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires moderator privileges. You can ask a moderator to run it for you.`;
-                  }
-                }
-                
-                // Safe to execute
-                const cmdContext = { ...context, args: [] };
-                const result = await cmd.execute(cmdContext);
-                console.log(`🤖 AI executed !${mapping.command} for user ${context.sourceNumber}`);
-                return `${getAiPrefix(responseMode)} ${result}`;
+              // Use safe command executor
+              const execResult = await this.safeCommandExecutor(mapping.command, [], context, 'openai');
+              
+              if (execResult.success) {
+                return `${getAiPrefix(responseMode)} ${execResult.result}`;
+              } else if (execResult.needsPermission) {
+                return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires ${execResult.needsPermission} privileges. You can ask an ${execResult.needsPermission} to run it for you.`;
+              } else if (execResult.blocked) {
+                return `${getAiPrefix(responseMode)} The !${mapping.command} command is blocked for safety reasons.`;
               }
+              // If command not found, continue to next mapping
             }
           }
           
-          // Also check for direct command execution requests
-          const commandPattern = /^(run|execute|do|perform) !?(\w+)(?:\s+(.*))?$/i;
+          // Phase 4: Enhanced command execution with safe executor
+          // Check for direct command execution requests
+          const commandPattern = /^(run|execute|do|perform|use) !?(\w+)(?:\s+(.*))?$/i;
           const match = userQuery.match(commandPattern);
           if (match) {
             const cmdName = match[2].toLowerCase();
             const cmdArgs = match[3] ? match[3].split(' ') : [];
-            const cmd = this.plugins.get(cmdName);
-            if (cmd) {
-              const cmdContext = { ...context, args: cmdArgs };
-              const result = await cmd.execute(cmdContext);
-              return `LocalAI: Executed !${cmdName}:\n\n${result}`;
+            
+            // Use safe command executor for all AI command executions
+            const execResult = await this.safeCommandExecutor(cmdName, cmdArgs, context, 'localai');
+            
+            if (execResult.success) {
+              return `LocalAI: Executed !${cmdName}:\n\n${execResult.result}`;
+            } else if (execResult.needsPermission) {
+              return `LocalAI: Cannot execute !${cmdName} - ${execResult.needsPermission} privileges required. You don't have ${execResult.needsPermission} access.`;
+            } else if (execResult.blocked) {
+              return `LocalAI: Command !${cmdName} is blocked for safety reasons. Please execute it manually if needed.`;
+            } else {
+              return `LocalAI: ${execResult.message}`;
+            }
+          }
+          
+          // Also check for implicit command requests (e.g., "add user X to group Y")
+          const implicitPatterns = [
+            { pattern: /add (?:user )?(\S+) to (?:group )?(\S+)/i, command: 'addto', extractArgs: (m) => [m[2], m[1]] },
+            { pattern: /remove (?:user )?(\S+) from (?:group )?(\S+)/i, command: 'removefrom', extractArgs: (m) => [m[2], m[1]] },
+            { pattern: /(?:create|make|add) (?:a )?(?:new )?group (?:called |named )?(\S+)/i, command: 'creategroup', extractArgs: (m) => [m[1]] },
+            { pattern: /(?:send|message) (?:to )?(\S+) (?:saying |with message |:)(.+)/i, command: 'send', extractArgs: (m) => [m[1], m[2]] },
+            { pattern: /(?:list|show) members (?:of|in) (?:group )?(\S+)/i, command: 'members', extractArgs: (m) => [m[1]] }
+          ];
+          
+          for (const implicitCmd of implicitPatterns) {
+            const implicitMatch = userQuery.match(implicitCmd.pattern);
+            if (implicitMatch) {
+              const cmdArgs = implicitCmd.extractArgs(implicitMatch);
+              const execResult = await this.safeCommandExecutor(implicitCmd.command, cmdArgs, context, 'localai');
+              
+              if (execResult.success) {
+                return `LocalAI: ${execResult.result}`;
+              } else if (execResult.needsPermission) {
+                return `LocalAI: That action requires ${execResult.needsPermission} privileges, which you don't have.`;
+              } else {
+                // Don't reveal the command failed, just say we can't do it
+                return `LocalAI: I'm unable to perform that action. ${execResult.needsPermission ? `It requires ${execResult.needsPermission} privileges.` : 'Please try a different approach.'}`;
+              }
             }
           }
           
@@ -7471,6 +7506,120 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     }
     
     return dbContext;
+  }
+  
+  // Phase 4: Safe Command Executor for Admin Operations
+  async safeCommandExecutor(commandName, args, context, aiProvider = 'ai') {
+    // Audit log for all AI command executions
+    const auditEntry = {
+      timestamp: new Date().toISOString(),
+      aiProvider: aiProvider,
+      command: commandName,
+      args: args,
+      user: context.sourceNumber,
+      userUuid: context.sourceUuid,
+      group: context.groupId,
+      executed: false,
+      error: null
+    };
+    
+    try {
+      // Get command from registry
+      const cmd = this.plugins.get(commandName);
+      if (!cmd) {
+        auditEntry.error = 'Command not found';
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        return { success: false, message: `Command !${commandName} not found` };
+      }
+      
+      // Get command metadata and check permissions
+      const commandRegistry = this.getCommandRegistry(context);
+      const cmdInfo = commandRegistry.all.find(c => c.name === commandName);
+      
+      if (!cmdInfo) {
+        auditEntry.error = 'Command metadata not found';
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        return { success: false, message: `Command metadata for !${commandName} not found` };
+      }
+      
+      // Permission checks
+      if (cmdInfo.adminOnly && !commandRegistry.isAdmin) {
+        auditEntry.error = 'Admin permission required';
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        return { 
+          success: false, 
+          message: `Cannot execute !${commandName} - admin privileges required`,
+          needsPermission: 'admin'
+        };
+      }
+      
+      if (cmdInfo.moderatorOnly && !commandRegistry.isModerator) {
+        auditEntry.error = 'Moderator permission required';
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        return { 
+          success: false, 
+          message: `Cannot execute !${commandName} - moderator privileges required`,
+          needsPermission: 'moderator'
+        };
+      }
+      
+      // Dangerous command blocklist - never allow AI to execute these
+      const dangerousCommands = ['delete', 'ban', 'kick', 'remove', 'destroy', 'drop', 'truncate', 'reset'];
+      if (dangerousCommands.includes(commandName.toLowerCase())) {
+        auditEntry.error = 'Dangerous command blocked';
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        return { 
+          success: false, 
+          message: `Command !${commandName} is blocked for AI execution for safety reasons`,
+          blocked: true
+        };
+      }
+      
+      // Input validation for args
+      if (args && args.length > 0) {
+        // Sanitize arguments
+        args = args.map(arg => {
+          // Remove any potential injection attempts
+          if (typeof arg === 'string') {
+            return arg.replace(/[;&|`$(){}[\]<>]/g, '').substring(0, 500);
+          }
+          return arg;
+        });
+      }
+      
+      // Execute the command with timeout
+      const cmdContext = { ...context, args: args || [] };
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Command execution timeout')), 10000)
+      );
+      
+      const result = await Promise.race([
+        cmd.execute(cmdContext),
+        timeoutPromise
+      ]);
+      
+      auditEntry.executed = true;
+      console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+      console.log(`✅ AI (${aiProvider}) successfully executed !${commandName} for user ${context.sourceNumber}`);
+      
+      return { 
+        success: true, 
+        result: result,
+        command: commandName,
+        executedBy: aiProvider
+      };
+      
+    } catch (error) {
+      auditEntry.error = error.message;
+      console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+      console.error(`❌ AI command execution error:`, error);
+      
+      return { 
+        success: false, 
+        message: `Error executing !${commandName}: ${error.message}`,
+        error: true
+      };
+    }
   }
   
   // ========== Q&A System Commands ==========

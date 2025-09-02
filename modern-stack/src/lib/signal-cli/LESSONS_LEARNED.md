@@ -998,5 +998,172 @@ This implementation provides a solid foundation for further enhancements while m
 
 ---
 
-*Last Updated: November 2024*
-*Version: 1.0.0*
+## Recent Updates (December 2024)
+
+### Security Hardening Implementation
+
+#### UUID-Based Authentication
+**Problem**: Phone number-based authentication was easily spoofed.
+
+**Solution**: Implemented UUID-based authentication system:
+```javascript
+// Migrated from phone number to UUID
+const ADMIN_UUIDS = process.env.ADMIN_UUIDS?.split(',') || [];
+
+isAdmin(context) {
+  // Prefer UUID over phone number
+  if (context.sourceUuid && ADMIN_UUIDS.includes(context.sourceUuid)) {
+    return true;
+  }
+  // Fallback to phone for backward compatibility
+  return context.sourceNumber === process.env.ADMIN_PHONE;
+}
+```
+
+**Lesson**: Always use cryptographically secure identifiers for authentication.
+
+#### Command Injection Prevention
+**Problem**: Using `exec()` with user-controlled input created command injection vulnerability.
+
+**Solution**: Replaced all `exec()` calls with secure `spawn()`:
+```javascript
+// BEFORE (vulnerable):
+exec(`echo '${JSON.stringify(payload)}' | nc -U ${this.socketPath}`)
+
+// AFTER (secure):
+const nc = spawn('nc', ['-U', this.socketPath], {
+  timeout: 5000,
+  stdio: ['pipe', 'pipe', 'pipe']
+});
+nc.stdin.write(JSON.stringify(payload));
+```
+
+**Lesson**: Never use `exec()` with user input. Always use parameterized commands with `spawn()`.
+
+### Repository Processing System
+
+#### Automatic URL Detection
+**Problem**: Need to automatically process repository URLs posted in chat.
+
+**Solution**: Implemented intelligent URL detection with platform-specific handling:
+```javascript
+// Supports GitHub, GitLab, Bitbucket, Codeberg
+const isRepositoryUrl = (url) => {
+  const patterns = {
+    github: 'github.com',
+    gitlab: 'gitlab.com',
+    bitbucket: 'bitbucket.org',
+    codeberg: 'codeberg.org'
+  };
+  // Check URL patterns and validate repository structure
+};
+```
+
+**Lesson**: Design flexible pattern matching for multiple platforms.
+
+#### Duplicate Processing Prevention
+**Problem**: Repository URLs were processed twice - once automatically and once via command.
+
+**Solution**: Skip automatic processing when commands are detected:
+```javascript
+const repoCommands = ['!repo', '!tldr', '!summarize'];
+const isRepoCommand = repoCommands.some(cmd => 
+  message.message.trim().toLowerCase().startsWith(cmd)
+);
+if (isRepoCommand) return; // Skip automatic processing
+```
+
+**Lesson**: Coordinate between automatic and manual processing systems.
+
+### Signal Protocol Issues
+
+#### Decryption Failures
+**Problem**: `InvalidMessageException: invalid Whisper message: decryption failed`
+
+**Common Causes**:
+1. Session key mismatch after device changes
+2. Multiple Signal sessions on same number
+3. Corrupted local session store
+
+**Solutions**:
+```bash
+# Reset session with specific contact
+signal-cli -a +PHONE sendEndSessionMessage +CONTACT_PHONE
+
+# Clear session store (nuclear option)
+rm -rf ~/.local/share/signal-cli/data/+PHONE/sessions/
+
+# Re-sync contacts
+signal-cli -a +PHONE sendContacts
+```
+
+**Lesson**: Signal's end-to-end encryption requires careful session management.
+
+#### Connection Stability
+**Problem**: `Connection closed unexpectedly, reconnecting`
+
+**Solution**: Implement exponential backoff for reconnections:
+```javascript
+let reconnectDelay = 1000;
+const maxDelay = 30000;
+
+async function reconnect() {
+  await new Promise(resolve => setTimeout(resolve, reconnectDelay));
+  reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+  // Attempt reconnection
+}
+```
+
+**Lesson**: Network issues are common; implement robust reconnection logic.
+
+### Command Naming and User Experience
+
+#### Command Clarity
+**Problem**: `!sentiment` was unclear - users didn't understand it was for bot feedback.
+
+**Solution**: Renamed to `!feedback` for clarity:
+```javascript
+// More intuitive command naming
+{ name: 'feedback', description: 'Bot feedback sentiment' }
+```
+
+**Lesson**: Choose command names that clearly communicate their purpose.
+
+### Database Schema Evolution
+
+#### Missing Model Handling
+**Problem**: Code expected `RepositoryLink` model that didn't exist in database.
+
+**Solution**: Graceful degradation when models are missing:
+```javascript
+try {
+  if (this.prisma && this.prisma.repositoryLink) {
+    await this.trackRepositoryLink(url, message, repoData);
+  }
+} catch (dbError) {
+  console.error('Database tracking failed (continuing):', dbError.message);
+}
+```
+
+**Lesson**: Always handle missing database models gracefully.
+
+### Performance Optimizations
+
+#### Message Processing Pipeline
+**Problem**: Processing all messages synchronously caused delays.
+
+**Solution**: Asynchronous processing with timeouts:
+```javascript
+setTimeout(() => {
+  this.processRepositoryUrl(url, message).catch(error => {
+    console.error(`Failed to process: ${url}`, error);
+  });
+}, 100);
+```
+
+**Lesson**: Use async processing for non-critical operations.
+
+---
+
+*Last Updated: December 2024*
+*Version: 1.1.0*

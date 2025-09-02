@@ -1344,6 +1344,41 @@ export default function UserDashboard() {
             )}
           </div>
         </TabsContent>
+        
+        {/* Signal Groups Tab */}
+        <TabsContent value="signal-groups">
+          <div className="grid gap-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Phone className="w-5 h-5" />
+                  My Signal Status
+                </CardTitle>
+                <CardDescription>
+                  View your Signal verification status and current group memberships
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <SignalStatusCard />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="w-5 h-5" />
+                  Available Signal Groups
+                </CardTitle>
+                <CardDescription>
+                  Discover and join Signal groups in the community
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <AvailableSignalGroupsCard />
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
 
         {/* Contact Admin Tab */}
         <TabsContent value="contact">
@@ -1821,6 +1856,210 @@ export default function UserDashboard() {
           </TabsContent>
         )}
       </Tabs>
+    </div>
+  );
+}
+
+// ============================================================================
+// Signal Groups Components (v0.4.0 Phase 1)
+// ============================================================================
+
+function SignalStatusCard() {
+  const { data: signalStatus, isLoading, refetch } = trpc.signal.getMySignalStatus.useQuery();
+
+  if (isLoading) {
+    return <div className="text-center py-8 text-muted-foreground">Loading Signal status...</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Signal Verification Status */}
+      <div className="flex items-center justify-between p-4 border rounded-lg">
+        <div className="flex items-center gap-3">
+          <div className={`p-2 rounded-full ${signalStatus?.isSignalVerified ? 'bg-green-100' : 'bg-orange-100'}`}>
+            {signalStatus?.isSignalVerified ? (
+              <CheckCircle className="w-4 h-4 text-green-600" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-orange-600" />
+            )}
+          </div>
+          <div>
+            <div className="font-medium">
+              Signal Verification
+            </div>
+            <div className="text-sm text-muted-foreground">
+              {signalStatus?.isSignalVerified ? 'Verified' : 'Not verified'}
+            </div>
+          </div>
+        </div>
+        {signalStatus?.phoneNumber && (
+          <Badge variant="outline">
+            {signalStatus.phoneNumber}
+          </Badge>
+        )}
+      </div>
+
+      {/* Current Group Memberships */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h4 className="font-medium">My Signal Groups ({signalStatus?.totalGroups || 0})</h4>
+          <Button variant="outline" size="sm" onClick={() => refetch()}>
+            Refresh
+          </Button>
+        </div>
+        
+        {signalStatus?.groupMemberships && signalStatus.groupMemberships.length > 0 ? (
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {signalStatus.groupMemberships.map((membership) => (
+              <div key={membership.id} className="flex items-center justify-between p-3 border rounded-lg">
+                <div>
+                  <div className="font-medium">{membership.groupName}</div>
+                  {membership.description && (
+                    <div className="text-sm text-muted-foreground">{membership.description}</div>
+                  )}
+                  <div className="text-xs text-muted-foreground">
+                    Joined {new Date(membership.joinedAt).toLocaleDateString()}
+                    {membership.memberCount && ` • ${membership.memberCount} members`}
+                  </div>
+                </div>
+                <Badge variant="secondary">{membership.status}</Badge>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-8 text-muted-foreground">
+            <Phone className="w-8 h-8 mx-auto mb-2 opacity-50" />
+            <p>No Signal groups joined yet</p>
+            <p className="text-sm">Browse available groups below to get started</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AvailableSignalGroupsCard() {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [searchQuery, setSearchQuery] = useState('');
+  
+  const { data: availableGroups, isLoading, refetch } = trpc.signal.getAvailableSignalGroups.useQuery({
+    page: currentPage,
+    limit: 10,
+    search: searchQuery || undefined
+  });
+
+  const joinGroupMutation = trpc.signal.requestSignalGroupJoin.useMutation({
+    onSuccess: (result) => {
+      toast.success(result.message);
+      refetch();
+    },
+    onError: (error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const handleJoinGroup = (groupId: string) => {
+    joinGroupMutation.mutate({ 
+      groupId,
+      message: "Hi! I'd like to join this group through the community dashboard."
+    });
+  };
+
+  if (isLoading) {
+    return <div className="text-center py-8 text-muted-foreground">Loading available groups...</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Search and Controls */}
+      <div className="flex gap-2">
+        <Input
+          placeholder="Search groups..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="flex-1"
+        />
+        <Button variant="outline" onClick={() => refetch()}>
+          Refresh
+        </Button>
+      </div>
+
+      {/* Groups List */}
+      {availableGroups?.groups && availableGroups.groups.length > 0 ? (
+        <div className="space-y-3">
+          {availableGroups.groups.map((group) => (
+            <div key={group.groupId} className="flex items-center justify-between p-4 border rounded-lg">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <div className="font-medium">{group.groupName}</div>
+                  {group.requiresApproval && (
+                    <Badge variant="outline" className="text-xs">
+                      Requires Approval
+                    </Badge>
+                  )}
+                </div>
+                {group.description && (
+                  <div className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                    {group.description}
+                  </div>
+                )}
+                <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                  <span>{group.memberCount} members</span>
+                  {group.tags && group.tags.length > 0 && (
+                    <div className="flex gap-1">
+                      {group.tags.slice(0, 3).map((tag, index) => (
+                        <Badge key={index} variant="secondary" className="text-xs px-1 py-0">
+                          {tag}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <Button 
+                size="sm" 
+                onClick={() => handleJoinGroup(group.groupId)}
+                disabled={joinGroupMutation.isLoading}
+              >
+                {joinGroupMutation.isLoading ? '...' : 'Request to Join'}
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-center py-8 text-muted-foreground">
+          <Users className="w-8 h-8 mx-auto mb-2 opacity-50" />
+          <p>No available groups found</p>
+          {searchQuery && <p className="text-sm">Try adjusting your search terms</p>}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {availableGroups && availableGroups.totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-muted-foreground">
+            Page {availableGroups.page} of {availableGroups.totalPages} • {availableGroups.total} total groups
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage(p => Math.min(availableGroups.totalPages, p + 1))}
+              disabled={currentPage === availableGroups.totalPages}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 } 

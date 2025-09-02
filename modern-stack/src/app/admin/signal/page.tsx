@@ -65,11 +65,12 @@ export default function AdminSignalPage() {
   const { data: healthStatus, refetch: refetchHealth } = trpc.signal.getHealth.useQuery();
   const { data: config, refetch: refetchConfig } = trpc.signal.getConfig.useQuery();
   const { data: accountInfo, refetch: refetchAccount } = trpc.signal.getAccountInfo.useQuery();
-  const { data: groups, refetch: refetchGroups } = trpc.signal.getGroups.useQuery();
-  const { data: conversation, refetch: refetchConversation } = trpc.signal.getConversation.useQuery(
-    { recipient: selectedConversation, limit: conversationLimit },
-    { enabled: !!selectedConversation }
-  );
+  const { data: groups, refetch: refetchGroups } = trpc.signal.getGroups.useQuery({});
+  // TODO: Implement getConversation API if needed
+  // const { data: conversation, refetch: refetchConversation } = trpc.signal.getConversation.useQuery(
+  //   { recipient: selectedConversation, limit: conversationLimit },
+  //   { enabled: !!selectedConversation }
+  // );
 
   // Mutations
   const registerMutation = trpc.signal.registerPhoneNumber.useMutation({
@@ -119,9 +120,9 @@ export default function AdminSignalPage() {
     },
   });
 
-  const sendMessageMutation = trpc.signal.sendMessageAdvanced.useMutation({
+  const sendMessageMutation = trpc.signal.sendMessage.useMutation({
     onSuccess: (data) => {
-      toast.success(data.message);
+      toast.success('Message sent successfully');
       setMessagingForm({ recipients: '', message: '', isUsername: false });
     },
     onError: (error) => {
@@ -129,16 +130,17 @@ export default function AdminSignalPage() {
     },
   });
 
-  const updateProfileMutation = trpc.signal.updateProfile.useMutation({
-    onSuccess: (data) => {
-      toast.success(data.message || 'Profile updated successfully');
-      setProfileForm({ displayName: '', avatarBase64: '' });
-      refetchAccount();
-    },
-    onError: (error) => {
-      toast.error(`Profile update failed: ${error.message}`);
-    },
-  });
+  // TODO: Implement updateProfile API
+  // const updateProfileMutation = trpc.signal.updateProfile.useMutation({
+  //   onSuccess: (data) => {
+  //     toast.success(data.message || 'Profile updated successfully');
+  //     setProfileForm({ displayName: '', avatarBase64: '' });
+  //     refetchAccount();
+  //   },
+  //   onError: (error) => {
+  //     toast.error(`Profile update failed: ${error.message}`);
+  //   },
+  // });
 
   const generateQRMutation = trpc.signal.generateQRCode.useMutation({
     onSuccess: (data) => {
@@ -788,7 +790,7 @@ export default function AdminSignalPage() {
                         if (messagingForm.recipients && !messagingForm.isUsername) {
                           console.log('Setting conversation to:', messagingForm.recipients);
                           setSelectedConversation(messagingForm.recipients);
-                          refetchConversation();
+                          // refetchConversation();
                         }
                       }}
                       disabled={!messagingForm.recipients || messagingForm.isUsername}
@@ -868,9 +870,9 @@ export default function AdminSignalPage() {
                       </div>
                       
                       <div className="border rounded-lg p-4 h-96 overflow-y-auto bg-gray-50 dark:bg-gray-900">
-                        {conversation?.messages && conversation.messages.length > 0 ? (
+                        {false && false ? ( // TODO: Enable when conversation API is implemented
                           <div className="space-y-3">
-                            {conversation.messages.map((msg: any) => (
+                            {[].map((msg: any) => (
                               <div
                                 key={msg.id}
                                 className={`flex ${msg.direction === 'outgoing' ? 'justify-end' : 'justify-start'}`}

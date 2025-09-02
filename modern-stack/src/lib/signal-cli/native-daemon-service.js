@@ -79,6 +79,15 @@ class NativeSignalBotService extends EventEmitter {
       failedPosts: 0,
       dailyCounts: new Map() // date -> count
     };
+
+    // Repository Processing System
+    this.processedRepositories = new Map(); // url -> {timestamp, repoData, groupId, messageId}
+    this.repositoryStats = {
+      totalProcessed: 0,
+      platforms: new Map(), // platform -> count  
+      languages: new Map(), // language -> count
+      dailyCounts: new Map() // date -> count
+    };
     
     // Custom news domains management
     this.customNewsDomains = new Set();
@@ -1949,6 +1958,9 @@ ${content.content.substring(0, 3000)}...`;
     // Check for news URLs and auto-process them
     await this.checkAndProcessNewsUrls(message);
     
+    // Check for repository URLs and auto-process them
+    await this.checkAndProcessRepositoryUrls(message);
+    
     // Check for event follow-up responses
     const eventContext = this.eventFollowUpContext.get(message.sourceNumber);
     if (eventContext && (Date.now() - eventContext.timestamp < 300000)) { // 5 minute timeout
@@ -2423,7 +2435,499 @@ ${content.content.substring(0, 3000)}...`;
       console.error('❌ Error saving custom news domains:', error.message);
     }
   }
+
+  // Repository Processing System
+  async checkAndProcessRepositoryUrls(message) {
+    const urlRegex = /https?:\/\/[^\s]+/g;
+    const urls = message.message.match(urlRegex);
+    
+    if (!urls || urls.length === 0) return;
+    
+    for (const url of urls) {
+      // Check security first for ALL URLs
+      const securityCheck = await this.checkUrlSecurity(url, message);
+      if (securityCheck.isWatched) {
+        await this.sendSecurityWarning(url, securityCheck, message);
+        continue;
+      }
+      
+      if (this.isRepositoryUrl(url)) {
+        console.log(`🔧 Detected repository URL: ${url}`);
+        
+        // Check if we've already processed this URL recently (within 6 hours)
+        const existingProcessed = Array.from(this.processedRepositories.values())
+          .find(p => p.url === url && Date.now() - p.timestamp < 21600000); // 6 hours
+        
+        if (existingProcessed) {
+          console.log(`⏭️ Repository already processed recently: ${url}`);
+          continue;
+        }
+        
+        // Process repository asynchronously
+        setTimeout(() => {
+          this.processRepositoryUrl(url, message).catch(error => {
+            console.error(`❌ Failed to process repository: ${url}`, error);
+          });
+        }, 100);
+      }
+    }
+  }
   
+  isRepositoryUrl(url) {
+    try {
+      const urlObj = new URL(url);
+      const hostname = urlObj.hostname.toLowerCase();
+      const pathname = urlObj.pathname.toLowerCase();
+      
+      // GitHub patterns
+      const githubPatterns = [
+        /^github\.com$/,
+        /^www\.github\.com$/,
+        /^gist\.github\.com$/ // Also support GitHub Gists
+      ];
+      
+      // GitLab patterns  
+      const gitlabPatterns = [
+        /^gitlab\.com$/,
+        /^www\.gitlab\.com$/,
+        /.*gitlab.*/ // Self-hosted GitLab instances
+      ];
+      
+      // Check if hostname matches known Git hosting services
+      const isGitHost = [
+        ...githubPatterns,
+        ...gitlabPatterns,
+        /^bitbucket\.org$/,
+        /^codeberg\.org$/,
+        /^sr\.ht$/, // SourceHut
+        /^git\./,   // Common git subdomain pattern
+      ].some(pattern => pattern.test(hostname));
+      
+      if (!isGitHost) return false;
+      
+      // Exclude non-repository URLs
+      const excludePatterns = [
+        /\/issues\/\d+/,      // Issue pages
+        /\/pull\/\d+/,        // PR pages  
+        /\/discussions/,      // Discussion pages
+        /\/releases\/tag/,    // Release pages
+        /\/actions/,          // Actions pages
+        /\/settings/,         // Settings pages
+        /\/wiki/,             // Wiki pages
+        /\/projects/,         // Project boards
+        /\/security/,         // Security pages
+        /\/pulse/,            // Pulse pages
+        /\/graphs/,           // Graph pages
+        /\/network/,          // Network pages
+        /\/blame/,            // Blame pages
+        /\/commit\/[a-f0-9]+/, // Individual commit pages
+        /\/tree\/[^\/]+\/.*/, // Specific file/folder views (beyond root)
+        /\/blob\/[^\/]+\/.*/, // Individual file views
+      ];
+      
+      const isExcluded = excludePatterns.some(pattern => pattern.test(pathname));
+      if (isExcluded) return false;
+      
+      // Must have owner/repo pattern (at minimum)
+      // Matches: /owner/repo, /owner/repo/, /owner/repo.git
+      const repoPattern = /^\/[^\/]+\/[^\/]+\/?(?:\.git)?$/;
+      const isRootRepoUrl = repoPattern.test(pathname);
+      
+      // Also accept basic repository URLs with common suffixes
+      const allowedSuffixes = [
+        '',           // /owner/repo
+        '/',          // /owner/repo/
+        '.git',       // /owner/repo.git
+        '/tree/main', // /owner/repo/tree/main
+        '/tree/master', // /owner/repo/tree/master
+        '/tree/develop', // /owner/repo/tree/develop
+      ];
+      
+      const hasAllowedSuffix = allowedSuffixes.some(suffix => 
+        pathname === pathname.split('/').slice(0, 3).join('/') + suffix
+      );
+      
+      return isRootRepoUrl || hasAllowedSuffix;
+      
+    } catch (error) {
+      return false;
+    }
+  }
+  
+  async processRepositoryUrl(url, message) {
+    console.log(`🔄 Processing repository URL: ${url}`);
+    
+    try {
+      // Step 1: Extract repository information from URL
+      const repoInfo = this.parseRepositoryUrl(url);
+      if (!repoInfo) {
+        console.log(`❌ Could not parse repository URL: ${url}`);
+        return;
+      }
+      
+      // Step 2: Fetch repository data from API
+      const repoData = await this.fetchRepositoryData(repoInfo);
+      if (!repoData) {
+        console.log(`❌ Could not fetch repository data: ${url}`);
+        return;
+      }
+      
+      // Step 3: Format repository summary
+      const summary = this.formatRepositorySummary(repoData, url);
+      
+      // Step 4: Send repository summary to chat
+      await this.sendReply(message, summary);
+      
+      // Step 5: Store processed repository
+      this.processedRepositories.set(url, {
+        url: url,
+        timestamp: Date.now(),
+        repoData: repoData,
+        groupId: message.groupId || 'dm',
+        messageId: message.timestamp
+      });
+      
+      // Step 6: Track in database
+      await this.trackRepositoryLink(url, message, repoData);
+      
+      console.log(`✅ Successfully processed repository: ${repoData.full_name || repoData.path_with_namespace}`);
+      
+    } catch (error) {
+      console.error(`❌ Error processing repository ${url}:`, error.message);
+      
+      // Send error message to chat for debugging
+      if (process.env.DEBUG === 'true') {
+        await this.sendReply(message, `⚠️ Repository processing failed: ${error.message}`);
+      }
+    }
+  }
+  
+  parseRepositoryUrl(url) {
+    try {
+      const urlObj = new URL(url);
+      const hostname = urlObj.hostname.toLowerCase();
+      const pathname = urlObj.pathname;
+      
+      // Remove leading slash and split path
+      const pathParts = pathname.substring(1).split('/');
+      
+      if (pathParts.length < 2) return null;
+      
+      const owner = pathParts[0];
+      const repo = pathParts[1].replace(/\.git$/, ''); // Remove .git suffix if present
+      
+      // Determine platform
+      let platform = 'unknown';
+      if (hostname.includes('github')) {
+        platform = 'github';
+      } else if (hostname.includes('gitlab')) {
+        platform = 'gitlab';
+      } else if (hostname.includes('bitbucket')) {
+        platform = 'bitbucket';
+      } else if (hostname.includes('codeberg')) {
+        platform = 'codeberg';
+      }
+      
+      return {
+        platform: platform,
+        hostname: hostname,
+        owner: owner,
+        repo: repo,
+        fullName: `${owner}/${repo}`,
+        originalUrl: url
+      };
+      
+    } catch (error) {
+      console.error('Error parsing repository URL:', error);
+      return null;
+    }
+  }
+  
+  async fetchRepositoryData(repoInfo) {
+    try {
+      if (repoInfo.platform === 'github') {
+        return await this.fetchGitHubData(repoInfo);
+      } else if (repoInfo.platform === 'gitlab') {
+        return await this.fetchGitLabData(repoInfo);
+      } else {
+        // For other platforms, try to extract basic info from HTML
+        return await this.fetchGenericRepositoryData(repoInfo);
+      }
+    } catch (error) {
+      console.error(`Error fetching ${repoInfo.platform} data:`, error);
+      return null;
+    }
+  }
+  
+  async fetchGitHubData(repoInfo) {
+    try {
+      const apiUrl = `https://api.github.com/repos/${repoInfo.fullName}`;
+      
+      // GitHub API request with optional authentication
+      const headers = {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'IrregularChat-Bot/1.0'
+      };
+      
+      // Add GitHub token if available (for higher rate limits)
+      if (process.env.GITHUB_TOKEN) {
+        headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
+      }
+      
+      const response = await fetch(apiUrl, { 
+        headers,
+        timeout: 10000 
+      });
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          console.log(`Repository not found: ${repoInfo.fullName}`);
+          return null;
+        }
+        throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      
+      return {
+        platform: 'GitHub',
+        name: data.name,
+        full_name: data.full_name,
+        description: data.description,
+        language: data.language,
+        stars: data.stargazers_count,
+        forks: data.forks_count,
+        open_issues: data.open_issues_count,
+        created_at: data.created_at,
+        updated_at: data.updated_at,
+        pushed_at: data.pushed_at,
+        size: data.size,
+        license: data.license?.spdx_id || data.license?.name,
+        topics: data.topics || [],
+        is_private: data.private,
+        is_fork: data.fork,
+        html_url: data.html_url,
+        clone_url: data.clone_url,
+        default_branch: data.default_branch,
+        archived: data.archived,
+        disabled: data.disabled
+      };
+      
+    } catch (error) {
+      console.error('Error fetching GitHub data:', error);
+      throw error;
+    }
+  }
+  
+  async fetchGitLabData(repoInfo) {
+    try {
+      // For gitlab.com
+      let apiUrl;
+      if (repoInfo.hostname === 'gitlab.com' || repoInfo.hostname === 'www.gitlab.com') {
+        // Encode the project path for GitLab API
+        const projectPath = encodeURIComponent(repoInfo.fullName);
+        apiUrl = `https://gitlab.com/api/v4/projects/${projectPath}`;
+      } else {
+        // For self-hosted GitLab instances
+        const projectPath = encodeURIComponent(repoInfo.fullName);
+        apiUrl = `https://${repoInfo.hostname}/api/v4/projects/${projectPath}`;
+      }
+      
+      const headers = {
+        'Accept': 'application/json',
+        'User-Agent': 'IrregularChat-Bot/1.0'
+      };
+      
+      // Add GitLab token if available
+      if (process.env.GITLAB_TOKEN) {
+        headers['Authorization'] = `Bearer ${process.env.GITLAB_TOKEN}`;
+      }
+      
+      const response = await fetch(apiUrl, { 
+        headers,
+        timeout: 10000 
+      });
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          console.log(`GitLab repository not found: ${repoInfo.fullName}`);
+          return null;
+        }
+        throw new Error(`GitLab API error: ${response.status} ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      
+      return {
+        platform: 'GitLab',
+        name: data.name,
+        full_name: data.path_with_namespace,
+        description: data.description,
+        language: data.language || 'Unknown',
+        stars: data.star_count,
+        forks: data.forks_count,
+        open_issues: data.open_issues_count || 0,
+        created_at: data.created_at,
+        updated_at: data.last_activity_at,
+        pushed_at: data.last_activity_at,
+        size: 0, // GitLab doesn't provide repository size in basic API
+        license: data.license?.name,
+        topics: data.topics || data.tag_list || [],
+        is_private: data.visibility === 'private',
+        is_fork: data.forked_from_project !== null,
+        html_url: data.web_url,
+        clone_url: data.http_url_to_repo,
+        default_branch: data.default_branch,
+        archived: data.archived,
+        disabled: false
+      };
+      
+    } catch (error) {
+      console.error('Error fetching GitLab data:', error);
+      throw error;
+    }
+  }
+  
+  async fetchGenericRepositoryData(repoInfo) {
+    try {
+      // Fallback for other Git hosting services
+      // Fetch the HTML page and try to extract basic information
+      const response = await fetch(repoInfo.originalUrl, {
+        headers: {
+          'User-Agent': 'IrregularChat-Bot/1.0'
+        },
+        timeout: 10000
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      
+      const html = await response.text();
+      
+      // Basic extraction using regex (not as reliable as API)
+      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      const descMatch = html.match(/<meta[^>]*name="description"[^>]*content="([^"]*)"[^>]*>/i);
+      
+      return {
+        platform: repoInfo.platform.charAt(0).toUpperCase() + repoInfo.platform.slice(1),
+        name: repoInfo.repo,
+        full_name: repoInfo.fullName,
+        description: descMatch ? descMatch[1] : 'No description available',
+        language: 'Unknown',
+        stars: 0,
+        forks: 0,
+        open_issues: 0,
+        created_at: null,
+        updated_at: null,
+        pushed_at: null,
+        size: 0,
+        license: null,
+        topics: [],
+        is_private: false,
+        is_fork: false,
+        html_url: repoInfo.originalUrl,
+        clone_url: null,
+        default_branch: null,
+        archived: false,
+        disabled: false
+      };
+      
+    } catch (error) {
+      console.error('Error fetching generic repository data:', error);
+      throw error;
+    }
+  }
+  
+  formatRepositorySummary(repoData, originalUrl) {
+    let summary = `🔧 **Repository Snapshot**\n\n`;
+    
+    // Repository name and platform
+    summary += `📦 **${repoData.full_name}**`;
+    if (repoData.is_private) {
+      summary += ` 🔒`;
+    }
+    if (repoData.is_fork) {
+      summary += ` 🍴`;
+    }
+    if (repoData.archived) {
+      summary += ` 📦 *Archived*`;
+    }
+    summary += `\n`;
+    summary += `🏠 Platform: ${repoData.platform}\n`;
+    
+    // Description
+    if (repoData.description) {
+      const desc = repoData.description.length > 200 
+        ? repoData.description.substring(0, 200) + '...'
+        : repoData.description;
+      summary += `📝 ${desc}\n`;
+    }
+    
+    summary += `\n`;
+    
+    // Stats section
+    summary += `📊 **Stats:**\n`;
+    if (repoData.language && repoData.language !== 'Unknown') {
+      summary += `• Language: ${repoData.language}\n`;
+    }
+    
+    if (repoData.stars > 0) {
+      summary += `• ⭐ ${repoData.stars.toLocaleString()} stars\n`;
+    }
+    
+    if (repoData.forks > 0) {
+      summary += `• 🍴 ${repoData.forks.toLocaleString()} forks\n`;
+    }
+    
+    if (repoData.open_issues > 0) {
+      summary += `• 🐛 ${repoData.open_issues.toLocaleString()} open issues\n`;
+    }
+    
+    // Last activity
+    if (repoData.updated_at || repoData.pushed_at) {
+      const lastUpdate = repoData.pushed_at || repoData.updated_at;
+      const updateDate = new Date(lastUpdate);
+      const now = new Date();
+      const diffDays = Math.floor((now - updateDate) / (1000 * 60 * 60 * 24));
+      
+      let timeAgo;
+      if (diffDays === 0) {
+        timeAgo = 'today';
+      } else if (diffDays === 1) {
+        timeAgo = 'yesterday';
+      } else if (diffDays < 7) {
+        timeAgo = `${diffDays} days ago`;
+      } else if (diffDays < 30) {
+        timeAgo = `${Math.floor(diffDays / 7)} weeks ago`;
+      } else if (diffDays < 365) {
+        timeAgo = `${Math.floor(diffDays / 30)} months ago`;
+      } else {
+        timeAgo = `${Math.floor(diffDays / 365)} years ago`;
+      }
+      
+      summary += `• 🕒 Last updated: ${timeAgo}\n`;
+    }
+    
+    // License
+    if (repoData.license) {
+      summary += `• 📄 License: ${repoData.license}\n`;
+    }
+    
+    // Topics/Tags
+    if (repoData.topics && repoData.topics.length > 0) {
+      const topicsList = repoData.topics.slice(0, 5).join(', ');
+      summary += `• 🏷️ Topics: ${topicsList}\n`;
+      if (repoData.topics.length > 5) {
+        summary += `  (+${repoData.topics.length - 5} more)\n`;
+      }
+    }
+    
+    summary += `\n📱 Quick access without clicking through`;
+    
+    return summary;
+  }
+
   // Discourse Metadata Management
   async loadDiscourseMetadata() {
     if (!this.discourseApiKey || !this.discourseApiUrl) {
@@ -6888,6 +7392,92 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
     } catch (error) {
       console.error('Failed to track news link:', error);
+    }
+  }
+
+  // Track repository links
+  async trackRepositoryLink(url, message, repoData) {
+    try {
+      const domain = new URL(url).hostname;
+      
+      // Check if this URL was already posted in this group
+      const existing = await this.prisma.repositoryLink.findUnique({
+        where: {
+          url_groupId: {
+            url: url,
+            groupId: message.groupId || 'dm'
+          }
+        }
+      });
+      
+      if (existing) {
+        // Update existing entry with fresh metadata
+        const updateData = {
+          lastPostedAt: new Date(),
+          postCount: existing.postCount + 1
+        };
+        
+        // Update metadata if we have fresh data
+        if (repoData.description) updateData.description = repoData.description;
+        if (repoData.language) updateData.language = repoData.language;
+        if (repoData.stars !== undefined) updateData.stars = repoData.stars;
+        if (repoData.forks !== undefined) updateData.forks = repoData.forks;
+        if (repoData.updated_at) updateData.lastUpdated = new Date(repoData.updated_at);
+        
+        await this.prisma.repositoryLink.update({
+          where: { id: existing.id },
+          data: updateData
+        });
+      } else {
+        // Create new repository entry
+        await this.prisma.repositoryLink.create({
+          data: {
+            url: url,
+            platform: repoData.platform || 'Unknown',
+            repositoryName: repoData.full_name || repoData.name,
+            owner: repoData.full_name?.split('/')[0] || 'Unknown',
+            name: repoData.name || 'Unknown',
+            description: repoData.description,
+            language: repoData.language,
+            stars: repoData.stars || 0,
+            forks: repoData.forks || 0,
+            openIssues: repoData.open_issues || 0,
+            license: repoData.license,
+            topics: repoData.topics ? JSON.stringify(repoData.topics) : null,
+            isPrivate: repoData.is_private || false,
+            isFork: repoData.is_fork || false,
+            isArchived: repoData.archived || false,
+            lastUpdated: repoData.updated_at ? new Date(repoData.updated_at) : null,
+            firstPostedAt: new Date(),
+            lastPostedAt: new Date(),
+            postCount: 1,
+            groupId: message.groupId || 'dm',
+            groupName: message.groupName,
+            postedBy: message.sourceNumber,
+            postedByName: message.sourceName
+          }
+        });
+      }
+
+      // Update statistics
+      this.repositoryStats.totalProcessed++;
+      
+      const today = new Date().toDateString();
+      this.repositoryStats.dailyCounts.set(today, 
+        (this.repositoryStats.dailyCounts.get(today) || 0) + 1);
+      
+      if (repoData.platform) {
+        this.repositoryStats.platforms.set(repoData.platform,
+          (this.repositoryStats.platforms.get(repoData.platform) || 0) + 1);
+      }
+      
+      if (repoData.language && repoData.language !== 'Unknown') {
+        this.repositoryStats.languages.set(repoData.language,
+          (this.repositoryStats.languages.get(repoData.language) || 0) + 1);
+      }
+      
+    } catch (error) {
+      console.error('Failed to track repository link:', error);
     }
   }
   

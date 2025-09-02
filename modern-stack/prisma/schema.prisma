@@ -562,6 +562,44 @@ model NewsLink {
   @@map("news_links")
 }
 
+// Repository Link Tracking - Track GitHub/GitLab repositories shared in chat
+model RepositoryLink {
+  id               String    @id @default(cuid())
+  url              String
+  platform         String    // GitHub, GitLab, Bitbucket, etc.
+  repositoryName   String    @map("repository_name") // owner/repo format
+  owner            String    // repository owner
+  name             String    // repository name
+  description      String?   @db.Text
+  language         String?   // primary programming language
+  stars            Int       @default(0)
+  forks            Int       @default(0)
+  openIssues       Int       @default(0) @map("open_issues")
+  license          String?
+  topics           String?   @db.Text // JSON array of topics/tags
+  isPrivate        Boolean   @default(false) @map("is_private")
+  isFork           Boolean   @default(false) @map("is_fork")
+  isArchived       Boolean   @default(false) @map("is_archived")
+  lastUpdated      DateTime? @map("last_updated") // when repo was last updated
+  groupId          String    @map("group_id")
+  groupName        String?   @map("group_name")
+  postedBy         String    @map("posted_by") // phone number
+  postedByName     String?   @map("posted_by_name")
+  postCount        Int       @default(1) @map("post_count") // Times this URL was shared
+  firstPostedAt    DateTime  @default(now()) @map("first_posted_at")
+  lastPostedAt     DateTime  @default(now()) @map("last_posted_at")
+  
+  @@unique([url, groupId])
+  @@index([groupId])
+  @@index([platform])
+  @@index([language])
+  @@index([owner])
+  @@index([postedBy])
+  @@index([firstPostedAt])
+  @@index([stars])
+  @@map("repository_links")
+}
+
 // URL Summary Tracking - Track URLs processed through !tldr
 model UrlSummary {
   id                String    @id @default(cuid())

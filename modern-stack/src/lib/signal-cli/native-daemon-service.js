@@ -3673,7 +3673,7 @@ ${content.content.substring(0, 3000)}...`;
       const adminGroups = groupsWithCounts.filter(g => this.isBotAdmin(g));
       if (adminGroups.length > 0) {
         response += `✅ Bot can add users to ${adminGroups.length} group(s)\n`;
-        response += 'Use !addto <group-number> @user to add users\n`;
+        response += 'Use !addto <group-number> @user to add users\n';
       } else {
         response += '⚠️ Bot has no admin rights in any group\n';
         response += 'Cannot add users without admin permissions\n';

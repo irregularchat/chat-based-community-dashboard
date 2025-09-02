@@ -140,12 +140,12 @@ class NativeSignalBotService extends EventEmitter {
       // Community Plugin Commands (9)
       { name: 'groups', description: 'List all available groups', handler: this.handleGroups.bind(this) },
       { name: 'join', description: 'Join a specific group', handler: this.handleJoin.bind(this) },
-      { name: 'leave', description: 'Leave a group', handler: this.handleLeave.bind(this) },
+      // { name: 'leave', description: 'Leave a group', handler: this.handleLeave.bind(this) }, // Removed per request
       { name: 'addto', description: 'Add users to a group (admin)', handler: this.handleAddTo.bind(this), adminOnly: true },
-      { name: 'adduser', description: 'Add user to group (admin)', handler: this.handleAddUser.bind(this), adminOnly: true },
+      // { name: 'adduser', description: 'Add user to group (admin)', handler: this.handleAddUser.bind(this), adminOnly: true }, // Removed per request
       { name: 'removeuser', description: 'Remove user from group (admin)', handler: this.handleRemoveUser.bind(this), adminOnly: true },
-      { name: 'groupinfo', description: 'Show group details', handler: this.handleGroupInfo.bind(this) },
-      { name: 'members', description: 'List group members', handler: this.handleMembers.bind(this) },
+      // { name: 'groupinfo', description: 'Show group details', handler: this.handleGroupInfo.bind(this) }, // Removed per request
+      // { name: 'members', description: 'List group members', handler: this.handleMembers.bind(this) }, // Removed per request
       { name: 'invite', description: 'Generate invite link (admin)', handler: this.handleInvite.bind(this), adminOnly: true },
       
       // Information Plugin Commands (7)  
@@ -153,14 +153,14 @@ class NativeSignalBotService extends EventEmitter {
       { name: 'forum', description: 'Search forum posts', handler: this.handleForum.bind(this) },
       { name: 'events', description: 'Show upcoming events', handler: this.handleEvents.bind(this) },
       { name: 'eventadd', description: 'Add a new event', handler: this.handleEventAdd.bind(this) },
-      { name: 'resources', description: 'List community resources', handler: this.handleResources.bind(this) },
+      // { name: 'resources', description: 'List community resources', handler: this.handleResources.bind(this) }, // Removed per request
       { name: 'faq', description: 'Get FAQ answers', handler: this.handleFAQ.bind(this) },
       { name: 'docs', description: 'Search documentation', handler: this.handleDocs.bind(this) },
       { name: 'links', description: 'Show important links', handler: this.handleLinks.bind(this) },
       
       // User Plugin Commands (2)
       { name: 'profile', description: 'Show your profile', handler: this.handleProfile.bind(this) },
-      { name: 'timezone', description: 'Set timezone', handler: this.handleTimezone.bind(this) },
+      // { name: 'timezone', description: 'Set timezone', handler: this.handleTimezone.bind(this) }, // Removed per request
       
       // Moderation Plugin Commands (8)
       { name: 'warn', description: 'Issue warning to user (admin)', handler: this.handleWarn.bind(this), adminOnly: true },
@@ -278,9 +278,9 @@ class NativeSignalBotService extends EventEmitter {
         const commandsByCategory = {
           '🔧 Core': ['help', 'ping', 'ai', 'lai', 'summarize', 'tldr', 'zeroeth', 'cleaner'],
           '❓ Q&A': ['q', 'question', 'questions', 'answer', 'solved'],
-          '👥 Community': ['groups', 'join', 'leave', 'groupinfo', 'members', 'adduser', 'removeuser', 'invite'],
-          '📚 Information': ['wiki', 'forum', 'events', 'resources', 'faq', 'docs', 'links'],
-          '👤 User Management': ['profile', 'timezone'],
+          '👥 Community': ['groups', 'join', 'removeuser', 'invite'],
+          '📚 Information': ['wiki', 'forum', 'events', 'faq', 'docs', 'links'],
+          '👤 User Management': ['profile'],
           '📄 Forum': ['fpost', 'flatest', 'fsearch', 'categories'],
           '📋 PDF Processing': ['pdf'],
           '👋 Onboarding': ['request', 'gtg', 'sngtg', 'pending'],

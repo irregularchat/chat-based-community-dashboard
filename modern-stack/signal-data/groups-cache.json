@@ -1,0 +1,107 @@
+{
+  "groups": [
+    {
+      "id": "Ehzd1ZUbifpck9XyJf9d/9rX0i3KTg3rh/c4Kceg1iI=",
+      "name": "IrregularChat: AI/ML/NLP",
+      "type": "GROUP",
+      "active": true,
+      "memberCount": 300,
+      "botIsAdmin": true,
+      "adminCount": 27
+    },
+    {
+      "id": "46Yfd7MDnWyGPnUToU4dvZvT2veU1atNOkHUVExTcVM=",
+      "name": "IR: Off Topic Guild",
+      "type": "GROUP",
+      "active": true,
+      "memberCount": 293,
+      "botIsAdmin": true,
+      "adminCount": 18
+    },
+    {
+      "id": "/cjfmI7snAAhRPLDMlvW50Ja8fE9SuslMBFukFjn9iI=",
+      "name": "Solo testing",
+      "type": "GROUP",
+      "active": true,
+      "memberCount": 2,
+      "botIsAdmin": true,
+      "adminCount": 2
+    },
+    {
+      "id": "PjJCT6d4nrF0/BZOs39ECX/lZkcHPbi65JU8B6kgw6s=",
+      "name": "IrregularChat Entry/INDOC",
+      "type": "GROUP",
+      "active": true,
+      "memberCount": 85,
+      "botIsAdmin": true,
+      "adminCount": 30
+    },
+    {
+      "id": "sXo1i+q2bjKUOpZfczzkyAO0VglsGlalOL/MWTzQX2w=",
+      "name": "IRREGULARCHAT: Space",
+      "type": "GROUP",
+      "active": true,
+      "memberCount": 72,
+      "botIsAdmin": true,
+      "adminCount": 15
+    },
+    {
+      "id": "6PP/i0JBlXpAe+dkxvH64ZKmOQoeaukKtsPUQU5wQTg=",
+      "name": "IrregularChat Bot Development",
+      "type": "GROUP",
+      "active": true,
+      "memberCount": 80,
+      "botIsAdmin": true,
+      "adminCount": 15
+    },
+    {
+      "id": "kHSJpz6meH83aAiAdT7TsXYc5k+TwzZ1YEGc3y6pGaQ=",
+      "name": "IrregularChat: FBNC",
+      "type": "GROUP",
+      "active": true,
+      "memberCount": 70,
+      "botIsAdmin": true,
+      "adminCount": 10
+    },
+    {
+      "id": "hBnM2KMgzgUp7J9VoKSMBkfxkCE8eSh+K8FjM07Lt+U=",
+      "name": "IrregularChat: Counter UxV",
+      "type": "GROUP",
+      "active": true,
+      "memberCount": 51,
+      "botIsAdmin": true,
+      "adminCount": 10
+    },
+    {
+      "id": "8QfR934JKX2UTp0KequCAkCaAy8k6gYpAM9ASySUXsc=",
+      "name": "IrregularChat: Alabama",
+      "type": "GROUP",
+      "active": true,
+      "memberCount": 60,
+      "botIsAdmin": true,
+      "adminCount": 8
+    },
+    {
+      "id": "MAMSFw5Ck3MvleEz/BAz2fEeZw7xP3AUnf0pRhhFzxg=",
+      "name": "IrregularChat: Georgia",
+      "type": "GROUP",
+      "active": true,
+      "memberCount": 55,
+      "botIsAdmin": true,
+      "adminCount": 8
+    },
+    {
+      "id": "an0pin2q61hkx4UycDQ0nXZ9w29sAdS7Pgb2SDqGMwc=",
+      "name": "IrregularChat: Tech",
+      "type": "GROUP",
+      "active": true,
+      "memberCount": 110,
+      "botIsAdmin": true,
+      "adminCount": 15
+    }
+  ],
+  "lastUpdated": 1756761809736,
+  "cacheVersion": "2.2",
+  "botPhone": "+19108471202",
+  "botUUID": "d6292870-2d4f-43a1-89fe-d63791ca104d"
+}

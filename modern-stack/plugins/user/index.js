@@ -24,17 +24,6 @@ class SetBioCommand extends BaseCommand {
   }
 }
 
-class TimezoneCommand extends BaseCommand {
-  constructor() {
-    super('timezone', 'Set your timezone', '!timezone <timezone>');
-  }
-
-  async execute(context) {
-    const plugin = context.bot.plugins.get('user');
-    return await plugin.handleTimezone(context);
-  }
-}
-
 class PronounsCommand extends BaseCommand {
   constructor() {
     super('pronouns', 'Set your pronouns', '!pronouns <pronouns>');
@@ -89,7 +78,6 @@ export default class UserPlugin extends BasePlugin {
     // Register commands
     this.addCommand(new ProfileCommand());
     this.addCommand(new SetBioCommand());
-    this.addCommand(new TimezoneCommand());
     this.addCommand(new PronounsCommand());
     this.addCommand(new ContactCommand());
     this.addCommand(new WhoAmICommand());

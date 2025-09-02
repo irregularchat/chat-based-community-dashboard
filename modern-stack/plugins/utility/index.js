@@ -714,6 +714,20 @@ export default class UtilityPlugin extends BasePlugin {
       
       const tldrText = \`📄 **TL;DR Summary**\n\n**URL:** \${args}\n**Title:** \${content.title || 'Unknown'}\n\n**Summary:**\n\${summary}\n\n**Word Count:** \${content.wordCount || 'Unknown'} → \${summary.split(' ').length} words\n**Reading Time:** ~\${Math.ceil((content.wordCount || 0) / 200)} min → ~30 seconds\n\n💡 Full article available at the original URL.\`;
       
+      // Track URL summary in database
+      if (this.bot.trackUrlSummary) {
+        await this.bot.trackUrlSummary({
+          url: args,
+          summary: summary,
+          title: content.title || 'Unknown',
+          wordCount: content.wordCount || 0,
+          groupId: context.groupId,
+          groupName: context.groupName,
+          userId: context.sender,
+          userName: context.senderName || context.sender
+        });
+      }
+      
       // Cache for 4 hours
       await this.setCache(cacheKey, tldrText, 'tldr', 4 * 60 * 60 * 1000);
       

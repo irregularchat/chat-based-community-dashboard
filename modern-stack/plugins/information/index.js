@@ -35,17 +35,6 @@ class EventsCommand extends BaseCommand {
   }
 }
 
-class ResourcesCommand extends BaseCommand {
-  constructor() {
-    super('resources', 'List community resources', '!resources [category]');
-  }
-
-  async execute(context) {
-    const plugin = context.bot.plugins.get('information');
-    return await plugin.handleResources(context);
-  }
-}
-
 class FAQCommand extends BaseCommand {
   constructor() {
     super('faq', 'Get answers to frequently asked questions', '!faq <topic>');
@@ -196,7 +185,6 @@ export default class InformationPlugin extends BasePlugin {
     this.addCommand(new WikiCommand());
     this.addCommand(new ForumCommand());
     this.addCommand(new EventsCommand());
-    this.addCommand(new ResourcesCommand());
     this.addCommand(new FAQCommand());
     this.addCommand(new DocsCommand());
     this.addCommand(new LinksCommand());

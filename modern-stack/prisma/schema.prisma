@@ -144,6 +144,33 @@ model CommunityEvent {
   @@map("community_events")
 }
 
+// Signal Events - Community events synced with Discourse
+model SignalEvent {
+  id                 Int       @id @default(autoincrement())
+  discourseTopicId   Int?      @unique @map("discourse_topic_id")
+  discoursePostId    Int?      @map("discourse_post_id")
+  eventName          String    @map("event_name")
+  eventStart         DateTime  @map("event_start")
+  eventEnd           DateTime? @map("event_end")
+  location           String?
+  timezone           String    @default("America/New_York")
+  status             String    @default("public")
+  description        String?   @db.Text
+  discourseUrl       String?   @map("discourse_url")
+  createdBy          String?   @map("created_by")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  isActive           Boolean   @default(true) @map("is_active")
+  allowedGroups      String    @default("trust_level_0") @map("allowed_groups")
+  reminders          String    @default("notification.3.days,bumpTopic.1.days")
+  rawDiscourseSyntax String?   @db.Text @map("raw_discourse_syntax")
+  
+  @@index([eventStart])
+  @@index([isActive])
+  @@index([createdBy])
+  @@map("signal_events")
+}
+
 // Email verification codes
 model VerificationCode {
   id        Int      @id @default(autoincrement())
@@ -453,4 +480,170 @@ model SignalGroupJoinRequest {
   @@index([status])
   @@index([requestedAt])
   @@map("signal_group_join_requests")
+}
+
+// Signal Messages - Store all messages for history and summarization
+model SignalMessage {
+  id               String    @id @default(cuid())
+  groupId          String?   @map("group_id") // null for DMs
+  groupName        String?   @map("group_name")
+  sourceNumber     String    @map("source_number")
+  sourceName       String?   @map("source_name")
+  sourceUuid       String?   @map("source_uuid")
+  message          String    @db.Text
+  timestamp        BigInt    // Signal timestamp
+  attachments      Json?     // JSON array of attachment info
+  mentions         Json?     // JSON array of mentions
+  isReply          Boolean   @default(false) @map("is_reply")
+  quotedMessageId  String?   @map("quoted_message_id")
+  quotedText       String?   @map("quoted_text") @db.Text
+  createdAt        DateTime  @default(now()) @map("created_at")
+  
+  // Relationships
+  reactions        SignalReaction[]
+  quotedMessage    SignalMessage? @relation("QuotedMessages", fields: [quotedMessageId], references: [id])
+  quotingMessages  SignalMessage[] @relation("QuotedMessages")
+  
+  @@index([groupId])
+  @@index([sourceNumber])
+  @@index([timestamp])
+  @@index([createdAt])
+  @@unique([timestamp, sourceNumber, groupId])
+  @@map("signal_messages")
+}
+
+// Signal Reactions - Track emoji reactions on messages
+model SignalReaction {
+  id            String    @id @default(cuid())
+  messageId     String    @map("message_id")
+  emoji         String
+  reactorNumber String    @map("reactor_number")
+  reactorName   String?   @map("reactor_name")
+  reactorUuid   String?   @map("reactor_uuid")
+  timestamp     BigInt
+  isRemove      Boolean   @default(false) @map("is_remove")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  
+  // Relationships
+  message       SignalMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  
+  @@unique([messageId, emoji, reactorNumber])
+  @@index([messageId])
+  @@index([reactorNumber])
+  @@index([timestamp])
+  @@map("signal_reactions")
+}
+
+// News Link Tracking - Track news links shared and their engagement
+model NewsLink {
+  id                String    @id @default(cuid())
+  url               String
+  domain            String?
+  title             String?   @db.Text
+  summary           String?   @db.Text  // AI-generated summary
+  groupId           String    @map("group_id")
+  groupName         String?   @map("group_name")
+  postedBy          String    @map("posted_by") // phone number
+  postedByName      String?   @map("posted_by_name")
+  forumLink         String?   @map("forum_link") // Deprecated - use forumUrl
+  forumUrl          String?   @map("forum_url") // Link to forum discussion if created
+  postCount         Int       @default(1) @map("post_count") // Times this URL was shared
+  reactionCount     Int       @default(0) @map("reaction_count") // Total reactions
+  thumbsUp          Int       @default(0) @map("thumbs_up")
+  thumbsDown        Int       @default(0) @map("thumbs_down")
+  firstPostedAt     DateTime  @default(now()) @map("first_posted_at")
+  lastPostedAt      DateTime  @default(now()) @map("last_posted_at")
+  
+  @@unique([url, groupId])
+  @@index([groupId])
+  @@index([domain])
+  @@index([postedBy])
+  @@index([firstPostedAt])
+  @@map("news_links")
+}
+
+// URL Summary Tracking - Track URLs processed through !tldr
+model UrlSummary {
+  id                String    @id @default(cuid())
+  url               String
+  groupId           String?   @map("group_id")
+  groupName         String?   @map("group_name")
+  requestedBy       String    @map("requested_by") // phone number
+  requestedByName   String?   @map("requested_by_name")
+  summary           String    @db.Text
+  aiProvider        String?   @map("ai_provider") // 'openai' or 'local'
+  processingTime    Int?      @map("processing_time") // milliseconds
+  createdAt         DateTime  @default(now()) @map("created_at")
+  
+  @@index([url])
+  @@index([groupId])
+  @@index([requestedBy])
+  @@index([createdAt])
+  @@map("url_summaries")
+}
+
+// Bot Command Usage - Track all bot command invocations
+model BotCommandUsage {
+  id                String    @id @default(cuid())
+  command           String
+  args              String?   @db.Text
+  groupId           String?   @map("group_id")
+  groupName         String?   @map("group_name")
+  userId            String    @map("user_id") // phone number
+  userName          String?   @map("user_name")
+  success           Boolean   @default(true)
+  responseTime      Int?      @map("response_time") // milliseconds
+  errorMessage      String?   @map("error_message") @db.Text
+  timestamp         DateTime  @default(now())
+  
+  @@index([command])
+  @@index([groupId])
+  @@index([userId])
+  @@index([timestamp])
+  @@index([success])
+  @@map("bot_command_usage")
+}
+
+// Bot Message Reactions - Track reactions to bot's messages
+model BotMessageReaction {
+  id                String    @id @default(cuid())
+  botMessageId      String?   @map("bot_message_id") // Signal message ID if available
+  botMessage        String    @map("bot_message") @db.Text // Content of bot's message
+  groupId           String?   @map("group_id")
+  groupName         String?   @map("group_name")
+  reactorId         String    @map("reactor_id") // phone number
+  reactorName       String?   @map("reactor_name")
+  reaction          String    // emoji
+  isPositive        Boolean?  @map("is_positive") // true for 👍, false for 👎, null for others
+  command           String?   // Command that generated this bot message
+  timestamp         DateTime  @default(now())
+  
+  @@index([groupId])
+  @@index([reactorId])
+  @@index([reaction])
+  @@index([isPositive])
+  @@index([command])
+  @@index([timestamp])
+  @@map("bot_message_reactions")
+}
+
+// Bot Errors - Track all bot errors for debugging
+model BotError {
+  id                String    @id @default(cuid())
+  errorType         String    @map("error_type") // 'command_error', 'system_error', 'api_error', etc.
+  errorMessage      String    @map("error_message") @db.Text
+  stackTrace        String?   @map("stack_trace") @db.Text
+  command           String?   // Command that caused error if applicable
+  groupId           String?   @map("group_id")
+  groupName         String?   @map("group_name")
+  userId            String?   @map("user_id") // phone number
+  userName          String?   @map("user_name")
+  context           Json?     // Additional context data
+  timestamp         DateTime  @default(now())
+  
+  @@index([errorType])
+  @@index([command])
+  @@index([groupId])
+  @@index([timestamp])
+  @@map("bot_errors")
 }

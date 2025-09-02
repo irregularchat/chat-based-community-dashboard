@@ -1797,52 +1797,122 @@ class NativeSignalBotService extends EventEmitter {
     return {
       twelveft: `https://12ft.io/proxy?q=${encoded}`,
       archive: `https://web.archive.org/save/${url}`,
-      archiveView: `https://web.archive.org/web/${url}`
+      archiveView: `https://web.archive.org/web/${url}`,
+      archivePh: `https://archive.ph/${url}`,
+      archiveIs: `https://archive.is/${url}`,
+      archiveToday: `https://archive.today/${url}`,
+      googleCache: `https://webcache.googleusercontent.com/search?q=cache:${encoded}`,
+      removepaywall: `https://www.removepaywall.com/${url.replace('https://', '').replace('http://', '')}`,
+      txtify: `https://txtify.it/${url}`
     };
   }
   
   async scrapeNewsContent(url, bypassLinks) {
-    const urls = [url, bypassLinks.twelveft, bypassLinks.archiveView];
+    // Extended list of bypass services
+    const urls = [
+      url,
+      bypassLinks.googleCache,
+      bypassLinks.archivePh,
+      bypassLinks.txtify,
+      bypassLinks.twelveft,
+      bypassLinks.removepaywall,
+      bypassLinks.archiveView
+    ];
+    
+    let cloudflareDetected = false;
     
     for (const attemptUrl of urls) {
       try {
         console.log(`🌐 Attempting to scrape: ${attemptUrl}`);
         
         const response = await axios.get(attemptUrl, {
-          timeout: 10000,
+          timeout: 15000, // Increased timeout
           headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; IrregularChatBot/1.0; +https://forum.irregularchat.com)'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+          },
+          maxRedirects: 5,
+          validateStatus: function (status) {
+            return status >= 200 && status < 500; // Accept client errors too
           }
         });
         
+        const responseText = response.data.toString();
+        
+        // Check for Cloudflare block
+        if (responseText.includes('Cloudflare') && 
+            (responseText.includes('Just a moment') || 
+             responseText.includes('Checking your browser') ||
+             responseText.includes('cf-browser-verification') ||
+             responseText.includes('Ray ID'))) {
+          console.log(`⚠️ Cloudflare protection detected, trying bypass services...`);
+          cloudflareDetected = true;
+          continue;
+        }
+        
+        // Check for paywall
+        if (responseText.includes('Subscribe to continue') ||
+            responseText.includes('article limit') ||
+            responseText.includes('paywall')) {
+          console.log(`🔒 Paywall detected, trying bypass...`);
+          continue;
+        }
+        
         const $ = cheerio.load(response.data);
         
-        // Extract title
-        let title = $('h1').first().text() || 
-                   $('title').text() || 
+        // Remove unwanted elements
+        $('script, style, noscript, iframe').remove();
+        
+        // Extract title with fallbacks
+        let title = $('h1').first().text().trim() || 
                    $('meta[property="og:title"]').attr('content') ||
-                   $('meta[name="twitter:title"]').attr('content');
+                   $('meta[name="twitter:title"]').attr('content') ||
+                   $('title').text().trim() ||
+                   $('.headline').first().text().trim() ||
+                   $('.article-title').first().text().trim();
         
         // Extract content using multiple strategies
         let content = '';
         
-        // Try article tag first
-        const articleContent = $('article').text() || $('[role="article"]').text();
-        if (articleContent && articleContent.length > 200) {
-          content = articleContent;
-        } else {
-          // Try common content selectors
-          const contentSelectors = [
-            '.article-content', '.entry-content', '.post-content', 
-            '.story-content', '.article-body', '.content-body',
-            'main p', '.main-content p', '#content p'
-          ];
-          
-          for (const selector of contentSelectors) {
-            const selectorContent = $(selector).text();
-            if (selectorContent && selectorContent.length > content.length) {
-              content = selectorContent;
+        // Strategy 1: Article tags
+        const articleSelectors = [
+          'article', 
+          '[role="article"]',
+          '[itemprop="articleBody"]',
+          '.article-body',
+          '.article-content',
+          '.entry-content'
+        ];
+        
+        for (const selector of articleSelectors) {
+          const articleContent = $(selector).text().trim();
+          if (articleContent && articleContent.length > 200) {
+            content = articleContent;
+            break;
+          }
+        }
+        
+        // Strategy 2: Paragraph collection
+        if (!content || content.length < 200) {
+          const paragraphs = [];
+          $('p').each((i, elem) => {
+            const text = $(elem).text().trim();
+            // Only include substantial paragraphs
+            if (text.length > 50 && 
+                !text.includes('Cookie') && 
+                !text.includes('Subscribe') &&
+                !text.includes('Advertisement')) {
+              paragraphs.push(text);
             }
+          });
+          
+          if (paragraphs.length > 2) {
+            content = paragraphs.join(' ');
           }
         }
         
@@ -1850,15 +1920,36 @@ class NativeSignalBotService extends EventEmitter {
         content = content.replace(/\s+/g, ' ').trim();
         title = title.replace(/\s+/g, ' ').trim();
         
+        // Remove common junk
+        content = content.replace(/Share this.*/gi, '');
+        content = content.replace(/Advertisement.*/gi, '');
+        content = content.replace(/Read more at.*/gi, '');
+        
         if (title && content && content.length > 100) {
           console.log(`✅ Successfully scraped from: ${attemptUrl}`);
           return { title, content };
         }
         
       } catch (error) {
-        console.log(`❌ Failed to scrape ${attemptUrl}: ${error.message}`);
+        if (error.code === 'ECONNREFUSED') {
+          console.log(`🚫 Connection refused for ${attemptUrl}`);
+        } else if (error.code === 'ETIMEDOUT') {
+          console.log(`⏱️ Timeout for ${attemptUrl}`);
+        } else if (error.response && error.response.status === 403) {
+          console.log(`🚫 Access forbidden for ${attemptUrl}`);
+        } else {
+          console.log(`❌ Error scraping ${attemptUrl}: ${error.message}`);
+        }
         continue;
       }
+    }
+    
+    // If Cloudflare was detected, provide a helpful message
+    if (cloudflareDetected) {
+      return {
+        title: 'Article Protected by Cloudflare',
+        content: `This article is protected by Cloudflare and cannot be automatically summarized. The URL appears to be about: "${new URL(url).pathname.split('/').pop().replace(/-/g, ' ')}". Please visit the original link to read the full article, or try sharing the article text directly for summarization.`
+      };
     }
     
     console.log(`❌ Failed to scrape content from all sources for: ${url}`);

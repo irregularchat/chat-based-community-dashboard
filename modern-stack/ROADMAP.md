@@ -121,6 +121,95 @@
 
 **PRODUCTION STATUS**: ✅ v0.3.0 Complete - Production ready with dual AI integration
 
+### 🚧 In Progress - v0.3.1
+
+#### v0.3.1 - AI Command Awareness & Intelligence
+**🎯 GOAL**: Enable AI (!ai and !lai) to understand all bot commands and execute them intelligently
+
+**📋 Implementation Plan**:
+
+1. **🧠 Command Registry Integration**
+   - [ ] Expose command registry to AI handlers
+   - [ ] Create command metadata with descriptions and examples
+   - [ ] Build command categorization (info, admin, moderation, utility)
+   - [ ] Generate dynamic help context for AI
+
+2. **🔍 Context & Data Access**
+   - [ ] Query Q&A database for stored questions/answers
+   - [ ] Access event database for upcoming events
+   - [ ] Retrieve shared links and bookmarks
+   - [ ] View recent message history for context
+   - [ ] Access news articles and summaries
+
+3. **🔐 Permission-Aware Execution**
+   - [ ] Check user admin/moderator status before execution
+   - [ ] Filter available commands by permission level
+   - [ ] Implement safe command execution wrapper
+   - [ ] Create audit trail for AI-executed commands
+   - [ ] Prevent dangerous operations (delete, ban, etc.)
+
+4. **🤖 Natural Language Understanding**
+   - [ ] Parse user queries for command intent
+   - [ ] Map natural language to specific commands
+   - [ ] Handle ambiguous requests with clarification
+   - [ ] Suggest relevant commands when unsure
+   - [ ] Learn from command usage patterns
+
+5. **📊 Implementation Phases**
+   - [ ] **Phase 1**: Read-only awareness (AI knows all commands)
+   - [ ] **Phase 2**: Database queries (fetch Q&A, events, links)
+   - [ ] **Phase 3**: Safe execution (info commands only)
+   - [ ] **Phase 4**: Admin execution (with permission checks)
+   - [ ] **Phase 5**: Learning and optimization
+
+**Technical Architecture**:
+```javascript
+class AICommandAwareness {
+  // Core components AI will access:
+  commandRegistry: Map<string, CommandHandler>
+  database: PrismaClient
+  permissions: PermissionChecker
+  executor: SafeCommandExecutor
+  
+  // AI capabilities:
+  - List and explain all commands
+  - Query database for context
+  - Check user permissions
+  - Execute appropriate commands
+  - Learn from interactions
+}
+```
+
+**Example Interactions**:
+- **User**: "What events are coming up?"
+  - **AI Action**: Query events DB → Format response → Send event list
+
+- **User**: "Show me unanswered questions"
+  - **AI Action**: Query Q&A DB → Filter pending → Display questions
+
+- **User**: "Add me to developers group"
+  - **AI Action**: Check permissions → Execute !addto → Confirm
+
+- **User**: "What can I do here?"
+  - **AI Action**: Check user role → List relevant commands → Provide examples
+
+- **User**: "Find links about React"
+  - **AI Action**: Search bookmarks DB → Filter by keyword → Return results
+
+**Success Metrics**:
+- ✓ AI correctly identifies command intent 95% of the time
+- ✓ Zero unauthorized command executions
+- ✓ Response time under 3 seconds
+- ✓ 90% user satisfaction with AI assistance
+- ✓ Reduces admin workload by 50%
+
+**Security Considerations**:
+- No direct database writes without validation
+- Rate limiting on command execution
+- Audit log for all AI actions
+- Rollback capability for mistakes
+- Human oversight for critical operations
+
 ### 📋 Upcoming Features
 
 #### v0.4.0 - Signal Self-Service Suite

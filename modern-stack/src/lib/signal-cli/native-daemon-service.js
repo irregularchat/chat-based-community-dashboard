@@ -85,6 +85,11 @@ class NativeSignalBotService extends EventEmitter {
     this.newsDomainsFile = path.join(this.dataDir, 'news-domains.json');
     this.loadCustomNewsDomains();
     
+    // Security Watch List for domains
+    this.watchedDomains = new Map(); // domain/tld -> country
+    this.watchedDomainsFile = path.join(this.dataDir, 'watched-domains.json');
+    this.initializeWatchedDomains();
+    
     // Initialize PDF processor
     this.pdfProcessor = new PDFProcessor();
     
@@ -186,6 +191,7 @@ class NativeSignalBotService extends EventEmitter {
       { name: 'errors', description: 'Recent bot errors', handler: this.handleErrors.bind(this), adminOnly: true },
       { name: 'newsstats', description: 'News link statistics', handler: this.handleNewsStats.bind(this), adminOnly: true },
       { name: 'sentiment', description: 'Bot feedback sentiment', handler: this.handleSentiment.bind(this), adminOnly: true },
+      { name: 'watchdomain', description: 'Manage watched security domains', handler: this.handleWatchedDomains.bind(this), adminOnly: true },
       
       // Utility Plugin Commands (12) 
       { name: 'weather', description: 'Get weather information', handler: this.handleWeather.bind(this) },
@@ -1128,6 +1134,19 @@ class NativeSignalBotService extends EventEmitter {
     if (!urls || urls.length === 0) return;
     
     for (const url of urls) {
+      // Check security first for ALL URLs
+      const securityCheck = await this.checkUrlSecurity(url, message);
+      if (securityCheck.isWatched) {
+        await this.sendSecurityWarning(url, securityCheck, message);
+        // Add eyes emoji reaction to the message
+        try {
+          // Note: This would require implementing reaction sending via signal-cli
+          console.log(`👀 Would add eyes emoji to message about ${url}`);
+        } catch (error) {
+          console.error('Could not add reaction:', error);
+        }
+      }
+      
       if (this.isNewsUrl(url)) {
         console.log(`📰 Detected news URL: ${url}`);
         
@@ -6536,6 +6555,165 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     } catch (dbError) {
       console.error('Failed to log error to database:', dbError);
     }
+  }
+
+  // ========== Security Domain Watch List ==========
+  
+  initializeWatchedDomains() {
+    // Default watched domains and TLDs
+    const defaultWatched = {
+      // Country-specific TLDs
+      '.ir': 'Iran',
+      '.cn': 'China',
+      '.ru': 'Russia',
+      '.ve': 'Venezuela',
+      // Common domains from these countries
+      'baidu.com': 'China',
+      'qq.com': 'China',
+      'weibo.com': 'China',
+      'yandex.ru': 'Russia',
+      'vk.com': 'Russia',
+      'mail.ru': 'Russia',
+      'rt.com': 'Russia',
+      'sputniknews.com': 'Russia',
+      'presstv.ir': 'Iran',
+      'tehrantimes.com': 'Iran',
+      'telesurtv.net': 'Venezuela'
+    };
+    
+    // Load from file if exists
+    try {
+      if (fs.existsSync(this.watchedDomainsFile)) {
+        const data = JSON.parse(fs.readFileSync(this.watchedDomainsFile, 'utf8'));
+        Object.entries(data).forEach(([domain, country]) => {
+          this.watchedDomains.set(domain.toLowerCase(), country);
+        });
+        console.log(`🛡️ Loaded ${this.watchedDomains.size} watched domains`);
+      } else {
+        // Initialize with defaults
+        Object.entries(defaultWatched).forEach(([domain, country]) => {
+          this.watchedDomains.set(domain.toLowerCase(), country);
+        });
+        this.saveWatchedDomains();
+        console.log(`🛡️ Initialized ${this.watchedDomains.size} default watched domains`);
+      }
+    } catch (error) {
+      console.error('Error loading watched domains:', error);
+      // Use defaults on error
+      Object.entries(defaultWatched).forEach(([domain, country]) => {
+        this.watchedDomains.set(domain.toLowerCase(), country);
+      });
+    }
+  }
+  
+  saveWatchedDomains() {
+    try {
+      const data = {};
+      this.watchedDomains.forEach((country, domain) => {
+        data[domain] = country;
+      });
+      fs.writeFileSync(this.watchedDomainsFile, JSON.stringify(data, null, 2));
+      console.log(`💾 Saved ${this.watchedDomains.size} watched domains`);
+    } catch (error) {
+      console.error('Error saving watched domains:', error);
+    }
+  }
+  
+  async checkUrlSecurity(url, message) {
+    try {
+      const urlObj = new URL(url);
+      const hostname = urlObj.hostname.toLowerCase();
+      
+      // Check exact domain matches
+      for (const [domain, country] of this.watchedDomains) {
+        if (hostname === domain || hostname.endsWith('.' + domain)) {
+          return { isWatched: true, country, domain };
+        }
+      }
+      
+      // Check TLD matches
+      for (const [tld, country] of this.watchedDomains) {
+        if (tld.startsWith('.') && hostname.endsWith(tld)) {
+          return { isWatched: true, country, domain: tld };
+        }
+      }
+      
+      return { isWatched: false };
+    } catch (error) {
+      console.error('Error checking URL security:', error);
+      return { isWatched: false };
+    }
+  }
+  
+  async sendSecurityWarning(url, securityCheck, message) {
+    const warning = `👀 **Security Notice**
+
+This link is hosted in **${securityCheck.country}** (${securityCheck.domain})
+
+Are you sure this is what you wanted to post?
+
+⚠️ Please verify the source before clicking.`;
+    
+    await this.sendReply(message, warning);
+    console.log(`🛡️ Security warning sent for ${url} (${securityCheck.country})`);
+  }
+  
+  // Admin command to manage watched domains
+  async handleWatchedDomains(context) {
+    const { args, sourceNumber } = context;
+    
+    if (!this.isAdmin(sourceNumber)) {
+      return '🚫 Only administrators can manage watched domains';
+    }
+    
+    if (!args || args.length === 0) {
+      // List current watched domains
+      let response = '🛡️ **Watched Domains & TLDs**\n\n';
+      const byCountry = {};
+      
+      this.watchedDomains.forEach((country, domain) => {
+        if (!byCountry[country]) byCountry[country] = [];
+        byCountry[country].push(domain);
+      });
+      
+      Object.entries(byCountry).forEach(([country, domains]) => {
+        response += `**${country}:**\n`;
+        domains.forEach(d => response += `  • ${d}\n`);
+        response += '\n';
+      });
+      
+      response += `\nTotal: ${this.watchedDomains.size} entries\n`;
+      response += '\nUsage: !watchdomain add <domain> <country>\n';
+      response += '       !watchdomain remove <domain>';
+      
+      return response;
+    }
+    
+    const action = args[0].toLowerCase();
+    
+    if (action === 'add' && args.length >= 3) {
+      const domain = args[1].toLowerCase();
+      const country = args.slice(2).join(' ');
+      
+      this.watchedDomains.set(domain, country);
+      this.saveWatchedDomains();
+      
+      return `✅ Added ${domain} to watch list (${country})`;
+    }
+    
+    if (action === 'remove' && args.length >= 2) {
+      const domain = args[1].toLowerCase();
+      
+      if (this.watchedDomains.has(domain)) {
+        this.watchedDomains.delete(domain);
+        this.saveWatchedDomains();
+        return `✅ Removed ${domain} from watch list`;
+      } else {
+        return `❌ Domain ${domain} not found in watch list`;
+      }
+    }
+    
+    return '❌ Usage: !watchdomain [add <domain> <country>|remove <domain>|list]';
   }
 }
 

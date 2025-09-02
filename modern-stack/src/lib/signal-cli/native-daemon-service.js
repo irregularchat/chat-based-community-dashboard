@@ -98,6 +98,33 @@ class NativeSignalBotService extends EventEmitter {
     this.discourseCategories = new Map(); // category id -> category object
     this.discourseTagsLoaded = false;
     this.discourseCategoriesLoaded = false;
+
+    // Security: Input validation patterns
+    this.validation = {
+      // Regex patterns for input validation
+      patterns: {
+        phoneNumber: /^\+[1-9]\d{1,14}$/,
+        uuid: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+        groupId: /^(group\.)?[A-Za-z0-9+/=]+$/,
+        url: /^https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)$/,
+        domain: /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/,
+        command: /^[a-zA-Z][a-zA-Z0-9_-]*$/,
+        alphanumeric: /^[a-zA-Z0-9\s-_.]+$/,
+        safeString: /^[a-zA-Z0-9\s\-_.!?@#$%&*+=()\[\]{};:,<>|~`'"\\\/]+$/
+      },
+      
+      // Maximum lengths for different input types
+      maxLengths: {
+        command: 50,
+        argument: 500,
+        message: 4096,
+        url: 2048,
+        phoneNumber: 20,
+        uuid: 40,
+        domain: 255,
+        groupId: 200
+      }
+    };
     
     // Onboarding/Request System
     this.pendingRequests = new Map(); // phoneNumber -> {timestamp, groupId, requester, timeoutId}
@@ -135,6 +162,185 @@ class NativeSignalBotService extends EventEmitter {
     console.log(`📱 Phone: ${this.phoneNumber}`);
     console.log(`📂 Data Dir: ${this.dataDir}`);
     console.log(`🔌 Socket: ${this.socketPath}`);
+  }
+
+  // Security: Input validation methods
+  validateInput(input, type, fieldName = 'input') {
+    // Basic null/undefined check
+    if (input === null || input === undefined) {
+      return { valid: false, error: `${fieldName} is required` };
+    }
+
+    // Convert to string if not already
+    const inputStr = String(input);
+
+    // Check maximum length
+    const maxLength = this.validation.maxLengths[type];
+    if (maxLength && inputStr.length > maxLength) {
+      return { 
+        valid: false, 
+        error: `${fieldName} exceeds maximum length of ${maxLength} characters` 
+      };
+    }
+
+    // Check pattern based on type
+    const pattern = this.validation.patterns[type];
+    if (pattern && !pattern.test(inputStr)) {
+      return { 
+        valid: false, 
+        error: `${fieldName} contains invalid characters or format for type ${type}` 
+      };
+    }
+
+    return { valid: true, sanitized: inputStr };
+  }
+
+  // Security: Sanitize command arguments
+  sanitizeCommandArgs(args) {
+    if (!Array.isArray(args)) return [];
+    
+    return args.map((arg, index) => {
+      if (typeof arg !== 'string') {
+        arg = String(arg);
+      }
+      
+      // Trim whitespace
+      arg = arg.trim();
+      
+      // Check for dangerous characters and patterns
+      const dangerousPatterns = [
+        /[;&|`$(){}[\]\\<>]/g,  // Shell metacharacters
+        /\.\.\//g,              // Directory traversal
+        /--/g,                  // Command injection attempts
+        /^\-/g,                 // Leading dashes (flags)
+      ];
+
+      let sanitized = arg;
+      for (const pattern of dangerousPatterns) {
+        sanitized = sanitized.replace(pattern, '');
+      }
+
+      // Validate length
+      if (sanitized.length > this.validation.maxLengths.argument) {
+        sanitized = sanitized.substring(0, this.validation.maxLengths.argument);
+      }
+
+      return sanitized;
+    }).filter(arg => arg.length > 0); // Remove empty arguments
+  }
+
+  // Security: Validate and sanitize command input
+  validateCommand(commandName, args, context) {
+    const validationResults = [];
+
+    // Validate command name
+    const commandValidation = this.validateInput(commandName, 'command', 'command name');
+    if (!commandValidation.valid) {
+      return { valid: false, errors: [commandValidation.error] };
+    }
+
+    // Validate user identifiers
+    if (context.sourceNumber) {
+      const phoneValidation = this.validateInput(context.sourceNumber, 'phoneNumber', 'source phone');
+      if (!phoneValidation.valid) {
+        validationResults.push(phoneValidation.error);
+      }
+    }
+
+    if (context.sourceUuid) {
+      const uuidValidation = this.validateInput(context.sourceUuid, 'uuid', 'source UUID');
+      if (!uuidValidation.valid) {
+        validationResults.push(uuidValidation.error);
+      }
+    }
+
+    if (context.groupId) {
+      const groupValidation = this.validateInput(context.groupId, 'groupId', 'group ID');
+      if (!groupValidation.valid) {
+        validationResults.push(groupValidation.error);
+      }
+    }
+
+    // Sanitize and validate arguments
+    const sanitizedArgs = this.sanitizeCommandArgs(args);
+
+    // Check for suspicious patterns in arguments
+    for (const [index, arg] of sanitizedArgs.entries()) {
+      // Check for URL arguments
+      if (arg.startsWith('http://') || arg.startsWith('https://')) {
+        const urlValidation = this.validateInput(arg, 'url', `argument ${index + 1}`);
+        if (!urlValidation.valid) {
+          validationResults.push(urlValidation.error);
+        }
+      }
+      // Check for phone number arguments
+      else if (arg.startsWith('+')) {
+        const phoneValidation = this.validateInput(arg, 'phoneNumber', `argument ${index + 1}`);
+        if (!phoneValidation.valid) {
+          validationResults.push(phoneValidation.error);
+        }
+      }
+      // General string validation for other arguments
+      else {
+        const safeValidation = this.validateInput(arg, 'safeString', `argument ${index + 1}`);
+        if (!safeValidation.valid) {
+          validationResults.push(safeValidation.error);
+        }
+      }
+    }
+
+    if (validationResults.length > 0) {
+      return { valid: false, errors: validationResults };
+    }
+
+    return { 
+      valid: true, 
+      sanitizedCommand: commandValidation.sanitized,
+      sanitizedArgs: sanitizedArgs 
+    };
+  }
+
+  // Security: Rate limiting per user
+  checkRateLimit(identifier, commandName) {
+    const now = Date.now();
+    const rateLimitKey = `${identifier}:${commandName}`;
+    
+    if (!this.rateLimits) {
+      this.rateLimits = new Map();
+    }
+
+    const userRateData = this.rateLimits.get(rateLimitKey) || { count: 0, resetTime: now + 60000 };
+
+    // Reset counter if time window has passed
+    if (now >= userRateData.resetTime) {
+      userRateData.count = 0;
+      userRateData.resetTime = now + 60000; // 1 minute window
+    }
+
+    // Check limits based on command type
+    const limits = {
+      'ai': 5,      // 5 AI requests per minute
+      'lai': 5,     // 5 Local AI requests per minute
+      'addto': 3,   // 3 group additions per minute
+      'newsadd': 2, // 2 news domain additions per minute
+      'default': 10 // 10 commands per minute default
+    };
+
+    const limit = limits[commandName] || limits.default;
+
+    if (userRateData.count >= limit) {
+      const remainingTime = Math.ceil((userRateData.resetTime - now) / 1000);
+      return { 
+        allowed: false, 
+        error: `Rate limit exceeded. Please wait ${remainingTime} seconds before using !${commandName} again.` 
+      };
+    }
+
+    // Increment counter
+    userRateData.count++;
+    this.rateLimits.set(rateLimitKey, userRateData);
+
+    return { allowed: true };
   }
 
   loadPlugins() {
@@ -1706,10 +1912,40 @@ ${content.content.substring(0, 3000)}...`;
     
     console.log(`📝 Processing command: !${commandName} with ${args.length} args`);
     
+    // Security: Validate and sanitize command input
+    const context = {
+      sender: message.sourceName || message.sourceNumber,
+      senderName: message.sourceName,
+      sourceNumber: message.sourceNumber,
+      sourceUuid: message.sourceUuid,
+      groupId: message.groupId
+    };
+
+    const validation = this.validateCommand(commandName, args, context);
+    if (!validation.valid) {
+      const errorMessage = `❌ Security validation failed: ${validation.errors.join(', ')}`;
+      console.log(`🛡️ ${errorMessage}`);
+      await this.sendReply(message, errorMessage);
+      return;
+    }
+
+    // Security: Check rate limits
+    const userIdentifier = message.sourceUuid || message.sourceNumber;
+    const rateLimit = this.checkRateLimit(userIdentifier, commandName);
+    if (!rateLimit.allowed) {
+      console.log(`🚫 Rate limit exceeded for ${userIdentifier}: ${commandName}`);
+      await this.sendReply(message, `🚫 ${rateLimit.error}`);
+      return;
+    }
+
+    // Use sanitized inputs from validation
+    const sanitizedCommandName = validation.sanitizedCommand;
+    const sanitizedArgs = validation.sanitizedArgs;
+    
     // Track command usage
     const usageData = {
-      command: commandName,
-      args: args.join(' ').substring(0, 1000), // Limit args length
+      command: sanitizedCommandName,
+      args: sanitizedArgs.join(' ').substring(0, 1000), // Limit args length
       groupId: message.groupId || null,
       groupName: message.groupName || null,
       userId: message.sourceNumber,
@@ -1720,14 +1956,14 @@ ${content.content.substring(0, 3000)}...`;
     };
     console.log(`📦 Available commands: ${Array.from(this.plugins.keys()).join(', ')}`);
     
-    const command = this.plugins.get(commandName);
+    const command = this.plugins.get(sanitizedCommandName);
     if (!command) {
-      console.log(`❌ Command not found: !${commandName}`);
+      console.log(`❌ Command not found: !${sanitizedCommandName}`);
       usageData.success = false;
       usageData.errorMessage = 'Command not found';
       usageData.responseTime = Date.now() - startTime;
       await this.trackCommandUsage(usageData);
-      await this.sendReply(message, `Unknown command: !${commandName}. Use !help for available commands.`);
+      await this.sendReply(message, `Unknown command: !${sanitizedCommandName}. Use !help for available commands.`);
       return;
     }
     
@@ -1737,7 +1973,7 @@ ${content.content.substring(0, 3000)}...`;
         senderName: message.sourceName,
         sourceNumber: message.sourceNumber, // Legacy - being phased out
         sourceUuid: message.sourceUuid, // Primary identifier for security
-        args: args,
+        args: sanitizedArgs, // Use sanitized arguments for security
         groupId: message.groupId,
         isGroup: !!message.groupId,
         isDM: !message.groupId,

@@ -146,7 +146,7 @@ class NativeSignalBotService extends EventEmitter {
       { name: 'removeuser', description: 'Remove user from group (admin)', handler: this.handleRemoveUser.bind(this), adminOnly: true },
       // { name: 'groupinfo', description: 'Show group details', handler: this.handleGroupInfo.bind(this) }, // Removed per request
       // { name: 'members', description: 'List group members', handler: this.handleMembers.bind(this) }, // Removed per request
-      { name: 'invite', description: 'Generate invite link (admin)', handler: this.handleInvite.bind(this), adminOnly: true },
+      { name: 'invite', description: 'Show how to invite someone to IrregularChat', handler: this.handleInvite.bind(this) },
       
       // Information Plugin Commands (7)  
       { name: 'wiki', description: 'Search IrregularChat wiki', handler: this.handleWiki.bind(this) },
@@ -2753,9 +2753,26 @@ ${content.content.substring(0, 3000)}...`;
   }
 
   async handleInvite(context) {
-    const { args } = context;
-    if (!args) return '❌ Usage: !invite <group>';
-    return `🔗 **Invite generated for ${args}:**\nhttps://signal.group/#abc123\n\n⚠️ Link expires in 24h`;
+    const { sender, sourceNumber, groupId } = context;
+    
+    // TODO: Add the sender to the entry room (Actions Chat)
+    // This would require knowing the entry room group ID and using updateGroup API
+    
+    const inviteInstructions = `📋 **To invite someone to IrregularChat:**
+
+1. Let them know you're vouching for them
+2. Make sure you have an SSO login: https://sso.irregularchat.com
+3. Login to the forum and follow: https://url.irregular.chat/invite
+4. Join the Actions Chat
+5. Add them to the Actions Chat
+6. Type: !request @their_username
+
+That's it! The onboarding process will begin once you type !request.`;
+    
+    // TODO: Actually add the user to the entry room here
+    // For now, just return the instructions
+    
+    return inviteInstructions;
   }
 
   // Information Plugin Handlers  

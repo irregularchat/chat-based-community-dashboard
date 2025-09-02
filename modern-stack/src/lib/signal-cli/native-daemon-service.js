@@ -798,24 +798,53 @@ class NativeSignalBotService extends EventEmitter {
           }
           
           // 3. Check if AI should execute a command internally
-          // Map of keywords to command names for internal execution
+          // First check for commands that need arguments
+          const argumentPatterns = [
+            { pattern: /search (?:the )?wiki (?:for )?(.+)/i, command: 'wiki', extractArgs: (m) => [m[1]] },
+            { pattern: /wiki (?:search )?(?:for )?(.+)/i, command: 'wiki', extractArgs: (m) => [m[1]] },
+            { pattern: /search (?:the )?forum (?:for )?(.+)/i, command: 'fsearch', extractArgs: (m) => [m[1]] },
+            { pattern: /forum search (?:for )?(.+)/i, command: 'fsearch', extractArgs: (m) => [m[1]] },
+            { pattern: /weather (?:in |for )?(.+)/i, command: 'weather', extractArgs: (m) => [m[1]] },
+            { pattern: /translate (.+) to (.+)/i, command: 'translate', extractArgs: (m) => [m[1], m[2]] },
+            { pattern: /answer question (?:#)?(\d+) with (.+)/i, command: 'answer', extractArgs: (m) => [m[1], m[2]] },
+            { pattern: /add (.+) to (?:group )?(.+)/i, command: 'addto', extractArgs: (m) => [m[2], m[1]] }
+          ];
+          
+          // Check for argument-based patterns first
+          for (const argPattern of argumentPatterns) {
+            const argMatch = userQuery.match(argPattern.pattern);
+            if (argMatch) {
+              const cmdArgs = argPattern.extractArgs(argMatch);
+              const execResult = await this.safeCommandExecutor(argPattern.command, cmdArgs, context, 'openai');
+              
+              if (execResult.success) {
+                return `${getAiPrefix(responseMode)} ${execResult.result}`;
+              } else if (execResult.needsPermission) {
+                return `${getAiPrefix(responseMode)} That command requires ${execResult.needsPermission} privileges which you don't have.`;
+              } else if (!execResult.success && execResult.message.includes('not found')) {
+                // Command not found, continue to other patterns
+              } else {
+                return `${getAiPrefix(responseMode)} ${execResult.message}`;
+              }
+            }
+          }
+          
+          // Map of keywords to command names for simple commands (no arguments)
           const commandMappings = [
             { keywords: ['show me commands', 'list commands', 'what commands', 'available commands', 'help'], command: 'help' },
             { keywords: ['what groups', 'list groups', 'show groups', 'available rooms'], command: 'groups' },
             { keywords: ['rules', 'laws', 'zeroeth', 'zeroth', 'principles'], command: 'zeroeth' },
-            { keywords: ['wiki', 'documentation', 'docs'], command: 'wiki' },
             { keywords: ['forum post', 'latest post', 'recent post', 'forum discussion', 'latest forum', 'recent forum', 'new forum'], command: 'flatest' },
             { keywords: ['events', 'meetups', 'meetings', 'upcoming event', 'next event'], command: 'events' },
             { keywords: ['members', 'who is in', 'list members', 'group members'], command: 'members' },
             { keywords: ['faq', 'frequently asked', 'common questions'], command: 'faq' },
             { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' },
-            { keywords: ['weather', 'temperature', 'forecast'], command: 'weather' },
-            { keywords: ['joke', 'tell me a joke', 'funny'], command: 'joke' },
+            { keywords: ['tell me a joke', 'funny'], command: 'joke' },
             { keywords: ['unanswered', 'pending question', 'open question'], command: 'pending' },
             { keywords: ['bookmark', 'saved link', 'stored link'], command: 'links' }
           ];
           
-          // Phase 4: Use safe executor for automatic command mapping
+          // Phase 4: Use safe executor for simple command mapping
           for (const mapping of commandMappings) {
             const matches = mapping.keywords.some(kw => userQuery.toLowerCase().includes(kw));
             if (matches) {
@@ -1021,24 +1050,53 @@ class NativeSignalBotService extends EventEmitter {
           }
           
           // 3. Check if AI should execute a command internally
-          // Map of keywords to command names for internal execution
+          // First check for commands that need arguments
+          const argumentPatterns = [
+            { pattern: /search (?:the )?wiki (?:for )?(.+)/i, command: 'wiki', extractArgs: (m) => [m[1]] },
+            { pattern: /wiki (?:search )?(?:for )?(.+)/i, command: 'wiki', extractArgs: (m) => [m[1]] },
+            { pattern: /search (?:the )?forum (?:for )?(.+)/i, command: 'fsearch', extractArgs: (m) => [m[1]] },
+            { pattern: /forum search (?:for )?(.+)/i, command: 'fsearch', extractArgs: (m) => [m[1]] },
+            { pattern: /weather (?:in |for )?(.+)/i, command: 'weather', extractArgs: (m) => [m[1]] },
+            { pattern: /translate (.+) to (.+)/i, command: 'translate', extractArgs: (m) => [m[1], m[2]] },
+            { pattern: /answer question (?:#)?(\d+) with (.+)/i, command: 'answer', extractArgs: (m) => [m[1], m[2]] },
+            { pattern: /add (.+) to (?:group )?(.+)/i, command: 'addto', extractArgs: (m) => [m[2], m[1]] }
+          ];
+          
+          // Check for argument-based patterns first
+          for (const argPattern of argumentPatterns) {
+            const argMatch = userQuery.match(argPattern.pattern);
+            if (argMatch) {
+              const cmdArgs = argPattern.extractArgs(argMatch);
+              const execResult = await this.safeCommandExecutor(argPattern.command, cmdArgs, context, 'openai');
+              
+              if (execResult.success) {
+                return `${getAiPrefix(responseMode)} ${execResult.result}`;
+              } else if (execResult.needsPermission) {
+                return `${getAiPrefix(responseMode)} That command requires ${execResult.needsPermission} privileges which you don't have.`;
+              } else if (!execResult.success && execResult.message.includes('not found')) {
+                // Command not found, continue to other patterns
+              } else {
+                return `${getAiPrefix(responseMode)} ${execResult.message}`;
+              }
+            }
+          }
+          
+          // Map of keywords to command names for simple commands (no arguments)
           const commandMappings = [
             { keywords: ['show me commands', 'list commands', 'what commands', 'available commands', 'help'], command: 'help' },
             { keywords: ['what groups', 'list groups', 'show groups', 'available rooms'], command: 'groups' },
             { keywords: ['rules', 'laws', 'zeroeth', 'zeroth', 'principles'], command: 'zeroeth' },
-            { keywords: ['wiki', 'documentation', 'docs'], command: 'wiki' },
             { keywords: ['forum post', 'latest post', 'recent post', 'forum discussion', 'latest forum', 'recent forum', 'new forum'], command: 'flatest' },
             { keywords: ['events', 'meetups', 'meetings', 'upcoming event', 'next event'], command: 'events' },
             { keywords: ['members', 'who is in', 'list members', 'group members'], command: 'members' },
             { keywords: ['faq', 'frequently asked', 'common questions'], command: 'faq' },
             { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' },
-            { keywords: ['weather', 'temperature', 'forecast'], command: 'weather' },
-            { keywords: ['joke', 'tell me a joke', 'funny'], command: 'joke' },
+            { keywords: ['tell me a joke', 'funny'], command: 'joke' },
             { keywords: ['unanswered', 'pending question', 'open question'], command: 'pending' },
             { keywords: ['bookmark', 'saved link', 'stored link'], command: 'links' }
           ];
           
-          // Phase 4: Use safe executor for automatic command mapping
+          // Phase 4: Use safe executor for simple command mapping
           for (const mapping of commandMappings) {
             const matches = mapping.keywords.some(kw => userQuery.toLowerCase().includes(kw));
             if (matches) {

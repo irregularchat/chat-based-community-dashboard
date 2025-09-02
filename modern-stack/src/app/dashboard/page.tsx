@@ -1950,8 +1950,31 @@ function AvailableSignalGroupsCard() {
 
   const joinGroupMutation = trpc.signal.requestSignalGroupJoin.useMutation({
     onSuccess: (result) => {
-      toast.success(result.message);
+      if (result.autoApproved && result.joined) {
+        // Auto-approved and successfully joined Signal group
+        toast.success(result.message, {
+          description: "You've been automatically added to the Signal group!"
+        });
+      } else if (result.autoApproved && !result.joined) {
+        // Auto-approved but Signal group add failed
+        toast.warning(result.message, {
+          description: result.signalError || "Please contact an admin for Signal group access"
+        });
+      } else {
+        // Pending approval
+        toast.success(result.message, {
+          description: "An admin will review your request shortly"
+        });
+      }
+      // Refresh both the available groups and user's status
       refetch();
+      // Also refresh the Signal status to show new membership
+      if (result.autoApproved && result.joined) {
+        // Delay slightly to allow database updates to propagate
+        setTimeout(() => {
+          window.location.reload(); // Force a full refresh to update all Signal data
+        }, 1000);
+      }
     },
     onError: (error) => {
       toast.error(error.message);
@@ -2020,8 +2043,16 @@ function AvailableSignalGroupsCard() {
                 size="sm" 
                 onClick={() => handleJoinGroup(group.groupId)}
                 disabled={joinGroupMutation.isLoading}
+                className={joinGroupMutation.isLoading ? 'animate-pulse' : ''}
               >
-                {joinGroupMutation.isLoading ? '...' : 'Request to Join'}
+                {joinGroupMutation.isLoading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-1"></div>
+                    Joining...
+                  </>
+                ) : (
+                  'Join Group'
+                )}
               </Button>
             </div>
           ))}

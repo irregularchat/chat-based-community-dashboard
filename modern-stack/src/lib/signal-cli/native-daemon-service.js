@@ -275,28 +275,44 @@ class NativeSignalBotService extends EventEmitter {
       name: 'help',
       description: 'Show available commands',
       execute: async (context) => {
-        const commandsByCategory = {
+        const isAdmin = this.isAdmin(context.sourceNumber, context.groupId);
+        
+        // Regular user commands
+        const userCommandsByCategory = {
           '🔧 Core': ['help', 'ping', 'ai', 'lai', 'summarize', 'tldr', 'zeroeth', 'cleaner'],
           '❓ Q&A': ['q', 'question', 'questions', 'answer', 'solved'],
-          '👥 Community': ['groups', 'join', 'removeuser', 'invite'],
+          '👥 Community': ['groups', 'join', 'invite'],
           '📚 Information': ['wiki', 'forum', 'events', 'faq', 'docs', 'links'],
           '👤 User Management': ['profile'],
           '📄 Forum': ['fpost', 'flatest', 'fsearch', 'categories'],
           '📋 PDF Processing': ['pdf'],
-          '👋 Onboarding': ['request', 'gtg', 'sngtg', 'pending'],
-          '📊 Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'sentiment'],
-          '🔐 Admin': ['addto', 'gtg', 'sngtg', 'pending', 'bypass']
+          '👋 Onboarding': ['request']
         };
         
-        let helpText = `🤖 **Signal Bot Commands** (${this.plugins.size} total)\n\n`;
+        // Admin-only commands
+        const adminCommandsByCategory = {
+          '🔐 Admin': ['removeuser', 'addto', 'gtg', 'sngtg', 'pending', 'bypass'],
+          '📊 Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'sentiment']
+        };
         
-        for (const [category, cmds] of Object.entries(commandsByCategory)) {
+        let helpText = `🤖 **Signal Bot Commands**\n\n`;
+        
+        // Show user commands
+        for (const [category, cmds] of Object.entries(userCommandsByCategory)) {
           helpText += `${category}:\n`;
           helpText += cmds.map(cmd => `• !${cmd}`).join(', ') + '\n\n';
         }
         
+        // Only show admin commands if user is admin
+        if (isAdmin) {
+          for (const [category, cmds] of Object.entries(adminCommandsByCategory)) {
+            helpText += `${category}:\n`;
+            helpText += cmds.map(cmd => `• !${cmd}`).join(', ') + '\n\n';
+          }
+          helpText += '🔒 You have admin privileges\n';
+        }
+        
         helpText += '💡 Use any command to get started!\n';
-        helpText += '🔒 Admin commands: !gtg, !addto (admin only)\n';
         helpText += `📱 Total: ${this.plugins.size} commands available`;
         
         return helpText;

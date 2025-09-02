@@ -2516,6 +2516,15 @@ ${content.content.substring(0, 3000)}...`;
 
   // Repository Processing System
   async checkAndProcessRepositoryUrls(message) {
+    // Skip automatic processing if this message starts with a command that handles repos
+    const repoCommands = ['!repo', '!tldr', '!summarize'];
+    const isRepoCommand = repoCommands.some(cmd => message.message.trim().toLowerCase().startsWith(cmd));
+    
+    if (isRepoCommand) {
+      console.log('⏭️ Skipping automatic repository detection for manual command');
+      return;
+    }
+    
     const urlRegex = /https?:\/\/[^\s]+/g;
     const urls = message.message.match(urlRegex);
     

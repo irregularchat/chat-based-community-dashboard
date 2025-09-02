@@ -281,7 +281,7 @@ class NativeSignalBotService extends EventEmitter {
       name: 'help',
       description: 'Show available commands',
       execute: async (context) => {
-        const isAdmin = this.isAdmin(context.sourceNumber, context.groupId);
+        const isAdmin = this.isAdmin(context.sourceUuid || context.sourceNumber, context.groupId);
         
         // Regular user commands
         const userCommandsByCategory = {
@@ -1735,7 +1735,8 @@ ${content.content.substring(0, 3000)}...`;
       const context = {
         sender: message.sourceName || message.sourceNumber, // Display name first, phone as fallback
         senderName: message.sourceName,
-        sourceNumber: message.sourceNumber, // Keep phone number for admin functions
+        sourceNumber: message.sourceNumber, // Legacy - being phased out
+        sourceUuid: message.sourceUuid, // Primary identifier for security
         args: args,
         groupId: message.groupId,
         isGroup: !!message.groupId,
@@ -5044,7 +5045,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
 
   async handleGtg(context) {
     const { sender, args, groupId, sourceNumber, mentions } = context;
-    const isAdmin = this.isAdmin(sourceNumber || sender, groupId);
+    const isAdmin = this.isAdmin(context.sourceUuid || sourceNumber || sender, groupId);
     if (!isAdmin) return '🚫 Only administrators can approve users with !gtg';
     
     // Check if this is a reply to someone's message (mentions array)
@@ -5270,7 +5271,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
 
   async handleSngtg(context) {
     const { sender, groupId, sourceNumber, args } = context;
-    const isAdmin = this.isAdmin(sourceNumber || sender, groupId);
+    const isAdmin = this.isAdmin(context.sourceUuid || sourceNumber || sender, groupId);
     if (!isAdmin) return '🚫 Only administrators can confirm safety numbers with !sngtg';
     
     if (args.length < 1) {
@@ -5289,7 +5290,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   
   async handlePending(context) {
     const { sender, groupId, sourceNumber } = context;
-    const isAdmin = this.isAdmin(sourceNumber || sender, groupId);
+    const isAdmin = this.isAdmin(context.sourceUuid || sourceNumber || sender, groupId);
     
     if (!isAdmin) {
       return '🚫 Only administrators can view pending requests';
@@ -5931,19 +5932,38 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     return `🎲 **Dice Roll**: ${roll}\n\nUsage: !dice [sides] [count]`; 
   }
 
-  // Helper method for admin check
-  isAdmin(userNumber, groupId = null) {
-    // First check global admin list (for backward compatibility)
-    const adminUsers = process.env.ADMIN_USERS?.split(',') || [];
-    if (adminUsers.includes(userNumber)) {
+  // Helper method for admin check - now UUID-based for security
+  isAdmin(userIdentifier, groupId = null) {
+    // Determine if we received a UUID or phone number
+    const isUuid = userIdentifier && userIdentifier.length > 15; // UUIDs are longer than phone numbers
+    
+    // Primary check: UUID-based admin list (secure)
+    const adminUuids = process.env.ADMIN_UUIDS?.split(',') || [];
+    if (isUuid && adminUuids.includes(userIdentifier)) {
       return true;
     }
     
-    // If a groupId is provided, check if user is admin in that specific group
+    // Fallback check: Phone number-based admin list (legacy - will be deprecated)
+    // Only for backward compatibility during transition period
+    if (!isUuid) {
+      const adminUsers = process.env.ADMIN_USERS?.split(',') || [];
+      if (adminUsers.includes(userIdentifier)) {
+        console.warn('⚠️ SECURITY WARNING: Using deprecated phone number admin auth. Migrate to UUID-based auth.');
+        return true;
+      }
+    }
+    
+    // Group-specific admin check (also needs UUID migration)
     if (groupId && this.cachedGroups) {
       const group = this.cachedGroups.find(g => g.id === groupId);
       if (group && group.admins && Array.isArray(group.admins)) {
-        return group.admins.some(admin => admin.number === userNumber);
+        if (isUuid) {
+          // Check by UUID (preferred)
+          return group.admins.some(admin => admin.uuid === userIdentifier);
+        } else {
+          // Fallback to phone number check
+          return group.admins.some(admin => admin.number === userIdentifier);
+        }
       }
     }
     
@@ -6242,7 +6262,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     
     // Only the asker or an admin can mark as solved
     const isAsker = question.askerPhone === sourceNumber;
-    const isAdmin = this.isAdmin(sourceNumber, groupId);
+    const isAdmin = this.isAdmin(context.sourceUuid || sourceNumber, groupId);
     
     if (!isAsker && !isAdmin) {
       return `❌ Only ${question.asker} (the question asker) or an admin can mark this as solved.`;
@@ -6694,7 +6714,7 @@ Are you sure this is what you wanted to post?
   async handleWatchedDomains(context) {
     const { args, sourceNumber } = context;
     
-    if (!this.isAdmin(sourceNumber)) {
+    if (!this.isAdmin(context.sourceUuid || sourceNumber)) {
       return '🚫 Only administrators can manage watched domains';
     }
     

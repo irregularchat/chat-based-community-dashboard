@@ -5923,9 +5923,11 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
              'To see existing questions, use: !questions';
     }
     
-    // Generate a unique question ID
-    this.questionCounter++;
-    const questionId = `Q${this.questionCounter}`;
+    // Get the next question ID from database
+    const lastQuestion = await this.prisma.qAndAQuestion.findFirst({
+      orderBy: { questionId: 'desc' }
+    });
+    const questionId = (lastQuestion?.questionId || 0) + 1;
     
     try {
       // Generate title using AI if available
@@ -5949,27 +5951,23 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         title = titleResponse.choices[0].message.content.trim();
       }
       
-      // Store question in memory
-      const question = {
-        id: questionId,
-        asker: sender || 'Unknown',
-        askerPhone: sourceNumber,
-        question: questionText,
-        title: title,
-        answers: [],
-        solved: false,
-        timestamp: Date.now(),
-        groupId: groupId,
-        discourseTopicId: null
-      };
+      // Store question in database
+      const question = await this.prisma.qAndAQuestion.create({
+        data: {
+          questionId: questionId,
+          asker: sender || 'Unknown',
+          askerPhone: sourceNumber,
+          question: questionText,
+          title: title,
+          groupId: groupId || 'dm',
+          groupName: context.groupName || null,
+          solved: false,
+          discourseTopicId: null,
+          answers: []
+        }
+      });
       
-      this.questions.set(questionId, question);
-      
-      // Track user's questions
-      if (!this.userQuestions.has(sourceNumber)) {
-        this.userQuestions.set(sourceNumber, []);
-      }
-      this.userQuestions.get(sourceNumber).push(questionId);
+      console.log(`✅ Question Q${questionId} saved to database`);
       
       // Post to Discourse if configured
       let forumLink = '';
@@ -5996,7 +5994,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
           
           if (response.ok) {
             const result = await response.json();
-            question.discourseTopicId = result.topic_id;
+            // Update question with forum link
+            await this.prisma.qAndAQuestion.update({
+              where: { questionId: questionId },
+              data: {
+                discourseTopicId: result.topic_id.toString(),
+                forumLink: `${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id}`
+              }
+            });
             forumLink = `\n📎 Forum: ${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id}`;
             console.log('✅ Question posted to Discourse:', result.topic_id);
           } else {
@@ -6010,8 +6015,8 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         }
       }
       
-      // Return success message even if Discourse posting failed (question is stored locally)
-      let response = `❓ Question ${questionId} Posted\n\n` +
+      // Return success message even if Discourse posting failed (question is stored in database)
+      let response = `❓ Question Q${questionId} Posted\n\n` +
                     `Title: ${title}\n` +
                     `Asked by: ${sender}\n` +
                     `Time: ${new Date().toLocaleTimeString()}`;
@@ -6023,8 +6028,8 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         console.log('⚠️ Question stored locally only due to forum error');
       }
       
-      response += `\n\nOthers can answer with: !answer ${questionId} <your answer>\n` +
-                 `Mark as solved with: !solved ${questionId}`;
+      response += `\n\nOthers can answer with: !answer Q${questionId} <your answer>\n` +
+                 `Mark as solved with: !solved Q${questionId}`;
       
       return response;
              
@@ -6041,36 +6046,47 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     // Get recent questions or user's questions
     const showMine = args && args[0] === 'mine';
     
-    let questionsList = [];
-    
-    if (showMine) {
-      const myQuestionIds = this.userQuestions.get(sourceNumber) || [];
-      questionsList = myQuestionIds.map(id => this.questions.get(id)).filter(q => q);
-    } else {
-      // Get last 10 questions
-      questionsList = Array.from(this.questions.values())
-        .sort((a, b) => b.timestamp - a.timestamp)
-        .slice(0, 10);
-    }
-    
-    if (questionsList.length === 0) {
-      return showMine ? '📭 You haven\'t asked any questions yet.' : '📭 No questions have been asked yet.';
-    }
-    
-    let response = showMine ? 'Your Questions:\n\n' : 'Recent Questions:\n\n';
-    
-    for (const q of questionsList) {
-      const status = q.solved ? '✅' : '❓';
-      const answerCount = q.answers.length;
-      const timeAgo = this.getRelativeTime(q.timestamp);
+    try {
+      let questionsList = [];
       
-      response += `${status} ${q.id}: ${q.title}\n`;
-      response += `   👤 ${q.asker} • 💬 ${answerCount} answer${answerCount !== 1 ? 's' : ''} • ⏰ ${timeAgo}\n\n`;
+      if (showMine) {
+        questionsList = await this.prisma.qAndAQuestion.findMany({
+          where: { askerPhone: sourceNumber },
+          orderBy: { timestamp: 'desc' },
+          take: 10
+        });
+      } else {
+        // Get last 10 questions
+        questionsList = await this.prisma.qAndAQuestion.findMany({
+          orderBy: { timestamp: 'desc' },
+          take: 10
+        });
+      }
+      
+      if (questionsList.length === 0) {
+        return showMine ? '📭 You haven\'t asked any questions yet.' : '📭 No questions have been asked yet.';
+      }
+      
+      let response = showMine ? 'Your Questions:\n\n' : 'Recent Questions:\n\n';
+      
+      for (const q of questionsList) {
+        const status = q.solved ? '✅' : '❓';
+        const answers = q.answers || [];
+        const answerCount = answers.length;
+        const timeAgo = this.getRelativeTime(q.timestamp);
+        
+        response += `${status} Q${q.questionId}: ${q.title || q.question.substring(0, 60)}\n`;
+        response += `   👤 ${q.asker} • 💬 ${answerCount} answer${answerCount !== 1 ? 's' : ''} • ⏰ ${timeAgo}\n\n`;
+      }
+      
+      response += '\n💡 Use !answer Q<ID> <answer> to answer a question';
+      
+      return response;
+      
+    } catch (error) {
+      console.error('Error fetching questions:', error);
+      return '❌ Failed to retrieve questions';
     }
-    
-    response += '\n💡 Use !answer <ID> <answer> to answer a question';
-    
-    return response;
   }
   
   async handleAnswer(context) {

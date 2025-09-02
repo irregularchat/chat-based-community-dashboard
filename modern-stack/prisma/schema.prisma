@@ -647,3 +647,29 @@ model BotError {
   @@index([timestamp])
   @@map("bot_errors")
 }
+
+// Q&A System - Track questions and answers
+model QAndAQuestion {
+  id                String    @id @default(cuid())
+  questionId        Int       @unique @map("question_id") // Sequential question ID for easy reference
+  question          String    @db.Text
+  title             String?   @db.Text
+  asker             String    // Display name
+  askerPhone        String    @map("asker_phone") // Phone number
+  groupId           String    @map("group_id")
+  groupName         String?   @map("group_name")
+  solved            Boolean   @default(false)
+  solvedBy          String?   @map("solved_by") // Phone number of solver
+  solvedAt          DateTime? @map("solved_at")
+  discourseTopicId  String?   @map("discourse_topic_id")
+  forumLink         String?   @map("forum_link")
+  timestamp         DateTime  @default(now())
+  answers           Json?     // Array of answers: [{answerer, answer, timestamp}]
+  
+  @@index([questionId])
+  @@index([groupId])
+  @@index([askerPhone])
+  @@index([solved])
+  @@index([timestamp])
+  @@map("q_and_a_questions")
+}

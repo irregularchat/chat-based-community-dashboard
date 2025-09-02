@@ -811,31 +811,60 @@ class NativeSignalBotService extends EventEmitter {
             { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' }
           ];
           
-          // Check if query matches any command mapping
+          // Phase 3: Permission-aware command execution
           for (const mapping of commandMappings) {
             const matches = mapping.keywords.some(kw => userQuery.toLowerCase().includes(kw));
             if (matches) {
-              // Execute the command internally
               const cmd = this.plugins.get(mapping.command);
               if (cmd) {
+                // Check permissions before execution
+                const cmdInfo = commandRegistry.all.find(c => c.name === mapping.command);
+                if (cmdInfo) {
+                  if (cmdInfo.adminOnly && !commandRegistry.isAdmin) {
+                    return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires admin privileges. You can ask an admin to run it for you.`;
+                  }
+                  if (cmdInfo.moderatorOnly && !commandRegistry.isModerator) {
+                    return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires moderator privileges. You can ask a moderator to run it for you.`;
+                  }
+                }
+                
+                // Safe to execute
                 const cmdContext = { ...context, args: [] };
                 const result = await cmd.execute(cmdContext);
+                console.log(`🤖 AI executed !${mapping.command} for user ${context.sourceNumber}`);
                 return `${getAiPrefix(responseMode)} ${result}`;
               }
             }
           }
           
-          // Also check for direct command execution requests
+          // Also check for direct command execution requests with permission checking
           const commandPattern = /^(run|execute|do|perform) !?(\w+)(?:\s+(.*))?$/i;
           const match = userQuery.match(commandPattern);
           if (match) {
             const cmdName = match[2].toLowerCase();
             const cmdArgs = match[3] ? match[3].split(' ') : [];
             const cmd = this.plugins.get(cmdName);
+            
             if (cmd) {
+              // Permission check
+              const cmdInfo = commandRegistry.all.find(c => c.name === cmdName);
+              if (cmdInfo) {
+                if (cmdInfo.adminOnly && !commandRegistry.isAdmin) {
+                  return `OpenAI: Cannot execute !${cmdName} - admin privileges required. You don't have admin access.`;
+                }
+                if (cmdInfo.moderatorOnly && !commandRegistry.isModerator) {
+                  return `OpenAI: Cannot execute !${cmdName} - moderator privileges required. You don't have moderator access.`;
+                }
+              }
+              
+              // Log execution for audit
+              console.log(`🤖 AI executing !${cmdName} for user ${context.sourceNumber} with args:`, cmdArgs);
+              
               const cmdContext = { ...context, args: cmdArgs };
               const result = await cmd.execute(cmdContext);
               return `OpenAI: Executed !${cmdName}:\n\n${result}`;
+            } else {
+              return `OpenAI: Command !${cmdName} not found. Use !help to see available commands.`;
             }
           }
           
@@ -992,15 +1021,27 @@ class NativeSignalBotService extends EventEmitter {
             { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' }
           ];
           
-          // Check if query matches any command mapping
+          // Phase 3: Permission-aware command execution
           for (const mapping of commandMappings) {
             const matches = mapping.keywords.some(kw => userQuery.toLowerCase().includes(kw));
             if (matches) {
-              // Execute the command internally
               const cmd = this.plugins.get(mapping.command);
               if (cmd) {
+                // Check permissions before execution
+                const cmdInfo = commandRegistry.all.find(c => c.name === mapping.command);
+                if (cmdInfo) {
+                  if (cmdInfo.adminOnly && !commandRegistry.isAdmin) {
+                    return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires admin privileges. You can ask an admin to run it for you.`;
+                  }
+                  if (cmdInfo.moderatorOnly && !commandRegistry.isModerator) {
+                    return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires moderator privileges. You can ask a moderator to run it for you.`;
+                  }
+                }
+                
+                // Safe to execute
                 const cmdContext = { ...context, args: [] };
                 const result = await cmd.execute(cmdContext);
+                console.log(`🤖 AI executed !${mapping.command} for user ${context.sourceNumber}`);
                 return `${getAiPrefix(responseMode)} ${result}`;
               }
             }

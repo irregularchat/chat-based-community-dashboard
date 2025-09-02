@@ -1258,10 +1258,17 @@ class NativeSignalBotService extends EventEmitter {
         if (args.length > 0) {
           const url = args.join(' ');
           if (this.isRepositoryUrl(url)) {
-            await this.sendReply(context, `🔄 Processing repository URL: ${url}`);
+            // Check if already processed recently (prevent duplicates)
+            const existingProcessed = Array.from(this.processedRepositories.values())
+              .find(p => p.url === url && Date.now() - p.timestamp < 30000); // 30 seconds
+            
+            if (existingProcessed) {
+              return `⏭️ Repository was just processed automatically. Check above for details.`;
+            }
+            
             try {
               await this.processRepositoryUrl(url, context);
-              return `✅ Successfully processed repository URL!`;
+              return; // Return nothing, processRepositoryUrl sends the formatted message
             } catch (error) {
               return `❌ Error processing URL: ${error.message}`;
             }
@@ -2658,8 +2665,14 @@ ${content.content.substring(0, 3000)}...`;
         messageId: message.timestamp
       });
       
-      // Step 6: Track in database
-      await this.trackRepositoryLink(url, message, repoData);
+      // Step 6: Track in database (skip if no prisma client or model doesn't exist)
+      try {
+        if (this.prisma && this.prisma.repositoryLink) {
+          await this.trackRepositoryLink(url, message, repoData);
+        }
+      } catch (dbError) {
+        console.error('Database tracking failed (continuing without tracking):', dbError.message);
+      }
       
       console.log(`✅ Successfully processed repository: ${repoData.full_name || repoData.path_with_namespace}`);
       

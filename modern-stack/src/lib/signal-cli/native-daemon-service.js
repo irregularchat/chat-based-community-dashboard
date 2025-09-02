@@ -3623,68 +3623,145 @@ ${content.content.substring(0, 3000)}...`;
       // Check if user wants to refresh the cache
       const forceRefresh = args && args[0] === 'refresh';
       
-      // Fetch groups using the new caching mechanism
-      const groups = await this.getSignalGroups(forceRefresh);
-      
       if (forceRefresh) {
-        console.log('✅ Groups cache refreshed');
+        // Force refresh from Signal and sync to database
+        await this.syncGroupsToDatabase();
+        console.log('✅ Groups synced from Signal to database');
       }
+      
+      // Get groups from database (fast response)
+      const groups = await this.getGroupsFromDatabase();
       
       if (!groups || groups.length === 0) {
-        return '❌ Unable to fetch groups or bot is not in any groups.';
-      }
-      
-      // Calculate member counts and sort by member count (highest first)
-      const groupsWithCounts = groups.map(group => {
-        // Get actual member count from members array
-        const memberCount = group.members ? group.members.length : 
-                           group.memberCount ? group.memberCount : 0;
-        return {
-          ...group,
-          actualMemberCount: memberCount
-        };
-      });
-      
-      // Sort by member count (descending)
-      groupsWithCounts.sort((a, b) => b.actualMemberCount - a.actualMemberCount);
-      
-      let response = '📱 Signal Groups (Sorted by Size):\n\n';
-      
-      groupsWithCounts.forEach((group, index) => {
-        const isAdmin = this.isBotAdmin(group);
-        const adminIcon = isAdmin ? '👑' : '👤';
+        // Try to sync from Signal if database is empty
+        console.log('📊 Database empty, syncing groups from Signal...');
+        await this.syncGroupsToDatabase();
+        const retryGroups = await this.getGroupsFromDatabase();
         
-        response += `${index + 1}. ${group.name || 'Unnamed Group'} ${adminIcon}\n`;
-        response += `   Members: ${group.actualMemberCount}`;
-        if (isAdmin) {
-          response += ' (Bot is Admin)';
+        if (!retryGroups || retryGroups.length === 0) {
+          return '❌ Unable to fetch groups or bot is not in any groups.';
         }
-        response += '\n\n';
-      });
-      
-      response += '────────────────\n';
-      
-      // Calculate total unique members across all groups
-      const totalMembers = groupsWithCounts.reduce((sum, group) => sum + group.actualMemberCount, 0);
-      response += `📊 Total: ${groupsWithCounts.length} groups, ~${totalMembers} total members\n`;
-      response += '👑 = Bot has admin rights\n';
-      response += '👤 = Bot is regular member\n\n';
-      
-      const adminGroups = groupsWithCounts.filter(g => this.isBotAdmin(g));
-      if (adminGroups.length > 0) {
-        response += `✅ Bot can add users to ${adminGroups.length} group(s)\n`;
-        response += 'Use !addto <group-number> @user to add users\n';
-      } else {
-        response += '⚠️ Bot has no admin rights in any group\n';
-        response += 'Cannot add users without admin permissions\n';
+        return this.formatGroupsResponse(retryGroups);
       }
       
-      return response;
+      return this.formatGroupsResponse(groups);
       
     } catch (error) {
       console.error('Error in handleGroups:', error);
       return '❌ Error fetching groups. Please try again later.';
     }
+  }
+  
+  // Get groups from database (fast)
+  async getGroupsFromDatabase() {
+    if (!this.prisma) {
+      console.log('⚠️ Database not available, falling back to file cache');
+      return await this.getSignalGroups(false);
+    }
+    
+    try {
+      const groups = await this.prisma.signalGroup.findMany({
+        where: { botIsMember: true },
+        orderBy: { memberCount: 'desc' }
+      });
+      
+      console.log(`📊 Retrieved ${groups.length} groups from database`);
+      return groups;
+    } catch (error) {
+      console.error('Error fetching groups from database:', error);
+      // Fallback to file cache
+      return await this.getSignalGroups(false);
+    }
+  }
+  
+  // Sync groups from Signal to database
+  async syncGroupsToDatabase() {
+    if (!this.prisma) {
+      console.log('⚠️ Database not available, skipping sync');
+      return;
+    }
+    
+    try {
+      // Get fresh data from Signal
+      const signalGroups = await this.getSignalGroups(true);
+      
+      if (!signalGroups || signalGroups.length === 0) {
+        console.log('⚠️ No groups received from Signal');
+        return;
+      }
+      
+      console.log(`🔄 Syncing ${signalGroups.length} groups to database...`);
+      
+      // Sync each group to database using upsert
+      for (const group of signalGroups) {
+        const memberCount = group.members ? group.members.length : 
+                           group.memberCount ? group.memberCount : 0;
+        const isAdmin = this.isBotAdmin(group);
+        
+        await this.prisma.signalGroup.upsert({
+          where: { id: group.id },
+          create: {
+            id: group.id,
+            name: group.name || 'Unnamed Group',
+            description: group.description,
+            memberCount: memberCount,
+            botIsAdmin: isAdmin,
+            botIsMember: true,
+            groupType: group.type,
+            lastUpdated: new Date()
+          },
+          update: {
+            name: group.name || 'Unnamed Group',
+            description: group.description,
+            memberCount: memberCount,
+            botIsAdmin: isAdmin,
+            botIsMember: true,
+            groupType: group.type,
+            lastUpdated: new Date()
+          }
+        });
+      }
+      
+      console.log(`✅ Synced ${signalGroups.length} groups to database`);
+      
+    } catch (error) {
+      console.error('Error syncing groups to database:', error);
+    }
+  }
+  
+  // Format groups response
+  formatGroupsResponse(groups) {
+    let response = '📱 Signal Groups (Sorted by Size):\n\n';
+    
+    groups.forEach((group, index) => {
+      const adminIcon = group.botIsAdmin ? '👑' : '👤';
+      
+      response += `${index + 1}. ${group.name} ${adminIcon}\n`;
+      response += `   Members: ${group.memberCount}`;
+      if (group.botIsAdmin) {
+        response += ' (Bot is Admin)';
+      }
+      response += '\n\n';
+    });
+    
+    response += '────────────────\n';
+    
+    // Calculate totals
+    const totalMembers = groups.reduce((sum, group) => sum + group.memberCount, 0);
+    response += `📊 Total: ${groups.length} groups, ~${totalMembers} total members\n`;
+    response += '👑 = Bot has admin rights\n';
+    response += '👤 = Bot is regular member\n\n';
+    
+    const adminGroups = groups.filter(g => g.botIsAdmin);
+    if (adminGroups.length > 0) {
+      response += `✅ Bot can add users to ${adminGroups.length} group(s)\n`;
+      response += 'Use !addto <group-number> @user to add users\n';
+    } else {
+      response += '⚠️ Bot has no admin rights in any group\n';
+      response += 'Cannot add users without admin permissions\n';
+    }
+    
+    return response;
   }
   
   async fetchAndCacheGroups() {

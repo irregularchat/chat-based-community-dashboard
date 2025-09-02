@@ -415,6 +415,25 @@ model SignalVerificationCode {
   @@map("signal_verification_codes")
 }
 
+// Signal Groups - Cached group information for fast retrieval
+model SignalGroup {
+  id              String    @id // Use the actual Signal group ID
+  name            String
+  description     String?
+  memberCount     Int       @default(0) @map("member_count")
+  botIsAdmin      Boolean   @default(false) @map("bot_is_admin")
+  botIsMember     Boolean   @default(true) @map("bot_is_member")
+  groupType       String?   @map("group_type") // "normal", "announcement", etc.
+  inviteLink      String?   @map("invite_link")
+  lastUpdated     DateTime  @default(now()) @map("last_updated")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  
+  @@index([memberCount])
+  @@index([lastUpdated])
+  @@index([botIsAdmin])
+  @@map("signal_groups")
+}
+
 // Signal group memberships tracking
 model SignalGroupMembership {
   id        Int      @id @default(autoincrement())

@@ -762,6 +762,9 @@ class NativeSignalBotService extends EventEmitter {
           });
           console.log(`🔄 Thread context: User ${context.sender} selected OpenAI`);
           
+          // Phase 1: Command Registry Access
+          const commandRegistry = this.getCommandRegistry(context);
+          
           // Zeroeth Law Implementation - Context Awareness
           let contextInfo = '';
           let responseMode = 'general'; // 'command', 'community', or 'general'
@@ -775,7 +778,11 @@ class NativeSignalBotService extends EventEmitter {
           
           if (isCommandQuery) {
             responseMode = 'command';
-            contextInfo = `User is asking about bot commands. Available commands: ${Array.from(this.plugins.keys()).join(', ')}`;
+            // Enhanced command context with descriptions and permissions
+            const commandList = commandRegistry.available.map(cmd => 
+              `!${cmd.name} - ${cmd.description}${cmd.adminOnly ? ' (admin)' : ''}${cmd.moderatorOnly ? ' (mod)' : ''}`
+            ).join('\n');
+            contextInfo = `User is asking about bot commands. They ${commandRegistry.isAdmin ? 'ARE an admin' : commandRegistry.isModerator ? 'ARE a moderator' : 'are NOT admin/moderator'}.\n\nAvailable commands:\n${commandList}`;
           }
           
           // 2. Check if asking about IrregularChat community
@@ -7086,6 +7093,146 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     }
     
     return false;
+  }
+  
+  // Helper method to check if user is moderator
+  isModerator(userIdentifier, groupId = null) {
+    // First check if user is admin (admins are also moderators)
+    if (this.isAdmin(userIdentifier, groupId)) {
+      return true;
+    }
+    
+    // Check moderator-specific list
+    const isUuid = userIdentifier && userIdentifier.length > 15;
+    const moderatorUuids = process.env.MODERATOR_UUIDS?.split(',') || [];
+    
+    if (isUuid && moderatorUuids.includes(userIdentifier)) {
+      return true;
+    }
+    
+    // Legacy phone number check
+    if (!isUuid) {
+      const moderatorUsers = process.env.MODERATOR_USERS?.split(',') || [];
+      if (moderatorUsers.includes(userIdentifier)) {
+        console.warn('⚠️ Using deprecated phone number moderator auth');
+        return true;
+      }
+    }
+    
+    return false;
+  }
+  
+  // AI Command Awareness: Get command registry with permission filtering
+  getCommandRegistry(context) {
+    const userIdentifier = context.sourceUuid || context.sourceNumber;
+    const isAdmin = this.isAdmin(userIdentifier, context.groupId);
+    const isModerator = this.isModerator(userIdentifier, context.groupId);
+    
+    // Build command list with metadata
+    const allCommands = [];
+    
+    // Add plugin commands
+    for (const [name, command] of this.plugins) {
+      const commandInfo = {
+        name: name,
+        description: command.description || 'No description available',
+        handler: command.handler || command.execute,
+        adminOnly: command.adminOnly || false,
+        moderatorOnly: command.moderatorOnly || false,
+        category: this.categorizeCommand(name),
+        usage: this.getCommandUsage(name),
+        examples: this.getCommandExamples(name)
+      };
+      
+      allCommands.push(commandInfo);
+    }
+    
+    // Filter commands based on permissions
+    const availableCommands = allCommands.filter(cmd => {
+      if (cmd.adminOnly && !isAdmin) return false;
+      if (cmd.moderatorOnly && !isModerator) return false;
+      return true;
+    });
+    
+    // Organize by category
+    const categorized = {};
+    for (const cmd of availableCommands) {
+      if (!categorized[cmd.category]) {
+        categorized[cmd.category] = [];
+      }
+      categorized[cmd.category].push(cmd);
+    }
+    
+    return {
+      isAdmin,
+      isModerator,
+      available: availableCommands,
+      all: allCommands,
+      categorized,
+      totalAvailable: availableCommands.length,
+      totalCommands: allCommands.length
+    };
+  }
+  
+  // Helper to categorize commands
+  categorizeCommand(name) {
+    const categories = {
+      'Core': ['help', 'ping', 'ai', 'lai'],
+      'Q&A': ['q', 'question', 'questions', 'answer', 'a', 'solved', 'search'],
+      'Events': ['events', 'eventadd'],
+      'Community': ['wiki', 'forum', 'faq', 'docs', 'links', 'zeroeth'],
+      'Groups': ['groups', 'join', 'addto', 'removeuser', 'invite'],
+      'Moderation': ['warn', 'warnings', 'clearwarnings', 'kick', 'tempban', 'modlog', 'report', 'cases'],
+      'Admin': ['reload', 'logs', 'backup', 'maintenance', 'bypass', 'gtg', 'sngtg', 'pending'],
+      'News': ['news', 'newsadd', 'newslist', 'newsremove', 'tldr', 'summarize'],
+      'Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'feedback', 'watchdomain'],
+      'Utilities': ['weather', 'time', 'translate', 'shorten', 'qr', 'hash', 'base64', 'calc', 'random', 'flip', 'wayback', 'pdf'],
+      'Fun': ['joke', 'quote', 'fact', 'poll', '8ball', 'dice'],
+      'Forum': ['fpost', 'flatest', 'fsearch', 'categories']
+    };
+    
+    for (const [category, commands] of Object.entries(categories)) {
+      if (commands.includes(name)) {
+        return category;
+      }
+    }
+    
+    return 'Other';
+  }
+  
+  // Helper to get command usage examples
+  getCommandUsage(name) {
+    const usages = {
+      'ai': '!ai <question>',
+      'lai': '!lai <question>',
+      'q': '!q <question text>',
+      'a': '!a <answer text>',
+      'events': '!events',
+      'eventadd': '!eventadd <event description>',
+      'addto': '!addto <group> <phone/username>',
+      'tldr': '!tldr <url>',
+      'news': '!news <url>',
+      'weather': '!weather <location>',
+      'translate': '!translate <language> <text>',
+      'pdf': '!pdf <url or attachment>'
+    };
+    
+    return usages[name] || `!${name}`;
+  }
+  
+  // Helper to get command examples
+  getCommandExamples(name) {
+    const examples = {
+      'ai': ['!ai what is the weather today?', '!ai explain quantum computing'],
+      'q': ['!q How do I join a Signal group?', '!q What is the wiki URL?'],
+      'a': ['!a The wiki is at https://wiki.example.com', '!a Use !join to see available groups'],
+      'events': ['!events'],
+      'eventadd': ['!eventadd Community meetup on Saturday 2pm at Coffee Shop'],
+      'weather': ['!weather London', '!weather 10001'],
+      'translate': ['!translate es Hello world', '!translate fr Good morning']
+    };
+    
+    return examples[name] || [];
   }
   
   // ========== Q&A System Commands ==========

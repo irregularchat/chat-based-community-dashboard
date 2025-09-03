@@ -2667,18 +2667,8 @@ ${content.content.substring(0, 3000)}...`;
   // Add user to a Signal group
   async addUserToGroup(userNumber, groupId) {
     try {
-      const request = {
-        jsonrpc: '2.0',
-        method: 'updateGroup',
-        params: {
-          account: this.phoneNumber,
-          groupId: groupId,
-          addMembers: [userNumber]
-        },
-        id: `adduser-${Date.now()}`
-      };
-      
-      const result = await this.sendJsonRpcRequest(request);
+      // Use the same fresh socket connection method that works for !addto
+      const result = await this.sendUpdateGroupRequest(groupId, userNumber);
       console.log(`✅ Added ${userNumber} to group ${groupId}`);
       return result;
     } catch (error) {

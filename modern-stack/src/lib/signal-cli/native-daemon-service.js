@@ -575,7 +575,7 @@ class NativeSignalBotService extends EventEmitter {
     const pluginCommands = [
       // Community Plugin Commands (9)
       { name: 'groups', description: 'List all available groups', handler: this.handleGroups.bind(this) },
-      { name: 'join', description: 'Join a specific group', handler: this.handleJoin.bind(this) },
+      { name: 'join', description: 'Join groups by number or name (multiple allowed)', handler: this.handleJoin.bind(this) },
       // { name: 'leave', description: 'Leave a group', handler: this.handleLeave.bind(this) }, // Removed per request
       { name: 'addto', description: 'Add users to a group (admin)', handler: this.handleAddTo.bind(this), adminOnly: true },
       // { name: 'adduser', description: 'Add user to group (admin)', handler: this.handleAddUser.bind(this), adminOnly: true }, // Removed per request
@@ -4300,9 +4300,152 @@ ${content.content.substring(0, 3000)}...`;
   }
 
   async handleJoin(context) {
-    const { args } = context;
-    if (!args) return '❌ Usage: !join <group-name>';
-    return `✅ Join request submitted for "${args}". Admins will review your request.`;
+    const { args, sender, sourceNumber, sourceUuid } = context;
+    
+    // If no arguments, show groups list
+    if (!args) {
+      try {
+        const groups = await this.getGroupsFromDatabase();
+        if (!groups || groups.length === 0) {
+          await this.syncGroupsToDatabase();
+          const retryGroups = await this.getGroupsFromDatabase();
+          if (!retryGroups || retryGroups.length === 0) {
+            return '❌ No groups available or bot is not in any groups.';
+          }
+          return this.formatGroupsResponse(retryGroups);
+        }
+        return this.formatGroupsResponse(groups);
+      } catch (error) {
+        console.error('Error fetching groups for !join:', error);
+        return '❌ Unable to fetch groups. Try again later.';
+      }
+    }
+    
+    // Get the user's UUID - this is who we'll be adding to groups
+    const userUuid = sourceUuid || null;
+    if (!userUuid) {
+      return '❌ Unable to identify your Signal UUID. Please ensure you have a Signal account.';
+    }
+    
+    // Parse group identifiers (can be numbers or names, comma/space separated)
+    const groupIdentifiers = args.split(/[,\s]+/).filter(id => id.trim());
+    
+    if (groupIdentifiers.length === 0) {
+      return '❌ Please specify group number(s) or name(s).\n\n' +
+             'Examples:\n' +
+             '• !join 1\n' +
+             '• !join 1,3,5\n' +
+             '• !join 1 3 5\n\n' +
+             'Use !join (no arguments) to see available groups';
+    }
+    
+    try {
+      // Get groups list
+      let groups;
+      if (this.prisma) {
+        groups = await this.getGroupsFromDatabase();
+      } else {
+        groups = await this.getSignalGroups(false);
+        if (groups && groups.length > 0) {
+          groups.sort((a, b) => (b.memberCount || 0) - (a.memberCount || 0));
+        }
+      }
+      
+      if (!groups || groups.length === 0) {
+        return '❌ Unable to fetch groups.';
+      }
+      
+      const targetGroups = [];
+      const errors = [];
+      
+      // Resolve each group identifier
+      for (const identifier of groupIdentifiers) {
+        const trimmedId = identifier.trim();
+        let targetGroup = null;
+        
+        // Try as group number first
+        const groupNum = parseInt(trimmedId);
+        if (!isNaN(groupNum) && groupNum >= 1 && groupNum <= groups.length) {
+          targetGroup = groups[groupNum - 1];
+        } else {
+          // Try as group name (case-insensitive partial match)
+          targetGroup = groups.find(g => 
+            g.name && g.name.toLowerCase().includes(trimmedId.toLowerCase())
+          );
+        }
+        
+        if (!targetGroup) {
+          errors.push(`❌ Group "${trimmedId}" not found`);
+          continue;
+        }
+        
+        // Check if bot has admin permissions
+        const isAdmin = this.isBotAdmin(targetGroup);
+        if (!isAdmin) {
+          errors.push(`❌ Cannot join "${targetGroup.name}" - bot lacks admin permissions`);
+          continue;
+        }
+        
+        targetGroups.push(targetGroup);
+      }
+      
+      if (targetGroups.length === 0) {
+        return errors.length > 0 ? errors.join('\n') : '❌ No valid groups specified.';
+      }
+      
+      // Attempt to add user to each group
+      const results = [];
+      const userName = sender || sourceNumber || 'User';
+      
+      console.log(`🎯 User ${userName} (${userUuid}) attempting to join ${targetGroups.length} group(s)`);
+      
+      for (const group of targetGroups) {
+        try {
+          console.log(`📤 Adding ${userName} (${userUuid}) to ${group.name}`);
+          
+          // Use the same reliable method as !addto
+          const result = await this.sendUpdateGroupRequest(group.id, userUuid);
+          
+          if (result.success) {
+            console.log(`✅ Successfully added ${userName} to ${group.name}`);
+            results.push(`✅ Joined "${group.name}"`);
+            
+            // Small delay between additions
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } else {
+            console.log(`⚠️ Failed to add ${userName} to ${group.name}: ${result.error || 'Unknown error'}`);
+            results.push(`⚠️ Failed to join "${group.name}" - ${result.error || 'you may already be a member'}`);
+          }
+        } catch (error) {
+          console.error(`Error adding ${userName} to ${group.name}:`, error);
+          results.push(`❌ Error joining "${group.name}": ${error.message}`);
+        }
+      }
+      
+      // Include any resolution errors
+      if (errors.length > 0) {
+        results.push(...errors);
+      }
+      
+      // Format response
+      const successCount = results.filter(r => r.includes('✅')).length;
+      const failCount = results.filter(r => r.includes('❌') || r.includes('⚠️')).length;
+      
+      let summary = `📱 Join Results for ${userName}:\n\n`;
+      summary += results.join('\n');
+      
+      if (successCount > 0 && failCount === 0) {
+        summary += `\n\n🎉 Successfully joined ${successCount} group${successCount > 1 ? 's' : ''}!`;
+      } else if (successCount > 0) {
+        summary += `\n\n📊 ${successCount} successful, ${failCount} failed`;
+      }
+      
+      return summary;
+      
+    } catch (error) {
+      console.error('Error in handleJoin:', error);
+      return '❌ Error processing join request. Please try again.';
+    }
   }
 
   async handleLeave(context) {

@@ -1,0 +1,17 @@
+{
+  "total": 321,
+  "successful": 321,
+  "failed": 0,
+  "errors": [],
+  "timestamp": "2025-09-03T17:04:52.462Z",
+  "removalTimestamp": "1756912257792",
+  "removalTime": "2025-09-03T15:10:57.792Z",
+  "restorationSummary": {
+    "totalUsers": 321,
+    "phoneNumbers": 16,
+    "uuids": 305,
+    "successfullyRestored": 321,
+    "failedToRestore": 0,
+    "successRate": "100.0%"
+  }
+}

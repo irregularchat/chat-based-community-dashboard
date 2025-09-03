@@ -1,0 +1,66 @@
+You’re tracking the big stuff (MARCH, prolonged field care, blood, hypothermia) — but modern conflicts, especially Ukraine, have forced rapid updates in TCCC and battlefield medicine. Here’s what’s new or emphasized lately:
+
+⸻
+
+1. Blood & Resuscitation
+	•	Walking Blood Banks are now standard practice in Ukrainian units.
+	•	Cold-stored whole blood is staged closer to the line when refrigeration exists.
+	•	Dried plasma is widespread because of logistics simplicity.
+	•	Shift away from crystalloids is now universal — many Ukrainian medics don’t even pack saline beyond IV flush.
+
+⸻
+
+2. Tourniquets & Bleeding Control
+	•	Wider adoption of junctional tourniquets (groin, axilla, neck base).
+	•	Hemostatic dressings are no longer just “nice-to-have” — they’re issued down to squad level.
+	•	Multiple tourniquets per limb is taught (especially with blast/FPV drone injuries).
+
+⸻
+
+3. Airway & Breathing
+	•	Needle decompression now emphasized at the 5th intercostal space mid-axillary line (safer than old 2nd ICS).
+	•	Supraglottic airways (iGel) preferred over intubation in field — faster, fewer complications.
+	•	Chest seals: vented types standard to avoid tension pneumothorax.
+
+⸻
+
+4. Hypothermia & Head Injury
+	•	Hypothermia prevention kits are packed forward — reflective blankets, heat packs, insulated litters.
+	•	TBI care stressed: eye shields, avoiding secondary injury, head elevation when possible.
+
+⸻
+
+5. Analgesia & Antibiotics
+	•	Combat pain management shifted from morphine to ketamine + TXA protocols (less risk of respiratory depression).
+	•	TXA (Tranexamic Acid) within 1–3 hrs of injury is standard to stop clot breakdown.
+	•	Antibiotics (moxifloxacin oral or ertapenem injection) pushed earlier, even by non-medics, due to high infection rates.
+
+⸻
+
+6. Prolonged Field Care (PFC)
+	•	Ukraine showed evacuation delays (hours to days).
+	•	Training now emphasizes:
+	•	Casualty monitoring (vitals over time).
+	•	Field-expedient nursing care (turning, hydration, wound care).
+	•	Improvised blood storage and transfusion.
+
+⸻
+
+7. Civilian–Military Lessons
+	•	High use of FPV drones means more blast + multi-shrapnel casualties, not just GSWs.
+	•	Burn injuries are way more common (vehicles, artillery, drone strikes).
+	•	Massive focus on casualty collection points (CCPs) and peer first aid because evacuation may be impossible during shelling.
+
+⸻
+
+8. Documentation & Tech
+	•	Digital casualty cards / QR-coded TCCC cards used in Ukraine for tracking.
+	•	Casualty evacuation apps integrated with drones, ATAK, and unit comms.
+
+⸻
+
+👉 In short:
+	•	Bleeding control is king (more junctional injuries now).
+	•	Blood > saline is gospel.
+	•	Hypothermia kits, TXA, antibiotics, and prolonged care skills are essential.
+	•	Blast + burn injuries are far more common than classic gunshot wounds.

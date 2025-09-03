@@ -882,6 +882,7 @@ if (!summary || summary.trim().length === 0) {
 | Timeout | Processing takes too long | Implement streaming or progress updates |
 | **Silent AI failures** | Commands execute but no response sent | Increase max_completion_tokens to 2000+ for GPT-5 |
 | **Thread context lost** | AI doesn't continue conversations | Implement thread tracking with 5-min timeout |
+| **Aggressive AI response** | Bot responds to regular messages without !ai/!lai | Restrict AI continuation logic to only explicit replies/quotes |
 
 ### GPT-5 Specific Requirements
 
@@ -1051,6 +1052,65 @@ I understood:
 
 Please provide the missing details.
 ```
+
+---
+
+## AI Response Behavior Fixes
+
+### Challenge: Over-Aggressive AI Thread Continuation
+**Problem**: Bot was responding with AI even when users didn't use !ai or !lai commands.
+
+**Root Cause**: The `looksLikeAiContinuation()` function was too permissive, treating any question under 50 characters as a potential AI continuation.
+
+**Example of False Positive**:
+- User: "Ha was it the bot that axed cuas?" 
+- Bot: "OpenAI: I'm not sure I follow — could you clarify a bit?"
+
+**Original Logic Issues**:
+1. Any message with `?` and under 50 chars was considered continuation
+2. Questions starting with common words (what, why, how) triggered AI
+3. No distinction between casual conversation and explicit AI requests
+
+**Solution**: Restricted AI continuation to only:
+1. **Explicit replies to bot messages** (`message.isReplyToBot`)
+2. **Quoted bot messages** (containing 🤖, LocalAI:, or OpenAI:)
+3. **Very specific follow-up phrases**:
+   - "tell me more about that"
+   - "explain that further"
+   - "can you elaborate"
+   - "what about that" 
+   - "continue with that"
+
+**Code Changes**:
+```javascript
+// OLD: Too permissive
+if (text.includes('?') && text.length < 50) {
+  const questionWords = ['what', 'why', 'how', 'when', 'where', 'who', 'which'];
+  for (const word of questionWords) {
+    if (text.startsWith(word + ' ')) {
+      return true; // FALSE POSITIVE!
+    }
+  }
+}
+
+// NEW: Restrictive
+const strictFollowUpPhrases = [
+  'tell me more about that',
+  'explain that further',
+  'can you elaborate',
+  'what about that',
+  'continue with that'
+];
+// Only exact matches allowed
+```
+
+**Impact**:
+- ✅ Eliminates false positive AI responses
+- ✅ Users must be explicit with !ai or !lai
+- ✅ Thread continuation still works for genuine follow-ups
+- ✅ Reduces unwanted bot chatter in group conversations
+
+**Lesson**: AI assistance should be opt-in, not inferred from casual conversation patterns.
 
 ---
 

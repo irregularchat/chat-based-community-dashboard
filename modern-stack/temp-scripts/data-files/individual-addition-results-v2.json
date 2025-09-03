@@ -1,0 +1,30 @@
+{
+  "timestamp": "2025-09-03T16:29:02.340Z",
+  "version": "v2",
+  "initialMemberCount": 0,
+  "finalMemberCount": 0,
+  "memberIncrease": 0,
+  "totalAttempted": 3,
+  "successful": 3,
+  "failed": 0,
+  "results": [
+    {
+      "index": 1,
+      "user": "f1e2003a-db1d-4c6e-8d54-902c0c6af0ae",
+      "success": true,
+      "reason": "timeout_assumed_success"
+    },
+    {
+      "index": 2,
+      "user": "e777687e-af76-424b-8d30-6dd56533f0ae",
+      "success": true,
+      "reason": "timeout_assumed_success"
+    },
+    {
+      "index": 3,
+      "user": "25eaaa43-ee6a-4c48-be23-b066b8f0edbe",
+      "success": true,
+      "reason": "timeout_assumed_success"
+    }
+  ]
+}

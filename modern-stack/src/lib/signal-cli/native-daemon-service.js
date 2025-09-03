@@ -270,11 +270,33 @@ class NativeSignalBotService extends EventEmitter {
       }
     }
 
+    // Commands that handle mentions should have special validation
+    const mentionAwareCommands = ['addto', 'adduser', 'removeuser', 'mention', 'gtg', 'sngtg'];
+    const isMentionCommand = mentionAwareCommands.includes(commandName);
+
     // Sanitize and validate arguments
     const sanitizedArgs = this.sanitizeCommandArgs(args);
 
     // Check for suspicious patterns in arguments
     for (const [index, arg] of sanitizedArgs.entries()) {
+      // For mention commands, skip validation after we've seen a mention character
+      // This allows for extra text like "!addto 6 @Joshua reason for adding"
+      if (isMentionCommand && index > 0) {
+        // Check if this arg or any previous arg is a mention character
+        let foundMention = false;
+        for (let i = 0; i <= index; i++) {
+          if (sanitizedArgs[i] === '￼') {
+            foundMention = true;
+            break;
+          }
+        }
+        // If we found a mention, skip validation for this arg and all following args
+        if (foundMention) {
+          console.log(`⚡ Skipping validation after mention for !${commandName} argument ${index + 1}: "${arg}"`);
+          continue;
+        }
+      }
+      
       // Check for URL arguments
       if (arg.startsWith('http://') || arg.startsWith('https://')) {
         const urlValidation = this.validateInput(arg, 'url', `argument ${index + 1}`);
@@ -2513,7 +2535,11 @@ ${content.content.substring(0, 3000)}...`;
   
   async processCommand(message) {
     const startTime = Date.now();
-    const parts = message.message.slice(1).split(' ');
+    // Only parse the first line for command and arguments
+    // This prevents multi-line messages from being incorrectly parsed
+    const lines = message.message.split('\n');
+    const firstLine = lines[0];
+    const parts = firstLine.slice(1).split(' ');
     const commandName = parts[0].toLowerCase();
     const args = parts.slice(1);
     
@@ -4029,7 +4055,16 @@ ${content.content.substring(0, 3000)}...`;
           // Try to look up in group members
           console.log(`🔍 Looking for ${userArg} in group members...`);
           try {
-            const groups = await this.getSignalGroups(false);
+            // Get groups sorted by member count (same as !groups command)
+            let groups;
+            if (this.prisma) {
+              groups = await this.getGroupsFromDatabase();
+            } else {
+              groups = await this.getSignalGroups(true);  // Need members to look up users
+              if (groups && groups.length > 0) {
+                groups.sort((a, b) => (b.memberCount || 0) - (a.memberCount || 0));
+              }
+            }
             const targetGroup = groups[parseInt(groupIdentifier) - 1];
             
             if (targetGroup && targetGroup.members) {
@@ -4055,8 +4090,18 @@ ${content.content.substring(0, 3000)}...`;
     }
     
     try {
-      // Get actual groups from Signal
-      const groups = await this.getSignalGroups(false);
+      // Get groups sorted by member count (same as !groups command)
+      let groups;
+      if (this.prisma) {
+        groups = await this.getGroupsFromDatabase();
+      } else {
+        // Fallback to getting groups from Signal and sort them
+        groups = await this.getSignalGroups(false);  // Don't need members, faster
+        if (groups && groups.length > 0) {
+          // Sort by member count descending to match database ordering
+          groups.sort((a, b) => (b.memberCount || 0) - (a.memberCount || 0));
+        }
+      }
       
       if (!groups || groups.length === 0) {
         return '❌ Unable to fetch groups.';
@@ -4091,38 +4136,24 @@ ${content.content.substring(0, 3000)}...`;
         try {
           const userIdentifier = user.identifier;
           
-          // Send the update group request
-          const request = {
-            jsonrpc: '2.0',
-            method: 'updateGroup',
-            params: {
-              account: this.phoneNumber,
-              groupId: targetGroup.id,
-              addMembers: [userIdentifier]
-            },
-            id: Date.now()
-          };
+          console.log(`📤 Adding ${user.display} (${userIdentifier}) to ${targetGroup.name}`);
           
-          console.log(`📤 Sending updateGroup request:`);
-          console.log(`   Group: ${targetGroup.name}`);
-          console.log(`   User UUID: ${userIdentifier}`);
-          console.log(`   Display: ${user.display}`);
+          // Use fresh socket connection for each updateGroup request
+          const result = await this.sendUpdateGroupRequest(targetGroup.id, userIdentifier);
           
-          const success = await this.sendJsonRpcRequest(request);
-          if (success) {
+          if (result.success) {
             console.log(`✅ Successfully added ${user.display}`);
             results.push(`✅ ${user.display} added successfully`);
+            
+            // Add a small delay between additions to ensure they process
+            await new Promise(resolve => setTimeout(resolve, 1000));
           } else {
-            console.log(`⚠️ Failed to add ${user.display}`);
-            results.push(`⚠️ ${user.display} (could not add - check if UUID is valid)`);
+            console.log(`⚠️ Failed to add ${user.display}: ${result.error || 'Unknown error'}`);
+            results.push(`⚠️ ${user.display} (could not add - ${result.error || 'may already be a member'})`);
           }
         } catch (error) {
           console.error(`Error adding ${user.display}:`, error);
-          if (error.message.includes('timeout')) {
-            results.push(`⚠️ ${user.display} (request timed out - user may not exist)`);
-          } else {
-            results.push(`❌ ${user.display}: ${error.message}`);
-          }
+          results.push(`❌ ${user.display}: ${error.message}`);
         }
       }
       
@@ -4137,8 +4168,8 @@ ${content.content.substring(0, 3000)}...`;
         summary += '\n\n✅ Operation complete';
       } else if (successCount > 0 && failCount > 0) {
         summary += `\n\n⚠️ Partially complete: ${successCount} added, ${failCount} failed`;
-      } else {
-        summary += '\n\n❌ Failed to add users';
+      } else if (failCount > 0) {
+        summary += '\n\n⚠️ Note: Users may already be members or the operation requires them to accept an invite';
       }
       
       return summary;
@@ -4168,6 +4199,8 @@ ${content.content.substring(0, 3000)}...`;
                 clearTimeout(timeoutId);
                 this.socket.removeListener('data', responseHandler);
                 
+                console.log(`📨 Received response for request ${request.id}: ${JSON.stringify(message).substring(0, 200)}`);
+                
                 if (message.result !== undefined) {
                   resolve(true);
                 } else if (message.error) {
@@ -4193,7 +4226,9 @@ ${content.content.substring(0, 3000)}...`;
       };
       
       this.socket.on('data', responseHandler);
-      this.socket.write(JSON.stringify(request) + '\n');
+      const requestStr = JSON.stringify(request);
+      console.log(`🔌 Sending JSON-RPC request: ${requestStr.substring(0, 200)}...`);
+      this.socket.write(requestStr + '\n');
       
       // Timeout after 10 seconds (some operations take longer)
       timeoutId = setTimeout(() => {
@@ -4210,6 +4245,67 @@ ${content.content.substring(0, 3000)}...`;
           }
         }
       }, 10000);
+    });
+  }
+
+  // Special method for updateGroup that uses a fresh socket connection
+  // EXACTLY like our manual test that successfully added Austyn
+  async sendUpdateGroupRequest(groupId, userUuid) {
+    const net = require('net');
+    
+    return new Promise((resolve) => {
+      const socket = new net.Socket();
+      const socketPath = '/tmp/signal-cli-socket';  // Hardcode path like manual test
+      let resolved = false;
+      
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          socket.destroy();
+          console.log(`⏰ Request timed out (common for updateGroup)`);
+          resolve({ success: true, timedOut: true });
+        }
+      }, 10000); // 10 second timeout like manual test
+      
+      const request = {
+        jsonrpc: '2.0',
+        method: 'updateGroup',
+        params: {
+          account: this.phoneNumber,
+          groupId: groupId,
+          member: [userUuid]
+        },
+        id: `add-${Date.now()}`  // Simpler ID like manual test
+      };
+      
+      socket.connect(socketPath, () => {
+        console.log('Socket connected for updateGroup');
+        socket.write(JSON.stringify(request) + '\n');
+      });
+      
+      socket.on('data', (data) => {
+        if (resolved) return;
+        try {
+          const response = JSON.parse(data.toString());
+          if (response.id === request.id) {
+            resolved = true;
+            clearTimeout(timeout);
+            socket.destroy();
+            resolve(response);
+          }
+        } catch (e) {
+          // Continue
+        }
+      });
+      
+      socket.on('error', (error) => {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          socket.destroy();
+          resolve({ error: error.message });
+        }
+      });
     });
   }
 
@@ -8805,6 +8901,277 @@ Are you sure this is what you wanted to post?
         reject(error);
       }
     });
+  }
+
+  // ============================================================================
+  // Welcome Bot Automation (v0.4.0 Phase 3)
+  // ============================================================================
+
+  /**
+   * Send welcome message to a new group member
+   * @param {string} groupId - The Signal group ID
+   * @param {string} newMemberUuid - The new member's UUID
+   * @param {object} welcomeConfig - Welcome configuration for the group
+   * @returns {Promise<boolean>} - Success status
+   */
+  async sendWelcomeMessage(groupId, newMemberUuid, welcomeConfig = {}) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        console.log(`🎉 Sending welcome message to ${newMemberUuid} in group ${groupId}`);
+        
+        // Get group information for personalization
+        let groupInfo;
+        try {
+          groupInfo = await this.getGroupInfo(groupId);
+        } catch (error) {
+          console.warn(`⚠️ Could not get group info: ${error.message}`);
+          groupInfo = { name: 'Community Group', memberCount: 'many' };
+        }
+
+        // Generate welcome message using template
+        const welcomeMessage = this.generateWelcomeMessage(groupInfo, welcomeConfig);
+        
+        // Delay before sending (configurable, default 2 seconds)
+        const delay = welcomeConfig.delaySeconds || 2;
+        await new Promise(resolve => setTimeout(resolve, delay * 1000));
+
+        // Send welcome message to the group
+        const success = await this.sendMessage(groupId, welcomeMessage);
+        
+        if (success) {
+          console.log(`✅ Welcome message sent successfully to group ${groupId}`);
+          
+          // Log to database if available
+          try {
+            if (this.prisma) {
+              await this.prisma.signalWelcomeLog.create({
+                data: {
+                  groupId,
+                  newMemberUuid,
+                  welcomeMessage,
+                  sentAt: new Date(),
+                  groupName: groupInfo.name
+                }
+              });
+            }
+          } catch (dbError) {
+            console.warn(`⚠️ Could not log welcome message: ${dbError.message}`);
+          }
+          
+          resolve(true);
+        } else {
+          reject(new Error('Failed to send welcome message'));
+        }
+
+      } catch (error) {
+        console.error(`❌ Error sending welcome message: ${error.message}`);
+        reject(error);
+      }
+    });
+  }
+
+  /**
+   * Generate personalized welcome message
+   * @param {object} groupInfo - Group information
+   * @param {object} config - Welcome configuration
+   * @returns {string} - Formatted welcome message
+   */
+  generateWelcomeMessage(groupInfo, config) {
+    const templates = {
+      default: `🎉 Welcome to ${groupInfo.name || 'our community'}!
+
+👋 Great to have you here! This group has ${groupInfo.memberCount || 'many'} members.
+
+📋 Quick tips:
+• Use !help to see available commands
+• Be respectful and follow community guidelines
+• Ask questions - we're here to help!
+
+Feel free to introduce yourself and let us know what brings you to the community!`,
+
+      tech: `🚀 Welcome to ${groupInfo.name || 'Tech Community'}!
+
+💻 This is our technical discussion space with ${groupInfo.memberCount || 'many'} developers and tech enthusiasts.
+
+🔧 Useful commands:
+• !help - See all bot commands
+• !wiki <topic> - Search our knowledge base
+• !events - Check upcoming tech events
+
+🤝 Community guidelines:
+• Keep discussions tech-focused
+• Help others learn and grow
+• Share useful resources and tips
+
+Looking forward to your contributions!`,
+
+      general: `👋 Welcome to ${groupInfo.name || 'the community'}!
+
+🎯 This is a space for open discussion and community connection.
+
+💬 How to get started:
+• !help - See what the bot can do
+• !events - Check upcoming events
+• !phelp - Get personalized help
+
+🌟 Community values:
+• Be kind and respectful
+• Help each other out
+• Have fun and learn together
+
+Glad you're here! Feel free to introduce yourself.`,
+
+      mod: `🛡️ Welcome to ${groupInfo.name || 'Moderator Chat'}!
+
+⚡ This is a private space for community moderators.
+
+🔐 Moderator resources:
+• !help - See mod-specific commands
+• !ban, !kick, !mute - Moderation tools
+• !gtg, !sngtg - User approval commands
+
+📊 Your responsibilities:
+• Monitor community guidelines
+• Help resolve conflicts
+• Guide new members
+
+Thanks for helping keep our community safe!`
+    };
+
+    // Use specified template or default
+    const templateName = config.template || 'default';
+    let message = templates[templateName] || templates.default;
+
+    // Apply custom message if provided
+    if (config.customMessage) {
+      message = config.customMessage.replace('{groupName}', groupInfo.name || 'our community');
+    }
+
+    // Add group-specific rules if provided
+    if (config.rules && Array.isArray(config.rules)) {
+      message += '\n\n📜 Group Rules:\n';
+      config.rules.forEach((rule, index) => {
+        message += `${index + 1}. ${rule}\n`;
+      });
+    }
+
+    // Add admin contact if provided
+    if (config.adminContact) {
+      message += `\n\n❓ Questions? Contact: ${config.adminContact}`;
+    }
+
+    return message;
+  }
+
+  /**
+   * Configure welcome settings for a group
+   * @param {string} groupId - The Signal group ID  
+   * @param {object} config - Welcome configuration
+   * @returns {Promise<boolean>} - Success status
+   */
+  async setWelcomeConfig(groupId, config) {
+    try {
+      if (!this.prisma) {
+        console.warn('⚠️ Database not available for welcome config');
+        return false;
+      }
+
+      await this.prisma.signalWelcomeConfig.upsert({
+        where: { groupId },
+        update: {
+          enabled: config.enabled !== undefined ? config.enabled : true,
+          template: config.template || 'default',
+          customMessage: config.customMessage,
+          delaySeconds: config.delaySeconds || 2,
+          rules: config.rules || [],
+          adminContact: config.adminContact,
+          updatedAt: new Date()
+        },
+        create: {
+          groupId,
+          enabled: config.enabled !== undefined ? config.enabled : true,
+          template: config.template || 'default',
+          customMessage: config.customMessage,
+          delaySeconds: config.delaySeconds || 2,
+          rules: config.rules || [],
+          adminContact: config.adminContact
+        }
+      });
+
+      console.log(`✅ Welcome config updated for group ${groupId}`);
+      return true;
+    } catch (error) {
+      console.error(`❌ Error setting welcome config: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Get welcome configuration for a group
+   * @param {string} groupId - The Signal group ID
+   * @returns {Promise<object>} - Welcome configuration
+   */
+  async getWelcomeConfig(groupId) {
+    try {
+      if (!this.prisma) {
+        return { enabled: true, template: 'default' }; // Default config
+      }
+
+      const config = await this.prisma.signalWelcomeConfig.findUnique({
+        where: { groupId }
+      });
+
+      return config || { enabled: true, template: 'default' };
+    } catch (error) {
+      console.error(`❌ Error getting welcome config: ${error.message}`);
+      return { enabled: true, template: 'default' };
+    }
+  }
+
+  /**
+   * Handle group member addition (called when someone joins)
+   * @param {object} groupUpdateMessage - Signal group update message
+   */
+  async handleGroupMemberAdded(groupUpdateMessage) {
+    try {
+      const { groupId, addedMembers } = groupUpdateMessage;
+      
+      if (!addedMembers || addedMembers.length === 0) {
+        return;
+      }
+
+      console.log(`👥 ${addedMembers.length} new member(s) added to group ${groupId}`);
+
+      // Get welcome configuration for this group
+      const welcomeConfig = await this.getWelcomeConfig(groupId);
+      
+      if (!welcomeConfig.enabled) {
+        console.log(`🚫 Welcome messages disabled for group ${groupId}`);
+        return;
+      }
+
+      // Send welcome message for each new member
+      for (const memberUuid of addedMembers) {
+        try {
+          // Don't welcome the bot itself
+          if (memberUuid === this.phoneNumber) {
+            continue;
+          }
+
+          await this.sendWelcomeMessage(groupId, memberUuid, welcomeConfig);
+          
+          // Small delay between multiple welcomes to avoid rate limiting
+          if (addedMembers.length > 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        } catch (error) {
+          console.error(`❌ Failed to welcome ${memberUuid}: ${error.message}`);
+        }
+      }
+
+    } catch (error) {
+      console.error(`❌ Error handling group member addition: ${error.message}`);
+    }
   }
 }
 

@@ -271,7 +271,7 @@ class NativeSignalBotService extends EventEmitter {
     }
 
     // Commands that handle mentions should have special validation
-    const mentionAwareCommands = ['addto', 'adduser', 'removeuser', 'mention', 'gtg', 'sngtg'];
+    const mentionAwareCommands = ['addto', 'adduser', 'removeuser', 'mention', 'gtg', 'sngtg', 'sn'];
     const isMentionCommand = mentionAwareCommands.includes(commandName);
 
     // Sanitize and validate arguments
@@ -4322,9 +4322,10 @@ ${content.content.substring(0, 3000)}...`;
     }
     
     // Get the user's UUID - this is who we'll be adding to groups
-    const userUuid = sourceUuid || null;
-    if (!userUuid) {
-      return '❌ Unable to identify your Signal UUID. Please ensure you have a Signal account.';
+    // For older messages or users without UUIDs, fallback to phone number
+    const userIdentifier = sourceUuid || sourceNumber || null;
+    if (!userIdentifier) {
+      return '❌ Unable to identify your Signal UUID or phone number. Please ensure you have a Signal account.';
     }
     
     // Parse group identifiers (can be numbers or names, comma/space separated)
@@ -4397,14 +4398,14 @@ ${content.content.substring(0, 3000)}...`;
       const results = [];
       const userName = sender || sourceNumber || 'User';
       
-      console.log(`🎯 User ${userName} (${userUuid}) attempting to join ${targetGroups.length} group(s)`);
+      console.log(`🎯 User ${userName} (${userIdentifier}) attempting to join ${targetGroups.length} group(s)`);
       
       for (const group of targetGroups) {
         try {
-          console.log(`📤 Adding ${userName} (${userUuid}) to ${group.name}`);
+          console.log(`📤 Adding ${userName} (${userIdentifier}) to ${group.name}`);
           
           // Use the same reliable method as !addto
-          const result = await this.sendUpdateGroupRequest(group.id, userUuid);
+          const result = await this.sendUpdateGroupRequest(group.id, userIdentifier);
           
           if (result.success) {
             console.log(`✅ Successfully added ${userName} to ${group.name}`);

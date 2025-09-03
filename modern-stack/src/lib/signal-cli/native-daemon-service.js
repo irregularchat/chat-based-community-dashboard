@@ -18,6 +18,11 @@ const pdf = require('pdf-parse');
 const PDFProcessor = require('../pdf-processor');
 const { PrismaClient } = require('../../generated/prisma');
 
+// Import services for user onboarding
+const authentikService = require('./services/authentik');
+const emailService = require('./services/email');
+const discourseService = require('./services/discourse');
+
 class NativeSignalBotService extends EventEmitter {
   constructor(config) {
     super();
@@ -2756,9 +2761,127 @@ ${content.content.substring(0, 3000)}...`;
   }
 
   async handleRemoveUser(context) {
-    const { args } = context;
-    if (!args) return '❌ Usage: !removeuser @user <group>';
-    return `✅ User removed from group successfully.`;
+    const { args, sourceNumber, groupId: currentGroupId } = context;
+    
+    if (!args || args.length === 0) {
+      return '❌ Usage:\n' +
+             '• !removeuser <group_number> @user - Remove specific user\n' +
+             '• !removeuser <group_number> nonadmin - Remove all non-admin users';
+    }
+    
+    // Check if user is admin
+    if (!this.isAdmin(sourceNumber)) {
+      return '🚫 Only administrators can remove users from groups';
+    }
+    
+    // Parse group number
+    const groupNumber = parseInt(args[0]);
+    if (isNaN(groupNumber)) {
+      return '❌ First argument must be a group number';
+    }
+    
+    // Get the group
+    if (!this.cachedGroups || this.cachedGroups.length === 0) {
+      await this.updateGroupCache();
+    }
+    
+    const sortedGroups = [...this.cachedGroups].sort((a, b) => 
+      (b.members?.length || 0) - (a.members?.length || 0)
+    );
+    
+    if (groupNumber < 1 || groupNumber > sortedGroups.length) {
+      return `❌ Invalid group number. Use !groups to see available groups.`;
+    }
+    
+    const targetGroup = sortedGroups[groupNumber - 1];
+    const groupName = targetGroup.name || 'Unnamed Group';
+    
+    // Check for 'nonadmin' flag
+    if (args[1] === 'nonadmin') {
+      // Special handling for removing all non-admin users
+      console.log(`🔄 Processing nonadmin removal for group: ${groupName}`);
+      
+      // Confirm this is the Entry/INDOC room (group 4)
+      if (groupNumber !== 4 && !args.includes('confirm')) {
+        return `⚠️ **Warning:** This will remove ALL non-admin users from "${groupName}"!\n\n` +
+               `To confirm, use: !removeuser ${groupNumber} nonadmin confirm`;
+      }
+      
+      try {
+        // Get members with admin status
+        const memberInfo = await this.getGroupMembersWithAdminStatus(targetGroup.id);
+        
+        if (!memberInfo.success) {
+          return `❌ Could not retrieve member information for '${groupName}'. Please try again.`;
+        }
+        
+        if (memberInfo.nonAdmins.length === 0) {
+          return `✅ No non-admin users found in '${groupName}'`;
+        }
+        
+        // Prepare removal list
+        const usersToRemove = memberInfo.nonAdmins.map(m => m.uuid).filter(uuid => uuid);
+        
+        if (usersToRemove.length === 0) {
+          return `❌ Could not identify users to remove (missing UUIDs)`;
+        }
+        
+        console.log(`🔄 Removing ${usersToRemove.length} non-admin users from ${groupName}`);
+        
+        // Remove users in batches of 10 to avoid timeout
+        const batchSize = 10;
+        let removedCount = 0;
+        let failedCount = 0;
+        
+        for (let i = 0; i < usersToRemove.length; i += batchSize) {
+          const batch = usersToRemove.slice(i, i + batchSize);
+          
+          try {
+            const removeRequest = {
+              jsonrpc: '2.0',
+              method: 'updateGroup',
+              params: {
+                account: this.phoneNumber,
+                groupId: targetGroup.id,
+                removeMembers: batch
+              },
+              id: `remove-nonadmin-batch-${Date.now()}`
+            };
+            
+            const response = await this.sendJsonRpcRequest(removeRequest, 20000);
+            
+            if (response.result) {
+              removedCount += batch.length;
+              console.log(`✅ Batch ${Math.floor(i/batchSize) + 1}: Removed ${batch.length} users`);
+            } else {
+              failedCount += batch.length;
+              console.error(`❌ Batch ${Math.floor(i/batchSize) + 1} failed:`, response.error);
+            }
+          } catch (error) {
+            failedCount += batch.length;
+            console.error(`❌ Error removing batch:`, error);
+          }
+          
+          // Small delay between batches
+          if (i + batchSize < usersToRemove.length) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+        
+        return `✅ **Cleanup Complete for '${groupName}'**\n\n` +
+               `• Total non-admins found: ${memberInfo.nonAdmins.length}\n` +
+               `• Successfully removed: ${removedCount}\n` +
+               `• Failed to remove: ${failedCount}\n` +
+               `• Admins retained: ${memberInfo.totalAdmins}`;
+               
+      } catch (error) {
+        console.error('Error in nonadmin removal:', error);
+        return `❌ Error removing non-admin users: ${error.message}`;
+      }
+    }
+    
+    // Regular user removal (not implemented in this stub)
+    return `❌ Regular user removal not yet implemented. Use: !removeuser <group> nonadmin`;
   }
 
   async handleGroupInfo(context) {
@@ -4889,85 +5012,289 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
 
   // Onboarding Plugin Handlers
   async handleRequest(context) {
-    const { args, groupId, sender, sourceNumber } = context;
+    const { args, groupId, groupName, sender, sourceNumber, mentions, message } = context;
     
-    // Check if user is mentioning someone
-    if (args && args.length > 0 && args[0].startsWith('@')) {
-      // Admin requesting intro from specific user
-      const targetUser = args[0];
-      return this.sendOnboardingRequest(targetUser, groupId, sender);
+    // Only work in entry room
+    const isEntryRoom = groupName && (groupName.toLowerCase().includes('entry') || groupName.toLowerCase().includes('indoc'));
+    if (!isEntryRoom) {
+      return '❌ The !request command only works in the Entry/INDOC room';
     }
     
-    // User is requesting to join (providing their intro)
-    if (!args || args.length === 0) {
-      // Check if they have a pending request
-      if (this.pendingRequests.has(sourceNumber)) {
-        return `⏳ You already have a pending request. Please provide your introduction:\n\n` +
-               `1. NAME\n` +
-               `2. YOUR_ORGANIZATION\n` +
-               `3. Who invited you (mention them)\n` +
-               `4. EMAIL_OR_EMAIL_ALIAS\n` +
-               `5. YOUR_INTERESTS\n` +
-               `6. LinkedIn profile (optional)`;
+    // Check if user is mentioning someone (for admin to request intro from new member)
+    if (args && args.length > 0 && (args[0].startsWith('@') || mentions?.length > 0)) {
+      // Admin requesting intro from specific user
+      const targetUser = mentions && mentions.length > 0 ? mentions[0] : null;
+      const targetName = targetUser ? targetUser.name : args[0].replace('@', '');
+      const targetUuid = targetUser ? targetUser.uuid : null;
+      
+      // Send onboarding prompt to the mentioned user
+      const prompt = `@${targetName} You've requested to join the IrregularChat Community.\n\n` +
+                    `**Bonafides:** Everyone in the chat has been invited by an irregularchat member. ` +
+                    `So that we can add you to the right groups, we need to know:\n\n` +
+                    `1. NAME\n` +
+                    `2. YOUR_ORGANIZATION\n` +
+                    `3. Who invited you (Add & mention them in this chat)\n` +
+                    `4. EMAIL_OR_EMAIL_ALIAS\n` +
+                    `5. YOUR_INTERESTS\n` +
+                    `6. Link to your LinkedIn profile (if you want others to endorse your skills)\n\n` +
+                    `**Please reply to this message with your introduction.**`;
+      
+      // Store pending request for this user
+      const targetPhone = targetUuid || targetName; // Use UUID if available, name as fallback
+      const timeoutMs = 24 * 60 * 60 * 1000; // 24 hours
+      const timeoutId = setTimeout(() => {
+        this.handleRequestTimeout(targetPhone, groupId, true); // true = remove from group
+      }, timeoutMs);
+      
+      this.pendingRequests.set(targetPhone, {
+        timestamp: Date.now(),
+        groupId: groupId,
+        requester: targetName,
+        introduction: null,
+        timeoutId: timeoutId,
+        phoneNumber: targetPhone,
+        status: 'awaiting_intro',
+        uuid: targetUuid
+      });
+      
+      console.log(`📨 Sent onboarding prompt to ${targetName}`);
+      return prompt;
+    }
+    
+    // Check if this is a user providing their introduction
+    // They should be replying to the onboarding prompt
+    if (message && message.quote) {
+      // User is replying to the onboarding prompt
+      const pendingRequest = this.pendingRequests.get(sourceNumber) || 
+                           Array.from(this.pendingRequests.values()).find(r => r.uuid === sourceNumber);
+      
+      if (pendingRequest && pendingRequest.status === 'awaiting_intro') {
+        // Parse the introduction
+        const introText = args ? args.join(' ') : '';
+        
+        // Extract mentioned inviter
+        let inviterMention = null;
+        if (mentions && mentions.length > 0) {
+          inviterMention = mentions[0];
+        }
+        
+        if (!inviterMention) {
+          return '❌ Please mention the person who invited you (use @name in your introduction)';
+        }
+        
+        // Update the pending request
+        pendingRequest.introduction = introText;
+        pendingRequest.inviter = inviterMention;
+        pendingRequest.status = 'awaiting_vouch';
+        
+        // Ask the inviter to vouch
+        const vouchRequest = `@${inviterMention.name} Do you trust and vouch for ${sender} to join the IrregularChat community, ` +
+                           `understanding what the community is about and the rules found on the front page of the wiki?\n\n` +
+                           `**Reply with "yes" to confirm.**`;
+        
+        console.log(`📨 Requesting vouch from ${inviterMention.name} for ${sender}`);
+        return vouchRequest;
+      }
+    }
+    
+    // Check if this is a vouch confirmation
+    const lowerMessage = message?.message?.toLowerCase() || '';
+    if (lowerMessage.includes('yes') && message.quote) {
+      // Check if this is a response to a vouch request
+      const pendingRequests = Array.from(this.pendingRequests.values());
+      const vouchRequest = pendingRequests.find(r => 
+        r.status === 'awaiting_vouch' && 
+        r.inviter && 
+        (r.inviter.uuid === sourceNumber || r.inviter.name === sender)
+      );
+      
+      if (vouchRequest) {
+        // Process the approved request
+        return this.processApprovedRequest(vouchRequest, context);
+      }
+    }
+    
+    return '❌ Invalid !request usage. Use !request @username to start onboarding a new member.';
+  }
+  
+  async processApprovedRequest(request, context) {
+    const { groupId } = context;
+    
+    try {
+      // Parse the introduction
+      const introData = this.parseIntroduction(request.introduction);
+      
+      // Generate username if not provided
+      let username = introData.name ? await this.generateSmartUsername(introData.name) : 
+                     this.generateUsername(request.requester || 'user');
+      
+      // Ensure username is unique
+      let attempts = 0;
+      while (await authentikService.checkUsernameExists(username) && attempts < 10) {
+        username = await this.generateSmartUsername(introData.name || 'user');
+        attempts++;
       }
       
-      // Send the onboarding prompt
-      return this.sendOnboardingPrompt(sourceNumber, groupId, sender);
+      const email = introData.email || `${username}@irregularchat.com`;
+      
+      // Create Authentik account
+      let authentikResult = null;
+      let password = '';
+      if (authentikService.isConfigured()) {
+        const [firstName, ...lastNameParts] = (introData.name || '').split(' ');
+        
+        authentikResult = await authentikService.createUser({
+          username,
+          email,
+          firstName: firstName || 'User',
+          lastName: lastNameParts.join(' ') || '',
+          attributes: {
+            organization: introData.organization,
+            interests: introData.interests,
+            invited_by: request.inviter?.name || 'Unknown',
+            signal_username: request.requester,
+            linkedin_username: introData.linkedin,
+            introduction: request.introduction,
+            created_via: 'signal_bot',
+          },
+          groups: ['newcomers'], // Add to newcomers group by default
+        });
+        
+        if (authentikResult.success) {
+          password = authentikResult.temp_password;
+          console.log(`✅ Created Authentik account for ${username}`);
+        } else {
+          console.error(`❌ Failed to create Authentik account: ${authentikResult.error}`);
+          // Generate local password as fallback
+          password = this.generateSecurePassword();
+        }
+      } else {
+        // Generate local password if Authentik isn't configured
+        password = this.generateSecurePassword();
+        console.log('⚠️ Authentik not configured, generated local credentials');
+      }
+      
+      // Create Discourse post
+      let discoursePostUrl = null;
+      if (discourseService.isConfigured()) {
+        const discourseResult = await discourseService.createIntroductionPost({
+          username,
+          intro: request.introduction,
+          invitedBy: request.inviter?.name,
+          organization: introData.organization,
+          interests: introData.interests,
+        });
+        
+        if (discourseResult.success) {
+          discoursePostUrl = discourseResult.postUrl;
+          console.log(`✅ Created Discourse post for ${username}: ${discoursePostUrl}`);
+        } else {
+          console.error(`❌ Failed to create Discourse post: ${discourseResult.error}`);
+        }
+      }
+      
+      // Send welcome email
+      if (emailService.isConfigured() && email && !email.endsWith('@irregularchat.com')) {
+        const fullName = introData.name || username;
+        const emailSent = await emailService.sendWelcomeEmail({
+          to: email,
+          subject: 'Welcome to IrregularChat!',
+          fullName,
+          username,
+          password,
+          discoursePostUrl,
+        });
+        
+        if (emailSent) {
+          console.log(`✅ Sent welcome email to ${email}`);
+        } else {
+          console.log(`❌ Failed to send welcome email to ${email}`);
+        }
+      }
+      
+      // Send welcome DM to the new user
+      const welcomeDM = `🎉 **Welcome to IrregularChat!**\n\n` +
+                       `Your account has been created:\n` +
+                       `Username: ${username}\n` +
+                       `Password: ${password}\n\n` +
+                       `Please save these credentials securely.\n\n` +
+                       `Next steps:\n` +
+                       `1. Visit https://irregularpedia.org to learn about the community\n` +
+                       `2. Join the Signal groups that interest you\n` +
+                       `3. Introduce yourself in the appropriate channels\n\n` +
+                       `Welcome aboard! 🚀`;
+      
+      if (request.uuid) {
+        await this.sendDirectMessage(request.uuid, welcomeDM);
+      }
+      
+      // Notify the entry room
+      const successMessage = `✅ **Good to go!** Thanks for verifying. This is how we keep the community safe.\n\n` +
+                           `@${request.requester} Your account has been created:\n` +
+                           `• Authentik username: ${username}\n` +
+                           `• Introduction posted to Discourse\n\n` +
+                           `**Next steps for @${request.requester}:**\n` +
+                           `1. Please leave this chat\n` +
+                           `2. You'll receive a direct message with your IrregularChat Login and a Link to all the chats\n` +
+                           `3. Join all the Chats that interest you when you get your login\n` +
+                           `4. Until then, Learn about the community: https://irregularpedia.org/index.php/Main_Page\n\n` +
+                           `See you out there! 🎉`;
+      
+      // Remove the new user and inviter (unless admin) from the entry room
+      const usersToRemove = [];
+      
+      // Add new user to removal list
+      if (request.uuid) {
+        usersToRemove.push(request.uuid);
+        console.log(`🔄 Removing new user ${request.requester} from entry room`);
+      }
+      
+      // Add inviter to removal list if not admin
+      if (request.inviter && request.inviter.uuid && !await this.isGroupAdmin(request.inviter.uuid, groupId)) {
+        usersToRemove.push(request.inviter.uuid);
+        console.log(`🔄 Removing inviter ${request.inviter.name} from entry room`);
+      }
+      
+      // Actually remove users from the group
+      if (usersToRemove.length > 0) {
+        try {
+          const removeRequest = {
+            jsonrpc: '2.0',
+            method: 'updateGroup',
+            params: {
+              account: this.phoneNumber,
+              groupId: groupId,
+              removeMembers: usersToRemove
+            },
+            id: `remove-onboarded-${Date.now()}`
+          };
+          
+          const removeResponse = await this.sendJsonRpcRequest(removeRequest, 15000); // 15s timeout
+          if (removeResponse.result) {
+            console.log(`✅ Successfully removed ${usersToRemove.length} users from entry room`);
+          } else {
+            console.error(`❌ Failed to remove users from entry room:`, removeResponse.error);
+          }
+        } catch (error) {
+          console.error(`❌ Error removing users from entry room:`, error);
+        }
+      }
+      
+      // Clear the pending request
+      clearTimeout(request.timeoutId);
+      this.pendingRequests.delete(request.phoneNumber);
+      
+      return successMessage;
+    } catch (error) {
+      console.error('Error processing approved request:', error);
+      return '❌ Error processing request. Please contact an admin.';
     }
-    
-    // User is providing their introduction
-    const introText = args.join(' ');
-    
-    // Store the request with timeout
-    const timeoutMs = this.requestTimeoutMinutes * 60 * 1000;
-    const timeoutId = setTimeout(() => {
-      this.handleRequestTimeout(sourceNumber, groupId);
-    }, timeoutMs);
-    
-    this.pendingRequests.set(sourceNumber, {
-      timestamp: Date.now(),
-      groupId: groupId,
-      requester: sender,
-      introduction: introText,
-      timeoutId: timeoutId,
-      phoneNumber: sourceNumber
-    });
-    
-    // Notify admins
-    const adminNotification = `🆕 New member request from ${sender}:\n\n` +
-                            `${introText}\n\n` +
-                            `✅ Approve with: !gtg ${sourceNumber}\n` +
-                            `❌ Timeout in: ${this.requestTimeoutMinutes / 60} hours`;
-    
-    // Log to console for now (would send to admin channel)
-    console.log('📨 Admin notification:', adminNotification);
-    
-    return `✅ Your introduction has been submitted!\n\n` +
-           `An admin will review your request shortly.\n` +
-           `You'll be notified once approved.\n\n` +
-           `⏰ Request expires in ${this.requestTimeoutMinutes / 60} hours.`;
   }
   
   async sendOnboardingPrompt(phoneNumber, groupId, sender) {
-    // Set a timer for this user - they have 24 hours to provide introduction
-    const timeoutMs = 24 * 60 * 60 * 1000; // 24 hours
-    const timeoutId = setTimeout(() => {
-      this.handleRequestTimeout(phoneNumber, groupId);
-    }, timeoutMs);
-    
-    // Store initial request without introduction
-    this.pendingRequests.set(phoneNumber, {
-      timestamp: Date.now(),
-      groupId: groupId,
-      requester: sender,
-      introduction: null,
-      timeoutId: timeoutId,
-      phoneNumber: phoneNumber,
-      status: 'awaiting_intro'
-    });
-    
+    // This function is now deprecated - functionality moved to handleRequest
     const prompt = `You've requested to join the IrregularChat Community.\n\n` +
-                  `Bonafides: Everyone in the chat has been invited by an irregularchat member.\n` +
+                  `**Bonafides:** Everyone in the chat has been invited by an irregularchat member.\n` +
                   `So that we can add you to the right groups, we need to know:\n\n` +
                   `1. NAME\n` +
                   `2. YOUR_ORGANIZATION\n` +
@@ -4991,7 +5318,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     return message;
   }
   
-  async handleRequestTimeout(phoneNumber, groupId) {
+  async handleRequestTimeout(phoneNumber, groupId, removeFromGroup = false) {
     console.log(`⏰ Request timeout for ${phoneNumber} in group ${groupId}`);
     
     // Remove from pending requests
@@ -5000,13 +5327,30 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       clearTimeout(request.timeoutId);
       this.pendingRequests.delete(phoneNumber);
       
-      // Would remove user from group here
-      console.log(`🚫 Would remove ${phoneNumber} from group ${groupId} due to timeout`);
-      
-      // Notify admins
-      const notification = `⏰ Request timeout: ${phoneNumber} has been removed from pending list.\n` +
-                         `No !gtg was provided within ${this.requestTimeoutMinutes / 60} hours.`;
-      console.log(notification);
+      if (removeFromGroup) {
+        // Remove user from entry room after 24 hours of no response
+        try {
+          const removeRequest = {
+            jsonrpc: '2.0',
+            method: 'updateGroup',
+            params: {
+              account: this.phoneNumber,
+              groupId: groupId,
+              removeMembers: [request.uuid || phoneNumber]
+            },
+            id: `timeout-remove-${Date.now()}`
+          };
+          
+          await this.sendJsonRpcRequest(removeRequest);
+          console.log(`🚫 Removed ${phoneNumber} from entry room due to 24-hour timeout`);
+          
+          // Send notification to group
+          await this.sendGroupMessage(groupId, 
+            `⏰ User removed due to 24-hour timeout (no introduction provided)`);
+        } catch (error) {
+          console.error('Failed to remove user on timeout:', error);
+        }
+      }
     }
   }
 
@@ -5142,6 +5486,15 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     // Add random suffix to ensure uniqueness
     const suffix = Math.floor(Math.random() * 999) + 1;
     return `${base}_${suffix}`;
+  }
+  
+  async generateSmartUsername(name) {
+    // Use Authentik's username generator if available
+    if (authentikService.isConfigured()) {
+      return await authentikService.generateUsername(name);
+    }
+    // Fallback to local generation
+    return this.generateUsername(name);
   }
   
   // Helper function to generate secure password
@@ -5916,6 +6269,101 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     }
     
     return false;
+  }
+  
+  async isGroupAdmin(userUuid, groupId) {
+    // Check if user is admin in a specific group
+    try {
+      const request = {
+        jsonrpc: '2.0',
+        method: 'listGroups',
+        params: {
+          account: this.phoneNumber,
+          'get-admins': true
+        },
+        id: `check-admin-${Date.now()}`
+      };
+      
+      const response = await this.sendJsonRpcRequest(request, 10000);
+      
+      if (response.result) {
+        const group = response.result.find(g => g.id === groupId);
+        if (group && group.admins) {
+          return group.admins.some(admin => 
+            admin === userUuid || 
+            (admin.uuid && admin.uuid === userUuid)
+          );
+        }
+      }
+    } catch (error) {
+      console.error('Error checking admin status:', error);
+    }
+    
+    return false;
+  }
+  
+  async getGroupMembersWithAdminStatus(groupId) {
+    // Get group members with their admin status
+    try {
+      const request = {
+        jsonrpc: '2.0',
+        method: 'listGroups',
+        params: {
+          account: this.phoneNumber,
+          'get-members': true,
+          'get-admins': true
+        },
+        id: `get-members-admins-${Date.now()}`
+      };
+      
+      const response = await this.sendJsonRpcRequest(request, 30000); // 30s timeout for large groups
+      
+      if (response.result) {
+        const group = response.result.find(g => g.id === groupId);
+        if (group) {
+          const members = group.members || [];
+          const admins = group.admins || [];
+          
+          // Create a set of admin IDs for quick lookup
+          const adminSet = new Set();
+          admins.forEach(admin => {
+            if (typeof admin === 'string') {
+              adminSet.add(admin);
+            } else if (admin.uuid) {
+              adminSet.add(admin.uuid);
+            }
+            if (admin.number) {
+              adminSet.add(admin.number);
+            }
+          });
+          
+          // Mark each member as admin or not
+          const membersWithStatus = members.map(member => ({
+            ...member,
+            isAdmin: adminSet.has(member.uuid) || adminSet.has(member.number)
+          }));
+          
+          return {
+            success: true,
+            members: membersWithStatus,
+            totalMembers: members.length,
+            totalAdmins: admins.length,
+            nonAdmins: membersWithStatus.filter(m => !m.isAdmin)
+          };
+        }
+      }
+      
+      return {
+        success: false,
+        error: 'Group not found'
+      };
+    } catch (error) {
+      console.error('Error getting group members with admin status:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to retrieve member information'
+      };
+    }
   }
   
   // ========== Q&A System Commands ==========

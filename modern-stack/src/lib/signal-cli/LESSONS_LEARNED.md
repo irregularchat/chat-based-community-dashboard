@@ -164,6 +164,101 @@ try {
 
 ---
 
+## Signal Mention System and Validation
+
+### Challenge 1: Mention Validation Errors
+**Problem**: Commands with @mentions failing with "Security validation failed: contains invalid characters"
+
+**Root Cause**: Signal replaces @mentions with special character `￼` (U+FFFC) that fails standard validation.
+
+**Solution**: Create mention-aware validation:
+```javascript
+const mentionAwareCommands = ['sn', 'gtg', 'request', 'addto', 'removeuser', 'mention'];
+
+// Skip validation after mention character
+if (mentionAwareCommands.includes(commandName) && arg === '￼') {
+  // Skip validation for this and following args
+}
+```
+
+**Lesson**: Always test with actual Signal mentions, not just typed "@username".
+
+### Challenge 2: Group Member Management
+**Problem**: Adding/removing users to groups times out with listGroups API.
+
+**Solution**: Use updateGroup with different parameters:
+```javascript
+// Adding users
+{ method: 'updateGroup', params: { groupId, member: [uuid] } }
+
+// Removing users  
+{ method: 'updateGroup', params: { groupId, removeMembers: [uuid] } }
+```
+
+**Lesson**: updateGroup operations often succeed even when timing out.
+
+### Challenge 3: Admin Detection in Groups
+**Problem**: Need to identify admins for nonadmin removal functionality.
+
+**Solution**: Combine get-members and get-admins in single request:
+```javascript
+{ 
+  method: 'listGroups',
+  params: { 
+    'get-members': true, 
+    'get-admins': true 
+  }
+}
+// Then cross-reference to identify non-admins
+```
+
+**Lesson**: Signal CLI supports multiple flags in single request for efficiency.
+
+---
+
+## Full User Onboarding Integration
+
+### Challenge 1: Service Integration
+**Problem**: Need to coordinate Authentik, Discourse, and Email services.
+
+**Solution**: Import services as modules and check configuration:
+```javascript
+if (authentikService.isConfigured()) {
+  await authentikService.createUser(userData);
+}
+```
+
+**Lesson**: Always check service availability before using.
+
+### Challenge 2: Username Generation
+**Problem**: Need unique usernames across systems.
+
+**Solution**: Check existence and retry with variations:
+```javascript
+while (await authentikService.checkUsernameExists(username) && attempts < 10) {
+  username = await generateAlternative();
+  attempts++;
+}
+```
+
+**Lesson**: Always validate uniqueness before creating accounts.
+
+### Challenge 3: Batch Operations
+**Problem**: Removing many users causes timeout.
+
+**Solution**: Process in batches with delays:
+```javascript
+for (let i = 0; i < users.length; i += batchSize) {
+  const batch = users.slice(i, i + batchSize);
+  await removeUsers(batch);
+  await new Promise(resolve => setTimeout(resolve, 1000));
+}
+```
+
+**Lesson**: Break large operations into manageable chunks.
+
+---
+
 ## Matrix-Signal Bridge Integration
 
 ### Challenge 1: Phone Number to UUID Resolution

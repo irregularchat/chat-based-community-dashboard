@@ -17,6 +17,7 @@ const cheerio = require('cheerio');
 const pdf = require('pdf-parse');
 const PDFProcessor = require('../pdf-processor');
 const { PrismaClient } = require('../../generated/prisma');
+const { SignalGroupSyncService } = require('./group-sync-service');
 
 // Import services for user onboarding
 const authentikService = require('./services/authentik');
@@ -97,6 +98,13 @@ class NativeSignalBotService extends EventEmitter {
     
     // Initialize PDF processor
     this.pdfProcessor = new PDFProcessor();
+    
+    // Initialize group sync service
+    this.groupSyncService = new SignalGroupSyncService({
+      phoneNumber: this.phoneNumber,
+      socketPath: this.socketPath,
+      syncInterval: 15 * 60 * 1000 // 15 minutes
+    });
     
     // Discourse metadata cache
     this.discourseTags = new Map(); // tag name -> tag object
@@ -1643,61 +1651,34 @@ ${content.content.substring(0, 3000)}...`;
   }
 
   async handleMention(message) {
-    // Apply zeroeth law - determine context and respond appropriately
+    // FIXED: Only provide helpful guidance, do not trigger AI responses
+    // AI responses should only be triggered by explicit !ai or !lai commands
     let query = message.message.replace(/bot|@signal|\+19108471202/gi, '').trim();
-    
-    // If this is a reply to bot, use the full message as the query
-    if (message.isReplyToBot && query) {
-      console.log(`📬 Received reply to bot: "${query}"`);
-      if (message.quotedMessage) {
-        console.log(`   Replying to: "${message.quotedMessage}"`);
-      }
-    }
     
     if (!query) return; // No actual question
     
     try {
       // Check if it's a command-related question
       if (query.includes('help') || query.includes('command') || query.includes('how')) {
-        const helpResponse = 'I can help! Use !help to see all commands, or ask me specific questions with !ai';
+        const helpResponse = 'I can help! Use !help to see all commands, or ask me specific questions with !ai or !lai';
         await this.sendReply(message, helpResponse);
         return;
       }
       
-      // Check if it's about the community
+      // Check if it's about the community  
       const communityKeywords = ['irregular', 'community', 'wiki', 'forum', 'member', 'rule'];
       const isCommunityQuery = communityKeywords.some(kw => query.toLowerCase().includes(kw));
       
       if (isCommunityQuery) {
-        // Get community context
-        const context = await this.getContextFromCommunity(query);
-        const response = `OpenAI [Community]: I can help with that! ${context}\n\nFor more info, check our wiki: ${this.wikiUrl} or forum: ${this.forumUrl}`;
+        const response = `For community info, check our wiki: ${this.wikiUrl} or forum: ${this.forumUrl}\n\nOr use !ai or !lai for AI assistance with your question.`;
         await this.sendReply(message, response);
         return;
       }
       
-      // General AI response
-      if (this.aiEnabled && this.openAiApiKey) {
-        const { OpenAI } = require('openai');
-        const openai = new OpenAI({ apiKey: this.openAiApiKey });
-        
-        // Add context if this is a reply
-        let systemPrompt = 'You are a helpful Signal bot assistant for the IrregularChat community. Be concise and friendly.';
-        if (message.isReplyToBot && message.quotedMessage) {
-          systemPrompt += `\n\nContext: The user is replying to your previous message: "${message.quotedMessage}"`;
-        }
-        
-        const response = await openai.chat.completions.create({
-          model: 'gpt-5-mini',
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: query }
-          ],
-          max_completion_tokens: 700  // GPT-5 thinking model needs 600+ tokens
-        });
-        
-        await this.sendReply(message, `OpenAI: ${response.choices[0].message.content}`);
-      }
+      // For all other mentions, provide guidance instead of AI responses
+      const helpResponse = 'Hi! Use !help for commands or !ai/!lai for AI assistance.';
+      await this.sendReply(message, helpResponse);
+      
     } catch (error) {
       console.error('Failed to handle mention:', error);
     }
@@ -1960,9 +1941,20 @@ ${content.content.substring(0, 3000)}...`;
     this.isListening = true;
     
     try {
-      await this.startDaemon();
+      // Check if daemon is already running by checking if socket exists
+      if (fs.existsSync(this.socketPath)) {
+        console.log('🔍 Found existing socket at', this.socketPath);
+        console.log('📡 Connecting to existing daemon...');
+      } else {
+        console.log('🚀 No existing daemon found, starting new one...');
+        await this.startDaemon();
+      }
       await this.connectSocket();
       console.log('✅ Signal bot is listening for messages');
+      
+      // Start periodic group sync
+      this.groupSyncService.startPeriodicSync();
+      console.log('🔄 Started periodic group sync service');
       
       // Load Discourse metadata in background
       this.loadDiscourseMetadata().catch(err => 
@@ -2354,67 +2346,47 @@ ${content.content.substring(0, 3000)}...`;
   }
   
   async getSignalGroups(forceRefresh = false) {
-    const cacheFile = path.join(this.dataDir, 'groups-cache.json');
-    const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes cache
-    
     try {
-      // Try to read from cache first
+      // Try to read from database cache first
       if (!forceRefresh) {
-        try {
-          const cacheData = await fsPromises.readFile(cacheFile, 'utf8');
-          const cache = JSON.parse(cacheData);
-          
-          if (cache.lastUpdated && cache.groups && cache.groups.length > 0) {
-            const age = Date.now() - cache.lastUpdated;
-            if (age < CACHE_DURATION) {
-              console.log(`📦 Using cached groups (${cache.groups.length} groups, age: ${Math.round(age/1000)}s)`);
-              return cache.groups;
-            }
-          }
-        } catch (e) {
-          // Cache doesn't exist or is invalid, continue to fetch
+        const cachedGroups = await this.groupSyncService.getCachedGroups();
+        if (cachedGroups && cachedGroups.length > 0) {
+          console.log(`📦 Using cached groups from database (${cachedGroups.length} groups)`);
+          return cachedGroups;
         }
       }
       
-      console.log('🔄 Fetching fresh group list from Signal...');
+      // Force refresh or no cached data - trigger sync
+      if (forceRefresh) {
+        console.log('🔄 Force refreshing groups...');
+      } else {
+        console.log('📥 No cached groups, fetching from Signal...');
+      }
       
-      // Use the existing sendJsonRpcRequest method
-      const request = {
-        jsonrpc: '2.0',
-        method: 'listGroups',
-        params: {
-          account: this.phoneNumber,
-          'get-members': false  // Don't fetch members to speed up
-        },
-        id: Date.now()
-      };
+      // Sync groups to database
+      const syncResult = await this.groupSyncService.syncGroups();
       
-      const groups = await this.sendJsonRpcRequestWithResult(request);
-      
-      // Save to cache
-      const cacheData = {
-        groups: groups || [],
-        lastUpdated: Date.now(),
-        cacheVersion: '1.0'
-      };
-      
-      await fsPromises.writeFile(cacheFile, JSON.stringify(cacheData, null, 2));
-      console.log(`✅ Cached ${groups ? groups.length : 0} groups`);
-      
-      return groups || [];
+      if (syncResult.success) {
+        // Return the freshly synced groups
+        const updatedGroups = await this.groupSyncService.getCachedGroups();
+        console.log(`✅ Synced ${syncResult.groupCount || updatedGroups.length} groups to database`);
+        return updatedGroups || [];
+      } else {
+        console.error('❌ Failed to sync groups:', syncResult.error);
+        return [];
+      }
     } catch (error) {
       console.error('Error getting groups:', error);
       
-      // Try to use stale cache if available
+      // Try to use database cache as fallback
       try {
-        const cacheData = await fsPromises.readFile(cacheFile, 'utf8');
-        const cache = JSON.parse(cacheData);
-        if (cache.groups && cache.groups.length > 0) {
-          console.log('⚠️ Using stale cache due to error');
-          return cache.groups;
+        const fallbackGroups = await this.groupSyncService.getCachedGroups();
+        if (fallbackGroups && fallbackGroups.length > 0) {
+          console.log('⚠️ Using cached database groups due to error');
+          return fallbackGroups;
         }
       } catch (e) {
-        // No cache available
+        console.error('❌ No fallback cache available:', e.message);
       }
       
       throw error;
@@ -2743,9 +2715,98 @@ ${content.content.substring(0, 3000)}...`;
   }
 
   async handleJoin(context) {
-    const { args } = context;
-    if (!args) return '❌ Usage: !join <group-name>';
-    return `✅ Join request submitted for "${args}". Admins will review your request.`;
+    const { args, sourceNumber, sender, groupId: currentGroupId } = context;
+    
+    if (!args || args.length === 0) {
+      return '❌ Usage: !join <group-number-or-name>\n\n' +
+             'Examples:\n' +
+             '• !join 1 (join group #1)\n' +
+             '• !join DevOps (join group by name)\n\n' +
+             'Use !groups to see available groups';
+    }
+    
+    const groupIdentifier = args.join(' ').trim();
+    
+    try {
+      // Get cached groups
+      const cachedGroups = await this.groupSyncService.getCachedGroups();
+      
+      if (!cachedGroups || cachedGroups.length === 0) {
+        console.log('No cached groups found, syncing...');
+        await this.groupSyncService.syncGroups();
+        const updatedGroups = await this.groupSyncService.getCachedGroups();
+        if (!updatedGroups || updatedGroups.length === 0) {
+          return '❌ Unable to fetch group information. Please try again later.';
+        }
+        cachedGroups.push(...updatedGroups);
+      }
+      
+      // Sort groups by member count (largest first) for consistent numbering
+      const sortedGroups = [...cachedGroups].sort((a, b) => 
+        (b.memberCount || 0) - (a.memberCount || 0)
+      );
+      
+      let targetGroup = null;
+      
+      // Check if it's a number (group number)
+      const groupNumber = parseInt(groupIdentifier);
+      if (!isNaN(groupNumber)) {
+        if (groupNumber < 1 || groupNumber > sortedGroups.length) {
+          return `❌ Invalid group number. Use !groups to see available groups (1-${sortedGroups.length}).`;
+        }
+        targetGroup = sortedGroups[groupNumber - 1];
+      } else {
+        // Search by name (case-insensitive partial match)
+        targetGroup = sortedGroups.find(group => 
+          group.name && group.name.toLowerCase().includes(groupIdentifier.toLowerCase())
+        );
+        
+        if (!targetGroup) {
+          return `❌ Group "${groupIdentifier}" not found. Use !groups to see available groups.`;
+        }
+      }
+      
+      // Check if user is already in the target group
+      const members = await this.groupSyncService.getCachedGroupMembers(targetGroup.groupId);
+      const isAlreadyMember = members.some(member => 
+        member.number === sourceNumber || member.uuid === sourceNumber
+      );
+      
+      if (isAlreadyMember) {
+        return `✅ You're already a member of "${targetGroup.name}"!`;
+      }
+      
+      // Add user to the target group
+      console.log(`🔄 Adding ${sourceNumber} (${sender}) to group: ${targetGroup.name}`);
+      
+      const request = {
+        jsonrpc: '2.0',
+        method: 'updateGroup',
+        params: {
+          account: this.phoneNumber,
+          groupId: targetGroup.groupId,
+          addMembers: [sourceNumber]
+        },
+        id: `join-${Date.now()}`
+      };
+      
+      const success = await this.sendJsonRpcRequest(request);
+      
+      if (success) {
+        // Update the cached member data
+        await this.groupSyncService.fetchAndSyncGroupMembers(targetGroup.groupId);
+        
+        return `✅ Successfully added you to "${targetGroup.name}"!\n\n` +
+               `👥 Group now has ${(targetGroup.memberCount || 0) + 1} members.\n` +
+               `Welcome to the group! 🎉`;
+      } else {
+        return `❌ Failed to add you to "${targetGroup.name}". Please try again or contact an admin.`;
+      }
+      
+    } catch (error) {
+      console.error('Error in handleJoin:', error);
+      return `❌ Error joining group: ${error.message}`;
+    }
   }
 
   async handleLeave(context) {
@@ -2780,13 +2841,22 @@ ${content.content.substring(0, 3000)}...`;
       return '❌ First argument must be a group number';
     }
     
-    // Get the group
-    if (!this.cachedGroups || this.cachedGroups.length === 0) {
-      await this.updateGroupCache();
+    // Get the group from cached data
+    const cachedGroups = await this.groupSyncService.getCachedGroups();
+    
+    if (!cachedGroups || cachedGroups.length === 0) {
+      // If no cached data, trigger a sync
+      console.log('No cached groups found, syncing...');
+      await this.groupSyncService.syncGroups();
+      const updatedGroups = await this.groupSyncService.getCachedGroups();
+      if (!updatedGroups || updatedGroups.length === 0) {
+        return '❌ Unable to fetch group information. Please try again later.';
+      }
+      cachedGroups.push(...updatedGroups);
     }
     
-    const sortedGroups = [...this.cachedGroups].sort((a, b) => 
-      (b.members?.length || 0) - (a.members?.length || 0)
+    const sortedGroups = [...cachedGroups].sort((a, b) => 
+      (b.memberCount || 0) - (a.memberCount || 0)
     );
     
     if (groupNumber < 1 || groupNumber > sortedGroups.length) {
@@ -2798,18 +2868,26 @@ ${content.content.substring(0, 3000)}...`;
     
     // Check for 'nonadmin' flag
     if (args[1] === 'nonadmin') {
-      // Special handling for removing all non-admin users
-      console.log(`🔄 Processing nonadmin removal for group: ${groupName}`);
-      
-      // Confirm this is the Entry/INDOC room (group 4)
-      if (groupNumber !== 4 && !args.includes('confirm')) {
-        return `⚠️ **Warning:** This will remove ALL non-admin users from "${groupName}"!\n\n` +
-               `To confirm, use: !removeuser ${groupNumber} nonadmin confirm`;
+      // SAFETY CHECK: Only allow nonadmin removal in Entry/INDOC room (group 4)
+      if (groupNumber !== 4) {
+        return `🚫 **SECURITY BLOCK**: The 'nonadmin' removal feature is ONLY allowed in the Entry/INDOC room (group 4).\n\n` +
+               `You tried to use it on group ${groupNumber}: "${groupName}"\n\n` +
+               `This is a safety measure to prevent accidental mass removal of users from established communities.\n\n` +
+               `For individual user removal, use: !removeuser ${groupNumber} @username`;
       }
       
+      // Additional safety check: confirm this is actually the Entry/INDOC room by name
+      if (!groupName.toLowerCase().includes('entry') && !groupName.toLowerCase().includes('indoc')) {
+        return `🚫 **SAFETY CHECK FAILED**: Group 4 should be the Entry/INDOC room, but found "${groupName}".\n\n` +
+               `This safety check prevents mass removal from the wrong group. Please verify group numbering with !groups`;
+      }
+      
+      // Special handling for removing all non-admin users
+      console.log(`🔄 Processing nonadmin removal for Entry/INDOC room: ${groupName}`);
+      
       try {
-        // Get members with admin status
-        const memberInfo = await this.getGroupMembersWithAdminStatus(targetGroup.id);
+        // Get members with admin status from cached data
+        const memberInfo = await this.getGroupMembersWithAdminStatus(targetGroup.groupId);
         
         if (!memberInfo.success) {
           return `❌ Could not retrieve member information for '${groupName}'. Please try again.`;
@@ -5738,35 +5816,41 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     
     // Store in database for persistence
     try {
-      await this.prisma.signalMessage.upsert({
-        where: {
-          timestamp_sourceNumber_groupId: {
-            timestamp: BigInt(message.timestamp),
+      // Skip database storage if sourceNumber is null (use sourceUuid as identifier instead)
+      if (!message.sourceNumber && message.sourceUuid) {
+        // For now, skip database storage for messages without phone numbers
+        console.log('Skipping database storage for message without sourceNumber');
+      } else if (message.sourceNumber) {
+        await this.prisma.signalMessage.upsert({
+          where: {
+            timestamp_sourceNumber_groupId: {
+              timestamp: BigInt(message.timestamp),
+              sourceNumber: message.sourceNumber,
+              groupId: groupId === 'dm' ? null : groupId
+            }
+          },
+          update: {
+            message: message.message,
+            sourceName: message.sourceName,
+            sourceUuid: message.sourceUuid || null,
+            groupName: message.groupName || null
+          },
+          create: {
+            groupId: groupId === 'dm' ? null : groupId,
+            groupName: message.groupName || null,
             sourceNumber: message.sourceNumber,
-            groupId: groupId === 'dm' ? null : groupId
+            sourceName: message.sourceName || null,
+            sourceUuid: message.sourceUuid || null,
+            message: message.message,
+            timestamp: BigInt(message.timestamp),
+            attachments: message.attachments?.length ? message.attachments : null,
+            mentions: message.mentions?.length ? message.mentions : null,
+            isReply: message.isReply || false,
+            quotedMessageId: message.quotedMessageId || null,
+            quotedText: message.quotedMessage || null
           }
-        },
-        update: {
-          message: message.message,
-          sourceName: message.sourceName,
-          sourceUuid: message.sourceUuid || null,
-          groupName: message.groupName || null
-        },
-        create: {
-          groupId: groupId === 'dm' ? null : groupId,
-          groupName: message.groupName || null,
-          sourceNumber: message.sourceNumber,
-          sourceName: message.sourceName || null,
-          sourceUuid: message.sourceUuid || null,
-          message: message.message,
-          timestamp: BigInt(message.timestamp),
-          attachments: message.attachments?.length ? message.attachments : null,
-          mentions: message.mentions?.length ? message.mentions : null,
-          isReply: message.isReply || false,
-          quotedMessageId: message.quotedMessageId || null,
-          quotedText: message.quotedMessage || null
-        }
-      });
+        });
+      }
     } catch (error) {
       console.error('Failed to store message in database:', error);
     }
@@ -6303,59 +6387,49 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   }
   
   async getGroupMembersWithAdminStatus(groupId) {
-    // Get group members with their admin status
+    // Get group members with their admin status from cached data
     try {
-      const request = {
-        jsonrpc: '2.0',
-        method: 'listGroups',
-        params: {
-          account: this.phoneNumber,
-          'get-members': true,
-          'get-admins': true
-        },
-        id: `get-members-admins-${Date.now()}`
-      };
+      // First try to get from cache
+      const cachedMembers = await this.groupSyncService.getCachedGroupMembers(groupId);
       
-      const response = await this.sendJsonRpcRequest(request, 30000); // 30s timeout for large groups
-      
-      if (response.result) {
-        const group = response.result.find(g => g.id === groupId);
-        if (group) {
-          const members = group.members || [];
-          const admins = group.admins || [];
-          
-          // Create a set of admin IDs for quick lookup
-          const adminSet = new Set();
-          admins.forEach(admin => {
-            if (typeof admin === 'string') {
-              adminSet.add(admin);
-            } else if (admin.uuid) {
-              adminSet.add(admin.uuid);
-            }
-            if (admin.number) {
-              adminSet.add(admin.number);
-            }
-          });
-          
-          // Mark each member as admin or not
-          const membersWithStatus = members.map(member => ({
-            ...member,
-            isAdmin: adminSet.has(member.uuid) || adminSet.has(member.number)
-          }));
+      if (cachedMembers && cachedMembers.length > 0) {
+        // Use cached data
+        console.log(`📚 Using cached member data for group ${groupId} (${cachedMembers.length} members)`);
+        
+        const admins = cachedMembers.filter(m => m.isAdmin);
+        const nonAdmins = cachedMembers.filter(m => !m.isAdmin);
+        
+        return {
+          success: true,
+          members: cachedMembers,
+          totalMembers: cachedMembers.length,
+          totalAdmins: admins.length,
+          nonAdmins: nonAdmins
+        };
+      } else {
+        // No cached data, try to sync this specific group
+        console.log(`🔄 No cached members for group ${groupId}, attempting sync...`);
+        await this.groupSyncService.fetchAndSyncGroupMembers(groupId);
+        
+        // Try cache again
+        const updatedMembers = await this.groupSyncService.getCachedGroupMembers(groupId);
+        if (updatedMembers && updatedMembers.length > 0) {
+          const admins = updatedMembers.filter(m => m.isAdmin);
+          const nonAdmins = updatedMembers.filter(m => !m.isAdmin);
           
           return {
             success: true,
-            members: membersWithStatus,
-            totalMembers: members.length,
+            members: updatedMembers,
+            totalMembers: updatedMembers.length,
             totalAdmins: admins.length,
-            nonAdmins: membersWithStatus.filter(m => !m.isAdmin)
+            nonAdmins: nonAdmins
           };
         }
       }
       
       return {
         success: false,
-        error: 'Group not found'
+        error: 'Unable to fetch group members - group may be too large or not accessible'
       };
     } catch (error) {
       console.error('Error getting group members with admin status:', error);
@@ -6731,7 +6805,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     // Check if this looks like a continuation of an AI conversation
     const text = message.message.toLowerCase();
     
-    // If it's a reply to a bot message, it's definitely a continuation
+    // ONLY treat as continuation if explicitly replying to bot message
     if (message.isReplyToBot) {
       return true;
     }
@@ -6744,33 +6818,25 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
     }
     
-    // Strong question indicators that are likely follow-ups
-    const strongQuestionPhrases = [
-      'what about', 'how about', 'tell me more', 'explain more',
-      'can you explain', 'could you explain', 'why is that',
-      'and what about', 'but what about', 'what if'
+    // MUCH more restrictive - only very specific follow-up phrases
+    const strictFollowUpPhrases = [
+      'tell me more about that',
+      'explain that further',  
+      'can you elaborate',
+      'what about that',
+      'continue with that'
     ];
     
-    // Check for strong question phrases
-    for (const phrase of strongQuestionPhrases) {
-      if (text.startsWith(phrase)) {
+    // Check for exact strict follow-up phrases only
+    for (const phrase of strictFollowUpPhrases) {
+      if (text === phrase || text === phrase + '?') {
         return true;
       }
     }
     
-    // If it's a question AND very short (likely a follow-up)
-    if (text.includes('?') && text.length < 50) {
-      // Additional checks for context
-      const questionWords = ['what', 'why', 'how', 'when', 'where', 'who', 'which'];
-      for (const word of questionWords) {
-        if (text.startsWith(word + ' ')) {
-          return true;
-        }
-      }
-    }
+    // NO general question handling - too prone to false positives
+    // Users must be explicit with !ai or !lai commands
     
-    // DO NOT treat regular short messages as continuations
-    // Only explicit follow-up patterns
     return false;
   }
   
@@ -6790,6 +6856,12 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   // Track command usage
   async trackCommandUsage(data) {
     try {
+      // Skip if userId is missing
+      if (!data.userId) {
+        console.log('Skipping command tracking - no userId available');
+        return;
+      }
+      
       await this.prisma.botCommandUsage.create({
         data: {
           command: data.command,

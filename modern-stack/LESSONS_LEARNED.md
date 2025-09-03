@@ -629,3 +629,156 @@ await logSecurityEvent(eventType, userId, details, severity);
 6. **Security incident response procedures**
 
 This security hardening represents a critical milestone in establishing a production-ready security posture for the community dashboard platform.
+
+## Signal CLI Group User Restoration Debugging (2025-09-03)
+
+### Problem
+After accidentally removing 321 users from the Counter UXV Signal group with a `removeuser 4 nonadmin` command, attempts to restore users consistently reported "success" but no users actually appeared in the group. Scripts would complete with 100% success rates while the group remained unchanged.
+
+### Root Causes Investigated
+
+#### 1. Initial Permission Issue (RESOLVED)
+- **Symptom**: Bot could send messages but group updates failed
+- **Root Cause**: Bot account (`+19108471202`) lost admin privileges in Counter UXV group
+- **Solution**: Had admin re-grant bot admin privileges in Signal group
+- **Verification**: `updateGroup` operations started succeeding after permission restoration
+
+#### 2. False Success Response Issue (ONGOING)
+- **Symptom**: Signal CLI returns `{"jsonrpc":"2.0","result":{},"id":"..."}` success responses
+- **Reality**: No actual group operations occur in Signal daemon logs
+- **Evidence**: 
+  - Socket connections logged: `INFO SocketHandler - Connection X closed`
+  - No group update operations: No `Group info:`, `Revision:`, or `Type: UPDATE` entries
+  - No actual user additions visible in Signal app
+
+#### 3. Group Operation Mechanism Failure (UNRESOLVED)
+- **Account Verification**: Both `+19108471202` and `+15623778014` can send messages
+- **Admin Status**: Confirmed bot has admin privileges (group update test passes)
+- **Command Structure**: Using identical patterns to successful operations
+- **Response Patterns**: All operations return success but don't execute
+
+### Debugging Approaches Attempted
+
+#### 1. Log Analysis & User Extraction ✅
+Successfully identified all 321 removed users from Signal daemon logs:
+```bash
+grep -A 10 "1756912257792" signal-daemon.log
+```
+- **Timestamp**: `2025-09-03T15:10:57.792Z` (removal event)
+- **Method**: Parsed receipt confirmations to identify who received removal message
+- **Result**: Clean list of 321 users (305 UUIDs + 16 phone numbers)
+
+#### 2. Permission Testing ✅
+Verified bot permissions through multiple approaches:
+- **Message sending**: ✅ Works (messages appear in group)
+- **Group description update**: ✅ Works (test operations succeed)
+- **Admin status confirmation**: ✅ Verified by user
+
+#### 3. Script Pattern Analysis ✅
+Replicated successful `add-sac-back-admin.js` patterns:
+- **Socket connection**: Identical implementation
+- **JSON-RPC format**: Exact same structure
+- **Response handling**: Same success detection logic
+- **Parameter structure**: `addMembers: [identifier]` format
+
+#### 4. Incremental Testing ✅
+- **Single user additions**: Report success, no actual addition
+- **Batch operations**: Report success, no actual additions  
+- **Different users**: Same failure pattern across all test subjects
+- **Multiple accounts**: Both bot accounts show same behavior
+
+### Signal CLI Response Analysis
+
+#### Success Response Pattern (Misleading)
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {},
+  "id": "batch-1-1756918433755"
+}
+```
+
+#### What This Should Indicate
+- Command was processed by Signal CLI
+- Group operation was submitted to Signal network
+- Should result in actual group membership changes
+
+#### What Actually Happens  
+- Socket connections logged but no group operations
+- No revision updates in Signal daemon logs
+- No notification messages sent to group members
+- Group membership remains unchanged
+
+### Current Status
+
+#### ✅ CONFIRMED WORKING
+1. **User identification**: All 321 removed users correctly extracted
+2. **Bot permissions**: Admin privileges restored and verified
+3. **Signal CLI communication**: Commands accepted and success responses returned
+4. **Log parsing**: Can identify actual group operations when they occur
+
+#### ❌ UNRESOLVED CORE ISSUE  
+- **Group operations don't execute**: Despite success responses, no actual Signal group changes occur
+- **No error indication**: Commands appear successful in all logging and responses
+- **Consistent failure pattern**: Affects all users, both individual and batch operations
+
+### Key Learning Points
+
+#### Signal CLI False Success Pattern
+- **Success responses don't guarantee execution**: `{"result":{}}` can be returned even when operations fail silently
+- **Log verification essential**: Must check Signal daemon logs for actual group operations like `Type: UPDATE`, revision changes
+- **Receipt confirmations as evidence**: Successful operations generate receipt messages from affected users
+
+#### Debugging Complex Integration Issues
+- **Layer-by-layer verification**: Test each component (permissions, communication, parsing) independently
+- **Historical comparison**: Use known working operations as baseline for debugging
+- **Comprehensive logging**: Both application logs and service daemon logs needed for full picture
+
+#### Group Operation Verification Methods
+```typescript
+// Insufficient: Only checking Signal CLI response
+const result = await sendSignalCommand(command);
+const success = result.result !== undefined;
+
+// Better: Also verify in Signal daemon logs  
+const success = result.result !== undefined && 
+                await verifyGroupOperationInLogs(timestamp);
+
+// Best: Multiple verification points
+const success = result.result !== undefined && 
+                await verifyGroupOperationInLogs(timestamp) &&
+                await checkGroupMembershipChange(groupId, userIds);
+```
+
+### Next Investigation Steps
+
+#### 1. Deep Signal CLI Analysis
+- Check if Signal CLI version or configuration issues
+- Verify Signal CLI socket communication protocol
+- Test with minimal reproduction case outside of Node.js
+
+#### 2. Alternative Restoration Approaches
+- Use Signal CLI command line directly (bypass socket API)
+- Batch operations through different Signal CLI methods
+- Manual invitation approach rather than direct addition
+
+#### 3. Signal Daemon Deep Dive
+- Monitor Signal daemon during operations for any error patterns
+- Check for network connectivity or Signal server communication issues
+- Verify Signal CLI account status and registration
+
+### Prevention Strategies
+1. **Multi-layer verification**: Never trust single success indicator
+2. **Operation logging**: Log both command submission and execution verification
+3. **Test environment**: Maintain test Signal groups for operation validation
+4. **Backup procedures**: Document manual restoration processes for critical failures
+5. **Permission monitoring**: Regular verification of bot admin status across groups
+
+### Files Created During Investigation
+- `restore-actual-removed-users.js` - Bulk restoration script (reports success, doesn't work)
+- `restore-users-individually.js` - Individual restoration with delays
+- `test-bot-permissions.js` - Permission verification script
+- `extract-using-grep.js` - User extraction from logs (WORKING)
+- `clean-and-prepare-users-final.js` - Data cleaning script (WORKING)
+
+This investigation demonstrates the critical importance of end-to-end verification in complex integration scenarios, where intermediate success indicators may not reflect actual system state changes.

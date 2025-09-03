@@ -673,3 +673,55 @@ model QAndAQuestion {
   @@index([timestamp])
   @@map("q_and_a_questions")
 }
+
+// Signal Group Cache - Store group information to avoid real-time fetching
+model SignalGroup {
+  id                String    @id
+  groupId           String    @unique @map("group_id") // Base64 group ID
+  name              String
+  description       String?   @db.Text
+  memberCount       Int       @default(0) @map("member_count")
+  revision          Int       @default(0)
+  isBlocked         Boolean   @default(false) @map("is_blocked")
+  isMember          Boolean   @default(true) @map("is_member")
+  isAdmin           Boolean   @default(false) @map("is_admin")
+  lastSync          DateTime  @default(now()) @map("last_sync")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  
+  // Relationships
+  members           SignalGroupMember[]
+  
+  @@index([name])
+  @@index([memberCount])
+  @@index([lastSync])
+  @@map("signal_groups")
+}
+
+// Signal Group Members - Cache group membership data
+model SignalGroupMember {
+  id                String    @id @default(cuid())
+  groupId           String    @map("group_id") // References SignalGroup.groupId
+  uuid              String    // Member's Signal UUID
+  number            String?   // Member's phone number (may be null)
+  name              String?   // Display name
+  profileName       String?   @map("profile_name")
+  username          String?   // Signal username
+  isAdmin           Boolean   @default(false) @map("is_admin")
+  isBanned          Boolean   @default(false) @map("is_banned")
+  joinedAt          DateTime? @map("joined_at")
+  addedBy           String?   @map("added_by") // UUID of who added them
+  lastActive        DateTime? @map("last_active")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  
+  // Relationships
+  group             SignalGroup @relation(fields: [groupId], references: [groupId], onDelete: Cascade)
+  
+  @@unique([groupId, uuid])
+  @@index([groupId])
+  @@index([uuid])
+  @@index([number])
+  @@index([isAdmin])
+  @@map("signal_group_members")
+}

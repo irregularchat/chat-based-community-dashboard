@@ -1114,6 +1114,100 @@ const strictFollowUpPhrases = [
 
 ---
 
+## CRITICAL: removeuser nonadmin Admin Protection Bug
+
+### Challenge: Critical Admin Removal Bug in !removeuser nonadmin
+**Problem**: The `!removeuser nonadmin` command was removing administrators instead of protecting them, causing mass removal of users including the user who invoked the command.
+
+**Root Cause**: The initial implementation attempted to use a non-existent `getGroup` method in signal-cli JSON-RPC API, which always failed and returned "Could not retrieve member information." This failure caused the function to skip admin detection and remove ALL users, including admins.
+
+**Critical Error Pattern**:
+```javascript
+// BROKEN - getGroup method doesn't exist in signal-cli
+const groupRequest = {
+  jsonrpc: '2.0',
+  method: 'getGroup',  // ❌ THIS METHOD DOES NOT EXIST
+  params: { groupId: currentGroupId },
+  id: `get-group-${Date.now()}`
+};
+```
+
+**Signal-CLI API Reality Check**:
+- ❌ `getGroup` - **Does NOT exist**
+- ✅ `listGroups` - **Does exist and returns admin information**
+
+**Correct Implementation**:
+```javascript
+// CORRECT - Use listGroups which actually exists
+const listGroupsRequest = {
+  jsonrpc: '2.0',
+  method: 'listGroups',  // ✅ This method exists and works
+  params: {
+    account: this.phoneNumber
+  },
+  id: `list-groups-${Date.now()}`
+};
+
+const groupsResponse = await this.sendJsonRpcRequest(listGroupsRequest);
+const groupInfo = groupsResponse.find(g => g.id === currentGroupId);
+const adminIds = new Set((groupInfo.admins || []).map(a => a.uuid || a.number));
+```
+
+**Admin Protection Logic**:
+```javascript
+// CRITICAL: Separate admins from non-admins using fresh data
+const adminMembers = [];
+const nonAdminMembers = [];
+
+for (const member of allMembers) {
+  const memberId = member.uuid || member.number;
+  if (adminIds.has(memberId)) {
+    adminMembers.push(member);
+    console.log(`🛡️ Protecting admin: ${member.profileName || member.name || memberId}`);
+  } else {
+    nonAdminMembers.push(member);
+  }
+}
+
+// Only remove non-admins
+const usersToRemove = nonAdminMembers.map(m => m.uuid || m.number).filter(id => id);
+```
+
+**Impact of Bug**:
+1. **Removed all users** including administrators
+2. **User Sac was repeatedly removed** from testing groups
+3. **Command appeared to "work"** but performed opposite action
+4. **No error messages** - silent failure mode
+
+**Prevention Measures**:
+1. **ALWAYS test API methods exist** before assuming they work
+2. **Use `listGroups` for admin information** - it's the only reliable method
+3. **Implement extensive logging** showing which users are protected
+4. **Test with actual Signal-CLI** before deploying admin-affecting commands
+5. **Add confirmation delays** for destructive operations
+
+**Testing Requirements**:
+```javascript
+// Add before ANY admin-sensitive operation:
+console.log(`📊 Fresh data: ${allMembers.length} total members, ${adminIds.size} admins identified`);
+console.log(`🛡️ KEEPING ${adminMembers.length} admins safe`);
+console.log(`⚠️ CONFIRMATION: Will remove ${usersToRemove.length} non-admin users from ${roomName}`);
+
+// Safety delay before execution
+await new Promise(resolve => setTimeout(resolve, 2000));
+```
+
+**Critical Lesson**: 
+- **Never assume API methods exist without testing**
+- **Signal-CLI documentation can be incomplete**
+- **Admin protection is CRITICAL - test with real scenarios**
+- **Batch operations with safety delays prevent mass accidents**
+- **Always use listGroups for group admin information**
+
+This bug demonstrates why thorough API testing is essential, especially for commands that can affect user membership and admin privileges. The corrected implementation now properly protects administrators while removing only non-admin users as intended.
+
+---
+
 ## Future Improvements
 
 ### Short Term

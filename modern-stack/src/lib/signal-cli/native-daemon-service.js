@@ -161,7 +161,7 @@ class NativeSignalBotService extends EventEmitter {
       // { name: 'leave', description: 'Leave a group', handler: this.handleLeave.bind(this) }, // Removed per request
       { name: 'addto', description: 'Add users to a group (admin)', handler: this.handleAddTo.bind(this), adminOnly: true },
       // { name: 'adduser', description: 'Add user to group (admin)', handler: this.handleAddUser.bind(this), adminOnly: true }, // Removed per request
-      { name: 'removeuser', description: 'Remove user from group (admin)', handler: this.handleRemoveUser.bind(this), adminOnly: true },
+      { name: 'removeuser', description: 'Remove non-admin users from entry room (admin only)', handler: this.handleRemoveUser.bind(this), adminOnly: true },
       // { name: 'groupinfo', description: 'Show group details', handler: this.handleGroupInfo.bind(this) }, // Removed per request
       // { name: 'members', description: 'List group members', handler: this.handleMembers.bind(this) }, // Removed per request
       { name: 'invite', description: 'Show how to invite someone to IrregularChat', handler: this.handleInvite.bind(this) },
@@ -170,6 +170,7 @@ class NativeSignalBotService extends EventEmitter {
       { name: 'wiki', description: 'Search IrregularChat wiki', handler: this.handleWiki.bind(this) },
       { name: 'forum', description: 'Search forum posts', handler: this.handleForum.bind(this) },
       { name: 'events', description: 'Show upcoming events', handler: this.handleEvents.bind(this) },
+      { name: 'event', description: 'Add a new event', handler: this.handleEventAdd.bind(this) },
       { name: 'eventadd', description: 'Add a new event', handler: this.handleEventAdd.bind(this) },
       // { name: 'resources', description: 'List community resources', handler: this.handleResources.bind(this) }, // Removed per request
       { name: 'faq', description: 'Get FAQ answers', handler: this.handleFAQ.bind(this) },
@@ -2822,144 +2823,156 @@ ${content.content.substring(0, 3000)}...`;
   }
 
   async handleRemoveUser(context) {
-    const { args, sourceNumber, groupId: currentGroupId } = context;
+    const { args, sourceNumber, groupId: currentGroupId, sender } = context;
     
-    if (!args || args.length === 0) {
-      return '❌ Usage:\n' +
-             '• !removeuser <group_number> @user - Remove specific user\n' +
-             '• !removeuser <group_number> nonadmin - Remove all non-admin users';
-    }
+    // Check if user is admin first (check both phone number and UUID)
+    const phoneNumberAdmin = this.isAdmin(sourceNumber);
+    const uuidAdmin = this.isUuidAdmin(sender?.uuid);
     
-    // Check if user is admin
-    if (!this.isAdmin(sourceNumber)) {
+    if (!phoneNumberAdmin && !uuidAdmin) {
       return '🚫 Only administrators can remove users from groups';
     }
     
-    // Parse group number
-    const groupNumber = parseInt(args[0]);
-    if (isNaN(groupNumber)) {
-      return '❌ First argument must be a group number';
+    // Entry room ID from environment (base64 decoded to the actual group ID)
+    // const entryRoomId = process.env.ENTRY_ROOM_ID?.replace('group.', '');
+    // const entryGroupId = entryRoomId ? Buffer.from(entryRoomId, 'base64').toString('base64') : 'PjJCT6d4nrF0/BZOs39ECX/lZkcHPbi65JU8B6kgw6s=';
+    
+    // TESTING: Hardcoded testing group for nonadmin removal
+    const testingGroupId = 'kZExwKqKmjMOK2KYvX8+WhsuBAnN8m6Ecf4XedYP4xM=';
+    const entryGroupId = 'PjJCT6d4nrF0/BZOs39ECX/lZkcHPbi65JU8B6kgw6s='; // Entry/INDOC room
+    
+    // This command only works in the testing room or entry room with 'nonadmin' parameter
+    if (currentGroupId !== testingGroupId && currentGroupId !== entryGroupId) {
+      return '❌ This command only works in the Testing room or Entry/INDOC room';
     }
     
-    // Get the group from cached data
-    const cachedGroups = await this.groupSyncService.getCachedGroups();
-    
-    if (!cachedGroups || cachedGroups.length === 0) {
-      // If no cached data, trigger a sync
-      console.log('No cached groups found, syncing...');
-      await this.groupSyncService.syncGroups();
-      const updatedGroups = await this.groupSyncService.getCachedGroups();
-      if (!updatedGroups || updatedGroups.length === 0) {
-        return '❌ Unable to fetch group information. Please try again later.';
-      }
-      cachedGroups.push(...updatedGroups);
+    if (!args || args.length === 0 || args[0] !== 'nonadmin') {
+      return '❌ Usage: !removeuser nonadmin\n' +
+             'This will remove all non-admin users from the current room (Testing or Entry/INDOC only).';
     }
     
-    const sortedGroups = [...cachedGroups].sort((a, b) => 
-      (b.memberCount || 0) - (a.memberCount || 0)
-    );
+    // Determine which room we're working in
+    const roomName = currentGroupId === testingGroupId ? 'Testing room' : 'Entry/INDOC room';
+    console.log(`🔄 Processing nonadmin removal for ${roomName}`);
     
-    if (groupNumber < 1 || groupNumber > sortedGroups.length) {
-      return `❌ Invalid group number. Use !groups to see available groups.`;
-    }
-    
-    const targetGroup = sortedGroups[groupNumber - 1];
-    const groupName = targetGroup.name || 'Unnamed Group';
-    
-    // Check for 'nonadmin' flag
-    if (args[1] === 'nonadmin') {
-      // SAFETY CHECK: Only allow nonadmin removal in Entry/INDOC room (group 4)
-      if (groupNumber !== 4) {
-        return `🚫 **SECURITY BLOCK**: The 'nonadmin' removal feature is ONLY allowed in the Entry/INDOC room (group 4).\n\n` +
-               `You tried to use it on group ${groupNumber}: "${groupName}"\n\n` +
-               `This is a safety measure to prevent accidental mass removal of users from established communities.\n\n` +
-               `For individual user removal, use: !removeuser ${groupNumber} @username`;
+    try {
+      // CRITICAL: Fetch fresh group data to get accurate admin status
+      console.log(`🔍 Fetching fresh group data with admin status for ${currentGroupId}...`);
+      
+      const listGroupsRequest = {
+        jsonrpc: '2.0',
+        method: 'listGroups',
+        params: {
+          account: this.phoneNumber
+        },
+        id: `list-groups-${Date.now()}`
+      };
+      
+      const groupsResponse = await this.sendJsonRpcRequest(listGroupsRequest);
+      
+      if (!groupsResponse) {
+        return `❌ Could not retrieve groups information. Please try again.`;
       }
       
-      // Additional safety check: confirm this is actually the Entry/INDOC room by name
-      if (!groupName.toLowerCase().includes('entry') && !groupName.toLowerCase().includes('indoc')) {
-        return `🚫 **SAFETY CHECK FAILED**: Group 4 should be the Entry/INDOC room, but found "${groupName}".\n\n` +
-               `This safety check prevents mass removal from the wrong group. Please verify group numbering with !groups`;
+      // Find our specific group
+      const groupInfo = groupsResponse.find(g => g.id === currentGroupId);
+      
+      if (!groupInfo || !groupInfo.members) {
+        return `❌ Could not retrieve group information. Please try again.`;
       }
       
-      // Special handling for removing all non-admin users
-      console.log(`🔄 Processing nonadmin removal for Entry/INDOC room: ${groupName}`);
+      const allMembers = groupInfo.members || [];
+      const adminIds = new Set((groupInfo.admins || []).map(a => a.uuid || a.number));
       
-      try {
-        // Get members with admin status from cached data
-        const memberInfo = await this.getGroupMembersWithAdminStatus(targetGroup.groupId);
-        
-        if (!memberInfo.success) {
-          return `❌ Could not retrieve member information for '${groupName}'. Please try again.`;
+      console.log(`📊 Fresh data: ${allMembers.length} total members, ${adminIds.size} admins identified`);
+      
+      // CRITICAL: Separate admins from non-admins using fresh data
+      const adminMembers = [];
+      const nonAdminMembers = [];
+      
+      for (const member of allMembers) {
+        const memberId = member.uuid || member.number;
+        if (adminIds.has(memberId)) {
+          adminMembers.push(member);
+          console.log(`🛡️ Protecting admin: ${member.profileName || member.name || memberId}`);
+        } else {
+          nonAdminMembers.push(member);
         }
+      }
+      
+      console.log(`📊 Group has ${allMembers.length} total members, ${adminMembers.length} admins, ${nonAdminMembers.length} non-admins`);
+      
+      if (nonAdminMembers.length === 0) {
+        return `✅ No non-admin users found in ${roomName}`;
+      }
+      
+      // Prepare removal list - use UUID preferentially, fallback to number
+      const usersToRemove = nonAdminMembers.map(m => m.uuid || m.number).filter(id => id);
+      
+      if (usersToRemove.length === 0) {
+        return `❌ Could not identify users to remove (missing UUIDs)`;
+      }
+      
+      // SAFETY: Show confirmation of what we're about to do
+      console.log(`⚠️ CONFIRMATION: Will remove ${usersToRemove.length} non-admin users from ${roomName}`);
+      console.log(`🛡️ KEEPING ${adminMembers.length} admins safe`);
+      
+      // Add a small delay for safety
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      console.log(`🔄 Starting removal of ${usersToRemove.length} non-admin users from ${roomName}`);
+      
+      // Remove users in batches of 5 to avoid timeout and be more careful
+      const batchSize = 5;
+      let removedCount = 0;
+      let failedCount = 0;
+      
+      for (let i = 0; i < usersToRemove.length; i += batchSize) {
+        const batch = usersToRemove.slice(i, i + batchSize);
         
-        if (memberInfo.nonAdmins.length === 0) {
-          return `✅ No non-admin users found in '${groupName}'`;
-        }
-        
-        // Prepare removal list
-        const usersToRemove = memberInfo.nonAdmins.map(m => m.uuid).filter(uuid => uuid);
-        
-        if (usersToRemove.length === 0) {
-          return `❌ Could not identify users to remove (missing UUIDs)`;
-        }
-        
-        console.log(`🔄 Removing ${usersToRemove.length} non-admin users from ${groupName}`);
-        
-        // Remove users in batches of 10 to avoid timeout
-        const batchSize = 10;
-        let removedCount = 0;
-        let failedCount = 0;
-        
-        for (let i = 0; i < usersToRemove.length; i += batchSize) {
-          const batch = usersToRemove.slice(i, i + batchSize);
+        try {
+          const removeRequest = {
+            jsonrpc: '2.0',
+            method: 'updateGroup',
+            params: {
+              account: this.phoneNumber,
+              groupId: currentGroupId,
+              removeMembers: batch
+            },
+            id: `remove-nonadmin-batch-${Date.now()}`
+          };
           
-          try {
-            const removeRequest = {
-              jsonrpc: '2.0',
-              method: 'updateGroup',
-              params: {
-                account: this.phoneNumber,
-                groupId: targetGroup.id,
-                removeMembers: batch
-              },
-              id: `remove-nonadmin-batch-${Date.now()}`
-            };
-            
-            const response = await this.sendJsonRpcRequest(removeRequest, 20000);
-            
-            if (response.result) {
-              removedCount += batch.length;
-              console.log(`✅ Batch ${Math.floor(i/batchSize) + 1}: Removed ${batch.length} users`);
-            } else {
-              failedCount += batch.length;
-              console.error(`❌ Batch ${Math.floor(i/batchSize) + 1} failed:`, response.error);
-            }
-          } catch (error) {
+          const success = await this.sendJsonRpcRequest(removeRequest);
+          
+          if (success) {
+            removedCount += batch.length;
+            console.log(`✅ Batch ${Math.floor(i/batchSize) + 1}: Removed ${batch.length} users`);
+          } else {
             failedCount += batch.length;
-            console.error(`❌ Error removing batch:`, error);
+            console.error(`❌ Batch ${Math.floor(i/batchSize) + 1} failed`);
           }
-          
-          // Small delay between batches
-          if (i + batchSize < usersToRemove.length) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
+        } catch (error) {
+          failedCount += batch.length;
+          console.error(`❌ Error removing batch:`, error);
         }
         
-        return `✅ **Cleanup Complete for '${groupName}'**\n\n` +
-               `• Total non-admins found: ${memberInfo.nonAdmins.length}\n` +
-               `• Successfully removed: ${removedCount}\n` +
-               `• Failed to remove: ${failedCount}\n` +
-               `• Admins retained: ${memberInfo.totalAdmins}`;
-               
-      } catch (error) {
-        console.error('Error in nonadmin removal:', error);
-        return `❌ Error removing non-admin users: ${error.message}`;
+        // Small delay between batches
+        if (i + batchSize < usersToRemove.length) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
       }
+      
+      const completedRoomName = currentGroupId === testingGroupId ? 'Testing room' : 'Entry/INDOC room';
+      return `✅ **Cleanup Complete for ${completedRoomName}**\n\n` +
+             `• Total non-admins found: ${nonAdminMembers.length}\n` +
+             `• Successfully removed: ${removedCount}\n` +
+             `• Failed to remove: ${failedCount}\n` +
+             `• Admins retained: ${adminMembers.length}`;
+             
+    } catch (error) {
+      console.error('Error in nonadmin removal:', error);
+      return `❌ Error removing non-admin users: ${error.message}`;
     }
-    
-    // Regular user removal (not implemented in this stub)
-    return `❌ Regular user removal not yet implemented. Use: !removeuser <group> nonadmin`;
   }
 
   async handleGroupInfo(context) {
@@ -3615,8 +3628,38 @@ That's it! The onboarding process will begin once you type !request.`;
     console.log(`📅 Processing event add request from ${sender}: ${eventDescription}`);
     
     try {
-      // Use LocalAI to parse the natural language event description
-      const parsedEvent = await this.parseEventWithLocalAI(eventDescription);
+      // Try basic parsing first for simple cases
+      let parsedEvent = this.basicEventParsing(eventDescription);
+      
+      // Check if basic parsing missed critical fields - if so, use AI immediately
+      const hasUrl = eventDescription.includes('http');
+      const shouldUseAI = !parsedEvent.name || !parsedEvent.start || !parsedEvent.location || 
+                         (hasUrl && this.localAiUrl && this.localAiApiKey);
+      
+      if (shouldUseAI) {
+        console.log('📡 Basic parsing incomplete, using AI to improve parsing...');
+        parsedEvent = await this.parseEventWithLocalAI(eventDescription);
+        
+        // If AI also failed, fall back to basic parsing
+        if (!parsedEvent.name && !parsedEvent.start) {
+          parsedEvent = this.basicEventParsing(eventDescription);
+        }
+      }
+      
+      // Extract URLs from description for Discourse calendar format
+      const urlMatches = eventDescription.match(/https?:\/\/[^\s]+/g);
+      if (urlMatches && urlMatches.length > 0) {
+        // Add URLs to description, removing them from location if they got mixed in
+        const urls = urlMatches.join('\n');
+        parsedEvent.description = parsedEvent.description ? 
+          `${parsedEvent.description}\n\n${urls}` : urls;
+        
+        // Clean URLs from location field
+        if (parsedEvent.location) {
+          parsedEvent.location = parsedEvent.location.replace(/\s*https?:\/\/[^\s]+/g, '').trim();
+          if (!parsedEvent.location) parsedEvent.location = null;
+        }
+      }
       
       // Check what fields are missing or incomplete
       const missingFields = [];
@@ -3740,27 +3783,24 @@ That's it! The onboarding process will begin once you type !request.`;
     }
     
     try {
-      const prompt = `Parse this event description into structured data. Extract:
-- name: Extract a meaningful event name from the context. Look for phrases like "community meetup", "meet up", "gathering", etc. If the text says something like "we should have a community meet up", extract "Community Meetup" as the name. If no clear event type is mentioned, use "Community Meetup" as default.
-- start: Start date and time (format: YYYY-MM-DD HH:MM). If no time is specified but a date is given, default to 18:00 (6 PM).
-- end: End date and time if mentioned (format: YYYY-MM-DD HH:MM)
-- location: Extract the location exactly as stated. If it's a business name like "macs speed shop", return just that. If it's a street address without city/state, return just the street. Do NOT add or guess missing address components.
-- timezone: Timezone (default: America/New_York)
-- description: Any additional context or details
+      const prompt = `Parse this event description into structured data for a Discourse calendar event. Extract:
+- name: Extract the main event title/name. For courses, training, conferences, use the full official title.
+- start: Start date and time (format: YYYY-MM-DD HH:MM). Parse formats like "Mon Oct 20, 2025 9:00 AM".
+- end: End date and time if mentioned (format: YYYY-MM-DD HH:MM). Parse formats like "Fri Oct 24, 2025 5:00 PM".
+- location: Extract ONLY the physical location (venue name, address, city, state, zip). Do NOT include URLs.
+- timezone: Extract timezone if mentioned (like MDT, EST), otherwise default to America/New_York
+- description: Any additional context. URLs should go here, NOT in location.
 
-Examples of name extraction:
-- "we should totally have a community meet up" → name: "Community Meetup"
-- "lets meet up on sep 20" → name: "Meetup"
-- "monthly gathering at the cafe" → name: "Monthly Gathering"
+For this input: "${description}"
 
-IMPORTANT: 
-1. For location, ONLY return what's explicitly stated. Never add city/state unless provided.
-2. For event names, extract meaningful phrases and format them properly (capitalize words).
-3. If time is not specified, default to 18:00 (6 PM) for community events.
+CRITICAL RULES:
+1. URLs go in description field, never in location
+2. Location should be clean physical address only
+3. Preserve exact event names and technical terms
+4. Parse multi-day events with proper start/end dates
+5. Handle timezone abbreviations (MDT, PST, EST, etc.)
 
-Event description: "${description}"
-
-Return ONLY valid JSON with these fields. Use null for missing values. Today's date is ${new Date().toISOString().split('T')[0]}.`;
+Return ONLY valid JSON with these fields. Use null for missing values.`;
 
       const response = await fetch(`${this.localAiUrl}/v1/chat/completions`, {
         method: 'POST',
@@ -3825,23 +3865,34 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       description: description
     };
     
-    // Try to extract date/time patterns
+    // Split the description into lines for multi-line parsing
+    const lines = description.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+    const fullText = lines.join(' ');
+    
+    // Enhanced date/time patterns to handle more formats
     const datePatterns = [
+      // Mon Oct 20, 2025 format
+      /(?:mon|tue|wed|thu|fri|sat|sun)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}/i,
+      // Oct 20, 2025 format  
+      /(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}/i,
+      // Other existing patterns
       /(?:on |at )?((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]* \d{1,2}(?:st|nd|rd|th)?(?:,? \d{4})?)/i,
       /(?:on |at )?(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)/i,
       /(tomorrow|today|tonight|next \w+day|this \w+day)/i
     ];
     
     const timePatterns = [
+      // Enhanced time patterns
+      /(\d{1,2}:\d{2}\s*(?:am|pm|AM|PM)(?:\s*-\s*\d{1,2}:\d{2}\s*(?:am|pm|AM|PM))?(?:\s+[A-Z]{2,4})?)/i,
       /(?:at |from )?(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM))/i,
       /(?:at |from )?(\d{1,2}:\d{2})/
     ];
     
     // Try to find a date
     for (const pattern of datePatterns) {
-      const match = description.match(pattern);
+      const match = fullText.match(pattern);
       if (match) {
-        parsed.start = match[1];
+        parsed.start = match[0]; // Use the full match for better date extraction
         break;
       }
     }
@@ -3849,9 +3900,13 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     // Try to find a time - if not found, default to a reasonable time
     let foundTime = false;
     for (const pattern of timePatterns) {
-      const match = description.match(pattern);
+      const match = fullText.match(pattern);
       if (match) {
-        parsed.start = (parsed.start || '') + ' ' + match[1];
+        if (parsed.start) {
+          parsed.start = parsed.start + ' ' + match[1];
+        } else {
+          parsed.start = match[1];
+        }
         foundTime = true;
         break;
       }
@@ -3862,41 +3917,91 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       parsed.start += ' 6:00 PM'; // Default to 6 PM for community events
     }
     
-    // Try to extract location - look for various patterns
-    // Look for "at [location]" pattern first
-    const atLocationMatch = description.match(/\bat\s+([^,]+?)(?:\s+on\s+|\s*$)/i);
-    if (atLocationMatch && !atLocationMatch[1].match(/^\d/)) { // Avoid matching times
-      parsed.location = atLocationMatch[1].trim();
-    } else {
-      // Look for street addresses (numbers followed by street names)
-      const addressMatch = description.match(/(\d+\s+\w+\s+(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|place|pl|way))\b/i);
-      if (addressMatch) {
-        parsed.location = addressMatch[1].trim();
+    // Enhanced location extraction
+    let foundLocation = null;
+    
+    // Try to extract location from separate lines (like "ENSCO Colorado Springs, 80916")
+    for (const line of lines) {
+      // Skip lines that are ONLY URLs, but process lines with URLs if they contain location info
+      if ((line.includes('http') || line.includes('www.')) && !line.match(/[A-Za-z\s]+,\s*\d{5}/)) continue;
+      
+      // Look for patterns that suggest location (company name + city, state, zip)
+      const locationPatterns = [
+        // Location info before URL (handle "ENSCO Colorado Springs, 80916 https://...")
+        /^(.+?)\s+https?:\/\//,
+        // Company/venue name with city, state, zip
+        /^([A-Za-z0-9\s&.-]+)\s+([A-Za-z\s]+),\s*(\d{5})/,
+        // Address with city, state, zip  
+        /(\d+\s+[A-Za-z0-9\s,.-]+,\s*[A-Za-z\s]+,?\s*\d{5})/,
+        // City, State ZIP
+        /([A-Za-z\s]+,\s*[A-Z]{2}\s+\d{5})/,
+        // Simple city, state
+        /([A-Za-z\s]+,\s*[A-Z]{2})/
+      ];
+      
+      for (const pattern of locationPatterns) {
+        const match = line.match(pattern);
+        if (match) {
+          // Use the first capture group if available (for URL pattern), otherwise use full match
+          foundLocation = (match[1] || match[0]).trim();
+          break;
+        }
+      }
+      if (foundLocation) break;
+    }
+    
+    // Fallback to traditional "at location" patterns
+    if (!foundLocation) {
+      const atLocationMatch = fullText.match(/\bat\s+([^,]+?)(?:\s+on\s+|\s*$)/i);
+      if (atLocationMatch && !atLocationMatch[1].match(/^\d/)) { // Avoid matching times
+        foundLocation = atLocationMatch[1].trim();
+      } else {
+        // Look for street addresses (numbers followed by street names)
+        const addressMatch = fullText.match(/(\d+\s+\w+\s+(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|place|pl|way))\b/i);
+        if (addressMatch) {
+          foundLocation = addressMatch[1].trim();
+        }
       }
     }
+    
+    parsed.location = foundLocation;
     
     // Enhanced event name extraction with context understanding
     let eventName = null;
     
-    // First, try to extract meaningful phrases that indicate the event type
-    const eventPhrases = [
-      /(?:we should )?(?:totally )?(?:have a |host a |organize a )?(community meet ?up|meet ?up|gathering|event|party|session|workshop|hackathon|demo day)/i,
-      /(?:let'?s |we should |want to |need to |plan to )?(meet ?up|gather|get together|hang out)/i,
-      /(monthly|weekly|annual|quarterly)\s+(meet ?up|gathering|event|meeting)/i
-    ];
-    
-    for (const pattern of eventPhrases) {
-      const match = description.match(pattern);
-      if (match) {
-        eventName = match[1] || match[0];
-        eventName = eventName.replace(/^(we should |totally |have a |let'?s |want to |need to |plan to )/i, '');
-        break;
+    // For complex event descriptions, try to extract the main title before date/time
+    // Look for text before dates like "Mon Oct 20, 2025"
+    const beforeDateMatch = fullText.match(/^(.+?)\s+(?:mon|tue|wed|thu|fri|sat|sun)\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i);
+    if (beforeDateMatch) {
+      let candidate = beforeDateMatch[1].trim();
+      // Remove common trailing words that might be part of date description
+      candidate = candidate.replace(/\s+(course|event|class|workshop|training|seminar)\s*$/i, ' $1');
+      if (candidate && candidate.length > 10) { // Ensure it's substantial
+        eventName = candidate;
       }
     }
     
-    // If no event phrase found, try to extract text before "on" or "at"
+    // Fallback: try to extract meaningful phrases that indicate the event type
     if (!eventName) {
-      const beforePreposition = description.match(/^(.+?)\s+(?:on|at)\s+/i);
+      const eventPhrases = [
+        /(?:we should )?(?:totally )?(?:have a |host a |organize a )?(community meet ?up|meet ?up|gathering|event|party|session|workshop|hackathon|demo day)/i,
+        /(?:let'?s |we should |want to |need to |plan to )?(meet ?up|gather|get together|hang out)/i,
+        /(monthly|weekly|annual|quarterly)\s+(meet ?up|gathering|event|meeting)/i
+      ];
+      
+      for (const pattern of eventPhrases) {
+        const match = fullText.match(pattern);
+        if (match) {
+          eventName = match[1] || match[0];
+          eventName = eventName.replace(/^(we should |totally |have a |let'?s |want to |need to |plan to )/i, '');
+          break;
+        }
+      }
+    }
+    
+    // If still no event phrase found, try to extract text before "on" or "at"
+    if (!eventName) {
+      const beforePreposition = fullText.match(/^(.+?)\s+(?:on|at)\s+/i);
       if (beforePreposition) {
         let candidate = beforePreposition[1].trim();
         // Clean up common prefixes
@@ -6353,6 +6458,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     }
     
     return false;
+  }
+  
+  isUuidAdmin(userUuid) {
+    // Check UUID-based admin list
+    if (!userUuid) return false;
+    
+    const adminUuids = process.env.ADMIN_UUIDS?.split(',') || [];
+    return adminUuids.includes(userUuid);
   }
   
   async isGroupAdmin(userUuid, groupId) {

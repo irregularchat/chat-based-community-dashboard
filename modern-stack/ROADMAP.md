@@ -121,6 +121,71 @@
 
 **PRODUCTION STATUS**: ✅ v0.3.0 Complete - Production ready with dual AI integration
 
+### 🐛 Critical Issues Found (September 2025)
+
+#### High Priority Fixes Required
+
+1. **❌ !removeuser nonadmin Command Critical Bug**
+   - **Issue**: Bot attempts to use non-existent `getGroup` API method
+   - **Impact**: Command fails with "Could not retrieve member information"
+   - **Fix**: Use `listGroups` method instead and properly parse admin data
+   - **Status**: Fixed in code but needs testing
+   - **Severity**: CRITICAL - Can remove admins instead of protecting them
+
+2. **⚠️ Signal CLI Decryption Errors**
+   - **Issue**: Multiple "invalid Whisper message: decryption failed" errors
+   - **Impact**: Some messages may not be received properly
+   - **Cause**: Missing sender key states and session issues
+   - **Fix**: May need to refresh sessions or re-register with groups
+
+3. **🔴 News Scraping Failures**
+   - **Issue**: WSJ, American Bar Association sites returning 401/403 errors
+   - **Impact**: News summarization feature fails for paywalled content
+   - **Workaround**: 12ft.io proxy also failing with ECONNREFUSED
+   - **Fix**: Need better paywall bypass or user authentication
+
+4. **📊 Prisma Database Validation Errors**
+   - **Issue**: PrismaClientValidationError when tracking news links
+   - **Impact**: News tracking feature may not persist data
+   - **Fix**: Schema validation needed for news tracking
+
+5. **🔑 Signal UnidentifiedAccess NullPointerException**
+   - **Issue**: "Cannot invoke UnidentifiedAccess.getUnidentifiedAccessKey()"
+   - **Impact**: Some Signal operations may fail
+   - **Fix**: Null checks needed in signal-cli operations
+
+6. **👤 Profile Retrieval Failures**
+   - **Issue**: Hundreds of "Failed to retrieve profile: [404] Profile not found"
+   - **Impact**: User profiles may not display correctly
+   - **Fix**: Implement fallback for missing profiles
+
+### 🔧 Immediate Action Items
+
+1. **Test and verify !removeuser nonadmin fix**
+   - Ensure admins are never removed
+   - Add comprehensive logging
+   - Create test suite for admin protection
+
+2. **Implement Signal session refresh mechanism**
+   - Auto-detect decryption failures
+   - Refresh sender key states
+   - Re-sync with problematic groups
+
+3. **Enhance news scraping resilience**
+   - Add more fallback scraping methods
+   - Implement content caching
+   - Handle paywalls gracefully
+
+4. **Database schema updates**
+   - Fix news tracking schema
+   - Add proper constraints
+   - Migration scripts needed
+
+5. **Signal-CLI error handling**
+   - Add null checks throughout
+   - Implement graceful degradation
+   - Better error reporting to users
+
 ### 📋 Upcoming Features
 
 #### v0.4.0 - Signal Self-Service Suite
@@ -366,5 +431,5 @@
 
 ---
 
-*Last Updated: August 2025*
-*Version: 0.2.0*
+*Last Updated: September 2025*
+*Version: 0.3.0*

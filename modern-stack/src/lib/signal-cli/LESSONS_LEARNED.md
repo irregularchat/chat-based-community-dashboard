@@ -109,6 +109,37 @@ registerCommand('!help', async (message) => {
 
 ---
 
+## AI Integration with GPT-5 and LocalAI
+
+### Update: Privacy-First Summarization (September 2025)
+**Enhancement**: Modified `!summarize` command to exclusively use LocalAI for privacy protection.
+
+**Key Changes**:
+1. **LocalAI Only**: Removed OpenAI fallback, always uses LocalAI for summarization
+2. **Paragraph Format**: Summaries are now flowing paragraphs without usernames
+3. **URL Tracking**: Extracts and includes top shared links in summary
+4. **Clean Output**: "LocalAI:" prefix with clean paragraph summary
+
+**Implementation**:
+```javascript
+// Extract URLs and count frequency
+const urlRegex = /(https?:\/\/[^\s]+)/g;
+const urlCounts = new Map();
+// Track and sort by frequency
+
+// Prompt engineering for paragraph format
+summaryPrompt = `Summarize as a single paragraph. Do NOT include usernames...`
+
+// Output format
+fullSummary = `📝 Chat Summary\n\nLocalAI: [paragraph summary]\n\n🔗 Top Links...`
+```
+
+**Benefits**:
+- User privacy protected (data never leaves local network)
+- Cleaner, more readable summaries
+- Important links preserved and highlighted
+- Consistent formatting across all summaries
+
 ## AI Integration with GPT-5
 
 ### Challenge 1: Model Selection

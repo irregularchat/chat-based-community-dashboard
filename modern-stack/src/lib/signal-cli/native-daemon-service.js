@@ -6326,63 +6326,73 @@ Return ONLY valid JSON with these fields. Use null for missing values.`;
     }
     
     try {
+      // Extract all URLs from messages
+      const urlRegex = /(https?:\/\/[^\s]+)/g;
+      const allUrls = [];
+      const urlCounts = new Map();
+      
+      recentMessages.forEach(msg => {
+        const urls = msg.message.match(urlRegex);
+        if (urls) {
+          urls.forEach(url => {
+            // Clean up URL (remove trailing punctuation)
+            const cleanUrl = url.replace(/[.,;!?]+$/, '');
+            allUrls.push(cleanUrl);
+            urlCounts.set(cleanUrl, (urlCounts.get(cleanUrl) || 0) + 1);
+          });
+        }
+      });
+      
+      // Sort URLs by frequency
+      const topUrls = Array.from(urlCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([url, count]) => url);
+      
       // Analyze emoji reactions to highlight highly reacted messages
       const reactionAnalysis = this.analyzeMessageReactions(recentMessages);
       
-      const messagesText = recentMessages.map(m => `${m.sender}: ${m.message}`).join('\n');
-      let aiResponse;
+      // Always use LocalAI for privacy
+      const messagesText = recentMessages.map(m => m.message).join('\n');
       
-      if (this.useLocalAiForSummarization) {
-        // Use local AI for privacy (keeps user data private)
-        console.log('Using local AI for chat summarization (privacy mode)');
-        
-        const response = await fetch(`${this.localAiUrl}/v1/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.localAiApiKey}`
-          },
-          body: JSON.stringify({
-            model: this.localAiModel,
-            messages: [{
-              role: 'system',
-              content: 'You are a helpful assistant that summarizes chat conversations. Focus on the main topics, key points, and any decisions or action items. Be concise but thorough.'
-            }, {
-              role: 'user',
-              content: `Please summarize this group chat conversation:\n\n${messagesText}`
-            }],
-            max_completion_tokens: 700  // GPT-5 requires max_completion_tokens
-          })
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Local AI error: ${response.status}`);
-        }
-        
-        aiResponse = await response.json();
-      } else {
-        // Fallback to OpenAI if local AI not configured
-        const { OpenAI } = require('openai');
-        const openai = new OpenAI({ apiKey: this.openAiApiKey });
-        
-        aiResponse = await openai.chat.completions.create({
-          model: 'gpt-5-mini',
-          messages: [{
-            role: 'system',
-            content: 'You are a helpful assistant that summarizes chat conversations. Focus on the main topics, key points, and any decisions or action items. Be concise but thorough.'
-          }, {
-            role: 'user',
-            content: `Please summarize this group chat conversation:\n\n${messagesText}` 
-          }],
-          max_completion_tokens: 900  // GPT-5 thinking model needs 600+ tokens
-        });
+      console.log('Using LocalAI for chat summarization (privacy mode)');
+      
+      // Prepare prompt with URL context
+      let summaryPrompt = `Summarize this group chat conversation as a single paragraph. Do NOT include usernames or attributions. Focus on the main topics discussed, key points made, and any decisions or conclusions reached. Write in a flowing narrative style.\n\n`;
+      
+      if (topUrls.length > 0) {
+        summaryPrompt += `Important: Include mentions of the key links shared, especially these frequently referenced URLs: ${topUrls.join(', ')}\n\n`;
       }
       
-      const participants = [...new Set(recentMessages.map(m => m.sender))].join(', ');
-      const actualMessageCount = recentMessages.length;
+      summaryPrompt += `Messages to summarize:\n${messagesText}`;
       
+      const response = await fetch(`${this.localAiUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.localAiApiKey}`
+        },
+        body: JSON.stringify({
+          model: this.localAiModel,
+          messages: [{
+            role: 'system',
+            content: 'You are a helpful assistant that summarizes chat conversations into flowing paragraphs without usernames. Focus on topics, key points, and include important URLs that were shared.'
+          }, {
+            role: 'user',
+            content: summaryPrompt
+          }],
+          max_completion_tokens: 700
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Local AI error: ${response.status}`);
+      }
+      
+      const aiResponse = await response.json();
+      
+      const actualMessageCount = recentMessages.length;
       const summaryText = aiResponse.choices[0].message.content;
-      const aiPrefix = this.useLocalAiForSummarization ? 'LocalAI:' : 'OpenAI:';
       
       // Build summary description
       let summaryDesc;
@@ -6394,14 +6404,20 @@ Return ONLY valid JSON with these fields. Use null for missing values.`;
         summaryDesc = `last ${actualMessageCount} messages`;
       }
       
-      let fullSummary = `📝 Chat Summary (${summaryDesc})\n\n👥 Participants: ${participants}`;
+      let fullSummary = `📝 Chat Summary (${summaryDesc})\n\n`;
       
-      // Add reaction analysis if there are significant reactions
+      // Add LocalAI summary as a single paragraph
+      fullSummary += `LocalAI: ${summaryText}`;
+      
+      // Add top links section if there are any
+      if (topUrls.length > 0) {
+        fullSummary += `\n\n🔗 Top Links Shared:\n${topUrls.map(url => `• ${url}`).join('\n')}`;
+      }
+      
+      // Add reaction highlights if significant
       if (reactionAnalysis.hasHighReactions) {
         fullSummary += `\n\n🔥 Highly Reacted Messages:\n${reactionAnalysis.highlightText}`;
       }
-      
-      fullSummary += `\n\n${aiPrefix} ${summaryText}`;
       
       return fullSummary;
       

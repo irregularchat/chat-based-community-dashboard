@@ -6135,29 +6135,42 @@ Return ONLY valid JSON with these fields. Use null for missing values.`;
     
     // Store in database for persistence
     try {
-      // Skip database storage if sourceNumber is null (use sourceUuid as identifier instead)
-      if (!message.sourceNumber && message.sourceUuid) {
-        // For now, skip database storage for messages without phone numbers
-        console.log('Skipping database storage for message without sourceNumber');
-      } else if (message.sourceNumber) {
-        await this.prisma.signalMessage.upsert({
-          where: {
-            timestamp_sourceNumber_groupId: {
-              timestamp: BigInt(message.timestamp),
-              sourceNumber: message.sourceNumber,
-              groupId: groupId === 'dm' ? null : groupId
-            }
-          },
+      // Handle both sourceNumber and sourceUuid based messages
+      const identifier = message.sourceNumber || message.sourceUuid;
+      if (!identifier) {
+        console.log('⚠️ Skipping database storage - no sourceNumber or sourceUuid');
+        return;
+      }
+
+      // Use sourceNumber when available, fallback to sourceUuid
+      const whereClause = message.sourceNumber ? {
+        timestamp_sourceNumber_groupId: {
+          timestamp: BigInt(message.timestamp),
+          sourceNumber: message.sourceNumber,
+          groupId: groupId === 'dm' ? null : groupId
+        }
+      } : {
+        // For UUID-only messages, create a unique combination using sourceUuid in sourceNumber field temporarily
+        timestamp_sourceNumber_groupId: {
+          timestamp: BigInt(message.timestamp),
+          sourceNumber: `uuid:${message.sourceUuid}`, // Prefix to distinguish UUID-based entries
+          groupId: groupId === 'dm' ? null : groupId
+        }
+      };
+
+      await this.prisma.signalMessage.upsert({
+        where: whereClause,
           update: {
             message: message.message,
             sourceName: message.sourceName,
             sourceUuid: message.sourceUuid || null,
-            groupName: message.groupName || null
+            groupName: message.groupName || null,
+            sourceNumber: message.sourceNumber || `uuid:${message.sourceUuid}` // Keep identifier consistent
           },
           create: {
             groupId: groupId === 'dm' ? null : groupId,
             groupName: message.groupName || null,
-            sourceNumber: message.sourceNumber,
+            sourceNumber: message.sourceNumber || `uuid:${message.sourceUuid}`, // Use identifier consistently
             sourceName: message.sourceName || null,
             sourceUuid: message.sourceUuid || null,
             message: message.message,
@@ -6169,7 +6182,6 @@ Return ONLY valid JSON with these fields. Use null for missing values.`;
             quotedText: message.quotedMessage || null
           }
         });
-      }
     } catch (error) {
       console.error('Failed to store message in database:', error);
     }
@@ -7254,7 +7266,9 @@ Return ONLY valid JSON with these fields. Use null for missing values.`;
           data: updateData
         });
       } else {
-        // Create new entry with metadata
+        // Create new entry with metadata (ensure postedBy is not null)
+        const postedBy = message.sourceNumber || `uuid:${message.sourceUuid}` || 'unknown';
+        
         await this.prisma.newsLink.create({
           data: {
             url: url,
@@ -7264,8 +7278,8 @@ Return ONLY valid JSON with these fields. Use null for missing values.`;
             forumUrl: metadata.forumUrl || null,
             groupId: message.groupId || 'dm',
             groupName: message.groupName,
-            postedBy: message.sourceNumber,
-            postedByName: message.sourceName
+            postedBy: postedBy,
+            postedByName: message.sourceName || 'Unknown User'
           }
         });
       }

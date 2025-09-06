@@ -196,6 +196,35 @@
     - **Fix**: Update to compatible Signal CLI version, implement method fallbacks
     - **Severity**: MEDIUM - Affects feature availability
 
+#### NEW Issues Found from Production Logs (September 6, 2025)
+
+12. **🔴 Database Schema Validation Errors** - CRITICAL
+    - **Issue**: Multiple `PrismaClientValidationError` failures across database operations
+    - **Impact**: Message tracking, news link tracking, and command usage tracking all broken
+    - **Root Cause**: Database schema mismatches and null constraint violations
+    - **Examples**: `sourceNumber must not be null`, `prisma.signalMessage.upsert()` invalid
+    - **Fix**: Audit and fix database schema, add proper null checks, update Prisma models
+    - **Severity**: CRITICAL - Core data persistence broken
+
+13. **❌ !request Command Complete Failure** - HIGH
+    - **Issue**: `TypeError: Cannot read properties of undefined (reading 'get')` in handleRequest
+    - **Impact**: User onboarding completely broken, prevents community growth
+    - **Root Cause**: Missing Map initialization or incorrect context handling in line 5211
+    - **Fix**: Fix undefined Map.get() call, add proper initialization and error handling
+    - **Severity**: HIGH - Blocks new user onboarding workflow
+
+14. **⚠️ Web Scraping Infrastructure Degradation** - MEDIUM
+    - **Issue**: Archive.org failures (404s), paywall bypass failures, scraping timeouts
+    - **Impact**: News summarization feature unreliable, content extraction broken
+    - **Root Cause**: Third-party service reliability, outdated scraping methods
+    - **Fix**: Implement fallback scraping methods, improve error handling, add retry logic
+    - **Severity**: MEDIUM - Affects news processing quality
+
+15. **✅ PDF Command Working Correctly** - INFO
+    - **Status**: PDF processing functionality confirmed working in production logs
+    - **Performance**: Successfully extracted 12,498 chars, compressed to 3,006 chars
+    - **No Issues**: No fixes needed for PDF command functionality
+
 ### 🔧 Immediate Action Items
 
 #### Legacy Issues
@@ -225,11 +254,12 @@
    - Better error reporting to users
 
 #### NEW Infrastructure Critical Fixes (September 6, 2025)
-6. **Fix Socket Connection Issues** - CRITICAL PRIORITY
-   - Implement single daemon instance enforcement
-   - Add proper daemon cleanup on startup/shutdown
-   - Implement retry logic with exponential backoff
-   - Add health check endpoints for monitoring
+6. **✅ Fix Socket Connection Issues** - CRITICAL PRIORITY ✅ **COMPLETED**
+   - ✅ Implemented single daemon instance enforcement with PID files
+   - ✅ Added proper daemon cleanup on startup/shutdown with signal handlers
+   - ✅ Implemented retry logic with exponential backoff (1s to 30s)
+   - ✅ Added health check endpoints and progress logging
+   - **Status**: RESOLVED - Bot now starts reliably in 2-3 seconds
 
 7. **Resolve Module Import Errors** - HIGH PRIORITY
    - Audit and fix broken import paths in start-signal-bot.js
@@ -243,13 +273,26 @@
    - Add circuit breaker pattern for failing services
    - Create timeout configuration management
 
-9. **Daemon Process Management** - MEDIUM PRIORITY
-   - Implement PID file management
-   - Add proper signal handlers for cleanup
-   - Create daemon status monitoring
-   - Add automatic recovery mechanisms
+9. **Fix Database Schema Validation Errors** - CRITICAL PRIORITY **NEW**
+   - Audit Prisma schema for null constraint violations
+   - Fix signalMessage.upsert() sourceNumber null issues
+   - Fix newsLink.create() validation failures
+   - Add proper null checks and data validation
+   - Update database migrations if needed
 
-10. **Signal CLI Version Compatibility** - MEDIUM PRIORITY
+10. **Fix !request Command Failure** - HIGH PRIORITY **NEW**
+    - Debug handleRequest TypeError at line 5211 in native-daemon-service.js
+    - Fix undefined Map.get() calls in request handling
+    - Add proper Map initialization and error handling
+    - Test onboarding workflow end-to-end
+
+11. **Daemon Process Management** - MEDIUM PRIORITY
+    - Implement PID file management
+    - Add proper signal handlers for cleanup
+    - Create daemon status monitoring
+    - Add automatic recovery mechanisms
+
+12. **Signal CLI Version Compatibility** - MEDIUM PRIORITY
     - Audit current Signal CLI version vs API usage
     - Update to latest compatible Signal CLI version
     - Implement feature detection and fallbacks

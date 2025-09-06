@@ -5366,11 +5366,21 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     
     // Store in database for persistence
     try {
+      // Handle both sourceNumber and sourceUuid based messages
+      const identifier = message.sourceNumber || message.sourceUuid;
+      if (!identifier) {
+        console.log('⚠️ Skipping database storage - no sourceNumber or sourceUuid');
+        return;
+      }
+      
+      // Use sourceNumber if available, otherwise use prefixed UUID
+      const dbSourceNumber = message.sourceNumber || `uuid:${message.sourceUuid}`;
+      
       await this.prisma.signalMessage.upsert({
         where: {
           timestamp_sourceNumber_groupId: {
             timestamp: BigInt(message.timestamp),
-            sourceNumber: message.sourceNumber,
+            sourceNumber: dbSourceNumber,
             groupId: groupId === 'dm' ? null : groupId
           }
         },
@@ -5383,7 +5393,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         create: {
           groupId: groupId === 'dm' ? null : groupId,
           groupName: message.groupName || null,
-          sourceNumber: message.sourceNumber,
+          sourceNumber: dbSourceNumber,
           sourceName: message.sourceName || null,
           sourceUuid: message.sourceUuid || null,
           message: message.message,

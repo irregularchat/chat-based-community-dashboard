@@ -31,6 +31,8 @@ class NativeSignalBotService extends EventEmitter {
     this.phoneNumber = config.phoneNumber;
     this.socketPath = config.socketPath || '/tmp/signal-cli-socket';
     this.dataDir = config.dataDir || path.join(process.cwd(), 'signal-data');
+    this.pidFilePath = path.join(this.dataDir, 'signal-daemon.pid');
+    this.lockFilePath = path.join(this.dataDir, 'signal-daemon.lock');
     this.aiEnabled = config.aiEnabled || false;
     this.openAiApiKey = config.openAiApiKey;
     
@@ -49,7 +51,12 @@ class NativeSignalBotService extends EventEmitter {
     this.isListening = false;
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 5;
+    this.retryDelay = 1000; // Start with 1 second
+    this.maxRetryDelay = 30000; // Max 30 seconds
     this.startTime = Date.now();
+    
+    // Setup process cleanup handlers
+    this.setupCleanupHandlers();
     
     // Message history for summarization (store recent messages per group)
     this.messageHistory = new Map(); // groupId -> array of recent messages
@@ -843,17 +850,180 @@ class NativeSignalBotService extends EventEmitter {
     return commands;
   }
 
+  // Process cleanup handlers
+  setupCleanupHandlers() {
+    const cleanup = async () => {
+      console.log('🧹 Cleaning up Signal CLI daemon...');
+      await this.cleanup();
+      process.exit(0);
+    };
+
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
+    process.on('uncaughtException', async (error) => {
+      console.error('💥 Uncaught exception:', error);
+      await this.cleanup();
+      process.exit(1);
+    });
+    process.on('unhandledRejection', async (reason, promise) => {
+      console.error('💥 Unhandled rejection at:', promise, 'reason:', reason);
+      await this.cleanup();
+      process.exit(1);
+    });
+  }
+
+  // Check if another daemon instance is running
+  isDaemonRunning() {
+    try {
+      if (fs.existsSync(this.pidFilePath)) {
+        const pid = fs.readFileSync(this.pidFilePath, 'utf8').trim();
+        try {
+          // Check if process is actually running
+          process.kill(pid, 0);
+          return true;
+        } catch (e) {
+          // Process doesn't exist, remove stale PID file
+          fs.unlinkSync(this.pidFilePath);
+          return false;
+        }
+      }
+      return false;
+    } catch (error) {
+      console.warn('⚠️ Error checking daemon status:', error.message);
+      return false;
+    }
+  }
+
+  // Create lock file to prevent multiple instances
+  createLockFile() {
+    try {
+      if (fs.existsSync(this.lockFilePath)) {
+        const lockContent = fs.readFileSync(this.lockFilePath, 'utf8');
+        const { pid, timestamp } = JSON.parse(lockContent);
+        
+        // Check if the locked process is still running
+        try {
+          process.kill(pid, 0);
+          throw new Error(`Another daemon instance is already running (PID: ${pid})`);
+        } catch (killError) {
+          if (killError.code === 'ESRCH') {
+            // Process doesn't exist, remove stale lock
+            fs.unlinkSync(this.lockFilePath);
+          } else {
+            throw killError;
+          }
+        }
+      }
+
+      // Create new lock file
+      const lockData = {
+        pid: process.pid,
+        timestamp: Date.now(),
+        socketPath: this.socketPath,
+        phoneNumber: this.phoneNumber
+      };
+      fs.writeFileSync(this.lockFilePath, JSON.stringify(lockData, null, 2));
+      
+      // Write PID file
+      fs.writeFileSync(this.pidFilePath, process.pid.toString());
+      console.log(`🔒 Created lock file (PID: ${process.pid})`);
+    } catch (error) {
+      console.error('❌ Failed to create lock file:', error.message);
+      throw error;
+    }
+  }
+
+  // Remove lock and PID files
+  removeLockFile() {
+    try {
+      if (fs.existsSync(this.lockFilePath)) {
+        fs.unlinkSync(this.lockFilePath);
+      }
+      if (fs.existsSync(this.pidFilePath)) {
+        fs.unlinkSync(this.pidFilePath);
+      }
+      console.log('🔓 Removed lock files');
+    } catch (error) {
+      console.warn('⚠️ Error removing lock files:', error.message);
+    }
+  }
+
+  // Clean up daemon and files
+  async cleanup() {
+    console.log('🧹 Starting cleanup...');
+    
+    this.isListening = false;
+    
+    // Close socket connection
+    if (this.socket) {
+      this.socket.end();
+      this.socket = null;
+    }
+
+    // Stop daemon process
+    if (this.daemon) {
+      console.log('⏹️ Stopping daemon process...');
+      this.daemon.kill('SIGTERM');
+      
+      // Wait for graceful shutdown with timeout
+      await new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          if (this.daemon) {
+            console.log('🔪 Force killing daemon...');
+            this.daemon.kill('SIGKILL');
+          }
+          resolve();
+        }, 5000);
+        
+        this.daemon.on('close', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+      });
+      
+      this.daemon = null;
+    }
+
+    // Clean up socket file
+    if (fs.existsSync(this.socketPath)) {
+      try {
+        fs.unlinkSync(this.socketPath);
+        console.log('🧹 Removed socket file');
+      } catch (error) {
+        console.warn('⚠️ Error removing socket file:', error.message);
+      }
+    }
+
+    // Remove lock files
+    this.removeLockFile();
+    
+    console.log('✅ Cleanup completed');
+  }
+
   async startDaemon() {
     console.log('🔄 Starting signal-cli daemon...');
+    
+    // Check for existing daemon instances
+    if (this.isDaemonRunning()) {
+      throw new Error('Another Signal CLI daemon instance is already running');
+    }
     
     // Ensure data directory exists
     if (!fs.existsSync(this.dataDir)) {
       fs.mkdirSync(this.dataDir, { recursive: true });
     }
     
-    // Remove existing socket if it exists
+    // Create lock file to prevent multiple instances
+    this.createLockFile();
+    
+    // Clean up any leftover socket file
     if (fs.existsSync(this.socketPath)) {
-      fs.unlinkSync(this.socketPath);
+      try {
+        fs.unlinkSync(this.socketPath);
+        console.log('🧹 Removed existing socket file');
+      } catch (error) {
+        console.warn('⚠️ Could not remove existing socket file:', error.message);
+      }
     }
     
     // Start signal-cli daemon
@@ -878,11 +1048,26 @@ class NativeSignalBotService extends EventEmitter {
     this.daemon.on('close', (code) => {
       console.log(`🔴 Signal daemon exited with code ${code}`);
       this.daemon = null;
+      this.removeLockFile(); // Clean up lock files when daemon exits
       
       if (this.isListening && this.reconnectAttempts < this.maxReconnectAttempts) {
-        console.log('🔄 Attempting to restart daemon...');
+        console.log(`🔄 Attempting to restart daemon (attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})...`);
         this.reconnectAttempts++;
-        setTimeout(() => this.startDaemon(), 5000);
+        
+        // Exponential backoff: 1s, 2s, 4s, 8s, 16s, then 30s max
+        const delay = Math.min(this.retryDelay * Math.pow(2, this.reconnectAttempts - 1), this.maxRetryDelay);
+        console.log(`⏰ Waiting ${delay}ms before restart...`);
+        
+        setTimeout(async () => {
+          try {
+            await this.startDaemon();
+          } catch (error) {
+            console.error('❌ Failed to restart daemon:', error.message);
+          }
+        }, delay);
+      } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+        console.error('❌ Max reconnect attempts reached, giving up');
+        this.emit('error', new Error('Daemon failed to restart after maximum attempts'));
       }
     });
     
@@ -892,16 +1077,30 @@ class NativeSignalBotService extends EventEmitter {
   }
 
   async waitForSocket() {
+    const maxWaitTime = 60000; // Increased to 60 seconds
+    const checkInterval = 500;
+    
     return new Promise((resolve, reject) => {
+      let attempts = 0;
+      const maxAttempts = maxWaitTime / checkInterval;
+      
       const checkSocket = () => {
+        attempts++;
+        
         if (fs.existsSync(this.socketPath)) {
+          console.log(`📡 Socket available after ${attempts * checkInterval}ms`);
           resolve();
+        } else if (attempts >= maxAttempts) {
+          reject(new Error(`Socket timeout after ${maxWaitTime}ms - daemon may have failed to start properly`));
         } else {
-          setTimeout(checkSocket, 500);
+          // Log progress every 10 seconds
+          if (attempts % 20 === 0) {
+            console.log(`⏳ Still waiting for socket... (${attempts * checkInterval}ms)`);
+          }
+          setTimeout(checkSocket, checkInterval);
         }
       };
       
-      setTimeout(() => reject(new Error('Socket timeout')), 30000);
       checkSocket();
     });
   }
@@ -5197,10 +5396,25 @@ Return ONLY valid JSON with these fields. Use null for missing values.`;
   async handleRequest(context) {
     const { args, groupId, groupName, sender, sourceNumber, mentions, message } = context;
     
-    // Only work in entry room
-    const isEntryRoom = groupName && (groupName.toLowerCase().includes('entry') || groupName.toLowerCase().includes('indoc'));
-    if (!isEntryRoom) {
-      return '❌ The !request command only works in the Entry/INDOC room';
+    // Only work in entry room - check both groupId and groupName
+    const entryRoomId = process.env.ENTRY_ROOM_ID;
+    const normalizedGroupId = this.normalizeGroupId(groupId);
+    const normalizedEntryId = this.normalizeGroupId(entryRoomId);
+    
+    // Check if we're in the entry room by ID or name
+    const isEntryRoomById = normalizedGroupId === normalizedEntryId;
+    const isEntryRoomByName = groupName && (groupName.toLowerCase().includes('entry') || groupName.toLowerCase().includes('indoc'));
+    
+    if (!isEntryRoomById && !isEntryRoomByName) {
+      // Also check our cached group data in case groupName wasn't provided
+      const cachedGroup = this.groupCache.get(normalizedGroupId);
+      const cachedName = cachedGroup?.name || '';
+      const isEntryRoomByCachedName = cachedName.toLowerCase().includes('entry') || cachedName.toLowerCase().includes('indoc');
+      
+      if (!isEntryRoomByCachedName) {
+        console.log(`❌ !request rejected - Not in Entry room. GroupId: ${groupId}, GroupName: ${groupName || 'null'}, CachedName: ${cachedName || 'null'}`);
+        return '❌ The !request command only works in the Entry/INDOC room';
+      }
     }
     
     // Check if user is mentioning someone (for admin to request intro from new member)

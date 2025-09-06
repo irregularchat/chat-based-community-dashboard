@@ -159,8 +159,46 @@
    - **Impact**: User profiles may not display correctly
    - **Fix**: Implement fallback for missing profiles
 
+#### NEW Signal CLI Infrastructure Issues (September 6, 2025)
+
+7. **🔴 Socket Connection Failures**
+   - **Issue**: "Socket timeout" errors in native-daemon-service.js at multiple line numbers (895, 854, 725, 731)
+   - **Impact**: Bot fails to start, cannot connect to Signal CLI daemon
+   - **Root Cause**: Multiple daemon instances competing for resources
+   - **Fix**: Implement proper daemon cleanup and single-instance enforcement
+   - **Severity**: CRITICAL - Bot cannot start
+
+8. **⚠️ Module Loading Errors**
+   - **Issue**: "Cannot find module './src/lib/signal-cli/rest-bot-service'" in start-signal-bot.js
+   - **Impact**: Bot startup failures with MODULE_NOT_FOUND errors
+   - **Root Cause**: Broken import path or missing file
+   - **Fix**: Update import paths to match actual file structure
+   - **Severity**: HIGH - Prevents bot initialization
+
+9. **🔴 Signal CLI API Timeout Issues** 
+   - **Issue**: "Request timeout" errors in native-daemon-service.js:2245:16
+   - **Impact**: Group operations fail ("Error getting groups", "Error in handleAddTo")
+   - **Root Cause**: Signal CLI API calls timing out after default timeout period
+   - **Fix**: Increase timeout values, implement retry logic, add circuit breaker
+   - **Severity**: HIGH - Core group functionality broken
+
+10. **⚠️ Daemon Process Management**
+    - **Issue**: "Config file is in use by another instance, waiting..." conflicts
+    - **Impact**: Multiple daemon instances causing resource conflicts at `/tmp/signal-cli-socket`
+    - **Root Cause**: Improper daemon cleanup between restarts
+    - **Fix**: PID file management, proper process termination, socket cleanup
+    - **Severity**: MEDIUM - Affects reliability
+
+11. **📝 Signal CLI Method Compatibility**
+    - **Issue**: "Method not implemented" errors in Signal CLI API
+    - **Impact**: Some bot commands may fail unexpectedly
+    - **Root Cause**: Signal CLI version compatibility or API changes
+    - **Fix**: Update to compatible Signal CLI version, implement method fallbacks
+    - **Severity**: MEDIUM - Affects feature availability
+
 ### 🔧 Immediate Action Items
 
+#### Legacy Issues
 1. **Test and verify !removeuser nonadmin fix**
    - Ensure admins are never removed
    - Add comprehensive logging
@@ -185,6 +223,37 @@
    - Add null checks throughout
    - Implement graceful degradation
    - Better error reporting to users
+
+#### NEW Infrastructure Critical Fixes (September 6, 2025)
+6. **Fix Socket Connection Issues** - CRITICAL PRIORITY
+   - Implement single daemon instance enforcement
+   - Add proper daemon cleanup on startup/shutdown
+   - Implement retry logic with exponential backoff
+   - Add health check endpoints for monitoring
+
+7. **Resolve Module Import Errors** - HIGH PRIORITY
+   - Audit and fix broken import paths in start-signal-bot.js
+   - Ensure all referenced modules exist
+   - Update package.json dependencies if needed
+   - Add module existence validation
+
+8. **Fix Signal CLI API Timeouts** - HIGH PRIORITY
+   - Increase default timeout values from current settings
+   - Implement retry logic for failed API calls
+   - Add circuit breaker pattern for failing services
+   - Create timeout configuration management
+
+9. **Daemon Process Management** - MEDIUM PRIORITY
+   - Implement PID file management
+   - Add proper signal handlers for cleanup
+   - Create daemon status monitoring
+   - Add automatic recovery mechanisms
+
+10. **Signal CLI Version Compatibility** - MEDIUM PRIORITY
+    - Audit current Signal CLI version vs API usage
+    - Update to latest compatible Signal CLI version
+    - Implement feature detection and fallbacks
+    - Document version requirements
 
 ### 📋 Upcoming Features
 

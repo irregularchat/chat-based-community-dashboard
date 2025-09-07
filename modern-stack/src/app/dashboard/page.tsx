@@ -1649,13 +1649,13 @@ export default function UserDashboard() {
                     <Button
                       variant="outline"
                       className="h-auto p-4 flex flex-col items-center gap-2"
-                      onClick={() => window.location.href = '/matrix'}
+                      onClick={() => window.location.href = '/community'}
                     >
-                      <div className="text-2xl">🔗</div>
+                      <div className="text-2xl">🏘️</div>
                       <div className="text-center">
-                        <div className="font-medium">Matrix Integration</div>
+                        <div className="font-medium">Community Management</div>
                         <div className="text-sm text-muted-foreground">
-                          Room & messaging management
+                          Matrix & Signal platform management
                         </div>
                       </div>
                     </Button>
@@ -1737,13 +1737,13 @@ export default function UserDashboard() {
                     <Button
                       variant="outline"
                       className="h-auto p-4 flex flex-col items-center gap-2"
-                      onClick={() => window.location.href = '/matrix'}
+                      onClick={() => window.location.href = '/community'}
                     >
-                      <div className="text-2xl">🔗</div>
+                      <div className="text-2xl">🏘️</div>
                       <div className="text-center">
-                        <div className="font-medium">Matrix Integration</div>
+                        <div className="font-medium">Community Management</div>
                         <div className="text-sm text-muted-foreground">
-                          Room & messaging management
+                          Matrix & Signal platform management
                         </div>
                       </div>
                     </Button>

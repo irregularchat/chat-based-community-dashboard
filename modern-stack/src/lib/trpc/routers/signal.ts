@@ -1207,4 +1207,29 @@ export const signalRouter = createTRPCRouter({
         });
       }
     }),
+
+  // Update Signal profile (display name and/or avatar)
+  updateProfile: moderatorProcedure
+    .input(z.object({
+      displayName: z.string().optional(),
+      avatarBase64: z.string().optional()
+    }))
+    .mutation(async ({ input }) => {
+      try {
+        // TODO: Implement actual Signal CLI profile update
+        // For now, return a success message as a placeholder
+        console.log('Profile update requested:', input);
+        
+        return {
+          success: true,
+          message: 'Profile update placeholder - implement Signal CLI profile update'
+        };
+      } catch (error) {
+        console.error('Error updating profile:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update profile'
+        });
+      }
+    }),
 });

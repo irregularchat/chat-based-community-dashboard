@@ -130,17 +130,16 @@ export default function AdminSignalPage() {
     },
   });
 
-  // TODO: Implement updateProfile API
-  // const updateProfileMutation = trpc.signal.updateProfile.useMutation({
-  //   onSuccess: (data) => {
-  //     toast.success(data.message || 'Profile updated successfully');
-  //     setProfileForm({ displayName: '', avatarBase64: '' });
-  //     refetchAccount();
-  //   },
-  //   onError: (error) => {
-  //     toast.error(`Profile update failed: ${error.message}`);
-  //   },
-  // });
+  const updateProfileMutation = trpc.signal.updateProfile.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.message || 'Profile updated successfully');
+      setProfileForm({ displayName: '', avatarBase64: '' });
+      refetchAccount();
+    },
+    onError: (error) => {
+      toast.error(`Profile update failed: ${error.message}`);
+    },
+  });
 
   const generateQRMutation = trpc.signal.generateQRCode.useMutation({
     onSuccess: (data) => {

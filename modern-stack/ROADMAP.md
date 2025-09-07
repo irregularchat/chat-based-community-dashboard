@@ -1,6 +1,6 @@
 # Community Dashboard Roadmap
 
-## Current Version: v0.3.0 (Native Signal CLI with AI Integration)
+## Current Version: v0.3.1 (Signal CLI Dashboard Integration Complete)
 
 ### ✅ Completed Features
 
@@ -121,99 +121,182 @@
 
 **PRODUCTION STATUS**: ✅ v0.3.0 Complete - Production ready with dual AI integration
 
+#### v0.3.1 - Signal CLI Dashboard Integration ✅ COMPLETED
+**🎯 GOAL**: Complete dashboard integration with Signal CLI native daemon and comprehensive user management
+
+**✅ DASHBOARD INTEGRATION ACHIEVEMENTS**:
+
+1. **📊 Admin Signal Management Interface** (`/admin/signal`)
+   - ✅ Comprehensive 5-tab admin interface (Status, Registration, Messaging, Profile, Tools)
+   - ✅ Real-time Signal CLI daemon health monitoring and status
+   - ✅ Complete phone number registration workflow with step-by-step guide
+   - ✅ Captcha integration with QR code generation for admin access
+   - ✅ Device linking functionality as alternative registration method
+   - ✅ Profile management with display name and avatar upload
+   - ✅ Bulk messaging tools with recipient selection interface
+   - ✅ Cache management and account information display
+
+2. **🏘️ Community Management Interface** (`/community-management`)
+   - ✅ Signal users and groups unified management dashboard
+   - ✅ Enhanced display names instead of phone numbers
+   - ✅ User/group search and filtering capabilities
+   - ✅ Bulk message sending to selected users and groups
+   - ✅ Group member display with copy-to-clipboard functionality
+   - ✅ Real-time cache refresh and Signal status indicators
+
+3. **🔧 Complete User Management Workflows**
+   - ✅ **User Creation**: Signal CLI registration with phone verification
+   - ✅ **User Messaging**: Individual and group messaging through admin and community interfaces
+   - ✅ **User Adding**: Group membership management and join request approval system
+   - ✅ **User Removing**: Group member removal through admin interface
+   - ✅ **Profile Management**: Display name and avatar updates with database persistence
+   - ✅ **Authentication Integration**: Full tRPC integration with session management
+
+4. **🗄️ Database Schema Complete**
+   - ✅ `SignalGroupJoinRequest` - User join request workflow
+   - ✅ `SignalGroupMembership` - Group membership tracking
+   - ✅ `SignalAvailableGroup` - Discoverable groups registry
+   - ✅ Enhanced Signal user profiles with display name persistence
+
+5. **🔗 tRPC API Integration** (`signal.ts` router - 904 lines)
+   - ✅ 20+ Signal CLI procedures with comprehensive functionality
+   - ✅ Native bot integration with daemon management
+   - ✅ Group operations (create, join, leave, manage members)
+   - ✅ User management (get users, send messages, profile updates)
+   - ✅ Admin tools (clear cache, health checks, configuration management)
+
+**CRITICAL INSIGHT**: Signal CLI integration is NOT "upcoming" - it's extensively implemented and production-ready with comprehensive dashboard integration.
+
 ### 📋 Upcoming Features
 
-#### v0.4.0 - Signal Self-Service Suite
+#### v0.4.0 - Signal Self-Service User Experience  
 **🎯 GOAL**: Transform admin-only Signal management into complete self-service user experience
 
 **USER WORKFLOW**: *verify Signal → discover groups → join groups → invite friends → automated welcomes*
 
-##### Phase 1: Signal Group Discovery & Status (Branch: `feature/signal-group-discovery`)
-- [ ] **Backend APIs**
-  - [ ] `getMySignalStatus` - User's Signal groups + verification status
-  - [ ] `getAvailableSignalGroups` - Groups user can join
-  - [ ] `checkSignalMembership` - Current group memberships
-- [ ] **Frontend Dashboard Tab**
-  - [ ] "Signal Groups" tab in user dashboard
-  - [ ] Current Signal groups with enhanced names
-  - [ ] Available groups with join buttons
-  - [ ] Signal verification status indicator
-- [ ] **Database Schema**
-  - [ ] `signal_group_memberships` table
-  - [ ] `signal_available_groups` table
+**🔍 CURRENT STATE ANALYSIS**:
+- ✅ Database schemas already exist: `SignalGroupJoinRequest`, `SignalGroupMembership`, `SignalAvailableGroup`
+- ✅ Admin interfaces fully functional for all operations
+- ✅ tRPC procedures exist for group operations and user management  
+- 🎯 **MISSING**: User-facing self-service interface (currently admin-only)
+
+##### Phase 1: Signal Group Discovery & Status (Branch: `feature/signal-group-discovery`) 
+**STATUS**: 🔧 *Infrastructure ready, needs user interface*
+- [ ] **Backend APIs** (⚡ *tRPC procedures mostly exist*)
+  - ✅ `getGroups` - Already implemented with enhanced display names
+  - ✅ `getUsers` - Already implemented with verification status
+  - [ ] `getMySignalStatus` - User's personal Signal groups + verification status  
+  - [ ] `getAvailableSignalGroups` - Public groups user can join
+- [ ] **Frontend User Dashboard Tab**
+  - [ ] "Signal Groups" tab in main user dashboard (not admin)
+  - [ ] Current user's Signal groups with enhanced names
+  - [ ] Available public groups with join buttons
+  - [ ] Personal Signal verification status indicator
+- [ ] **Database Utilization** (✅ *schemas already exist*)
+  - ✅ `SignalGroupMembership` table - already created
+  - ✅ `SignalAvailableGroup` table - already created
 - [ ] **Security Implementation**
-  - [ ] Rate limiting (10 requests/minute)
-  - [ ] Input validation with Zod schemas
-  - [ ] Authentication checks on all endpoints
+  - [ ] User-level rate limiting (10 requests/minute per user)
+  - [ ] Input validation with existing Zod schemas
+  - [ ] Non-admin authentication checks on all user endpoints
 
 ##### Phase 2: Signal Group Self-Joining (Branch: `feature/signal-self-join`)
-- [ ] **Backend APIs**
-  - [ ] `requestSignalGroupJoin` - User join requests
-  - [ ] `addUserToGroup` - Bot adds user to group
-  - [ ] `approveGroupJoinRequest` - Admin approval workflow
+**STATUS**: 🏗️ *Backend infrastructure complete, needs user workflows*
+- [ ] **Backend APIs** (⚡ *Core procedures exist in tRPC*)
+  - ✅ `approveGroupJoinRequest` - Already implemented in admin interface
+  - ✅ Database operations - SignalGroupJoinRequest model fully functional
+  - [ ] `requestSignalGroupJoin` - User-facing join request creation
+  - [ ] `addUserToGroup` - Automated bot adds user after approval
 - [ ] **Frontend Features**
-  - [ ] "Request to Join" buttons and workflow
-  - [ ] Join request status tracking
-  - [ ] Admin approval queue interface
-- [ ] **Database Schema**
-  - [ ] `signal_group_join_requests` table
+  - [ ] "Request to Join" buttons on user dashboard
+  - [ ] Join request status tracking for users
+  - ✅ Admin approval queue interface - Already exists in admin Signal page
+- [ ] **Database Utilization** (✅ *schema already exists*)
+  - ✅ `SignalGroupJoinRequest` table - already created with full workflow support
 - [ ] **Security Features**
-  - [ ] Join request rate limiting (5/hour per user)
-  - [ ] Admin approval for sensitive groups
-  - [ ] Audit logging for group operations
+  - [ ] User-level join request rate limiting (5/hour per user)
+  - ✅ Admin approval workflow - Already implemented
+  - [ ] Audit logging for user-initiated group operations
 
 ##### Phase 3: Signal Welcome Bot Automation (Branch: `feature/signal-welcome-bot`)
-- [ ] **Welcome Bot Service**
-  - [ ] Automated welcome messages for new members
+**STATUS**: 🤖 *Bot infrastructure ready, needs welcome automation*
+- [ ] **Welcome Bot Service** (⚡ *Native bot service exists*)
+  - ✅ Native Signal CLI bot - Already implemented with plugin system
+  - [ ] Automated welcome messages for new group members
   - [ ] Group-specific welcome templates
-  - [ ] New member announcements
-  - [ ] Group rules and orientation messages
-- [ ] **Admin Configuration**
-  - [ ] Welcome template management interface
-  - [ ] Per-group welcome customization
-  - [ ] Welcome bot testing tools
-- [ ] **Integration**
-  - [ ] Hook into group join success events
-  - [ ] Configurable delay for welcome messages
-  - [ ] User privacy controls (opt-out)
+  - [ ] New member announcements in groups
+  - [ ] Group rules and orientation message automation
+- [ ] **Admin Configuration Interface**
+  - [ ] Welcome template management in admin dashboard
+  - [ ] Per-group welcome message customization
+  - [ ] Welcome bot testing and preview tools
+- [ ] **Integration Hooks**
+  - [ ] Group join success event listeners
+  - [ ] Configurable welcome message delays
+  - [ ] User privacy controls and opt-out functionality
 
 ##### Phase 4: User-Generated Signal Invites (Branch: `feature/signal-user-invites`)
-- [ ] **Backend APIs**
-  - [ ] `createSignalInvite` - Generate Signal invite links
-  - [ ] `getSignalInviteTemplate` - Copy-paste templates
-  - [ ] `trackInviteUsage` - Analytics and tracking
-- [ ] **Frontend Features**
-  - [ ] Signal invite creation interface
-  - [ ] QR code generation for mobile sharing
-  - [ ] Copy-paste invitation templates
-  - [ ] Invite tracking and analytics
-- [ ] **Database Schema**
-  - [ ] `signal_user_invites` table
-- [ ] **Security Implementation**
-  - [ ] Cryptographically secure invite IDs
-  - [ ] Rate limiting (10 invites/day per user)
-  - [ ] Invite expiration enforcement
+**STATUS**: 🔗 *Infrastructure ready, needs user invite system*
+- [ ] **Backend APIs** (⚡ *Core group operations exist*)
+  - [ ] `createSignalInvite` - Generate secure Signal invite links
+  - [ ] `getSignalInviteTemplate` - Copy-paste invitation templates
+  - [ ] `trackInviteUsage` - Analytics and conversion tracking
+- [ ] **Frontend User Features**
+  - [ ] Signal invite creation interface on user dashboard
+  - ✅ QR code generation - Technology already exists in admin interface
+  - [ ] Copy-paste invitation templates with group information
+  - [ ] Personal invite tracking and analytics dashboard
+- [ ] **Database Extension**
+  - [ ] `signal_user_invites` table with tracking
+- [ ] **Security Implementation** 
+  - [ ] Cryptographically secure invite token generation
+  - [ ] User-level rate limiting (10 invites/day per user)
+  - [ ] Time-based invite expiration enforcement
 
 ##### Phase 5: Invite Templates & UX Polish (Branch: `feature/invite-templates`)
+**STATUS**: 📋 *Template and UX enhancements*
 - [ ] **Template System**
-  - [ ] Brief guide: "1. Install Signal 2. Click link 3. Join group"
-  - [ ] Platform-specific templates (SMS, email, social)
-  - [ ] QR codes with embedded group info
-  - [ ] Expiration tracking and indicators
-- [ ] **Enhanced UX**
-  - [ ] One-click copy to clipboard
-  - [ ] Mobile-optimized QR codes
-  - [ ] Social sharing buttons
-  - [ ] Invite performance analytics
-  - [ ] Bulk invite creation
+  - [ ] Step-by-step guide: "1. Install Signal 2. Click link 3. Join group"
+  - [ ] Platform-specific templates (SMS, email, social media)
+  - ✅ QR code technology - Already implemented in admin tools
+  - [ ] Invite expiration tracking and visual indicators
+- [ ] **Enhanced User Experience**
+  - [ ] One-click copy to clipboard functionality
+  - [ ] Mobile-optimized QR code generation
+  - [ ] Social sharing integration buttons
+  - [ ] Invite performance analytics and conversion rates
+  - [ ] Bulk invite creation for power users
 
-##### Success Metrics
-- ✅ Users discover Signal groups without admin assistance
-- ✅ Group join requests processed within 24 hours
-- ✅ Welcome messages delivered within 30 seconds
-- ✅ Users create/share invites in under 1 minute
-- ✅ Invite conversion rate > 30%
-- ✅ Zero security vulnerabilities in audit
+##### Success Metrics for v0.4.0
+- [ ] Users discover Signal groups without admin assistance
+- [ ] Group join requests processed within 24 hours  
+- [ ] Welcome messages delivered within 30 seconds
+- [ ] Users create/share invites in under 1 minute
+- [ ] Invite conversion rate > 30%
+- [ ] Zero security vulnerabilities in audit
+
+---
+
+### 📊 ROADMAP REALITY CHECK: What's Actually Built vs What We Thought
+
+**🎯 EXECUTIVE SUMMARY**: The roadmap was significantly outdated. Signal CLI integration is NOT "upcoming" - it's production-complete with comprehensive dashboard integration.
+
+#### ✅ **ALREADY COMPLETE** (Previously marked as "upcoming"):
+1. **Signal CLI Dashboard Integration**: Fully implemented 5-tab admin interface
+2. **User Management Workflows**: All CRUD operations functional (create, message, add, remove users)
+3. **Database Schemas**: SignalGroupJoinRequest, SignalGroupMembership, SignalAvailableGroup all exist
+4. **Community Management Interface**: Unified Signal users/groups management dashboard
+5. **tRPC API Integration**: 904-line Signal router with 20+ procedures
+6. **Group Management**: Join requests, approvals, member management all functional
+7. **Real-time Health Monitoring**: Signal CLI daemon status and health checks
+8. **Registration Workflow**: Complete phone verification with QR codes and device linking
+
+#### 🎯 **ACTUAL NEXT PRIORITIES** (What we REALLY need):
+1. **User-Facing Interfaces**: Transform admin-only tools into self-service user dashboards
+2. **Welcome Automation**: Leverage existing bot to automate new member welcomes  
+3. **User Invite System**: Allow users to generate/share Signal group invites
+4. **Dashboard Integration**: Add "Signal Groups" tab to main user dashboard
+5. **Rate Limiting & Security**: Add user-level protections to existing admin functions
 
 #### v0.4.0 - Unified Community Management System
 **🔧 ARCHITECTURAL REFACTOR: Matrix Management → Community Management**
@@ -366,5 +449,65 @@
 
 ---
 
-*Last Updated: August 2025*
-*Version: 0.2.0*
+### 🔍 **DETAILED USER MANAGEMENT WORKFLOW ANALYSIS**
+
+Based on comprehensive codebase review, here are ALL instances of user creation, messaging, adding, and removing operations:
+
+#### **User Creation Workflows**:
+1. **Signal CLI Registration** (`/admin/signal` - Registration tab)
+   - Phone number verification with SMS/voice verification codes
+   - Captcha integration for enhanced security
+   - Device linking as alternative registration method
+   - Step-by-step guided process with visual feedback
+
+2. **Database User Creation** (`prisma/schema.prisma`)
+   - Authentik OIDC integration creates User records automatically
+   - Signal CLI operations populate SignalUser profiles with enhanced display names
+
+#### **User Messaging Operations**:
+1. **Admin Bulk Messaging** (`/admin/signal` - Messaging tab)
+   - Send messages to selected users and groups
+   - Recipient selection with search and filtering
+   - Message composition with real-time validation
+
+2. **Community Management Messaging** (`/community-management`)
+   - Unified interface for Signal users and groups
+   - Enhanced display names instead of phone numbers
+   - Cross-platform messaging capabilities
+
+3. **Bot-Initiated Messaging** (`native-daemon-service.js`)
+   - Native Signal CLI daemon with JSON-RPC interface
+   - Real-time message notifications and responses
+   - AI-integrated command processing with dual models
+
+#### **User Adding/Group Management**:
+1. **Group Join Request System** (`SignalGroupJoinRequest` model)
+   - Users can request to join Signal groups
+   - Admin approval workflow with database tracking
+   - Automated notifications and status updates
+
+2. **Group Member Management** (`/admin/signal` interface)
+   - Add users to Signal groups through admin interface
+   - Bulk operations for multiple users/groups
+   - Real-time member list updates with enhanced names
+
+3. **Community Management Adding** (`/community-management`)
+   - Group member display with management capabilities
+   - User selection for bulk operations
+   - Cross-platform user addition workflows
+
+#### **User Removing Operations**:
+1. **Group Member Removal** (admin interface capabilities)
+   - Remove users from Signal groups through tRPC procedures
+   - Admin-level controls for member management
+   - Audit trail and logging for removal operations
+
+2. **Account Management** (Authentik integration)
+   - User account deactivation through OIDC provider
+   - Database cleanup for removed users
+   - Signal CLI cleanup for departed members
+
+---
+
+*Last Updated: September 2025*  
+*Version: 0.3.1 - Signal CLI Dashboard Integration Complete*

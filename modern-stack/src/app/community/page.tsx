@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { trpc } from '@/lib/trpc/client';
@@ -264,14 +264,30 @@ export default function CommunityManagementPage() {
   };
 
 
+  // Auto-redirect to login after 0.5 seconds if not authenticated
+  useEffect(() => {
+    if (!session) {
+      const timer = setTimeout(() => {
+        router.push('/auth/signin?callbackUrl=' + encodeURIComponent('/community'));
+      }, 500);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [session, router]);
+
   if (!session) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <Card className="w-full max-w-md">
           <CardHeader>
             <CardTitle>Access Denied</CardTitle>
-            <CardDescription>Please sign in to access community management</CardDescription>
+            <CardDescription>Redirecting to sign in page...</CardDescription>
           </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-center py-4">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            </div>
+          </CardContent>
         </Card>
       </div>
     );

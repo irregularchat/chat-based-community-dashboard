@@ -6170,7 +6170,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       
       // Add first few lines as preview if summary failed
       if (summary === 'AI summary unavailable' || summary === 'AI summarization is not enabled') {
-        const preview = textContent.split('\n').slice(0, 5).join('\n');
+        let preview = textContent.split('\n').slice(0, 5).join('\n');
         if (preview.length > 300) {
           preview = preview.substring(0, 300) + '...';
         }

@@ -127,16 +127,16 @@ export default function NavigationHeader() {
 
           {(session.user.isModerator || session.user.isAdmin) && (
             <Button
-              variant={isActive('/matrix') ? 'default' : 'ghost'}
+              variant={isActive('/community') ? 'default' : 'ghost'}
               size="sm"
               className={cn(
                 "text-foreground/60 hover:text-foreground/80",
-                isActive('/matrix') ? "text-foreground" : ""
+                isActive('/community') ? "text-foreground" : ""
               )}
-              onClick={() => handleNavigation('/matrix')}
+              onClick={() => handleNavigation('/community')}
             >
               <MessageSquare className="w-4 h-4 mr-2" />
-              Matrix
+              Community
             </Button>
           )}
 
@@ -180,9 +180,9 @@ export default function NavigationHeader() {
                 </DropdownMenuItem>
               )}
               {(session.user.isModerator || session.user.isAdmin) && (
-                <DropdownMenuItem onClick={() => handleNavigation('/matrix')}>
+                <DropdownMenuItem onClick={() => handleNavigation('/community')}>
                   <MessageSquare className="w-4 h-4 mr-2" />
-                  Matrix
+                  Community
                 </DropdownMenuItem>
               )}
               {session.user.isAdmin && (

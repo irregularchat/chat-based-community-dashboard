@@ -2328,7 +2328,7 @@ Source: [${url}](${url})
 Bypass: [12ft.io](${bypassLinks.twelveft})
 Archive: [Web Archive](${bypassLinks.archiveView})
 
-*Posted automatically by Signal Bot*`;
+Posted automatically by Signal Bot`;
       
       const response = await axios.post(${this.discourseApiUrl}/posts.json, {
         title: title,
@@ -3366,7 +3366,7 @@ Archive: [Web Archive](${bypassLinks.archiveView})
       summary +=  🍴;
     }
     if (repoData.archived) {
-      summary +=  *Archived*;
+      summary +=  (Archived);
     }
     summary += \n;
     summary += Platform: ${repoData.platform}\n;
@@ -5461,7 +5461,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
                          🌐 Timezone: ${eventData.timezone || 'America/New_York'}\n\n +
                          ${eventData.description || ''}\n\n +
                          ---\n +
-                         *Event created via Signal bot by ${createdBy}*;
+                         Event created via Signal bot by ${createdBy};
       
       // Create the topic in Discourse
       const response = await fetch(${this.discourseApiUrl}/posts.json, {
@@ -8078,7 +8078,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         try {
           const topicData = {
             title: title,
-            raw: Question from ${sender}:\n\n${questionText}\n\n---\n*Posted via Signal Bot from ${groupId ? 'group chat' : 'direct message'}*,
+            raw: Question from ${sender}:\n\n${questionText}\n\n---\nPosted via Signal Bot from ${groupId ? 'group chat' : 'direct message'},
             category: 7, // Questions category - updated for IrregularChat forum
             tags: ['question', 'signal-bot']
           };

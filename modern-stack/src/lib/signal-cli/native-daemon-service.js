@@ -49,6 +49,12 @@ class NativeSignalBotService extends EventEmitter {
     this.messageHistory = new Map(); // groupId -> array of recent messages
     this.maxHistoryPerGroup = 50; // Keep last 50 messages per group
     
+    // Duplicate message prevention
+    this.processedMessages = new Set(); // Track processed message IDs
+    this.messageTimestamps = new Map(); // Track message timestamps for deduplication
+    this.duplicateDetectionWindow = 30000; // 30 seconds window for duplicate detection
+    this.instanceId = Math.random().toString(36).substring(7); // Unique instance ID
+    
     // Thread context tracking for AI provider selection
     this.threadContext = new Map(); // messageId -> {provider: 'openai'|'localai', timestamp, groupId}
     this.userAiPreference = new Map(); // groupId:userId -> {provider: 'openai'|'localai', timestamp, lastMessage}
@@ -171,6 +177,69 @@ class NativeSignalBotService extends EventEmitter {
     console.log(`📱 Phone: ${this.phoneNumber}`);
     console.log(`📂 Data Dir: ${this.dataDir}`);
     console.log(`🔌 Socket: ${this.socketPath}`);
+    console.log(`🔒 Instance ID: ${this.instanceId} (for duplicate prevention)`);
+    
+    // Start cleanup interval for duplicate detection
+    this.startCleanupInterval();
+  }
+
+  // Duplicate message detection method
+  isDuplicateMessage(envelope) {
+    if (!envelope || !envelope.timestamp) return false;
+    
+    // Create a unique message ID from envelope data
+    const messageId = this.createMessageId(envelope);
+    
+    // Check if we've already processed this message
+    if (this.processedMessages.has(messageId)) {
+      return true;
+    }
+    
+    // Check for recent messages with same content (temporal deduplication)
+    const now = Date.now();
+    const messageKey = `${envelope.sourceNumber || envelope.sourceUuid}_${envelope.dataMessage?.message || ''}`;
+    
+    if (this.messageTimestamps.has(messageKey)) {
+      const lastSeen = this.messageTimestamps.get(messageKey);
+      if (now - lastSeen < this.duplicateDetectionWindow) {
+        console.log(`⚠️ [Instance ${this.instanceId}] Temporal duplicate detected within ${this.duplicateDetectionWindow}ms`);
+        return true;
+      }
+    }
+    
+    // Mark message as processed
+    this.processedMessages.add(messageId);
+    this.messageTimestamps.set(messageKey, now);
+    
+    return false;
+  }
+
+  // Create unique message ID
+  createMessageId(envelope) {
+    return `${envelope.timestamp}_${envelope.sourceNumber || envelope.sourceUuid}_${envelope.dataMessage?.message?.substring(0, 50) || 'reaction'}`;
+  }
+
+  // Cleanup old entries to prevent memory leaks
+  startCleanupInterval() {
+    setInterval(() => {
+      const now = Date.now();
+      const cutoff = now - this.duplicateDetectionWindow * 2; // Keep twice the detection window
+      
+      // Clean up old timestamps
+      for (const [key, timestamp] of this.messageTimestamps.entries()) {
+        if (timestamp < cutoff) {
+          this.messageTimestamps.delete(key);
+        }
+      }
+      
+      // Clean up old processed message IDs (keep only recent ones)
+      if (this.processedMessages.size > 1000) {
+        // Clear half when we reach 1000 entries
+        const entries = Array.from(this.processedMessages);
+        this.processedMessages.clear();
+        entries.slice(-500).forEach(id => this.processedMessages.add(id));
+      }
+    }, 60000); // Clean every minute
   }
 
   // Security: Input validation methods
@@ -614,6 +683,7 @@ class NativeSignalBotService extends EventEmitter {
       { name: 'random', description: 'Random number', handler: this.handleRandom.bind(this) },
       { name: 'flip', description: 'Flip coin', handler: this.handleFlip.bind(this) },
       { name: 'wayback', description: 'Archive.org wayback lookup', handler: this.handleWayback.bind(this) },
+      { name: 'archive', description: 'Web.archive.org save and lookup', handler: this.handleArchive.bind(this) },
       
       // Forum Plugin Commands (3)
       { name: 'fpost', description: 'Post article to forum', handler: this.handleFPost.bind(this) },
@@ -694,12 +764,11 @@ class NativeSignalBotService extends EventEmitter {
         
         // Regular user commands
         const userCommandsByCategory = {
-          '🔧 Core': ['help', 'ping', 'ai', 'lai', 'summarize', 'tldr', 'zeroeth', 'cleaner'],
+          '🔧 Core': ['help', 'ping', 'ai', 'lai', 'summarize', 'zeroeth', 'cleaner'],
           '❓ Q&A': ['q', 'question', 'questions', 'answer', 'solved'],
           '👥 Community': ['groups', 'join', 'invite'],
-          '📰 News & Repos': ['news', 'newsadd', 'newslist', 'newsremove', 'repo'],
+          '📰 News & Repos': ['news', 'newsadd', 'newslist', 'newsremove', 'repo', 'wayback', 'archive', 'bypass', 'tldr'],
           '📚 Information': ['wiki', 'forum', 'events', 'faq', 'docs', 'links'],
-          '👤 User Management': ['profile', 'bypass'],
           '📄 Forum': ['fpost', 'flatest', 'fsearch', 'categories'],
           '📋 PDF Processing': ['pdf'],
           '👋 Onboarding': ['request']
@@ -711,7 +780,7 @@ class NativeSignalBotService extends EventEmitter {
           '📊 Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'feedback', 'watchdomain']
         };
         
-        let helpText = `🤖 **Signal Bot Commands**\n\n`;
+        let helpText = `🤖 Signal Bot Commands\n\n`;
         
         // Show user commands
         for (const [category, cmds] of Object.entries(userCommandsByCategory)) {
@@ -1286,6 +1355,17 @@ class NativeSignalBotService extends EventEmitter {
             } catch (error) {
               console.error('Repository processing failed, falling back to standard TLDR:', error);
               // Fall through to normal TLDR processing
+            }
+          }
+
+          // Auto-detect PDF URLs and redirect to !pdf command
+          if (url.toLowerCase().includes('.pdf') || url.toLowerCase().endsWith('.pdf')) {
+            console.log('🔍 PDF URL detected, redirecting to PDF processor...');
+            try {
+              return await this.handlePdf({ ...context, args: [url] });
+            } catch (error) {
+              console.error('PDF processing failed, falling back to standard TLDR:', error);
+              return '❌ PDF processing failed. The URL appears to be a PDF but could not be processed.';
             }
           }
           
@@ -2281,6 +2361,12 @@ ${content.content.substring(0, 3000)}...`;
     const dataMessage = envelope.dataMessage;
     const reactionMessage = envelope.reactionMessage;
     
+    // Check for duplicate messages
+    if (this.isDuplicateMessage(envelope)) {
+      console.log(`⚠️ [Instance ${this.instanceId}] Duplicate message detected, skipping processing`);
+      return;
+    }
+    
     // Handle reaction messages separately
     if (reactionMessage) {
       await this.handleReactionMessage(envelope, reactionMessage);
@@ -2784,6 +2870,10 @@ ${content.content.substring(0, 3000)}...`;
     }
   }
 
+  async isDaemonRunning() {
+    return fs.existsSync(this.socketPath);
+  }
+
   async startListening() {
     if (this.isListening) {
       console.log('⚠️ Already listening');
@@ -2799,8 +2889,17 @@ ${content.content.substring(0, 3000)}...`;
     this.isListening = true;
     
     try {
-      await this.startDaemon();
-      await this.connectSocket();
+      // Check if daemon is already running
+      const daemonRunning = await this.isDaemonRunning();
+      if (daemonRunning) {
+        console.log('🔌 Daemon already running, connecting to existing socket...');
+        await this.connectSocket();
+      } else {
+        console.log('🚀 Starting new daemon...');
+        await this.startDaemon();
+        await this.connectSocket();
+      }
+      
       console.log('✅ Signal bot is listening for messages');
       
       // Load Discourse metadata in background
@@ -3536,39 +3635,32 @@ ${content.content.substring(0, 3000)}...`;
   }
 
   async getGroups() {
-    return new Promise((resolve, reject) => {
-      const listGroups = spawn('signal-cli', [
-        '-a', this.phoneNumber,
-        '--config', this.dataDir,
-        'listGroups',
-        '--detailed'
-      ]);
+    try {
+      const request = {
+        jsonrpc: '2.0',
+        method: 'listGroups',
+        params: {
+          account: this.phoneNumber
+        },
+        id: Date.now()
+      };
       
-      let output = '';
-      let error = '';
+      const response = await this.sendJsonRpcRequest(request);
+      if (response.error) {
+        throw new Error(response.error.message || 'Failed to list groups');
+      }
       
-      listGroups.stdout.on('data', (data) => {
-        output += data.toString();
-      });
+      // Transform the response to match expected format
+      const groups = (response.result || []).map(group => ({
+        id: group.id,
+        name: group.name || 'Unknown Group'
+      }));
       
-      listGroups.stderr.on('data', (data) => {
-        error += data.toString();
-      });
-      
-      listGroups.on('close', (code) => {
-        if (code === 0) {
-          try {
-            // Parse the output to extract group information
-            const groups = this.parseGroupsOutput(output);
-            resolve(groups);
-          } catch (parseError) {
-            reject(parseError);
-          }
-        } else {
-          reject(new Error(error || 'Failed to list groups'));
-        }
-      });
-    });
+      return groups;
+    } catch (error) {
+      console.error('Error getting groups via JSON-RPC:', error);
+      throw error;
+    }
   }
 
   parseGroupsOutput(output) {
@@ -3590,6 +3682,66 @@ ${content.content.substring(0, 3000)}...`;
     }
     
     return groups;
+  }
+
+  async getContacts() {
+    try {
+      const request = {
+        jsonrpc: '2.0',
+        method: 'listContacts',
+        params: {
+          account: this.phoneNumber
+        },
+        id: Date.now()
+      };
+      
+      const response = await this.sendJsonRpcRequest(request);
+      if (response.error) {
+        throw new Error(response.error.message || 'Failed to list contacts');
+      }
+      
+      // Transform the response to match expected format
+      const contacts = (response.result || []).map(contact => ({
+        identifier: contact.uuid || contact.number,
+        displayName: contact.name || contact.number || contact.uuid || 'Unknown Contact',
+        phoneNumber: contact.number,
+        uuid: contact.uuid
+      }));
+      
+      return contacts;
+    } catch (error) {
+      console.error('Error getting contacts via JSON-RPC:', error);
+      throw error;
+    }
+  }
+
+  parseContactsOutput(output) {
+    const contacts = [];
+    const lines = output.split('\n');
+    
+    for (const line of lines) {
+      if (line.includes('Number:') || line.includes('UUID:')) {
+        const numberMatch = line.match(/Number: ([^\s]+)/);
+        const uuidMatch = line.match(/UUID: ([^\s]+)/);
+        const nameMatch = line.match(/Name: (.+?)(?:\s+|$)/);
+        
+        const contact = {};
+        if (numberMatch) contact.number = numberMatch[1];
+        if (uuidMatch) contact.uuid = uuidMatch[1];
+        if (nameMatch) contact.name = nameMatch[1].trim();
+        
+        if (Object.keys(contact).length > 0) {
+          contacts.push({
+            identifier: contact.uuid || contact.number,
+            displayName: contact.name || contact.number || contact.uuid,
+            phoneNumber: contact.number,
+            uuid: contact.uuid
+          });
+        }
+      }
+    }
+    
+    return contacts;
   }
 
   async getHealth() {
@@ -5476,7 +5628,30 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async handleLogs(context) { return 'Admin system - View logs placeholder'; }
   async handleBackup(context) { return 'Admin system - Backup placeholder'; }
   async handleMaintenance(context) { return 'Admin system - Maintenance mode placeholder'; }
-  async handleBypass(context) { return 'Admin system - Authentication bypass placeholder'; }
+  async handleBypass(context) {
+    const { args } = context;
+    
+    if (!args.length) {
+      return '🔓 Bypass Links Generator\n\nUsage: !bypass <url>\n\nGenerate bypass links for paywalled articles using multiple services like 12ft.io, archive.ph, and more.';
+    }
+    
+    const url = args[0];
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      return '❌ Please provide a valid URL starting with http:// or https://';
+    }
+    
+    const bypassLinks = this.generateBypassLinks(url);
+    
+    let response = `🔓 Bypass Links for: ${url}\n\n`;
+    response += `🚪 12ft.io: ${bypassLinks.twelveft}\n`;
+    response += `📦 Archive.ph: ${bypassLinks.archivePh}\n`;
+    response += `📄 Txtify: ${bypassLinks.txtify}\n`;
+    response += `🗑️ RemovePaywall: ${bypassLinks.removepaywall}\n`;
+    response += `🌐 Google Cache: ${bypassLinks.googleCache}\n`;
+    response += `📚 Web Archive: ${bypassLinks.archiveView}`;
+    
+    return response;
+  }
 
   // Analytics Command Handlers (Admin Only)
   async handleStats(context) {
@@ -5769,7 +5944,46 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     const result = Math.random() < 0.5 ? 'heads' : 'tails';
     return `🪙 **Coin Flip**: ${result.toUpperCase()}!`; 
   }
-  async handleWayback(context) { return 'Wayback Machine placeholder - !wayback <url> [date]'; }
+  async handleWayback(context) {
+    const { args } = context;
+    
+    if (!args.length) {
+      return '📚 Wayback Machine\n\nUsage: !wayback <url>\n\nGet the latest archived version from web.archive.org and create a new save point if needed.';
+    }
+    
+    const url = args[0];
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      return '❌ Please provide a valid URL starting with http:// or https://';
+    }
+    
+    const bypassLinks = this.generateBypassLinks(url);
+    
+    let response = `📚 Wayback Machine for: ${url}\n\n`;
+    response += `🔍 Latest Archive: ${bypassLinks.archiveView}\n`;
+    response += `💾 Save New Copy: ${bypassLinks.archive}\n\n`;
+    response += `💡 The save link will create a new archive if one doesn't exist today.`;
+    
+    return response;
+  }
+
+  async handleArchive(context) {
+    const { args } = context;
+    if (!args) return '❌ Usage: !archive <url>\nGet web.archive.org links for a URL';
+
+    const url = args.trim();
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      return '❌ Please provide a valid URL starting with http:// or https://';
+    }
+
+    const bypassLinks = this.generateBypassLinks(url);
+    
+    let response = `🏛️ Archive.org for: ${url}\n\n`;
+    response += `🔍 View Latest Archive: ${bypassLinks.archiveView}\n`;
+    response += `💾 Create New Archive: ${bypassLinks.archive}\n\n`;
+    response += `💡 The create link will save a new copy to archive.org if needed.`;
+    
+    return response;
+  }
 
   // Forum Plugin Handlers
   async handleFPost(context) {
@@ -6870,10 +7084,15 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
           }
         },
         update: {
-          message: message.message,
-          sourceName: message.sourceName,
+          groupName: message.groupName || null,
+          sourceName: message.sourceName || null,
           sourceUuid: message.sourceUuid || null,
-          groupName: message.groupName || null
+          message: message.message,
+          attachments: message.attachments?.length ? message.attachments : null,
+          mentions: message.mentions?.length ? message.mentions : null,
+          isReply: message.isReply || false,
+          quotedMessageId: message.quotedMessageId || null,
+          quotedText: message.quotedMessage || null
         },
         create: {
           groupId: groupId === 'dm' ? null : groupId,
@@ -7501,10 +7720,10 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       'Community': ['wiki', 'forum', 'faq', 'docs', 'links', 'zeroeth'],
       'Groups': ['groups', 'join', 'addto', 'removeuser', 'invite'],
       'Moderation': ['warn', 'warnings', 'clearwarnings', 'kick', 'tempban', 'modlog', 'report', 'cases'],
-      'Admin': ['reload', 'logs', 'backup', 'maintenance', 'bypass', 'gtg', 'sngtg', 'pending'],
-      'News': ['news', 'newsadd', 'newslist', 'newsremove', 'tldr', 'summarize'],
+      'Admin': ['reload', 'logs', 'backup', 'maintenance', 'gtg', 'sngtg', 'pending'],
+      'News': ['news', 'newsadd', 'newslist', 'newsremove', 'tldr', 'summarize', 'bypass', 'archive'],
       'Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'feedback', 'watchdomain'],
-      'Utilities': ['weather', 'time', 'translate', 'shorten', 'qr', 'hash', 'base64', 'calc', 'random', 'flip', 'wayback', 'pdf'],
+      'Utilities': ['weather', 'time', 'translate', 'shorten', 'qr', 'hash', 'base64', 'calc', 'random', 'flip', 'pdf'],
       'Fun': ['joke', 'quote', 'fact', 'poll', '8ball', 'dice'],
       'Forum': ['fpost', 'flatest', 'fsearch', 'categories']
     };

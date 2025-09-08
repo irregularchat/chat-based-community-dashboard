@@ -30,8 +30,8 @@ model User {
   attributes        Json?
   authentikId       String?               @unique @map("authentik_id")
   signalIdentity    String?               @map("signal_identity")
-  // signalVerified    Boolean               @default(false) @map("signal_verified")
-  // signalPhoneNumber String?               @map("signal_phone_number")
+  signalVerified    Boolean               @default(false) @map("signal_verified")
+  signalPhoneNumber String?               @map("signal_phone_number")
   matrixUsername    String?               @map("matrix_username")
   
   // Relationships
@@ -506,7 +506,7 @@ model SignalMessage {
   id               String    @id @default(cuid())
   groupId          String?   @map("group_id") // null for DMs
   groupName        String?   @map("group_name")
-  sourceNumber     String    @map("source_number")
+  sourceNumber     String?   @map("source_number")
   sourceName       String?   @map("source_name")
   sourceUuid       String?   @map("source_uuid")
   message          String    @db.Text
@@ -523,11 +523,11 @@ model SignalMessage {
   quotedMessage    SignalMessage? @relation("QuotedMessages", fields: [quotedMessageId], references: [id])
   quotingMessages  SignalMessage[] @relation("QuotedMessages")
   
+  @@unique([timestamp, sourceNumber, groupId])
   @@index([groupId])
   @@index([sourceNumber])
   @@index([timestamp])
   @@index([createdAt])
-  @@unique([timestamp, sourceNumber, groupId])
   @@map("signal_messages")
 }
 

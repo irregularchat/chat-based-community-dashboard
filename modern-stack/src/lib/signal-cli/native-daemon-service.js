@@ -174,10 +174,10 @@ class NativeSignalBotService extends EventEmitter {
     this.plugins = this.loadPlugins();
     
     console.log('🚀 Native Signal CLI Daemon Service initialized');
-    console.log(`📱 Phone: ${this.phoneNumber}`);
-    console.log(`📂 Data Dir: ${this.dataDir}`);
-    console.log(`🔌 Socket: ${this.socketPath}`);
-    console.log(`🔒 Instance ID: ${this.instanceId} (for duplicate prevention)`);
+    console.log(📱 Phone: ${this.phoneNumber});
+    console.log(📂 Data Dir: ${this.dataDir});
+    console.log(🔌 Socket: ${this.socketPath});
+    console.log(🔒 Instance ID: ${this.instanceId} (for duplicate prevention));
     
     // Start cleanup interval for duplicate detection
     this.startCleanupInterval();
@@ -197,12 +197,12 @@ class NativeSignalBotService extends EventEmitter {
     
     // Check for recent messages with same content (temporal deduplication)
     const now = Date.now();
-    const messageKey = `${envelope.sourceNumber || envelope.sourceUuid}_${envelope.dataMessage?.message || ''}`;
+    const messageKey = ${envelope.sourceNumber || envelope.sourceUuid}_${envelope.dataMessage?.message || ''};
     
     if (this.messageTimestamps.has(messageKey)) {
       const lastSeen = this.messageTimestamps.get(messageKey);
       if (now - lastSeen < this.duplicateDetectionWindow) {
-        console.log(`⚠️ [Instance ${this.instanceId}] Temporal duplicate detected within ${this.duplicateDetectionWindow}ms`);
+        console.log(⚠️ [Instance ${this.instanceId}] Temporal duplicate detected within ${this.duplicateDetectionWindow}ms);
         return true;
       }
     }
@@ -216,7 +216,7 @@ class NativeSignalBotService extends EventEmitter {
 
   // Create unique message ID
   createMessageId(envelope) {
-    return `${envelope.timestamp}_${envelope.sourceNumber || envelope.sourceUuid}_${envelope.dataMessage?.message?.substring(0, 50) || 'reaction'}`;
+    return ${envelope.timestamp}_${envelope.sourceNumber || envelope.sourceUuid}_${envelope.dataMessage?.message?.substring(0, 50) || 'reaction'};
   }
 
   // Cleanup old entries to prevent memory leaks
@@ -246,7 +246,7 @@ class NativeSignalBotService extends EventEmitter {
   validateInput(input, type, fieldName = 'input') {
     // Basic null/undefined check
     if (input === null || input === undefined) {
-      return { valid: false, error: `${fieldName} is required` };
+      return { valid: false, error: ${fieldName} is required };
     }
 
     // Convert to string if not already
@@ -257,7 +257,7 @@ class NativeSignalBotService extends EventEmitter {
     if (maxLength && inputStr.length > maxLength) {
       return { 
         valid: false, 
-        error: `${fieldName} exceeds maximum length of ${maxLength} characters` 
+        error: ${fieldName} exceeds maximum length of ${maxLength} characters 
       };
     }
 
@@ -266,7 +266,7 @@ class NativeSignalBotService extends EventEmitter {
     if (pattern && !pattern.test(inputStr)) {
       return { 
         valid: false, 
-        error: `${fieldName} contains invalid characters or format for type ${type}` 
+        error: ${fieldName} contains invalid characters or format for type ${type} 
       };
     }
 
@@ -346,21 +346,21 @@ class NativeSignalBotService extends EventEmitter {
     for (const [index, arg] of sanitizedArgs.entries()) {
       // Check for URL arguments
       if (arg.startsWith('http://') || arg.startsWith('https://')) {
-        const urlValidation = this.validateInput(arg, 'url', `argument ${index + 1}`);
+        const urlValidation = this.validateInput(arg, 'url', argument ${index + 1});
         if (!urlValidation.valid) {
           validationResults.push(urlValidation.error);
         }
       }
       // Check for phone number arguments
       else if (arg.startsWith('+')) {
-        const phoneValidation = this.validateInput(arg, 'phoneNumber', `argument ${index + 1}`);
+        const phoneValidation = this.validateInput(arg, 'phoneNumber', argument ${index + 1});
         if (!phoneValidation.valid) {
           validationResults.push(phoneValidation.error);
         }
       }
       // General string validation for other arguments
       else {
-        const safeValidation = this.validateInput(arg, 'safeString', `argument ${index + 1}`);
+        const safeValidation = this.validateInput(arg, 'safeString', argument ${index + 1});
         if (!safeValidation.valid) {
           validationResults.push(safeValidation.error);
         }
@@ -381,7 +381,7 @@ class NativeSignalBotService extends EventEmitter {
   // Security: Rate limiting per user
   checkRateLimit(identifier, commandName) {
     const now = Date.now();
-    const rateLimitKey = `${identifier}:${commandName}`;
+    const rateLimitKey = ${identifier}:${commandName};
     
     if (!this.rateLimits) {
       this.rateLimits = new Map();
@@ -410,7 +410,7 @@ class NativeSignalBotService extends EventEmitter {
       const remainingTime = Math.ceil((userRateData.resetTime - now) / 1000);
       return { 
         allowed: false, 
-        error: `Rate limit exceeded. Please wait ${remainingTime} seconds before using !${commandName} again.` 
+        error: Rate limit exceeded. Please wait ${remainingTime} seconds before using !${commandName} again. 
       };
     }
 
@@ -574,7 +574,7 @@ class NativeSignalBotService extends EventEmitter {
       }
       // Skip arrays and other complex types for security
       else {
-        console.warn(`Skipping sanitization of complex data type for key ${key}:`, typeof value);
+        console.warn(Skipping sanitization of complex data type for key ${key}:, typeof value);
       }
     }
     
@@ -592,7 +592,7 @@ class NativeSignalBotService extends EventEmitter {
     for (const [key, value] of Object.entries(where)) {
       // Skip if key contains dangerous characters
       if (typeof key === 'string' && /[^a-zA-Z0-9_.]/.test(key)) {
-        console.warn(`Skipping dangerous WHERE key: ${key}`);
+        console.warn(Skipping dangerous WHERE key: ${key});
         continue;
       }
 
@@ -742,14 +742,14 @@ class NativeSignalBotService extends EventEmitter {
           try {
             return await cmd.handler(context);
           } catch (error) {
-            console.error(`❌ Command ${cmd.name} failed:`, error);
-            return `❌ Command failed: ${error.message}`;
+            console.error(❌ Command ${cmd.name} failed:, error);
+            return ❌ Command failed: ${error.message};
           }
         }
       });
     }
     
-    console.log(`📦 Loaded ${commands.size} total commands (${basicCommands.size} basic + ${pluginCommands.length} plugin)`);
+    console.log(📦 Loaded ${commands.size} total commands (${basicCommands.size} basic + ${pluginCommands.length} plugin));
     return commands;
   }
 
@@ -780,25 +780,25 @@ class NativeSignalBotService extends EventEmitter {
           '📊 Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'feedback', 'watchdomain']
         };
         
-        let helpText = `🤖 Signal Bot Commands\n\n`;
+        let helpText = 🤖 Signal Bot Commands\n\n;
         
         // Show user commands
         for (const [category, cmds] of Object.entries(userCommandsByCategory)) {
-          helpText += `${category}:\n`;
-          helpText += cmds.map(cmd => `• !${cmd}`).join(', ') + '\n\n';
+          helpText += ${category}:\n;
+          helpText += cmds.map(cmd => • !${cmd}).join(', ') + '\n\n';
         }
         
         // Only show admin commands if user is admin
         if (isAdmin) {
           for (const [category, cmds] of Object.entries(adminCommandsByCategory)) {
-            helpText += `${category}:\n`;
-            helpText += cmds.map(cmd => `• !${cmd}`).join(', ') + '\n\n';
+            helpText += ${category}:\n;
+            helpText += cmds.map(cmd => • !${cmd}).join(', ') + '\n\n';
           }
           helpText += '🔒 You have admin privileges\n';
         }
         
         helpText += '💡 Use any command to get started!\n';
-        helpText += `📱 Total: ${this.plugins.size} commands available`;
+        helpText += 📱 Total: ${this.plugins.size} commands available;
         
         return helpText;
       }
@@ -823,13 +823,13 @@ class NativeSignalBotService extends EventEmitter {
           const userQuery = context.args.join(' ') || 'Hello';
           
           // Store thread context - this user prefers OpenAI
-          const threadKey = `${context.groupId || 'dm'}:${context.sourceNumber}`;
+          const threadKey = ${context.groupId || 'dm'}:${context.sourceNumber};
           this.userAiPreference.set(threadKey, {
             provider: 'openai',
             timestamp: Date.now(),
             lastMessage: userQuery
           });
-          console.log(`🔄 Thread context: User ${context.sender} selected OpenAI`);
+          console.log(🔄 Thread context: User ${context.sender} selected OpenAI);
           
           // Phase 1: Command Registry Access
           const commandRegistry = this.getCommandRegistry(context);
@@ -852,9 +852,9 @@ class NativeSignalBotService extends EventEmitter {
             responseMode = 'command';
             // Enhanced command context with descriptions and permissions
             const commandList = commandRegistry.available.map(cmd => 
-              `!${cmd.name} - ${cmd.description}${cmd.adminOnly ? ' (admin)' : ''}${cmd.moderatorOnly ? ' (mod)' : ''}`
+              !${cmd.name} - ${cmd.description}${cmd.adminOnly ? ' (admin)' : ''}${cmd.moderatorOnly ? ' (mod)' : ''}
             ).join('\n');
-            contextInfo = `User is asking about bot commands. They ${commandRegistry.isAdmin ? 'ARE an admin' : commandRegistry.isModerator ? 'ARE a moderator' : 'are NOT admin/moderator'}.\n\nAvailable commands:\n${commandList}`;
+            contextInfo = User is asking about bot commands. They ${commandRegistry.isAdmin ? 'ARE an admin' : commandRegistry.isModerator ? 'ARE a moderator' : 'are NOT admin/moderator'}.\n\nAvailable commands:\n${commandList};
           }
           
           // 2. Check if asking about IrregularChat community
@@ -863,7 +863,7 @@ class NativeSignalBotService extends EventEmitter {
           
           if (isCommunityQuery && !isCommandQuery) {
             responseMode = 'community';
-            contextInfo = `User is asking about the IrregularChat community. ${this.communityContext.description} Rules: ${this.communityContext.rules.join('; ')}`;
+            contextInfo = User is asking about the IrregularChat community. ${this.communityContext.description} Rules: ${this.communityContext.rules.join('; ')};
           }
           
           // 3. Check if AI should execute a command internally
@@ -887,13 +887,13 @@ class NativeSignalBotService extends EventEmitter {
               const execResult = await this.safeCommandExecutor(argPattern.command, cmdArgs, context, 'openai');
               
               if (execResult.success) {
-                return `${getAiPrefix(responseMode)} ${execResult.result}`;
+                return ${getAiPrefix(responseMode)} ${execResult.result};
               } else if (execResult.needsPermission) {
-                return `${getAiPrefix(responseMode)} That command requires ${execResult.needsPermission} privileges which you don't have.`;
+                return ${getAiPrefix(responseMode)} That command requires ${execResult.needsPermission} privileges which you don't have.;
               } else if (!execResult.success && execResult.message.includes('not found')) {
                 // Command not found, continue to other patterns
               } else {
-                return `${getAiPrefix(responseMode)} ${execResult.message}`;
+                return ${getAiPrefix(responseMode)} ${execResult.message};
               }
             }
           }
@@ -921,11 +921,11 @@ class NativeSignalBotService extends EventEmitter {
               const execResult = await this.safeCommandExecutor(mapping.command, [], context, 'openai');
               
               if (execResult.success) {
-                return `${getAiPrefix(responseMode)} ${execResult.result}`;
+                return ${getAiPrefix(responseMode)} ${execResult.result};
               } else if (execResult.needsPermission) {
-                return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires ${execResult.needsPermission} privileges. You can ask an ${execResult.needsPermission} to run it for you.`;
+                return ${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires ${execResult.needsPermission} privileges. You can ask an ${execResult.needsPermission} to run it for you.;
               } else if (execResult.blocked) {
-                return `${getAiPrefix(responseMode)} The !${mapping.command} command is blocked for safety reasons.`;
+                return ${getAiPrefix(responseMode)} The !${mapping.command} command is blocked for safety reasons.;
               }
               // If command not found, continue to next mapping
             }
@@ -943,13 +943,13 @@ class NativeSignalBotService extends EventEmitter {
             const execResult = await this.safeCommandExecutor(cmdName, cmdArgs, context, 'openai');
             
             if (execResult.success) {
-              return `OpenAI: Executed !${cmdName}:\n\n${execResult.result}`;
+              return OpenAI: Executed !${cmdName}:\n\n${execResult.result};
             } else if (execResult.needsPermission) {
-              return `OpenAI: Cannot execute !${cmdName} - ${execResult.needsPermission} privileges required. You don't have ${execResult.needsPermission} access.`;
+              return OpenAI: Cannot execute !${cmdName} - ${execResult.needsPermission} privileges required. You don't have ${execResult.needsPermission} access.;
             } else if (execResult.blocked) {
-              return `OpenAI: Command !${cmdName} is blocked for safety reasons. Please execute it manually if needed.`;
+              return OpenAI: Command !${cmdName} is blocked for safety reasons. Please execute it manually if needed.;
             } else {
-              return `OpenAI: ${execResult.message}`;
+              return OpenAI: ${execResult.message};
             }
           }
           
@@ -969,12 +969,12 @@ class NativeSignalBotService extends EventEmitter {
               const execResult = await this.safeCommandExecutor(implicitCmd.command, cmdArgs, context, 'openai');
               
               if (execResult.success) {
-                return `OpenAI: ${execResult.result}`;
+                return OpenAI: ${execResult.result};
               } else if (execResult.needsPermission) {
-                return `OpenAI: That action requires ${execResult.needsPermission} privileges, which you don't have.`;
+                return OpenAI: That action requires ${execResult.needsPermission} privileges, which you don't have.;
               } else {
                 // Don't reveal the command failed, just say we can't do it
-                return `OpenAI: I'm unable to perform that action. ${execResult.needsPermission ? `It requires ${execResult.needsPermission} privileges.` : 'Please try a different approach.'}`;
+                return OpenAI: I'm unable to perform that action. ${execResult.needsPermission ? It requires ${execResult.needsPermission} privileges. : 'Please try a different approach.'};
               }
             }
           }
@@ -988,7 +988,7 @@ class NativeSignalBotService extends EventEmitter {
           const systemPrompt = responseMode === 'command' 
             ? 'You are a helpful Signal bot assistant. Help users understand and use bot commands. Be concise and specific.'
             : responseMode === 'community'
-            ? `You are the IrregularChat community assistant. Help users with community-related questions. Reference the wiki (${this.wikiUrl}) and forum (${this.forumUrl}) when appropriate. IrregularChat is a privacy-focused community.`
+            ? You are the IrregularChat community assistant. Help users with community-related questions. Reference the wiki (${this.wikiUrl}) and forum (${this.forumUrl}) when appropriate. IrregularChat is a privacy-focused community.
             : 'You are a helpful AI assistant. Provide clear, concise responses.';
           
           const messages = [
@@ -996,7 +996,7 @@ class NativeSignalBotService extends EventEmitter {
           ];
           
           if (contextInfo) {
-            messages.push({ role: 'system', content: `Context: ${contextInfo}` });
+            messages.push({ role: 'system', content: Context: ${contextInfo} });
           }
           
           // Add database context if relevant data found
@@ -1006,28 +1006,28 @@ class NativeSignalBotService extends EventEmitter {
             if (dbContext.questions.length > 0) {
               dbContextStr += '\nRecent Q&A:\n';
               dbContext.questions.forEach(q => {
-                dbContextStr += `Q: ${q.question}\nA: ${q.answer || 'Unanswered'}\n`;
+                dbContextStr += Q: ${q.question}\nA: ${q.answer || 'Unanswered'}\n;
               });
             }
             
             if (dbContext.events.length > 0) {
               dbContextStr += '\nUpcoming Events:\n';
               dbContext.events.forEach(e => {
-                dbContextStr += `- ${e.name} on ${e.start} at ${e.location || 'TBD'}\n`;
+                dbContextStr += - ${e.name} on ${e.start} at ${e.location || 'TBD'}\n;
               });
             }
             
             if (dbContext.links.length > 0) {
               dbContextStr += '\nRelevant Links:\n';
               dbContext.links.forEach(l => {
-                dbContextStr += `- ${l.title}: ${l.url}\n`;
+                dbContextStr += - ${l.title}: ${l.url}\n;
               });
             }
             
             if (dbContext.news.length > 0) {
               dbContextStr += '\nRecent News:\n';
               dbContext.news.forEach(n => {
-                dbContextStr += `- ${n.title} (${n.timestamp})\n`;
+                dbContextStr += - ${n.title} (${n.timestamp})\n;
               });
             }
             
@@ -1055,11 +1055,11 @@ class NativeSignalBotService extends EventEmitter {
             
             // Add context indicator to response
             const aiResponse = response.choices[0].message.content;
-            console.log(`✅ AI Response length: ${aiResponse.length} chars`);
-            return `${getAiPrefix(responseMode)} ${aiResponse}`;
+            console.log(✅ AI Response length: ${aiResponse.length} chars);
+            return ${getAiPrefix(responseMode)} ${aiResponse};
           } catch (apiError) {
             console.error('❌ OpenAI API error:', apiError);
-            return `OpenAI: Error - ${apiError.message}`;
+            return OpenAI: Error - ${apiError.message};
           }
         }
       });
@@ -1075,13 +1075,13 @@ class NativeSignalBotService extends EventEmitter {
           const userQuery = context.args.join(' ') || 'Hello';
           
           // Store thread context - this user prefers LocalAI  
-          const threadKey = `${context.groupId || 'dm'}:${context.sourceNumber}`;
+          const threadKey = ${context.groupId || 'dm'}:${context.sourceNumber};
           this.userAiPreference.set(threadKey, {
             provider: 'localai',
             timestamp: Date.now(),
             lastMessage: userQuery
           });
-          console.log(`🔄 Thread context: User ${context.sender} selected LocalAI`);
+          console.log(🔄 Thread context: User ${context.sender} selected LocalAI);
           
           // Phase 1: Command Registry Access
           const commandRegistry = this.getCommandRegistry(context);
@@ -1104,9 +1104,9 @@ class NativeSignalBotService extends EventEmitter {
             responseMode = 'command';
             // Enhanced command context with descriptions and permissions
             const commandList = commandRegistry.available.map(cmd => 
-              `!${cmd.name} - ${cmd.description}${cmd.adminOnly ? ' (admin)' : ''}${cmd.moderatorOnly ? ' (mod)' : ''}`
+              !${cmd.name} - ${cmd.description}${cmd.adminOnly ? ' (admin)' : ''}${cmd.moderatorOnly ? ' (mod)' : ''}
             ).join('\n');
-            contextInfo = `User is asking about bot commands. They ${commandRegistry.isAdmin ? 'ARE an admin' : commandRegistry.isModerator ? 'ARE a moderator' : 'are NOT admin/moderator'}.\n\nAvailable commands:\n${commandList}`;
+            contextInfo = User is asking about bot commands. They ${commandRegistry.isAdmin ? 'ARE an admin' : commandRegistry.isModerator ? 'ARE a moderator' : 'are NOT admin/moderator'}.\n\nAvailable commands:\n${commandList};
           }
           
           // 2. Check if asking about IrregularChat community
@@ -1115,7 +1115,7 @@ class NativeSignalBotService extends EventEmitter {
           
           if (isCommunityQuery && !isCommandQuery) {
             responseMode = 'community';
-            contextInfo = `User is asking about the IrregularChat community. ${this.communityContext.description} Rules: ${this.communityContext.rules.join('; ')}`;
+            contextInfo = User is asking about the IrregularChat community. ${this.communityContext.description} Rules: ${this.communityContext.rules.join('; ')};
           }
           
           // 3. Check if AI should execute a command internally
@@ -1139,13 +1139,13 @@ class NativeSignalBotService extends EventEmitter {
               const execResult = await this.safeCommandExecutor(argPattern.command, cmdArgs, context, 'openai');
               
               if (execResult.success) {
-                return `${getAiPrefix(responseMode)} ${execResult.result}`;
+                return ${getAiPrefix(responseMode)} ${execResult.result};
               } else if (execResult.needsPermission) {
-                return `${getAiPrefix(responseMode)} That command requires ${execResult.needsPermission} privileges which you don't have.`;
+                return ${getAiPrefix(responseMode)} That command requires ${execResult.needsPermission} privileges which you don't have.;
               } else if (!execResult.success && execResult.message.includes('not found')) {
                 // Command not found, continue to other patterns
               } else {
-                return `${getAiPrefix(responseMode)} ${execResult.message}`;
+                return ${getAiPrefix(responseMode)} ${execResult.message};
               }
             }
           }
@@ -1173,11 +1173,11 @@ class NativeSignalBotService extends EventEmitter {
               const execResult = await this.safeCommandExecutor(mapping.command, [], context, 'openai');
               
               if (execResult.success) {
-                return `${getAiPrefix(responseMode)} ${execResult.result}`;
+                return ${getAiPrefix(responseMode)} ${execResult.result};
               } else if (execResult.needsPermission) {
-                return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires ${execResult.needsPermission} privileges. You can ask an ${execResult.needsPermission} to run it for you.`;
+                return ${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires ${execResult.needsPermission} privileges. You can ask an ${execResult.needsPermission} to run it for you.;
               } else if (execResult.blocked) {
-                return `${getAiPrefix(responseMode)} The !${mapping.command} command is blocked for safety reasons.`;
+                return ${getAiPrefix(responseMode)} The !${mapping.command} command is blocked for safety reasons.;
               }
               // If command not found, continue to next mapping
             }
@@ -1195,13 +1195,13 @@ class NativeSignalBotService extends EventEmitter {
             const execResult = await this.safeCommandExecutor(cmdName, cmdArgs, context, 'localai');
             
             if (execResult.success) {
-              return `LocalAI: Executed !${cmdName}:\n\n${execResult.result}`;
+              return LocalAI: Executed !${cmdName}:\n\n${execResult.result};
             } else if (execResult.needsPermission) {
-              return `LocalAI: Cannot execute !${cmdName} - ${execResult.needsPermission} privileges required. You don't have ${execResult.needsPermission} access.`;
+              return LocalAI: Cannot execute !${cmdName} - ${execResult.needsPermission} privileges required. You don't have ${execResult.needsPermission} access.;
             } else if (execResult.blocked) {
-              return `LocalAI: Command !${cmdName} is blocked for safety reasons. Please execute it manually if needed.`;
+              return LocalAI: Command !${cmdName} is blocked for safety reasons. Please execute it manually if needed.;
             } else {
-              return `LocalAI: ${execResult.message}`;
+              return LocalAI: ${execResult.message};
             }
           }
           
@@ -1221,12 +1221,12 @@ class NativeSignalBotService extends EventEmitter {
               const execResult = await this.safeCommandExecutor(implicitCmd.command, cmdArgs, context, 'localai');
               
               if (execResult.success) {
-                return `LocalAI: ${execResult.result}`;
+                return LocalAI: ${execResult.result};
               } else if (execResult.needsPermission) {
-                return `LocalAI: That action requires ${execResult.needsPermission} privileges, which you don't have.`;
+                return LocalAI: That action requires ${execResult.needsPermission} privileges, which you don't have.;
               } else {
                 // Don't reveal the command failed, just say we can't do it
-                return `LocalAI: I'm unable to perform that action. ${execResult.needsPermission ? `It requires ${execResult.needsPermission} privileges.` : 'Please try a different approach.'}`;
+                return LocalAI: I'm unable to perform that action. ${execResult.needsPermission ? It requires ${execResult.needsPermission} privileges. : 'Please try a different approach.'};
               }
             }
           }
@@ -1240,7 +1240,7 @@ class NativeSignalBotService extends EventEmitter {
           const systemPrompt = responseMode === 'command' 
             ? 'You are a helpful Signal bot assistant. Help users understand and use bot commands. Be concise and specific.'
             : responseMode === 'community'
-            ? `You are the IrregularChat community assistant. Help users with community-related questions. Reference the wiki (${this.wikiUrl}) and forum (${this.forumUrl}) when appropriate. IrregularChat is a privacy-focused community.`
+            ? You are the IrregularChat community assistant. Help users with community-related questions. Reference the wiki (${this.wikiUrl}) and forum (${this.forumUrl}) when appropriate. IrregularChat is a privacy-focused community.
             : 'You are a helpful AI assistant. Provide clear, concise responses.';
           
           const messages = [
@@ -1248,7 +1248,7 @@ class NativeSignalBotService extends EventEmitter {
           ];
           
           if (contextInfo) {
-            messages.push({ role: 'system', content: `Context: ${contextInfo}` });
+            messages.push({ role: 'system', content: Context: ${contextInfo} });
           }
           
           // Add database context if relevant data found
@@ -1258,28 +1258,28 @@ class NativeSignalBotService extends EventEmitter {
             if (dbContext.questions.length > 0) {
               dbContextStr += '\nRecent Q&A:\n';
               dbContext.questions.forEach(q => {
-                dbContextStr += `Q: ${q.question}\nA: ${q.answer || 'Unanswered'}\n`;
+                dbContextStr += Q: ${q.question}\nA: ${q.answer || 'Unanswered'}\n;
               });
             }
             
             if (dbContext.events.length > 0) {
               dbContextStr += '\nUpcoming Events:\n';
               dbContext.events.forEach(e => {
-                dbContextStr += `- ${e.name} on ${e.start} at ${e.location || 'TBD'}\n`;
+                dbContextStr += - ${e.name} on ${e.start} at ${e.location || 'TBD'}\n;
               });
             }
             
             if (dbContext.links.length > 0) {
               dbContextStr += '\nRelevant Links:\n';
               dbContext.links.forEach(l => {
-                dbContextStr += `- ${l.title}: ${l.url}\n`;
+                dbContextStr += - ${l.title}: ${l.url}\n;
               });
             }
             
             if (dbContext.news.length > 0) {
               dbContextStr += '\nRecent News:\n';
               dbContext.news.forEach(n => {
-                dbContextStr += `- ${n.title} (${n.timestamp})\n`;
+                dbContextStr += - ${n.title} (${n.timestamp})\n;
               });
             }
             
@@ -1290,11 +1290,11 @@ class NativeSignalBotService extends EventEmitter {
           
           // Use Local AI instead of OpenAI
           try {
-            const response = await fetch(`${this.localAiUrl}/api/v1/chat/completions`, {
+            const response = await fetch(${this.localAiUrl}/api/v1/chat/completions, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.localAiApiKey}`
+                'Authorization': Bearer ${this.localAiApiKey}
               },
               body: JSON.stringify({
                 model: 'irregularbot:latest',
@@ -1304,7 +1304,7 @@ class NativeSignalBotService extends EventEmitter {
             });
 
             if (!response.ok) {
-              throw new Error(`Local AI request failed: ${response.status} ${response.statusText}`);
+              throw new Error(Local AI request failed: ${response.status} ${response.statusText});
             }
 
             const aiResponse = await response.json();
@@ -1313,11 +1313,11 @@ class NativeSignalBotService extends EventEmitter {
             // Clean up thinking process - remove <think>...</think> tags and content
             content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
             
-            return `${getAiPrefix(responseMode)} ${content}`;
+            return ${getAiPrefix(responseMode)} ${content};
             
           } catch (error) {
             console.error('Local AI request failed:', error);
-            return `LocalAI: Sorry, the local AI service is currently unavailable. Error: ${error.message}`;
+            return LocalAI: Sorry, the local AI service is currently unavailable. Error: ${error.message};
           }
         }
       });
@@ -1348,10 +1348,10 @@ class NativeSignalBotService extends EventEmitter {
 
           // If it's a repository URL, use repository processing instead
           if (this.isRepositoryUrl(url)) {
-            await this.sendReply(context, `🔄 Detected repository URL, processing with repository analyzer...`);
+            await this.sendReply(context, 🔄 Detected repository URL, processing with repository analyzer...);
             try {
               await this.processRepositoryUrl(url, context);
-              return `✅ Repository processed! See details above.`;
+              return ✅ Repository processed! See details above.;
             } catch (error) {
               console.error('Repository processing failed, falling back to standard TLDR:', error);
               // Fall through to normal TLDR processing
@@ -1381,14 +1381,14 @@ class NativeSignalBotService extends EventEmitter {
               model: 'gpt-5-mini',
               messages: [{
                 role: 'user', 
-                content: `Summarize this article in 1-2 paragraphs:\n\n${textContent}`
+                content: Summarize this article in 1-2 paragraphs:\n\n${textContent}
               }],
               max_completion_tokens: 800  // GPT-5 thinking model needs 600+ tokens
             });
             
-            return `OpenAI: **Article Summary**\n\n${aiResponse.choices[0].message.content}\n\n🔗 Source: ${url}`;
+            return OpenAI: Article Summary\n\n${aiResponse.choices[0].message.content}\n\n🔗 Source: ${url};
           } catch (error) {
-            return `❌ Failed to summarize: ${error.message}`;
+            return ❌ Failed to summarize: ${error.message};
           }
         }
       });
@@ -1402,35 +1402,35 @@ class NativeSignalBotService extends EventEmitter {
         const today = new Date().toDateString();
         const todayCount = this.cleanerStats.dailyCounts.get(today) || 0;
         
-        let stats = `🧹 **URL Cleaner Statistics**\n\n`;
-        stats += `📊 **Overall Stats:**\n`;
-        stats += `• Total URLs cleaned: ${this.cleanerStats.totalCleaned}\n`;
-        stats += `• Trackers removed: ${this.cleanerStats.trackersSaved}\n`;
-        stats += `• Today: ${todayCount} URLs cleaned\n\n`;
+        let stats = 🧹 URL Cleaner Statistics\n\n;
+        stats += 📊 Overall Stats:\n;
+        stats += • Total URLs cleaned: ${this.cleanerStats.totalCleaned}\n;
+        stats += • Trackers removed: ${this.cleanerStats.trackersSaved}\n;
+        stats += • Today: ${todayCount} URLs cleaned\n\n;
         
         if (this.cleanerStats.platforms.size > 0) {
-          stats += `🌐 **Platforms Cleaned:**\n`;
+          stats += 🌐 Platforms Cleaned:\n;
           const platformList = Array.from(this.cleanerStats.platforms.entries())
             .sort((a, b) => b[1] - a[1])
             .slice(0, 10)
-            .map(([platform, count]) => `• ${platform}: ${count} URLs`)
+            .map(([platform, count]) => • ${platform}: ${count} URLs)
             .join('\n');
           stats += platformList + '\n\n';
         }
         
-        stats += `💡 **Why remove trackers?**\n`;
-        stats += `Tracking parameters help social media platforms identify users across the web, `;
-        stats += `building detailed behavioral profiles for targeted advertising and data monetization.\n\n`;
+        stats += 💡 Why remove trackers?\n;
+        stats += Tracking parameters help social media platforms identify users across the web, ;
+        stats += building detailed behavioral profiles for targeted advertising and data monetization.\n\n;
         
         if (this.cleanedUrls.size > 0) {
-          stats += `🔄 **Recent Activity:** ${Math.min(3, this.cleanedUrls.size)} most recent cleanings\n`;
+          stats += 🔄 Recent Activity: ${Math.min(3, this.cleanedUrls.size)} most recent cleanings\n;
           const recentUrls = Array.from(this.cleanedUrls.entries())
             .sort((a, b) => b[0] - a[0])
             .slice(0, 3);
             
           for (const [timestamp, data] of recentUrls) {
             const timeAgo = Math.round((Date.now() - timestamp) / 60000);
-            stats += `• ${data.platform} - ${timeAgo}m ago (${data.trackersRemoved} trackers)\n`;
+            stats += • ${data.platform} - ${timeAgo}m ago (${data.trackersRemoved} trackers)\n;
           }
         }
         
@@ -1449,15 +1449,15 @@ class NativeSignalBotService extends EventEmitter {
         if (args.length > 0) {
           const url = args.join(' ');
           if (this.isNewsUrl(url)) {
-            await this.sendReply(context, `🔄 Processing news URL: ${url}`);
+            await this.sendReply(context, 🔄 Processing news URL: ${url});
             try {
               await this.processNewsUrl(url, context);
-              return `✅ Successfully processed news URL!`;
+              return ✅ Successfully processed news URL!;
             } catch (error) {
-              return `❌ Error processing URL: ${error.message}`;
+              return ❌ Error processing URL: ${error.message};
             }
           } else {
-            return `❌ URL doesn't match news patterns. Use !news to see stats.`;
+            return ❌ URL doesn't match news patterns. Use !news to see stats.;
           }
         }
         
@@ -1465,15 +1465,15 @@ class NativeSignalBotService extends EventEmitter {
         const today = new Date().toDateString();
         const todayCount = this.newsStats.dailyCounts.get(today) || 0;
         
-        let stats = `📰 **News Processing Statistics**\n\n`;
-        stats += `📊 **Overall Stats:**\n`;
-        stats += `• Total news processed: ${this.newsStats.totalProcessed}\n`;
-        stats += `• Successful posts: ${this.newsStats.successfulPosts}\n`;
-        stats += `• Failed posts: ${this.newsStats.failedPosts}\n`;
-        stats += `• Today: ${todayCount} articles processed\n\n`;
+        let stats = 📰 News Processing Statistics\n\n;
+        stats += 📊 Overall Stats:\n;
+        stats += • Total news processed: ${this.newsStats.totalProcessed}\n;
+        stats += • Successful posts: ${this.newsStats.successfulPosts}\n;
+        stats += • Failed posts: ${this.newsStats.failedPosts}\n;
+        stats += • Today: ${todayCount} articles processed\n\n;
         
         if (this.processedNews.size > 0) {
-          stats += `🔄 **Recent Activity:** ${Math.min(3, this.processedNews.size)} most recent articles\n`;
+          stats += 🔄 Recent Activity: ${Math.min(3, this.processedNews.size)} most recent articles\n;
           const recentNews = Array.from(this.processedNews.values())
             .sort((a, b) => b.timestamp - a.timestamp)
             .slice(0, 3);
@@ -1481,13 +1481,13 @@ class NativeSignalBotService extends EventEmitter {
           for (const news of recentNews) {
             const timeAgo = Math.round((Date.now() - news.timestamp) / 60000);
             const title = news.title.length > 50 ? news.title.substring(0, 50) + '...' : news.title;
-            stats += `• ${title} - ${timeAgo}m ago\n`;
+            stats += • ${title} - ${timeAgo}m ago\n;
           }
           stats += '\n';
         }
         
-        stats += `💡 **Usage:** Send \`!news <url>\` to manually process a news URL\n`;
-        stats += `🤖 **Auto-processing:** News URLs are automatically detected and processed`;
+        stats += 💡 Usage: Send \!news <url>\ to manually process a news URL\n;
+        stats += 🤖 Auto-processing: News URLs are automatically detected and processed;
         
         return stats;
       }
@@ -1507,13 +1507,13 @@ class NativeSignalBotService extends EventEmitter {
         const domain = args[0].toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0];
         
         if (this.customNewsDomains.has(domain)) {
-          return `ℹ️ Domain ${domain} is already in the news list`;
+          return ℹ️ Domain ${domain} is already in the news list;
         }
         
         this.customNewsDomains.add(domain);
         this.saveCustomNewsDomains();
         
-        return `✅ Added ${domain} to news domains\n📰 Total domains: ${this.customNewsDomains.size}`;
+        return ✅ Added ${domain} to news domains\n📰 Total domains: ${this.customNewsDomains.size};
       }
     });
     
@@ -1525,11 +1525,11 @@ class NativeSignalBotService extends EventEmitter {
           return '📰 No custom news domains configured\nUse !newsadd <domain> to add domains';
         }
         
-        let response = `📰 Custom News Domains (${this.customNewsDomains.size}):\n\n`;
+        let response = 📰 Custom News Domains (${this.customNewsDomains.size}):\n\n;
         const domains = Array.from(this.customNewsDomains).sort();
         
         domains.forEach(domain => {
-          response += `• ${domain}\n`;
+          response += • ${domain}\n;
         });
         
         response += '\n💡 Links from these domains will be auto-processed';
@@ -1550,13 +1550,13 @@ class NativeSignalBotService extends EventEmitter {
         const domain = args[0].toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0];
         
         if (!this.customNewsDomains.has(domain)) {
-          return `❌ Domain ${domain} is not in the news list`;
+          return ❌ Domain ${domain} is not in the news list;
         }
         
         this.customNewsDomains.delete(domain);
         this.saveCustomNewsDomains();
         
-        return `✅ Removed ${domain} from news domains\n📰 Remaining domains: ${this.customNewsDomains.size}`;
+        return ✅ Removed ${domain} from news domains\n📰 Remaining domains: ${this.customNewsDomains.size};
       }
     });
 
@@ -1575,17 +1575,17 @@ class NativeSignalBotService extends EventEmitter {
               .find(p => p.url === url && Date.now() - p.timestamp < 30000); // 30 seconds
             
             if (existingProcessed) {
-              return `⏭️ Repository was just processed automatically. Check above for details.`;
+              return ⏭️ Repository was just processed automatically. Check above for details.;
             }
             
             try {
               await this.processRepositoryUrl(url, context);
               return; // Return nothing, processRepositoryUrl sends the formatted message
             } catch (error) {
-              return `❌ Error processing URL: ${error.message}`;
+              return ❌ Error processing URL: ${error.message};
             }
           } else {
-            return `❌ URL doesn't match repository patterns. Use !repo to see stats.`;
+            return ❌ URL doesn't match repository patterns. Use !repo to see stats.;
           }
         }
         
@@ -1593,33 +1593,33 @@ class NativeSignalBotService extends EventEmitter {
         const today = new Date().toDateString();
         const todayCount = this.repositoryStats.dailyCounts.get(today) || 0;
         
-        let stats = `🔧 **Repository Processing Statistics**\n\n`;
-        stats += `📊 **Overall Stats:**\n`;
-        stats += `• Total repositories processed: ${this.repositoryStats.totalProcessed}\n`;
-        stats += `• Repositories today: ${todayCount}\n`;
+        let stats = 🔧 Repository Processing Statistics\n\n;
+        stats += 📊 Overall Stats:\n;
+        stats += • Total repositories processed: ${this.repositoryStats.totalProcessed}\n;
+        stats += • Repositories today: ${todayCount}\n;
         
         if (this.repositoryStats.platforms.size > 0) {
-          stats += `\n🏠 **Platforms:**\n`;
+          stats += \n🏠 Platforms:\n;
           const sortedPlatforms = Array.from(this.repositoryStats.platforms.entries())
             .sort((a, b) => b[1] - a[1])
             .slice(0, 5);
           for (const [platform, count] of sortedPlatforms) {
-            stats += `• ${platform}: ${count}\n`;
+            stats += • ${platform}: ${count}\n;
           }
         }
         
         if (this.repositoryStats.languages.size > 0) {
-          stats += `\n💻 **Top Languages:**\n`;
+          stats += \n💻 Top Languages:\n;
           const sortedLanguages = Array.from(this.repositoryStats.languages.entries())
             .sort((a, b) => b[1] - a[1])
             .slice(0, 7);
           for (const [language, count] of sortedLanguages) {
-            stats += `• ${language}: ${count}\n`;
+            stats += • ${language}: ${count}\n;
           }
         }
         
-        stats += `\n💡 **Usage:** Send \`!repo <url>\` to manually process a repository URL\n`;
-        stats += `🤖 **Auto-processing:** Repository URLs are automatically detected and processed`;
+        stats += \n💡 Usage: Send \!repo <url>\ to manually process a repository URL\n;
+        stats += 🤖 Auto-processing: Repository URLs are automatically detected and processed;
         
         return stats;
       }
@@ -1653,15 +1653,15 @@ class NativeSignalBotService extends EventEmitter {
     });
     
     this.daemon.stdout.on('data', (data) => {
-      console.log(`📡 Daemon: ${data.toString().trim()}`);
+      console.log(📡 Daemon: ${data.toString().trim()});
     });
     
     this.daemon.stderr.on('data', (data) => {
-      console.error(`⚠️ Daemon Error: ${data.toString().trim()}`);
+      console.error(⚠️ Daemon Error: ${data.toString().trim()});
     });
     
     this.daemon.on('close', (code) => {
-      console.log(`🔴 Signal daemon exited with code ${code}`);
+      console.log(🔴 Signal daemon exited with code ${code});
       this.daemon = null;
       
       if (this.isListening && this.reconnectAttempts < this.maxReconnectAttempts) {
@@ -1746,7 +1746,7 @@ class NativeSignalBotService extends EventEmitter {
     }
     
     this.reconnectAttempts++;
-    console.log(`🔄 Reconnecting socket (attempt ${this.reconnectAttempts})...`);
+    console.log(🔄 Reconnecting socket (attempt ${this.reconnectAttempts})...);
     
     setTimeout(() => {
       this.connectSocket();
@@ -1817,9 +1817,9 @@ class NativeSignalBotService extends EventEmitter {
     
     // If any URLs were cleaned, send the cleaned version
     if (cleanedResults.length > 0) {
-      let response = `🧹 Cleaned Tracking Links: `;
+      let response = 🧹 Cleaned Tracking Links: ;
       response += cleanedResults.map(r => r.cleanedUrl).join(' ');
-      response += `\n\n💡 Why? Trackers help social media platforms illuminate networks and track user behavior across the web.`;
+      response += \n\n💡 Why? Trackers help social media platforms illuminate networks and track user behavior across the web.;
       
       await this.sendReply(message, response);
     }
@@ -1940,21 +1940,21 @@ class NativeSignalBotService extends EventEmitter {
         // Add eyes emoji reaction to the message
         try {
           // Note: This would require implementing reaction sending via signal-cli
-          console.log(`👀 Would add eyes emoji to message about ${url}`);
+          console.log(👀 Would add eyes emoji to message about ${url});
         } catch (error) {
           console.error('Could not add reaction:', error);
         }
       }
       
       if (this.isNewsUrl(url)) {
-        console.log(`📰 Detected news URL: ${url}`);
+        console.log(📰 Detected news URL: ${url});
         
         // Check if we've already processed this URL recently (within 1 hour)
         const existingProcessed = Array.from(this.processedNews.values())
           .find(p => p.url === url && Date.now() - p.timestamp < 3600000);
         
         if (existingProcessed) {
-          console.log(`⏭️ URL already processed recently: ${url}`);
+          console.log(⏭️ URL already processed recently: ${url});
           continue;
         }
         
@@ -1962,7 +1962,7 @@ class NativeSignalBotService extends EventEmitter {
           // Process news URL and track it
           await this.processNewsUrl(url, message);
         } catch (error) {
-          console.error(`❌ Error processing news URL ${url}:`, error.message);
+          console.error(❌ Error processing news URL ${url}:, error.message);
           this.newsStats.failedPosts++;
           
           // Log error
@@ -2024,7 +2024,7 @@ class NativeSignalBotService extends EventEmitter {
   }
   
   async processNewsUrl(url, message) {
-    console.log(`🔄 Processing news URL: ${url}`);
+    console.log(🔄 Processing news URL: ${url});
     
     try {
       // Step 1: Clean URL and get bypass links
@@ -2035,7 +2035,7 @@ class NativeSignalBotService extends EventEmitter {
       const content = await this.scrapeNewsContent(cleanedUrl, bypassLinks);
       
       if (!content || !content.title) {
-        console.log(`❌ Could not extract content from: ${url}`);
+        console.log(❌ Could not extract content from: ${url});
         return;
       }
       
@@ -2043,7 +2043,7 @@ class NativeSignalBotService extends EventEmitter {
       const summary = await this.generateNewsSummary(content);
       
       if (!summary) {
-        console.log(`❌ Could not generate summary for: ${url}`);
+        console.log(❌ Could not generate summary for: ${url});
         return;
       }
       
@@ -2074,7 +2074,7 @@ class NativeSignalBotService extends EventEmitter {
       this.newsStats.dailyCounts.set(today, todayCount + 1);
       
       // Step 6: Track the news link in database with forum URL
-      const forumUrl = discourseTopicId ? `${this.discourseApiUrl}/t/${discourseTopicId}` : null;
+      const forumUrl = discourseTopicId ? ${this.discourseApiUrl}/t/${discourseTopicId} : null;
       await this.trackNewsLink(cleanedUrl, message, {
         title: content.title,
         summary: summary,
@@ -2082,13 +2082,13 @@ class NativeSignalBotService extends EventEmitter {
       });
       
       // Step 7: Send confirmation to Signal group (no markdown for Signal)
-      let response = `📰 ${content.title}\n`;
+      let response = 📰 ${content.title}\n;
       if (discourseTopicId) {
-        response += `💬 Forum: ${forumUrl}\n\n`;
+        response += 💬 Forum: ${forumUrl}\n\n;
       }
-      response += `📝 Summary: ${summary}\n\n`;
-      response += `🔗 Original: ${cleanedUrl}\n`;
-      response += `🔓 Bypass: ${bypassLinks.twelveft}`;
+      response += 📝 Summary: ${summary}\n\n;
+      response += 🔗 Original: ${cleanedUrl}\n;
+      response += 🔓 Bypass: ${bypassLinks.twelveft};
       
       // Store this as the last news URL for reaction tracking
       this.lastNewsUrl = cleanedUrl;
@@ -2096,10 +2096,10 @@ class NativeSignalBotService extends EventEmitter {
       
       await this.sendReply(message, response);
       
-      console.log(`✅ Successfully processed news: ${content.title}`);
+      console.log(✅ Successfully processed news: ${content.title});
       
     } catch (error) {
-      console.error(`❌ Error processing news URL ${url}:`, error);
+      console.error(❌ Error processing news URL ${url}:, error);
       throw error;
     }
   }
@@ -2107,15 +2107,15 @@ class NativeSignalBotService extends EventEmitter {
   generateBypassLinks(url) {
     const encoded = encodeURIComponent(url);
     return {
-      twelveft: `https://12ft.io/proxy?q=${encoded}`,
-      archive: `https://web.archive.org/save/${url}`,
-      archiveView: `https://web.archive.org/web/${url}`,
-      archivePh: `https://archive.ph/${url}`,
-      archiveIs: `https://archive.is/${url}`,
-      archiveToday: `https://archive.today/${url}`,
-      googleCache: `https://webcache.googleusercontent.com/search?q=cache:${encoded}`,
-      removepaywall: `https://www.removepaywall.com/${url.replace('https://', '').replace('http://', '')}`,
-      txtify: `https://txtify.it/${url}`
+      twelveft: https://12ft.io/proxy?q=${encoded},
+      archive: https://web.archive.org/save/${url},
+      archiveView: https://web.archive.org/web/${url},
+      archivePh: https://archive.ph/${url},
+      archiveIs: https://archive.is/${url},
+      archiveToday: https://archive.today/${url},
+      googleCache: https://webcache.googleusercontent.com/search?q=cache:${encoded},
+      removepaywall: https://www.removepaywall.com/${url.replace('https://', '').replace('http://', '')},
+      txtify: https://txtify.it/${url}
     };
   }
   
@@ -2135,7 +2135,7 @@ class NativeSignalBotService extends EventEmitter {
     
     for (const attemptUrl of urls) {
       try {
-        console.log(`🌐 Attempting to scrape: ${attemptUrl}`);
+        console.log(🌐 Attempting to scrape: ${attemptUrl});
         
         const response = await axios.get(attemptUrl, {
           timeout: 15000, // Increased timeout
@@ -2162,7 +2162,7 @@ class NativeSignalBotService extends EventEmitter {
              responseText.includes('Checking your browser') ||
              responseText.includes('cf-browser-verification') ||
              responseText.includes('Ray ID'))) {
-          console.log(`⚠️ Cloudflare protection detected, trying bypass services...`);
+          console.log(⚠️ Cloudflare protection detected, trying bypass services...);
           cloudflareDetected = true;
           continue;
         }
@@ -2171,7 +2171,7 @@ class NativeSignalBotService extends EventEmitter {
         if (responseText.includes('Subscribe to continue') ||
             responseText.includes('article limit') ||
             responseText.includes('paywall')) {
-          console.log(`🔒 Paywall detected, trying bypass...`);
+          console.log(🔒 Paywall detected, trying bypass...);
           continue;
         }
         
@@ -2238,19 +2238,19 @@ class NativeSignalBotService extends EventEmitter {
         content = content.replace(/Read more at.*/gi, '');
         
         if (title && content && content.length > 100) {
-          console.log(`✅ Successfully scraped from: ${attemptUrl}`);
+          console.log(✅ Successfully scraped from: ${attemptUrl});
           return { title, content };
         }
         
       } catch (error) {
         if (error.code === 'ECONNREFUSED') {
-          console.log(`🚫 Connection refused for ${attemptUrl}`);
+          console.log(🚫 Connection refused for ${attemptUrl});
         } else if (error.code === 'ETIMEDOUT') {
-          console.log(`⏱️ Timeout for ${attemptUrl}`);
+          console.log(⏱️ Timeout for ${attemptUrl});
         } else if (error.response && error.response.status === 403) {
-          console.log(`🚫 Access forbidden for ${attemptUrl}`);
+          console.log(🚫 Access forbidden for ${attemptUrl});
         } else {
-          console.log(`❌ Error scraping ${attemptUrl}: ${error.message}`);
+          console.log(❌ Error scraping ${attemptUrl}: ${error.message});
         }
         continue;
       }
@@ -2260,11 +2260,11 @@ class NativeSignalBotService extends EventEmitter {
     if (cloudflareDetected) {
       return {
         title: 'Article Protected by Cloudflare',
-        content: `This article is protected by Cloudflare and cannot be automatically summarized. The URL appears to be about: "${new URL(url).pathname.split('/').pop().replace(/-/g, ' ')}". Please visit the original link to read the full article, or try sharing the article text directly for summarization.`
+        content: This article is protected by Cloudflare and cannot be automatically summarized. The URL appears to be about: "${new URL(url).pathname.split('/').pop().replace(/-/g, ' ')}". Please visit the original link to read the full article, or try sharing the article text directly for summarization.
       };
     }
     
-    console.log(`❌ Failed to scrape content from all sources for: ${url}`);
+    console.log(❌ Failed to scrape content from all sources for: ${url});
     return null;
   }
   
@@ -2298,7 +2298,7 @@ ${content.content.substring(0, 3000)}...`;
       });
       
       const summary = response.choices[0].message.content.trim();
-      console.log(`✅ Generated summary: ${summary.substring(0, 100)}...`);
+      console.log(✅ Generated summary: ${summary.substring(0, 100)}...);
       return summary;
       
     } catch (error) {
@@ -2321,16 +2321,16 @@ ${content.content.substring(0, 3000)}...`;
       // Select appropriate category (default to news category 5)
       const categoryId = this.selectDiscourseCategory(content, summary);
       
-      const title = `[News] ${content.title}`;
+      const title = [News] ${content.title};
       const body = `${summary}
 
-**Source:** [${url}](${url})
-**Bypass:** [12ft.io](${bypassLinks.twelveft})
-**Archive:** [Web Archive](${bypassLinks.archiveView})
+Source: [${url}](${url})
+Bypass: [12ft.io](${bypassLinks.twelveft})
+Archive: [Web Archive](${bypassLinks.archiveView})
 
 *Posted automatically by Signal Bot*`;
       
-      const response = await axios.post(`${this.discourseApiUrl}/posts.json`, {
+      const response = await axios.post(${this.discourseApiUrl}/posts.json, {
         title: title,
         raw: body,
         category: categoryId,
@@ -2345,7 +2345,7 @@ ${content.content.substring(0, 3000)}...`;
       });
       
       const topicId = response.data.topic_id;
-      console.log(`✅ Posted to Discourse: ${this.discourseApiUrl}/t/${topicId}`);
+      console.log(✅ Posted to Discourse: ${this.discourseApiUrl}/t/${topicId});
       return topicId;
       
     } catch (error) {
@@ -2363,7 +2363,7 @@ ${content.content.substring(0, 3000)}...`;
     
     // Check for duplicate messages
     if (this.isDuplicateMessage(envelope)) {
-      console.log(`⚠️ [Instance ${this.instanceId}] Duplicate message detected, skipping processing`);
+      console.log(⚠️ [Instance ${this.instanceId}] Duplicate message detected, skipping processing);
       return;
     }
     
@@ -2416,7 +2416,7 @@ ${content.content.substring(0, 3000)}...`;
     // Store message in history for summarization
     this.storeMessageInHistory(message);
     
-    console.log(`📨 Message from ${message.sourceName || message.sourceNumber}: ${message.message}`);
+    console.log(📨 Message from ${message.sourceName || message.sourceNumber}: ${message.message});
     
     // Store message in history for context
     if (message.groupId) {
@@ -2465,7 +2465,7 @@ ${content.content.substring(0, 3000)}...`;
     // Check for AI thread continuation (no command prefix)
     const text = message.message.trim();
     if (!text.startsWith('!')) {
-      const threadKey = `${message.groupId || 'dm'}:${message.sourceNumber}`;
+      const threadKey = ${message.groupId || 'dm'}:${message.sourceNumber};
       const userPref = this.userAiPreference.get(threadKey);
       
       // Check if user has recent AI preference
@@ -2477,7 +2477,7 @@ ${content.content.substring(0, 3000)}...`;
         if (timeSinceLastAi < fiveMinutes) {
           const isContinuation = this.looksLikeAiContinuation(message, userPref);
           if (isContinuation) {
-            console.log(`🔄 Continuing ${userPref.provider} thread for ${message.sourceName}`);
+            console.log(🔄 Continuing ${userPref.provider} thread for ${message.sourceName});
             
             // Route to appropriate AI handler
             const context = {
@@ -2511,13 +2511,13 @@ ${content.content.substring(0, 3000)}...`;
                 }
               }
             } catch (error) {
-              console.error(`Error in AI thread continuation:`, error);
+              console.error(Error in AI thread continuation:, error);
             }
           }
         } else {
           // Thread expired, remove preference
           this.userAiPreference.delete(threadKey);
-          console.log(`🔄 Thread expired for ${message.sourceName}`);
+          console.log(🔄 Thread expired for ${message.sourceName});
         }
       }
     }
@@ -2542,9 +2542,9 @@ ${content.content.substring(0, 3000)}...`;
     
     // If this is a reply to bot, use the full message as the query
     if (message.isReplyToBot && query) {
-      console.log(`📬 Received reply to bot: "${query}"`);
+      console.log(📬 Received reply to bot: "${query}");
       if (message.quotedMessage) {
-        console.log(`   Replying to: "${message.quotedMessage}"`);
+        console.log(   Replying to: "${message.quotedMessage}");
       }
     }
     
@@ -2565,7 +2565,7 @@ ${content.content.substring(0, 3000)}...`;
       if (isCommunityQuery) {
         // Get community context
         const context = await this.getContextFromCommunity(query);
-        const response = `OpenAI [Community]: I can help with that! ${context}\n\nFor more info, check our wiki: ${this.wikiUrl} or forum: ${this.forumUrl}`;
+        const response = OpenAI [Community]: I can help with that! ${context}\n\nFor more info, check our wiki: ${this.wikiUrl} or forum: ${this.forumUrl};
         await this.sendReply(message, response);
         return;
       }
@@ -2578,7 +2578,7 @@ ${content.content.substring(0, 3000)}...`;
         // Add context if this is a reply
         let systemPrompt = 'You are a helpful Signal bot assistant for the IrregularChat community. Be concise and friendly.';
         if (message.isReplyToBot && message.quotedMessage) {
-          systemPrompt += `\n\nContext: The user is replying to your previous message: "${message.quotedMessage}"`;
+          systemPrompt += \n\nContext: The user is replying to your previous message: "${message.quotedMessage}";
         }
         
         const response = await openai.chat.completions.create({
@@ -2590,7 +2590,7 @@ ${content.content.substring(0, 3000)}...`;
           max_completion_tokens: 700  // GPT-5 thinking model needs 600+ tokens
         });
         
-        await this.sendReply(message, `OpenAI: ${response.choices[0].message.content}`);
+        await this.sendReply(message, OpenAI: ${response.choices[0].message.content});
       }
     } catch (error) {
       console.error('Failed to handle mention:', error);
@@ -2603,7 +2603,7 @@ ${content.content.substring(0, 3000)}...`;
     const commandName = parts[0].toLowerCase();
     const args = parts.slice(1);
     
-    console.log(`📝 Processing command: !${commandName} with ${args.length} args`);
+    console.log(📝 Processing command: !${commandName} with ${args.length} args);
     
     // Security: Validate and sanitize command input
     const context = {
@@ -2616,8 +2616,8 @@ ${content.content.substring(0, 3000)}...`;
 
     const validation = this.validateCommand(commandName, args, context);
     if (!validation.valid) {
-      const errorMessage = `❌ Security validation failed: ${validation.errors.join(', ')}`;
-      console.log(`🛡️ ${errorMessage}`);
+      const errorMessage = ❌ Security validation failed: ${validation.errors.join(', ')};
+      console.log(🛡️ ${errorMessage});
       await this.sendReply(message, errorMessage);
       return;
     }
@@ -2626,8 +2626,8 @@ ${content.content.substring(0, 3000)}...`;
     const userIdentifier = message.sourceUuid || message.sourceNumber;
     const rateLimit = this.checkRateLimit(userIdentifier, commandName);
     if (!rateLimit.allowed) {
-      console.log(`🚫 Rate limit exceeded for ${userIdentifier}: ${commandName}`);
-      await this.sendReply(message, `🚫 ${rateLimit.error}`);
+      console.log(🚫 Rate limit exceeded for ${userIdentifier}: ${commandName});
+      await this.sendReply(message, 🚫 ${rateLimit.error});
       return;
     }
 
@@ -2647,16 +2647,16 @@ ${content.content.substring(0, 3000)}...`;
       responseTime: null,
       errorMessage: null
     };
-    console.log(`📦 Available commands: ${Array.from(this.plugins.keys()).join(', ')}`);
+    console.log(📦 Available commands: ${Array.from(this.plugins.keys()).join(', ')});
     
     const command = this.plugins.get(sanitizedCommandName);
     if (!command) {
-      console.log(`❌ Command not found: !${sanitizedCommandName}`);
+      console.log(❌ Command not found: !${sanitizedCommandName});
       usageData.success = false;
       usageData.errorMessage = 'Command not found';
       usageData.responseTime = Date.now() - startTime;
       await this.trackCommandUsage(usageData);
-      await this.sendReply(message, `Unknown command: !${sanitizedCommandName}. Use !help for available commands.`);
+      await this.sendReply(message, Unknown command: !${sanitizedCommandName}. Use !help for available commands.);
       return;
     }
     
@@ -2695,7 +2695,7 @@ ${content.content.substring(0, 3000)}...`;
         await this.sendReply(message, response);
       }
     } catch (error) {
-      console.error(`❌ Command ${commandName} failed:`, error);
+      console.error(❌ Command ${commandName} failed:, error);
       
       // Track failed command
       usageData.success = false;
@@ -2712,7 +2712,7 @@ ${content.content.substring(0, 3000)}...`;
         userName: message.sourceName
       });
       
-      await this.sendReply(message, `Command failed: ${error.message}`);
+      await this.sendReply(message, Command failed: ${error.message});
     }
   }
 
@@ -2735,14 +2735,14 @@ ${content.content.substring(0, 3000)}...`;
           groupId: groupId,
           addMembers: [userNumber]
         },
-        id: `adduser-${Date.now()}`
+        id: adduser-${Date.now()}
       };
       
       const result = await this.sendJsonRpcRequest(request);
-      console.log(`✅ Added ${userNumber} to group ${groupId}`);
+      console.log(✅ Added ${userNumber} to group ${groupId});
       return result;
     } catch (error) {
-      console.error(`Failed to add user to group: ${error.message}`);
+      console.error(Failed to add user to group: ${error.message});
       throw error;
     }
   }
@@ -2751,9 +2751,9 @@ ${content.content.substring(0, 3000)}...`;
   async sendToGroup(groupId, message) {
     try {
       await this.sendGroupMessage(groupId, message);
-      console.log(`✅ Sent message to group ${groupId}`);
+      console.log(✅ Sent message to group ${groupId});
     } catch (error) {
-      console.error(`Failed to send to group: ${error.message}`);
+      console.error(Failed to send to group: ${error.message});
       throw error;
     }
   }
@@ -2883,7 +2883,7 @@ ${content.content.substring(0, 3000)}...`;
     // Check if account is registered
     const accountExists = await this.checkAccountRegistered();
     if (!accountExists) {
-      throw new Error(`Account ${this.phoneNumber} is not registered. Please register first using signal-cli.`);
+      throw new Error(Account ${this.phoneNumber} is not registered. Please register first using signal-cli.);
     }
     
     this.isListening = true;
@@ -2919,7 +2919,7 @@ ${content.content.substring(0, 3000)}...`;
         const data = fs.readFileSync(this.newsDomainsFile, 'utf8');
         const domains = JSON.parse(data);
         this.customNewsDomains = new Set(domains);
-        console.log(`📰 Loaded ${this.customNewsDomains.size} custom news domains`);
+        console.log(📰 Loaded ${this.customNewsDomains.size} custom news domains);
       }
     } catch (error) {
       console.error('❌ Error loading custom news domains:', error.message);
@@ -2930,7 +2930,7 @@ ${content.content.substring(0, 3000)}...`;
     try {
       const domains = Array.from(this.customNewsDomains);
       fs.writeFileSync(this.newsDomainsFile, JSON.stringify(domains, null, 2));
-      console.log(`💾 Saved ${this.customNewsDomains.size} custom news domains`);
+      console.log(💾 Saved ${this.customNewsDomains.size} custom news domains);
     } catch (error) {
       console.error('❌ Error saving custom news domains:', error.message);
     }
@@ -2961,21 +2961,21 @@ ${content.content.substring(0, 3000)}...`;
       }
       
       if (this.isRepositoryUrl(url)) {
-        console.log(`🔧 Detected repository URL: ${url}`);
+        console.log(🔧 Detected repository URL: ${url});
         
         // Check if we've already processed this URL recently (within 6 hours)
         const existingProcessed = Array.from(this.processedRepositories.values())
           .find(p => p.url === url && Date.now() - p.timestamp < 21600000); // 6 hours
         
         if (existingProcessed) {
-          console.log(`⏭️ Repository already processed recently: ${url}`);
+          console.log(⏭️ Repository already processed recently: ${url});
           continue;
         }
         
         // Process repository asynchronously
         setTimeout(() => {
           this.processRepositoryUrl(url, message).catch(error => {
-            console.error(`❌ Failed to process repository: ${url}`, error);
+            console.error(❌ Failed to process repository: ${url}, error);
           });
         }, 100);
       }
@@ -3064,20 +3064,20 @@ ${content.content.substring(0, 3000)}...`;
   }
   
   async processRepositoryUrl(url, message) {
-    console.log(`🔄 Processing repository URL: ${url}`);
+    console.log(🔄 Processing repository URL: ${url});
     
     try {
       // Step 1: Extract repository information from URL
       const repoInfo = this.parseRepositoryUrl(url);
       if (!repoInfo) {
-        console.log(`❌ Could not parse repository URL: ${url}`);
+        console.log(❌ Could not parse repository URL: ${url});
         return;
       }
       
       // Step 2: Fetch repository data from API
       const repoData = await this.fetchRepositoryData(repoInfo);
       if (!repoData) {
-        console.log(`❌ Could not fetch repository data: ${url}`);
+        console.log(❌ Could not fetch repository data: ${url});
         return;
       }
       
@@ -3105,14 +3105,14 @@ ${content.content.substring(0, 3000)}...`;
         console.error('Database tracking failed (continuing without tracking):', dbError.message);
       }
       
-      console.log(`✅ Successfully processed repository: ${repoData.full_name || repoData.path_with_namespace}`);
+      console.log(✅ Successfully processed repository: ${repoData.full_name || repoData.path_with_namespace});
       
     } catch (error) {
-      console.error(`❌ Error processing repository ${url}:`, error.message);
+      console.error(❌ Error processing repository ${url}:, error.message);
       
       // Send error message to chat for debugging
       if (process.env.DEBUG === 'true') {
-        await this.sendReply(message, `⚠️ Repository processing failed: ${error.message}`);
+        await this.sendReply(message, ⚠️ Repository processing failed: ${error.message});
       }
     }
   }
@@ -3148,7 +3148,7 @@ ${content.content.substring(0, 3000)}...`;
         hostname: hostname,
         owner: owner,
         repo: repo,
-        fullName: `${owner}/${repo}`,
+        fullName: ${owner}/${repo},
         originalUrl: url
       };
       
@@ -3169,14 +3169,14 @@ ${content.content.substring(0, 3000)}...`;
         return await this.fetchGenericRepositoryData(repoInfo);
       }
     } catch (error) {
-      console.error(`Error fetching ${repoInfo.platform} data:`, error);
+      console.error(Error fetching ${repoInfo.platform} data:, error);
       return null;
     }
   }
   
   async fetchGitHubData(repoInfo) {
     try {
-      const apiUrl = `https://api.github.com/repos/${repoInfo.fullName}`;
+      const apiUrl = https://api.github.com/repos/${repoInfo.fullName};
       
       // GitHub API request with optional authentication
       const headers = {
@@ -3186,7 +3186,7 @@ ${content.content.substring(0, 3000)}...`;
       
       // Add GitHub token if available (for higher rate limits)
       if (process.env.GITHUB_TOKEN) {
-        headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
+        headers['Authorization'] = token ${process.env.GITHUB_TOKEN};
       }
       
       const response = await fetch(apiUrl, { 
@@ -3196,10 +3196,10 @@ ${content.content.substring(0, 3000)}...`;
       
       if (!response.ok) {
         if (response.status === 404) {
-          console.log(`Repository not found: ${repoInfo.fullName}`);
+          console.log(Repository not found: ${repoInfo.fullName});
           return null;
         }
-        throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+        throw new Error(GitHub API error: ${response.status} ${response.statusText});
       }
       
       const data = await response.json();
@@ -3241,11 +3241,11 @@ ${content.content.substring(0, 3000)}...`;
       if (repoInfo.hostname === 'gitlab.com' || repoInfo.hostname === 'www.gitlab.com') {
         // Encode the project path for GitLab API
         const projectPath = encodeURIComponent(repoInfo.fullName);
-        apiUrl = `https://gitlab.com/api/v4/projects/${projectPath}`;
+        apiUrl = https://gitlab.com/api/v4/projects/${projectPath};
       } else {
         // For self-hosted GitLab instances
         const projectPath = encodeURIComponent(repoInfo.fullName);
-        apiUrl = `https://${repoInfo.hostname}/api/v4/projects/${projectPath}`;
+        apiUrl = https://${repoInfo.hostname}/api/v4/projects/${projectPath};
       }
       
       const headers = {
@@ -3255,7 +3255,7 @@ ${content.content.substring(0, 3000)}...`;
       
       // Add GitLab token if available
       if (process.env.GITLAB_TOKEN) {
-        headers['Authorization'] = `Bearer ${process.env.GITLAB_TOKEN}`;
+        headers['Authorization'] = Bearer ${process.env.GITLAB_TOKEN};
       }
       
       const response = await fetch(apiUrl, { 
@@ -3265,10 +3265,10 @@ ${content.content.substring(0, 3000)}...`;
       
       if (!response.ok) {
         if (response.status === 404) {
-          console.log(`GitLab repository not found: ${repoInfo.fullName}`);
+          console.log(GitLab repository not found: ${repoInfo.fullName});
           return null;
         }
-        throw new Error(`GitLab API error: ${response.status} ${response.statusText}`);
+        throw new Error(GitLab API error: ${response.status} ${response.statusText});
       }
       
       const data = await response.json();
@@ -3315,7 +3315,7 @@ ${content.content.substring(0, 3000)}...`;
       });
       
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw new Error(HTTP ${response.status});
       }
       
       const html = await response.text();
@@ -3355,48 +3355,48 @@ ${content.content.substring(0, 3000)}...`;
   }
   
   formatRepositorySummary(repoData, originalUrl) {
-    let summary = `**Repository Snapshot**\n\n`;
+    let summary = Repository Snapshot\n\n;
     
     // Repository name and platform
-    summary += `**${repoData.full_name}**`;
+    summary += ${repoData.full_name};
     if (repoData.is_private) {
-      summary += ` 🔒`;
+      summary +=  🔒;
     }
     if (repoData.is_fork) {
-      summary += ` 🍴`;
+      summary +=  🍴;
     }
     if (repoData.archived) {
-      summary += ` *Archived*`;
+      summary +=  *Archived*;
     }
-    summary += `\n`;
-    summary += `Platform: ${repoData.platform}\n`;
+    summary += \n;
+    summary += Platform: ${repoData.platform}\n;
     
     // Description
     if (repoData.description) {
       const desc = repoData.description.length > 200 
         ? repoData.description.substring(0, 200) + '...'
         : repoData.description;
-      summary += `${desc}\n`;
+      summary += ${desc}\n;
     }
     
-    summary += `\n`;
+    summary += \n;
     
     // Stats section
-    summary += `**Stats:**\n`;
+    summary += Stats:\n;
     if (repoData.language && repoData.language !== 'Unknown') {
-      summary += `• Language: ${repoData.language}\n`;
+      summary += • Language: ${repoData.language}\n;
     }
     
     if (repoData.stars > 0) {
-      summary += `• ⭐ ${repoData.stars.toLocaleString()} stars\n`;
+      summary += • ⭐ ${repoData.stars.toLocaleString()} stars\n;
     }
     
     if (repoData.forks > 0) {
-      summary += `• 🍴 ${repoData.forks.toLocaleString()} forks\n`;
+      summary += • 🍴 ${repoData.forks.toLocaleString()} forks\n;
     }
     
     if (repoData.open_issues > 0) {
-      summary += `• 🐛 ${repoData.open_issues.toLocaleString()} open issues\n`;
+      summary += • 🐛 ${repoData.open_issues.toLocaleString()} open issues\n;
     }
     
     // Last activity
@@ -3412,33 +3412,33 @@ ${content.content.substring(0, 3000)}...`;
       } else if (diffDays === 1) {
         timeAgo = 'yesterday';
       } else if (diffDays < 7) {
-        timeAgo = `${diffDays} days ago`;
+        timeAgo = ${diffDays} days ago;
       } else if (diffDays < 30) {
-        timeAgo = `${Math.floor(diffDays / 7)} weeks ago`;
+        timeAgo = ${Math.floor(diffDays / 7)} weeks ago;
       } else if (diffDays < 365) {
-        timeAgo = `${Math.floor(diffDays / 30)} months ago`;
+        timeAgo = ${Math.floor(diffDays / 30)} months ago;
       } else {
-        timeAgo = `${Math.floor(diffDays / 365)} years ago`;
+        timeAgo = ${Math.floor(diffDays / 365)} years ago;
       }
       
-      summary += `• Last updated: ${timeAgo}\n`;
+      summary += • Last updated: ${timeAgo}\n;
     }
     
     // License
     if (repoData.license) {
-      summary += `• License: ${repoData.license}\n`;
+      summary += • License: ${repoData.license}\n;
     }
     
     // Topics/Tags
     if (repoData.topics && repoData.topics.length > 0) {
       const topicsList = repoData.topics.slice(0, 5).join(', ');
-      summary += `• Topics: ${topicsList}\n`;
+      summary += • Topics: ${topicsList}\n;
       if (repoData.topics.length > 5) {
-        summary += `  (+${repoData.topics.length - 5} more)\n`;
+        summary +=   (+${repoData.topics.length - 5} more)\n;
       }
     }
     
-    summary += `\nShare related repos with the group and tell us why you find them interesting!`;
+    summary += \nShare related repos with the group and tell us why you find them interesting!;
     
     return summary;
   }
@@ -3454,7 +3454,7 @@ ${content.content.substring(0, 3000)}...`;
     
     try {
       // Load tags
-      const tagsResponse = await axios.get(`${this.discourseApiUrl}/tags.json`, {
+      const tagsResponse = await axios.get(${this.discourseApiUrl}/tags.json, {
         headers: {
           'Api-Key': this.discourseApiKey,
           'Api-Username': this.discourseApiUsername
@@ -3466,11 +3466,11 @@ ${content.content.substring(0, 3000)}...`;
           this.discourseTags.set(tag.id, tag);
         });
         this.discourseTagsLoaded = true;
-        console.log(`✅ Loaded ${this.discourseTags.size} Discourse tags`);
+        console.log(✅ Loaded ${this.discourseTags.size} Discourse tags);
       }
       
       // Load categories
-      const categoriesResponse = await axios.get(`${this.discourseApiUrl}/categories.json`, {
+      const categoriesResponse = await axios.get(${this.discourseApiUrl}/categories.json, {
         headers: {
           'Api-Key': this.discourseApiKey,
           'Api-Username': this.discourseApiUsername
@@ -3482,7 +3482,7 @@ ${content.content.substring(0, 3000)}...`;
           this.discourseCategories.set(category.id, category);
         });
         this.discourseCategoriesLoaded = true;
-        console.log(`✅ Loaded ${this.discourseCategories.size} Discourse categories`);
+        console.log(✅ Loaded ${this.discourseCategories.size} Discourse categories);
       }
       
     } catch (error) {
@@ -3492,7 +3492,7 @@ ${content.content.substring(0, 3000)}...`;
   
   extractNewsTagsFromContent(content, summary) {
     const tags = [];
-    const text = `${content.title} ${summary} ${content.content}`.toLowerCase();
+    const text = ${content.title} ${summary} ${content.content}.toLowerCase();
     
     // Technology tags
     if (text.includes('ai') || text.includes('artificial intelligence')) tags.push('ai');
@@ -3526,7 +3526,7 @@ ${content.content.substring(0, 3000)}...`;
   }
   
   selectDiscourseCategory(content, summary) {
-    const text = `${content.title} ${summary}`.toLowerCase();
+    const text = ${content.title} ${summary}.toLowerCase();
     
     // Category mapping (adjust IDs based on your Discourse setup)
     if (text.includes('cyber') || text.includes('security') || text.includes('hack')) return 7; // Cybersecurity
@@ -3567,7 +3567,7 @@ ${content.content.substring(0, 3000)}...`;
   }
 
   async registerAccount(captchaToken) {
-    console.log(`📱 Registering account ${this.phoneNumber}...`);
+    console.log(📱 Registering account ${this.phoneNumber}...);
     
     return new Promise((resolve, reject) => {
       const register = spawn('signal-cli', [
@@ -3601,7 +3601,7 @@ ${content.content.substring(0, 3000)}...`;
   }
 
   async verifyAccount(verificationCode) {
-    console.log(`🔐 Verifying account ${this.phoneNumber}...`);
+    console.log(🔐 Verifying account ${this.phoneNumber}...);
     
     return new Promise((resolve, reject) => {
       const verify = spawn('signal-cli', [
@@ -3817,7 +3817,7 @@ ${content.content.substring(0, 3000)}...`;
         orderBy: { memberCount: 'desc' }
       });
       
-      console.log(`📊 Retrieved ${groups.length} groups from database`);
+      console.log(📊 Retrieved ${groups.length} groups from database);
       return groups;
     } catch (error) {
       console.error('Error fetching groups from database:', error);
@@ -3842,7 +3842,7 @@ ${content.content.substring(0, 3000)}...`;
         return;
       }
       
-      console.log(`🔄 Syncing ${signalGroups.length} groups to database...`);
+      console.log(🔄 Syncing ${signalGroups.length} groups to database...);
       
       // Sync each group to database using upsert
       for (const group of signalGroups) {
@@ -3874,7 +3874,7 @@ ${content.content.substring(0, 3000)}...`;
         });
       }
       
-      console.log(`✅ Synced ${signalGroups.length} groups to database`);
+      console.log(✅ Synced ${signalGroups.length} groups to database);
       
     } catch (error) {
       console.error('Error syncing groups to database:', error);
@@ -3888,8 +3888,8 @@ ${content.content.substring(0, 3000)}...`;
     groups.forEach((group, index) => {
       const adminIcon = group.botIsAdmin ? '👑' : '👤';
       
-      response += `${index + 1}. ${group.name} ${adminIcon}\n`;
-      response += `   Members: ${group.memberCount}`;
+      response += ${index + 1}. ${group.name} ${adminIcon}\n;
+      response +=    Members: ${group.memberCount};
       if (group.botIsAdmin) {
         response += ' (Bot is Admin)';
       }
@@ -3900,13 +3900,13 @@ ${content.content.substring(0, 3000)}...`;
     
     // Calculate totals
     const totalMembers = groups.reduce((sum, group) => sum + group.memberCount, 0);
-    response += `📊 Total: ${groups.length} groups, ~${totalMembers} total members\n`;
+    response += 📊 Total: ${groups.length} groups, ~${totalMembers} total members\n;
     response += '👑 = Bot has admin rights\n';
     response += '👤 = Bot is regular member\n\n';
     
     const adminGroups = groups.filter(g => g.botIsAdmin);
     if (adminGroups.length > 0) {
-      response += `✅ Bot can add users to ${adminGroups.length} group(s)\n`;
+      response += ✅ Bot can add users to ${adminGroups.length} group(s)\n;
       response += 'Use !addto <group-number> @user to add users\n';
     } else {
       response += '⚠️ Bot has no admin rights in any group\n';
@@ -3948,7 +3948,7 @@ ${content.content.substring(0, 3000)}...`;
       
       nc.on('close', (code) => {
         if (code !== 0) {
-          reject(new Error(`nc process exited with code ${code}: ${stderr}`));
+          reject(new Error(nc process exited with code ${code}: ${stderr}));
           return;
         }
         
@@ -3990,7 +3990,7 @@ ${content.content.substring(0, 3000)}...`;
           if (cache.lastUpdated && cache.groups && cache.groups.length > 0) {
             const age = Date.now() - cache.lastUpdated;
             if (age < CACHE_DURATION) {
-              console.log(`📦 Using cached groups (${cache.groups.length} groups, age: ${Math.round(age/1000)}s)`);
+              console.log(📦 Using cached groups (${cache.groups.length} groups, age: ${Math.round(age/1000)}s));
               return cache.groups;
             }
           }
@@ -4022,7 +4022,7 @@ ${content.content.substring(0, 3000)}...`;
       };
       
       await fsPromises.writeFile(cacheFile, JSON.stringify(cacheData, null, 2));
-      console.log(`✅ Cached ${groups ? groups.length : 0} groups`);
+      console.log(✅ Cached ${groups ? groups.length : 0} groups);
       
       return groups || [];
     } catch (error) {
@@ -4126,7 +4126,7 @@ ${content.content.substring(0, 3000)}...`;
     // The message text after the command and group number
     // This will contain the replacement characters for mentions
     const fullMessage = message?.message || '';
-    const commandPrefix = `!addto ${groupIdentifier}`;
+    const commandPrefix = !addto ${groupIdentifier};
     const afterCommand = fullMessage.substring(fullMessage.indexOf(commandPrefix) + commandPrefix.length).trim();
     
     console.log('🔍 AddTo Debug:');
@@ -4148,14 +4148,14 @@ ${content.content.substring(0, 3000)}...`;
         if (mention.uuid) {
           // Sometimes Signal puts the UUID in the name field when the actual name isn't available
           const displayName = (mention.name && mention.name !== mention.uuid) ? mention.name : 'User';
-          console.log(`✅ Using UUID from mention: ${mention.uuid} for ${displayName}`);
+          console.log(✅ Using UUID from mention: ${mention.uuid} for ${displayName});
           users.push({
             identifier: mention.uuid,
             display: displayName
           });
         } else if (mention.number) {
           const displayName = (mention.name && mention.name !== mention.number) ? mention.name : mention.number;
-          console.log(`📱 Using phone from mention: ${mention.number} for ${displayName}`);
+          console.log(📱 Using phone from mention: ${mention.number} for ${displayName});
           users.push({
             identifier: mention.number,
             display: displayName
@@ -4175,11 +4175,11 @@ ${content.content.substring(0, 3000)}...`;
           users.push({ identifier: userArg, display: userArg });
         } else if (userArg.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
           // Direct UUID
-          console.log(`📍 Direct UUID provided: ${userArg}`);
+          console.log(📍 Direct UUID provided: ${userArg});
           users.push({ identifier: userArg, display: userArg });
         } else {
           // Try to look up in group members
-          console.log(`🔍 Looking for ${userArg} in group members...`);
+          console.log(🔍 Looking for ${userArg} in group members...);
           try {
             const groups = await this.getSignalGroups(false);
             const targetGroup = groups[parseInt(groupIdentifier) - 1];
@@ -4191,16 +4191,16 @@ ${content.content.substring(0, 3000)}...`;
               );
               
               if (member && member.uuid) {
-                console.log(`✅ Found UUID in group members: ${member.uuid}`);
+                console.log(✅ Found UUID in group members: ${member.uuid});
                 users.push({ identifier: member.uuid, display: userArg });
               } else {
-                console.log(`⚠️ Could not find UUID for ${userArg}`);
-                return `❌ Could not find user "${userArg}". Please use @mention or provide their UUID.`;
+                console.log(⚠️ Could not find UUID for ${userArg});
+                return ❌ Could not find user "${userArg}". Please use @mention or provide their UUID.;
               }
             }
           } catch (error) {
             console.error('Error fetching group members:', error);
-            return `❌ Error looking up user "${userArg}"`;
+            return ❌ Error looking up user "${userArg}";
           }
         }
       }
@@ -4217,8 +4217,8 @@ ${content.content.substring(0, 3000)}...`;
       // Find the group by number
       const groupNum = parseInt(groupIdentifier);
       if (isNaN(groupNum) || groupNum < 1 || groupNum > groups.length) {
-        return `❌ Invalid group number: ${groupIdentifier}\n\n` +
-               `Please use a number between 1 and ${groups.length}\n` +
+        return ❌ Invalid group number: ${groupIdentifier}\n\n +
+               Please use a number between 1 and ${groups.length}\n +
                'Use !groups to see available groups.';
       }
       
@@ -4226,18 +4226,18 @@ ${content.content.substring(0, 3000)}...`;
       const isAdmin = this.isBotAdmin(targetGroup);
       
       if (!isAdmin) {
-        return `❌ Cannot add users to "${targetGroup.name}"\n\n` +
+        return ❌ Cannot add users to "${targetGroup.name}"\n\n +
                'Bot does not have admin permissions in this group.\n' +
                'Only group admins can add new members.';
       }
       
       if (users.length === 0) {
-        return `❌ No users specified to add to ${targetGroup.name}`;
+        return ❌ No users specified to add to ${targetGroup.name};
       }
       
       // Attempt to add users via Signal CLI
       const results = [];
-      console.log(`🎯 Attempting to add ${users.length} users to group: ${targetGroup.name} (${targetGroup.id})`);
+      console.log(🎯 Attempting to add ${users.length} users to group: ${targetGroup.name} (${targetGroup.id}));
       
       for (const user of users) {
         try {
@@ -4255,25 +4255,25 @@ ${content.content.substring(0, 3000)}...`;
             id: Date.now()
           };
           
-          console.log(`📤 Sending updateGroup request:`);
-          console.log(`   Group: ${targetGroup.name}`);
-          console.log(`   User UUID: ${userIdentifier}`);
-          console.log(`   Display: ${user.display}`);
+          console.log(📤 Sending updateGroup request:);
+          console.log(   Group: ${targetGroup.name});
+          console.log(   User UUID: ${userIdentifier});
+          console.log(   Display: ${user.display});
           
           const success = await this.sendJsonRpcRequest(request);
           if (success) {
-            console.log(`✅ Successfully added ${user.display}`);
-            results.push(`✅ ${user.display} added successfully`);
+            console.log(✅ Successfully added ${user.display});
+            results.push(✅ ${user.display} added successfully);
           } else {
-            console.log(`⚠️ Failed to add ${user.display}`);
-            results.push(`⚠️ ${user.display} (could not add - check if UUID is valid)`);
+            console.log(⚠️ Failed to add ${user.display});
+            results.push(⚠️ ${user.display} (could not add - check if UUID is valid));
           }
         } catch (error) {
-          console.error(`Error adding ${user.display}:`, error);
+          console.error(Error adding ${user.display}:, error);
           if (error.message.includes('timeout')) {
-            results.push(`⚠️ ${user.display} (request timed out - user may not exist)`);
+            results.push(⚠️ ${user.display} (request timed out - user may not exist));
           } else {
-            results.push(`❌ ${user.display}: ${error.message}`);
+            results.push(❌ ${user.display}: ${error.message});
           }
         }
       }
@@ -4282,13 +4282,13 @@ ${content.content.substring(0, 3000)}...`;
       const successCount = results.filter(r => r.includes('✅')).length;
       const failCount = results.filter(r => r.includes('❌') || r.includes('⚠️')).length;
       
-      let summary = `📱 Adding users to "${targetGroup.name}":\n\n`;
+      let summary = 📱 Adding users to "${targetGroup.name}":\n\n;
       summary += results.join('\n');
       
       if (successCount > 0 && failCount === 0) {
         summary += '\n\n✅ Operation complete';
       } else if (successCount > 0 && failCount > 0) {
-        summary += `\n\n⚠️ Partially complete: ${successCount} added, ${failCount} failed`;
+        summary += \n\n⚠️ Partially complete: ${successCount} added, ${failCount} failed;
       } else {
         summary += '\n\n❌ Failed to add users';
       }
@@ -4297,8 +4297,8 @@ ${content.content.substring(0, 3000)}...`;
              
     } catch (error) {
       console.error('Error in handleAddTo:', error);
-      return `❌ Failed to add users\n\n` +
-             `Error: ${error.message}`;
+      return ❌ Failed to add users\n\n +
+             Error: ${error.message};
     }
   }
   
@@ -4355,7 +4355,7 @@ ${content.content.substring(0, 3000)}...`;
           
           // Don't reject on timeout for send messages and updateGroup - they often succeed but don't respond
           if (request.method === 'send' || request.method === 'updateGroup') {
-            console.log(`⚠️ ${request.method} request timed out but may have succeeded`);
+            console.log(⚠️ ${request.method} request timed out but may have succeeded);
             resolve(true);
           } else {
             reject(new Error('Request timeout'));
@@ -4368,35 +4368,35 @@ ${content.content.substring(0, 3000)}...`;
   async handleJoin(context) {
     const { args } = context;
     if (!args) return '❌ Usage: !join <group-name>';
-    return `✅ Join request submitted for "${args}". Admins will review your request.`;
+    return ✅ Join request submitted for "${args}". Admins will review your request.;
   }
 
   async handleLeave(context) {
     const { args } = context;  
     if (!args) return '❌ Usage: !leave <group-name>';
-    return `✅ You have left the "${args}" group.`;
+    return ✅ You have left the "${args}" group.;
   }
 
   async handleAddUser(context) {
     const { args } = context;
     if (!args) return '❌ Usage: !adduser @user <group>';
-    return `✅ User added to group successfully.`;
+    return ✅ User added to group successfully.;
   }
 
   async handleRemoveUser(context) {
     const { args } = context;
     if (!args) return '❌ Usage: !removeuser @user <group>';
-    return `✅ User removed from group successfully.`;
+    return ✅ User removed from group successfully.;
   }
 
   async handleGroupInfo(context) {
     const { args } = context;
     if (!args) return '❌ Usage: !groupinfo <group>';
-    return `📊 **Group: ${args}**\nMembers: 25\nActive today: 8\nDescription: Community discussions`;
+    return 📊 Group: ${args}\nMembers: 25\nActive today: 8\nDescription: Community discussions;
   }
 
   async handleMembers(context) {
-    return `👥 **Group Members:**\n• Admin1 (Admin)\n• User1\n• User2\n• User3\n\nTotal: 15 members`;
+    return 👥 Group Members:\n• Admin1 (Admin)\n• User1\n• User2\n• User3\n\nTotal: 15 members;
   }
 
   async handleInvite(context) {
@@ -4405,7 +4405,7 @@ ${content.content.substring(0, 3000)}...`;
     // TODO: Add the sender to the entry room (Actions Chat)
     // This would require knowing the entry room group ID and using updateGroup API
     
-    const inviteInstructions = `📋 **To invite someone to IrregularChat:**
+    const inviteInstructions = `📋 To invite someone to IrregularChat:
 
 1. Let them know you're vouching for them
 2. Make sure you have an SSO login: https://sso.irregularchat.com
@@ -4427,17 +4427,17 @@ That's it! The onboarding process will begin once you type !request.`;
     const { args } = context;
     
     if (!args || args.length === 0) {
-      return `📚 **IrregularPedia Wiki**\n\n` +
-             `Usage: !wiki <search term>\n` +
-             `Example: !wiki security\n\n` +
-             `Browse: https://irregularpedia.org`;
+      return 📚 IrregularPedia Wiki\n\n +
+             Usage: !wiki <search term>\n +
+             Example: !wiki security\n\n +
+             Browse: https://irregularpedia.org;
     }
     
     const searchTerm = Array.isArray(args) ? args.join(' ') : args;
     
     try {
       // Search MediaWiki API
-      const apiUrl = `https://irregularpedia.org/api.php`;
+      const apiUrl = https://irregularpedia.org/api.php;
       const searchParams = new URLSearchParams({
         action: 'query',
         list: 'search',
@@ -4447,10 +4447,10 @@ That's it! The onboarding process will begin once you type !request.`;
         srprop: 'snippet|size|wordcount|timestamp'
       });
       
-      const response = await fetch(`${apiUrl}?${searchParams}`);
+      const response = await fetch(${apiUrl}?${searchParams});
       
       if (!response.ok) {
-        throw new Error(`Wiki API error: ${response.status}`);
+        throw new Error(Wiki API error: ${response.status});
       }
       
       const data = await response.json();
@@ -4462,22 +4462,22 @@ That's it! The onboarding process will begin once you type !request.`;
         const titleParams = new URLSearchParams({
           action: 'query',
           list: 'search',
-          srsearch: `intitle:${searchTerm}`,
+          srsearch: intitle:${searchTerm},
           format: 'json',
           srlimit: '5'
         });
         
-        const titleResponse = await fetch(`${apiUrl}?${titleParams}`);
+        const titleResponse = await fetch(${apiUrl}?${titleParams});
         const titleData = await titleResponse.json();
         const titleResults = titleData.query?.search || [];
         
         if (titleResults.length === 0) {
-          return `Wiki Search: "${searchTerm}"\n\n` +
-                 `No results found.\n\n` +
-                 `Try:\n` +
-                 `• Different keywords\n` +
-                 `• Browse all pages: https://irregularpedia.org/wiki/Special:AllPages\n` +
-                 `• Main page: https://irregularpedia.org`;
+          return Wiki Search: "${searchTerm}"\n\n +
+                 No results found.\n\n +
+                 Try:\n +
+                 • Different keywords\n +
+                 • Browse all pages: https://irregularpedia.org/wiki/Special:AllPages\n +
+                 • Main page: https://irregularpedia.org;
         }
         
         // Use title results
@@ -4485,7 +4485,7 @@ That's it! The onboarding process will begin once you type !request.`;
       }
       
       // Format results for Signal
-      let output = `Wiki Search: "${searchTerm}"\n\n`;
+      let output = Wiki Search: "${searchTerm}"\n\n;
       
       let displayCount = 0;
       for (let i = 0; i < results.length && displayCount < 5; i++) {
@@ -4500,7 +4500,7 @@ That's it! The onboarding process will begin once you type !request.`;
         const title = result.title.replace(/_/g, ' ');
         
         // Build direct URL
-        const pageUrl = `https://irregularpedia.org/wiki/${encodeURIComponent(result.title.replace(/ /g, '_'))}`;
+        const pageUrl = https://irregularpedia.org/wiki/${encodeURIComponent(result.title.replace(/ /g, '_'))};
         
         // Clean snippet - aggressively remove ALL HTML artifacts
         let snippet = '';
@@ -4547,7 +4547,7 @@ That's it! The onboarding process will begin once you type !request.`;
         }
         
         displayCount++;
-        output += `${displayCount}. ${title}\n`;
+        output += ${displayCount}. ${title}\n;
         
         // Only add snippet if it's meaningful and clean (no HTML artifacts)
         if (snippet && snippet.length > 10 && 
@@ -4556,27 +4556,27 @@ That's it! The onboarding process will begin once you type !request.`;
             !snippet.includes('id=') &&
             !snippet.includes('/>') &&
             !snippet.includes('</')) {
-          output += `   ${snippet}\n`;
+          output +=    ${snippet}\n;
         }
         
-        output += `   ${pageUrl}\n\n`;
+        output +=    ${pageUrl}\n\n;
       }
       
       // If no valid results after filtering
       if (displayCount === 0) {
-        return `Wiki Search: "${searchTerm}"\n\n` +
-               `No results found.\n\n` +
-               `Browse all pages: https://irregularpedia.org/wiki/Special:AllPages\n` +
-               `Main page: https://irregularpedia.org`;
+        return Wiki Search: "${searchTerm}"\n\n +
+               No results found.\n\n +
+               Browse all pages: https://irregularpedia.org/wiki/Special:AllPages\n +
+               Main page: https://irregularpedia.org;
       }
       
       // Add summary
       if (totalHits > displayCount) {
-        output += `Showing ${displayCount} of ${totalHits} results\n`;
+        output += Showing ${displayCount} of ${totalHits} results\n;
       }
       
       // Add search link
-      output += `More: https://irregularpedia.org/wiki/Special:Search?search=${encodeURIComponent(searchTerm)}`;
+      output += More: https://irregularpedia.org/wiki/Special:Search?search=${encodeURIComponent(searchTerm)};
       
       return output;
       
@@ -4584,11 +4584,11 @@ That's it! The onboarding process will begin once you type !request.`;
       console.error('Wiki search error:', error);
       
       // Fallback response
-      return `Wiki Search: "${searchTerm}"\n\n` +
-             `Direct search:\n` +
-             `https://irregularpedia.org/wiki/Special:Search?search=${encodeURIComponent(searchTerm)}\n\n` +
-             `Browse all pages:\n` +
-             `https://irregularpedia.org/wiki/Special:AllPages`;
+      return Wiki Search: "${searchTerm}"\n\n +
+             Direct search:\n +
+             https://irregularpedia.org/wiki/Special:Search?search=${encodeURIComponent(searchTerm)}\n\n +
+             Browse all pages:\n +
+             https://irregularpedia.org/wiki/Special:AllPages;
     }
   }
 
@@ -4607,7 +4607,7 @@ That's it! The onboarding process will begin once you type !request.`;
     }
     
     const query = args.join(' ').trim();
-    console.log(`🔍 Advanced search for: "${query}" by ${sender}`);
+    console.log(🔍 Advanced search for: "${query}" by ${sender});
     
     try {
       // Collect data from multiple sources
@@ -4622,7 +4622,7 @@ That's it! The onboarding process will begin once you type !request.`;
       // 1. Search forum posts (if API configured)
       if (this.discourseApiUrl && this.discourseApiKey) {
         try {
-          const forumUrl = `${this.discourseApiUrl}/search.json?q=${encodeURIComponent(query)}`;
+          const forumUrl = ${this.discourseApiUrl}/search.json?q=${encodeURIComponent(query)};
           const forumResponse = await fetch(forumUrl, {
             headers: {
               'Api-Key': this.discourseApiKey,
@@ -4637,7 +4637,7 @@ That's it! The onboarding process will begin once you type !request.`;
             
             searchResults.forum = posts.slice(0, 3).map(post => {
               const topic = topics.find(t => t.id === post.topic_id) || {};
-              const title = topic.title || post.topic_title || `Post #${post.id}`;
+              const title = topic.title || post.topic_title || Post #${post.id};
               const slug = topic.slug || post.topic_slug || 'topic';
               const topicId = post.topic_id || topic.id;
               
@@ -4645,8 +4645,8 @@ That's it! The onboarding process will begin once you type !request.`;
                 type: 'forum',
                 title: title,
                 content: post.blurb || post.excerpt || '',
-                url: topicId ? `https://forum.irregularchat.com/t/${slug}/${topicId}` : 
-                              `https://forum.irregularchat.com/p/${post.id}`
+                url: topicId ? https://forum.irregularchat.com/t/${slug}/${topicId} : 
+                              https://forum.irregularchat.com/p/${post.id}
               };
             });
           }
@@ -4657,7 +4657,7 @@ That's it! The onboarding process will begin once you type !request.`;
       
       // 2. Search wiki
       try {
-        const wikiUrl = `https://irregularpedia.org/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=3`;
+        const wikiUrl = https://irregularpedia.org/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=3;
         const wikiResponse = await fetch(wikiUrl);
         
         if (wikiResponse.ok) {
@@ -4667,7 +4667,7 @@ That's it! The onboarding process will begin once you type !request.`;
             type: 'wiki',
             title: article.title,
             content: article.snippet?.replace(/<[^>]*>/g, '').substring(0, 100) || '',
-            url: `https://irregularpedia.org/wiki/${encodeURIComponent(article.title.replace(/ /g, '_'))}`
+            url: https://irregularpedia.org/wiki/${encodeURIComponent(article.title.replace(/ /g, '_'))}
           }));
         }
       } catch (error) {
@@ -4723,12 +4723,12 @@ That's it! The onboarding process will begin once you type !request.`;
       ];
       
       if (allResults.length === 0) {
-        return `🔍 No results found for: "${query}"\n\n` +
-               `Try:\n` +
-               `• Different keywords\n` +
-               `• !wiki for wiki search\n` +
-               `• !fsearch for forum search\n` +
-               `• !questions to see Q&A`;
+        return 🔍 No results found for: "${query}"\n\n +
+               Try:\n +
+               • Different keywords\n +
+               • !wiki for wiki search\n +
+               • !fsearch for forum search\n +
+               • !questions to see Q&A;
       }
       
       // 6. Use Local AI to synthesize results (for privacy) - with timeout
@@ -4749,11 +4749,11 @@ That's it! The onboarding process will begin once you type !request.`;
             }))
           };
           
-          const aiPromise = fetch(`${this.localAiUrl}/v1/chat/completions`, {
+          const aiPromise = fetch(${this.localAiUrl}/v1/chat/completions, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer ${this.localAiApiKey}`
+              'Authorization': Bearer ${this.localAiApiKey}
             },
             body: JSON.stringify({
               model: this.localAiModel,
@@ -4762,7 +4762,7 @@ That's it! The onboarding process will begin once you type !request.`;
                 content: 'Synthesize search results in 2-3 sentences max. Be direct and helpful.'
               }, {
                 role: 'user',
-                content: `Query: "${query}"\nResults: ${JSON.stringify(contextData.results)}`
+                content: Query: "${query}"\nResults: ${JSON.stringify(contextData.results)}
               }],
               max_completion_tokens: 650  // GPT-5 minimum for thinking models
             })
@@ -4782,43 +4782,43 @@ That's it! The onboarding process will begin once you type !request.`;
       }
       
       // 7. Format response (compact for large groups)
-      let response = `Search Results for: "${query}"\n\n`;
+      let response = Search Results for: "${query}"\n\n;
       
       // Add AI summary if available (skip if too long)
       if (aiSummary && aiSummary.length < 150) {
-        response += `${aiSummary}\n\n`;
+        response += ${aiSummary}\n\n;
       }
       
       // Add categorized results (compact format)
       if (searchResults.wiki.length > 0) {
-        response += `📚 Wiki Articles:\n`;
+        response += 📚 Wiki Articles:\n;
         searchResults.wiki.slice(0, 3).forEach(r => {  // Limit to 3
-          response += `• ${r.title}\n  ${r.url}\n`;
+          response += • ${r.title}\n  ${r.url}\n;
         });
         response += '\n';
       }
       
       if (searchResults.forum.length > 0) {
-        response += `💬 Forum Posts:\n`;
+        response += 💬 Forum Posts:\n;
         searchResults.forum.slice(0, 3).forEach(r => {  // Limit to 3
-          response += `• ${r.title}\n  ${r.url}\n`;
+          response += • ${r.title}\n  ${r.url}\n;
         });
         response += '\n';
       }
       
       if (searchResults.questions.length > 0) {
-        response += `❓ Questions:\n`;
+        response += ❓ Questions:\n;
         searchResults.questions.forEach(q => {
           const status = q.solved ? '✅' : '❓';
-          response += `${status} ${q.id}: ${q.title} (${q.answers} answers)\n`;
+          response += ${status} ${q.id}: ${q.title} (${q.answers} answers)\n;
         });
         response += '\n';
       }
       
       if (searchResults.messages.length > 0) {
-        response += `💭 Recent Messages:\n`;
+        response += 💭 Recent Messages:\n;
         searchResults.messages.forEach(m => {
-          response += `• just now - ${m.content.substring(0, 50)}...\n`;  // Shorter content
+          response += • just now - ${m.content.substring(0, 50)}...\n;  // Shorter content
         });
       }
       
@@ -4831,13 +4831,13 @@ That's it! The onboarding process will begin once you type !request.`;
       
     } catch (error) {
       console.error('Advanced search error:', error);
-      return `❌ Search error occurred. Please try again.\n\nYou can also try:\n• !wiki ${query}\n• !fsearch ${query}`;
+      return ❌ Search error occurred. Please try again.\n\nYou can also try:\n• !wiki ${query}\n• !fsearch ${query};
     }
   }
 
   async handleForum(context) {
     const { args } = context;
-    return `💬 **Forum Search${args ? `: "${args}"` : ''}**\n\nVisit: https://forum.irregularchat.com\n\n💡 Use the forum for detailed discussions.`;
+    return 💬 Forum Search${args ? : "${args}" : ''}\n\nVisit: https://forum.irregularchat.com\n\n💡 Use the forum for detailed discussions.;
   }
 
   async handleEvents(context) {
@@ -4867,7 +4867,7 @@ That's it! The onboarding process will begin once you type !request.`;
       // Also try to fetch latest events from Discourse if API is available
       if (this.discourseApiUrl && this.discourseApiKey) {
         try {
-          const response = await fetch(`${this.discourseApiUrl}/tags/event.json`, {
+          const response = await fetch(${this.discourseApiUrl}/tags/event.json, {
             headers: {
               'Api-Key': this.discourseApiKey,
               'Api-Username': this.discourseApiUsername || 'system'
@@ -4886,7 +4886,7 @@ That's it! The onboarding process will begin once you type !request.`;
       
       // Format events for display
       if (events.length === 0) {
-        return `📅 Upcoming Events:\n\nNo upcoming events scheduled.\n\nTo add an event, use: !eventadd <event details>\n\nView calendar: ${this.discourseApiUrl}/upcoming-events`;
+        return 📅 Upcoming Events:\n\nNo upcoming events scheduled.\n\nTo add an event, use: !eventadd <event details>\n\nView calendar: ${this.discourseApiUrl}/upcoming-events;
       }
       
       let response = '📅 Upcoming Events:\n\n';
@@ -4895,29 +4895,29 @@ That's it! The onboarding process will begin once you type !request.`;
         const startDate = new Date(event.eventStart);
         const endDate = event.eventEnd ? new Date(event.eventEnd) : null;
         
-        response += `${event.eventName}\n`;
-        response += `📅 ${this.formatEventDate(startDate)}\n`;
+        response += ${event.eventName}\n;
+        response += 📅 ${this.formatEventDate(startDate)}\n;
         if (endDate) {
-          response += `⏰ Ends: ${this.formatEventTime(endDate)}\n`;
+          response += ⏰ Ends: ${this.formatEventTime(endDate)}\n;
         }
         if (event.location) {
-          response += `📍 ${event.location}\n`;
+          response += 📍 ${event.location}\n;
         }
         if (event.discourseUrl) {
-          response += `🔗 ${event.discourseUrl}\n`;
+          response += 🔗 ${event.discourseUrl}\n;
         }
         response += '\n';
       }
       
-      response += `View all events: ${this.discourseApiUrl}/upcoming-events\n`;
-      response += `Add an event: !eventadd <details>`;
+      response += View all events: ${this.discourseApiUrl}/upcoming-events\n;
+      response += Add an event: !eventadd <details>;
       
       await prisma.$disconnect();
       return response;
       
     } catch (error) {
       console.error('Error fetching events:', error);
-      return `📅 **Upcoming Events:**\n\n⚠️ Unable to fetch events at this time.\n\nView events online: ${this.discourseApiUrl}/upcoming-events`;
+      return 📅 Upcoming Events:\n\n⚠️ Unable to fetch events at this time.\n\nView events online: ${this.discourseApiUrl}/upcoming-events;
     }
   }
   
@@ -4971,15 +4971,15 @@ That's it! The onboarding process will begin once you type !request.`;
           minute: '2-digit' 
         });
         
-        return `LocalAI: ✅ Event Created!\n\n` +
-               `${pendingEvent.parsed.name}\n` +
-               `📅 ${dateStr}\n` +
-               `🕐 ${timeStr}\n` +
-               `📍 ${pendingEvent.parsed.location}\n\n` +
-               `📎 Forum link: ${createdEvent.url}\n\n` +
-               `The event has been posted to the forum calendar and saved to our database.`;
+        return LocalAI: ✅ Event Created!\n\n +
+               ${pendingEvent.parsed.name}\n +
+               📅 ${dateStr}\n +
+               🕐 ${timeStr}\n +
+               📍 ${pendingEvent.parsed.location}\n\n +
+               📎 Forum link: ${createdEvent.url}\n\n +
+               The event has been posted to the forum calendar and saved to our database.;
       } else {
-        return `LocalAI: ❌ Failed to create event: ${createdEvent.error}`;
+        return LocalAI: ❌ Failed to create event: ${createdEvent.error};
       }
     }
     
@@ -5008,23 +5008,23 @@ That's it! The onboarding process will begin once you type !request.`;
         
         if (missingFields.length === 0) {
           // We have everything, confirm creation
-          return `LocalAI: Great! I now have all the details:\n\n` +
-                 `• Name: ${pendingEvent.parsed.name}\n` +
-                 `• Start: ${pendingEvent.parsed.start}\n` +
-                 `• Location: ${pendingEvent.parsed.location}\n\n` +
-                 `Reply "yes" to create this event or "cancel" to stop.`;
+          return LocalAI: Great! I now have all the details:\n\n +
+                 • Name: ${pendingEvent.parsed.name}\n +
+                 • Start: ${pendingEvent.parsed.start}\n +
+                 • Location: ${pendingEvent.parsed.location}\n\n +
+                 Reply "yes" to create this event or "cancel" to stop.;
         }
       }
     }
     
     // Update pending event and ask for confirmation
     pendingEvent.timestamp = Date.now();
-    return `LocalAI: I've updated the location to: ${pendingEvent.parsed.location}\n\n` +
-           `Event details:\n` +
-           `• Name: ${pendingEvent.parsed.name}\n` +
-           `• Start: ${pendingEvent.parsed.start}\n` +
-           `• Location: ${pendingEvent.parsed.location}\n\n` +
-           `Reply "yes" to create this event or "cancel" to stop.`;
+    return LocalAI: I've updated the location to: ${pendingEvent.parsed.location}\n\n +
+           Event details:\n +
+           • Name: ${pendingEvent.parsed.name}\n +
+           • Start: ${pendingEvent.parsed.start}\n +
+           • Location: ${pendingEvent.parsed.location}\n\n +
+           Reply "yes" to create this event or "cancel" to stop.;
   }
 
   async handleEventAdd(context) {
@@ -5039,7 +5039,7 @@ That's it! The onboarding process will begin once you type !request.`;
     }
     
     const eventDescription = args.join(' ').trim();
-    console.log(`📅 Processing event add request from ${sender}: ${eventDescription}`);
+    console.log(📅 Processing event add request from ${sender}: ${eventDescription});
     
     try {
       // Use LocalAI to parse the natural language event description
@@ -5071,7 +5071,7 @@ That's it! The onboarding process will begin once you type !request.`;
       }
       
       // Store pending event in memory for follow-up
-      const pendingEventId = `pending_${Date.now()}`;
+      const pendingEventId = pending_${Date.now()};
       this.pendingEvents = this.pendingEvents || new Map();
       this.pendingEvents.set(pendingEventId, {
         parsed: parsedEvent,
@@ -5099,24 +5099,24 @@ That's it! The onboarding process will begin once you type !request.`;
       if (missingFields.length > 0) {
         let response = 'LocalAI: 📅 Creating Event\n\n';
         response += 'I understood:\n';
-        if (parsedEvent.name) response += `• Name: ${parsedEvent.name}\n`;
-        if (parsedEvent.start) response += `• Start: ${parsedEvent.start}\n`;
-        if (parsedEvent.end) response += `• End: ${parsedEvent.end}\n`;
-        if (parsedEvent.location) response += `• Location: ${parsedEvent.location}\n`;
+        if (parsedEvent.name) response += • Name: ${parsedEvent.name}\n;
+        if (parsedEvent.start) response += • Start: ${parsedEvent.start}\n;
+        if (parsedEvent.end) response += • End: ${parsedEvent.end}\n;
+        if (parsedEvent.location) response += • Location: ${parsedEvent.location}\n;
         
-        response += `\n❓ Missing information: ${missingFields.join(', ')}\n\n`;
-        response += `Please provide the missing details. For example:\n`;
-        if (!parsedEvent.name) response += `"The event name is Community Meetup"\n`;
-        if (!parsedEvent.start) response += `"It starts on January 15 at 6pm"\n`;
-        if (!parsedEvent.location) response += `"Location is 123 Main St, Anytown, CA"\n`;
+        response += \n❓ Missing information: ${missingFields.join(', ')}\n\n;
+        response += Please provide the missing details. For example:\n;
+        if (!parsedEvent.name) response += "The event name is Community Meetup"\n;
+        if (!parsedEvent.start) response += "It starts on January 15 at 6pm"\n;
+        if (!parsedEvent.location) response += "Location is 123 Main St, Anytown, CA"\n;
         if (missingFields.includes('city and state for the address')) {
-          response += `"The city is Anytown, CA" (please include city and state)\n`;
+          response += "The city is Anytown, CA" (please include city and state)\n;
         }
         if (missingFields.includes('complete address with city and state')) {
-          response += `"${parsedEvent.location} is at 123 Main St, Anytown, CA"\n`;
+          response += "${parsedEvent.location} is at 123 Main St, Anytown, CA"\n;
         }
         
-        response += `\n💡 Or reply with the complete details and I'll try again.`;
+        response += \n💡 Or reply with the complete details and I'll try again.;
         
         return response;
       }
@@ -5139,11 +5139,11 @@ That's it! The onboarding process will begin once you type !request.`;
       
       let response = 'LocalAI: 📅 Ready to Create Event\n\n';
       response += 'Event Details:\n';
-      response += `• Name: ${parsedEvent.name}\n`;
-      response += `• When: ${formattedDate}\n`;
-      response += `• Where: ${parsedEvent.location}\n`;
+      response += • Name: ${parsedEvent.name}\n;
+      response += • When: ${formattedDate}\n;
+      response += • Where: ${parsedEvent.location}\n;
       if (parsedEvent.description && parsedEvent.description !== eventDescription) {
-        response += `• Details: ${parsedEvent.description}\n`;
+        response += • Details: ${parsedEvent.description}\n;
       }
       
       response += '\n✅ Reply "yes" to create this event\n';
@@ -5154,9 +5154,9 @@ That's it! The onboarding process will begin once you type !request.`;
       
     } catch (error) {
       console.error('Error in handleEventAdd:', error);
-      return `❌ **Error processing event**\n\n` +
-             `Please try again with a clearer description, for example:\n` +
-             `!eventadd "Community Meetup on January 15 at 6pm at 123 Main St"`;
+      return ❌ Error processing event\n\n +
+             Please try again with a clearer description, for example:\n +
+             !eventadd "Community Meetup on January 15 at 6pm at 123 Main St";
     }
   }
   
@@ -5189,11 +5189,11 @@ Event description: "${description}"
 
 Return ONLY valid JSON with these fields. Use null for missing values. Today's date is ${new Date().toISOString().split('T')[0]}.`;
 
-      const response = await fetch(`${this.localAiUrl}/v1/chat/completions`, {
+      const response = await fetch(${this.localAiUrl}/v1/chat/completions, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.localAiApiKey}`
+          'Authorization': Bearer ${this.localAiApiKey}
         },
         body: JSON.stringify({
           model: this.localAiModel || 'gpt-oss-120',
@@ -5437,10 +5437,10 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       const day = String(eventStart.getDate()).padStart(2, '0');
       const hours = String(eventStart.getHours()).padStart(2, '0');
       const minutes = String(eventStart.getMinutes()).padStart(2, '0');
-      const eventDateTime = `${year}-${month}-${day} ${hours}:${minutes}`;
+      const eventDateTime = ${year}-${month}-${day} ${hours}:${minutes};
       
       // Create event tag with optional end time
-      let eventTag = `[event start="${eventDateTime}" status="public"`;
+      let eventTag = [event start="${eventDateTime}" status="public";
       if (eventData.end) {
         const endDate = new Date(eventData.end);
         const endYear = endDate.getFullYear();
@@ -5448,23 +5448,23 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         const endDay = String(endDate.getDate()).padStart(2, '0');
         const endHours = String(endDate.getHours()).padStart(2, '0');
         const endMinutes = String(endDate.getMinutes()).padStart(2, '0');
-        const endDateTime = `${endYear}-${endMonth}-${endDay} ${endHours}:${endMinutes}`;
-        eventTag += ` end="${endDateTime}"`;
+        const endDateTime = ${endYear}-${endMonth}-${endDay} ${endHours}:${endMinutes};
+        eventTag +=  end="${endDateTime}";
       }
-      eventTag += `]\n[/event]`;
+      eventTag += ]\n[/event];
       
       // Format the post content with event details
-      const postContent = eventTag + `\n\n` +
-                         `## ${eventData.name}\n\n` +
-                         `📍 **Location:** ${eventData.location || 'TBD'}\n` +
-                         `🕐 **Time:** ${eventStart.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} at ${startTime}\n` +
-                         `🌐 **Timezone:** ${eventData.timezone || 'America/New_York'}\n\n` +
-                         `${eventData.description || ''}\n\n` +
-                         `---\n` +
-                         `*Event created via Signal bot by ${createdBy}*`;
+      const postContent = eventTag + \n\n +
+                         ## ${eventData.name}\n\n +
+                         📍 Location: ${eventData.location || 'TBD'}\n +
+                         🕐 Time: ${eventStart.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} at ${startTime}\n +
+                         🌐 Timezone: ${eventData.timezone || 'America/New_York'}\n\n +
+                         ${eventData.description || ''}\n\n +
+                         ---\n +
+                         *Event created via Signal bot by ${createdBy}*;
       
       // Create the topic in Discourse
-      const response = await fetch(`${this.discourseApiUrl}/posts.json`, {
+      const response = await fetch(${this.discourseApiUrl}/posts.json, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -5481,7 +5481,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       
       if (response.ok) {
         const result = await response.json();
-        const eventUrl = `${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id}`;
+        const eventUrl = ${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id};
         
         // Store in database
         const { PrismaClient } = require('../../generated/prisma');
@@ -5519,7 +5519,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         console.error('Discourse API error:', response.status, errorText);
         return {
           success: false,
-          error: `Forum API error: ${response.status}`
+          error: Forum API error: ${response.status}
         };
       }
       
@@ -5553,14 +5553,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
               eventStart: new Date(topic.event.start),
               eventEnd: topic.event.end ? new Date(topic.event.end) : null,
               location: topic.event.location || null,
-              discourseUrl: `${this.discourseApiUrl}/t/${topic.slug}/${topic.id}`,
+              discourseUrl: ${this.discourseApiUrl}/t/${topic.slug}/${topic.id},
               description: topic.excerpt || null,
               status: topic.event.status || 'public'
             }
           });
         }
       } catch (error) {
-        console.error(`Failed to sync event ${topic.id}:`, error);
+        console.error(Failed to sync event ${topic.id}:, error);
       }
     }
     
@@ -5568,15 +5568,15 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   }
 
   async handleResources(context) {
-    return `📚 **IrregularChat Resources:**\n\n**Main Services:**\n• Wiki: https://irregularpedia.org\n• Forum: https://forum.irregularchat.com\n• SSO: https://sso.irregularchat.com\n\n**Tools:**\n• Matrix: https://matrix.irregularchat.com\n• CryptPad: https://cryptpad.irregularchat.com\n• Search: https://search.irregularchat.com`;
+    return 📚 IrregularChat Resources:\n\nMain Services:\n• Wiki: https://irregularpedia.org\n• Forum: https://forum.irregularchat.com\n• SSO: https://sso.irregularchat.com\n\nTools:\n• Matrix: https://matrix.irregularchat.com\n• CryptPad: https://cryptpad.irregularchat.com\n• Search: https://search.irregularchat.com;
   }
 
   async handleFAQ(context) {
     const { args } = context;
-    if (!args) return `❓ **FAQ Topics:** join, rules, sso, wiki, matrix, help\n\n💡 Usage: !faq <topic>`;
+    if (!args) return ❓ FAQ Topics: join, rules, sso, wiki, matrix, help\n\n💡 Usage: !faq <topic>;
     
     const faqs = {
-      join: 'Use `!join <group>` to request group access. Admins will review your request.',
+      join: 'Use !join <group> to request group access. Admins will review your request.',
       rules: '1. Be respectful\n2. Stay on topic\n3. No classified info\n4. Follow Chatham House Rule',
       sso: 'Visit https://sso.irregularchat.com for account access.',
       wiki: 'Contribute at https://irregularpedia.org',
@@ -5584,29 +5584,29 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       help: 'Use !help for commands, !faq for questions.'
     };
     
-    return faqs[args.toLowerCase()] || `❌ FAQ topic "${args}" not found.`;
+    return faqs[args.toLowerCase()] || ❌ FAQ topic "${args}" not found.;
   }
 
   async handleDocs(context) {
-    return `📖 **Documentation:**\n\nMain resources:\n• Wiki: https://irregularpedia.org\n• Forum: https://forum.irregularchat.com\n• GitHub: https://github.com/irregularchat\n\n💡 Use specific search terms.`;
+    return 📖 Documentation:\n\nMain resources:\n• Wiki: https://irregularpedia.org\n• Forum: https://forum.irregularchat.com\n• GitHub: https://github.com/irregularchat\n\n💡 Use specific search terms.;
   }
 
   async handleLinks(context) {
-    return `🔗 **Important Links:**\n\n🏠 **Main:**\n• Wiki: https://irregularpedia.org\n• Forum: https://forum.irregularchat.com\n• SSO: https://sso.irregularchat.com\n\n🛠️ **Tools:**\n• Matrix: https://matrix.irregularchat.com\n• CryptPad: https://cryptpad.irregularchat.com\n• Search: https://search.irregularchat.com`;
+    return 🔗 Important Links:\n\n🏠 Main:\n• Wiki: https://irregularpedia.org\n• Forum: https://forum.irregularchat.com\n• SSO: https://sso.irregularchat.com\n\n🛠️ Tools:\n• Matrix: https://matrix.irregularchat.com\n• CryptPad: https://cryptpad.irregularchat.com\n• Search: https://search.irregularchat.com;
   }
 
 
   // User Plugin Handlers
   async handleProfile(context) {
     const { sender, senderName } = context;
-    return `👤 **Your Profile:**\n\nSignal: ${sender}\nName: ${senderName || 'Not set'}\nTimezone: Not set\n\n💡 Use !timezone to set your timezone.`;
+    return 👤 Your Profile:\n\nSignal: ${sender}\nName: ${senderName || 'Not set'}\nTimezone: Not set\n\n💡 Use !timezone to set your timezone.;
   }
 
 
   async handleTimezone(context) {
     const { args } = context;
     if (!args) return '❌ Usage: !timezone <timezone>\nExample: !timezone EST';
-    return `✅ Timezone set to: ${args}`;
+    return ✅ Timezone set to: ${args};
   }
 
 
@@ -5642,13 +5642,13 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     
     const bypassLinks = this.generateBypassLinks(url);
     
-    let response = `🔓 Bypass Links for: ${url}\n\n`;
-    response += `🚪 12ft.io: ${bypassLinks.twelveft}\n`;
-    response += `📦 Archive.ph: ${bypassLinks.archivePh}\n`;
-    response += `📄 Txtify: ${bypassLinks.txtify}\n`;
-    response += `🗑️ RemovePaywall: ${bypassLinks.removepaywall}\n`;
-    response += `🌐 Google Cache: ${bypassLinks.googleCache}\n`;
-    response += `📚 Web Archive: ${bypassLinks.archiveView}`;
+    let response = 🔓 Bypass Links for: ${url}\n\n;
+    response += 🚪 12ft.io: ${bypassLinks.twelveft}\n;
+    response += 📦 Archive.ph: ${bypassLinks.archivePh}\n;
+    response += 📄 Txtify: ${bypassLinks.txtify}\n;
+    response += 🗑️ RemovePaywall: ${bypassLinks.removepaywall}\n;
+    response += 🌐 Google Cache: ${bypassLinks.googleCache}\n;
+    response += 📚 Web Archive: ${bypassLinks.archiveView};
     
     return response;
   }
@@ -5697,12 +5697,12 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       const hours = Math.floor(uptime / 3600);
       const minutes = Math.floor((uptime % 3600) / 60);
       
-      return `📊 Bot Statistics (Last ${days} days)\n\n📈 Usage:\n• Total Commands: ${totalCommands}\n• Success Rate: ${successRate}%\n• Avg/Day: ${avgPerDay}\n\n👥 Activity:\n• Active Users: ${uniqueUsers.length}\n• Active Groups: ${uniqueGroups.length}\n\n⏱️ Uptime: ${hours}h ${minutes}m\n💡 Use !topcommands for popular commands`;
+      return 📊 Bot Statistics (Last ${days} days)\n\n📈 Usage:\n• Total Commands: ${totalCommands}\n• Success Rate: ${successRate}%\n• Avg/Day: ${avgPerDay}\n\n👥 Activity:\n• Active Users: ${uniqueUsers.length}\n• Active Groups: ${uniqueGroups.length}\n\n⏱️ Uptime: ${hours}h ${minutes}m\n💡 Use !topcommands for popular commands;
       
     } catch (error) {
       console.error('Failed to get stats:', error);
       const uptime = Math.floor((Date.now() - this.startTime) / 1000);
-      return `📊 Bot Statistics\n\nUptime: ${uptime}s\nCommands: ${this.plugins.size}\nStatus: ✅ Online`;
+      return 📊 Bot Statistics\n\nUptime: ${uptime}s\nCommands: ${this.plugins.size}\nStatus: ✅ Online;
     }
   }
   
@@ -5722,11 +5722,11 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         return '📊 No command usage data available yet';
       }
       
-      let response = `🏆 Top ${limit} Commands\n\n`;
+      let response = 🏆 Top ${limit} Commands\n\n;
       
       topCommands.forEach((cmd, index) => {
-        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
-        response += `${medal} !${cmd.command}: ${cmd._count.command} uses\n`;
+        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : ${index + 1}.;
+        response += ${medal} !${cmd.command}: ${cmd._count.command} uses\n;
       });
       
       return response;
@@ -5754,12 +5754,12 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         return '👥 No user activity data available yet';
       }
       
-      let response = `👥 Top ${limit} Active Users\n\n`;
+      let response = 👥 Top ${limit} Active Users\n\n;
       
       topUsers.forEach((user, index) => {
-        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : ${index + 1}.;
         const firstName = user.userName.split(' ')[0];
-        response += `${medal} ${firstName}: ${user._count.userName} commands\n`;
+        response += ${medal} ${firstName}: ${user._count.userName} commands\n;
       });
       
       return response;
@@ -5790,13 +5790,13 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         return '✅ No errors logged (excellent!)';
       }
       
-      let response = `❌ Recent Errors (${recentErrors.length})\n\n`;
+      let response = ❌ Recent Errors (${recentErrors.length})\n\n;
       
       recentErrors.forEach(error => {
         const timeAgo = this.getTimeAgo(error.timestamp);
-        const cmd = error.command ? `!${error.command}` : 'N/A';
+        const cmd = error.command ? !${error.command} : 'N/A';
         const msg = error.errorMessage.substring(0, 50);
-        response += `• ${error.errorType}\n  Cmd: ${cmd}\n  ${timeAgo}\n\n`;
+        response += • ${error.errorType}\n  Cmd: ${cmd}\n  ${timeAgo}\n\n;
       });
       
       return response;
@@ -5836,16 +5836,16 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         }
       });
       
-      let response = `📰 News Statistics (${days} days)\n\n`;
-      response += `Total Links: ${totalNewsLinks}\n\n`;
+      let response = 📰 News Statistics (${days} days)\n\n;
+      response += Total Links: ${totalNewsLinks}\n\n;
       
       if (topNews.length > 0) {
-        response += `🔥 Top News by Engagement:\n\n`;
+        response += 🔥 Top News by Engagement:\n\n;
         
         topNews.forEach((news, index) => {
           const title = news.title ? news.title.substring(0, 30) + '...' : news.domain;
-          response += `${index + 1}. ${title}\n`;
-          response += `   👍 ${news.thumbsUp} 👎 ${news.thumbsDown} 🔄 ${news.postCount}x\n\n`;
+          response += ${index + 1}. ${title}\n;
+          response +=    👍 ${news.thumbsUp} 👎 ${news.thumbsDown} 🔄 ${news.postCount}x\n\n;
         });
       }
       
@@ -5890,16 +5890,16 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         ? ((positiveReactions / totalReactions) * 100).toFixed(1)
         : 0;
       
-      let response = `💭 Bot Sentiment (${days} days)\n\n`;
-      response += `Overall: ${sentimentScore}% Positive\n\n`;
-      response += `📊 Breakdown:\n`;
-      response += `👍 Positive: ${positiveReactions}\n`;
-      response += `👎 Negative: ${negativeReactions}\n\n`;
+      let response = 💭 Bot Sentiment (${days} days)\n\n;
+      response += Overall: ${sentimentScore}% Positive\n\n;
+      response += 📊 Breakdown:\n;
+      response += 👍 Positive: ${positiveReactions}\n;
+      response += 👎 Negative: ${negativeReactions}\n\n;
       
       if (reactionBreakdown.length > 0) {
-        response += `🎯 Top Reactions:\n`;
+        response += 🎯 Top Reactions:\n;
         reactionBreakdown.forEach(r => {
-          response += `${r.reaction}: ${r._count.reaction}x\n`;
+          response += ${r.reaction}: ${r._count.reaction}x\n;
         });
       }
       
@@ -5915,20 +5915,20 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   getTimeAgo(date) {
     const seconds = Math.floor((new Date() - new Date(date)) / 1000);
     
-    if (seconds < 60) return `${seconds}s ago`;
+    if (seconds < 60) return ${seconds}s ago;
     const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
+    if (minutes < 60) return ${minutes}m ago;
     const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
+    if (hours < 24) return ${hours}h ago;
     const days = Math.floor(hours / 24);
-    return `${days}d ago`;
+    return ${days}d ago;
   }
 
   // Utility Plugin Handlers
   async handleWeather(context) { return 'Weather service placeholder - !weather <location>'; }
   async handleTime(context) { 
     const now = new Date().toLocaleString();
-    return `🕒 **Current Time**: ${now}\n\nUsage: !time <timezone>`; 
+    return 🕒 Current Time: ${now}\n\nUsage: !time <timezone>; 
   }
   async handleTranslate(context) { return 'Translation service placeholder - !translate <text>'; }
   async handleShorten(context) { return 'URL shortener placeholder - !shorten <url>'; }
@@ -5938,11 +5938,11 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async handleCalc(context) { return 'Calculator placeholder - !calc <expression>'; }
   async handleRandom(context) { 
     const num = Math.floor(Math.random() * 100) + 1;
-    return `🎲 **Random Number**: ${num}\n\nUsage: !random <min> <max>`; 
+    return 🎲 Random Number: ${num}\n\nUsage: !random <min> <max>; 
   }
   async handleFlip(context) { 
     const result = Math.random() < 0.5 ? 'heads' : 'tails';
-    return `🪙 **Coin Flip**: ${result.toUpperCase()}!`; 
+    return 🪙 Coin Flip: ${result.toUpperCase()}!; 
   }
   async handleWayback(context) {
     const { args } = context;
@@ -5958,10 +5958,10 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     
     const bypassLinks = this.generateBypassLinks(url);
     
-    let response = `📚 Wayback Machine for: ${url}\n\n`;
-    response += `🔍 Latest Archive: ${bypassLinks.archiveView}\n`;
-    response += `💾 Save New Copy: ${bypassLinks.archive}\n\n`;
-    response += `💡 The save link will create a new archive if one doesn't exist today.`;
+    let response = 📚 Wayback Machine for: ${url}\n\n;
+    response += 🔍 Latest Archive: ${bypassLinks.archiveView}\n;
+    response += 💾 Save New Copy: ${bypassLinks.archive}\n\n;
+    response += 💡 The save link will create a new archive if one doesn't exist today.;
     
     return response;
   }
@@ -5977,10 +5977,10 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
 
     const bypassLinks = this.generateBypassLinks(url);
     
-    let response = `🏛️ Archive.org for: ${url}\n\n`;
-    response += `🔍 View Latest Archive: ${bypassLinks.archiveView}\n`;
-    response += `💾 Create New Archive: ${bypassLinks.archive}\n\n`;
-    response += `💡 The create link will save a new copy to archive.org if needed.`;
+    let response = 🏛️ Archive.org for: ${url}\n\n;
+    response += 🔍 View Latest Archive: ${bypassLinks.archiveView}\n;
+    response += 💾 Create New Archive: ${bypassLinks.archive}\n\n;
+    response += 💡 The create link will save a new copy to archive.org if needed.;
     
     return response;
   }
@@ -5989,7 +5989,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async handleFPost(context) {
     const { args } = context;
     if (!args) return '❌ Usage: !fpost <url> [title]\nPost an article to the forum';
-    return `✅ Posted to forum: ${args.split(' ')[0]}\n🔗 Check the forum for your post!`;
+    return ✅ Posted to forum: ${args.split(' ')[0]}\n🔗 Check the forum for your post!;
   }
 
   async handleFLatest(context) {
@@ -6003,7 +6003,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
       
       // Fetch latest posts from Discourse
-      const response = await fetch(`${this.discourseApiUrl}/posts.json`, {
+      const response = await fetch(${this.discourseApiUrl}/posts.json, {
         headers: {
           'Api-Key': this.discourseApiKey,
           'Api-Username': this.discourseApiUsername || 'system'
@@ -6011,7 +6011,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       });
       
       if (!response.ok) {
-        throw new Error(`Failed to fetch posts: ${response.status}`);
+        throw new Error(Failed to fetch posts: ${response.status});
       }
       
       const data = await response.json();
@@ -6022,7 +6022,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
       
       // Format the response with post titles and short links
-      let result = `📰 Latest Forum Posts (${Math.min(count, posts.length)}):\n\n`;
+      let result = 📰 Latest Forum Posts (${Math.min(count, posts.length)}):\n\n;
       
       for (let i = 0; i < Math.min(count, posts.length); i++) {
         const post = posts[i];
@@ -6039,13 +6039,13 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         }
         
         // Create short link with just the topic and post IDs
-        const shortLink = `${this.discourseApiUrl.replace('/api', '')}/t/${post.topic_id}/${post.post_number || 1}`;
+        const shortLink = ${this.discourseApiUrl.replace('/api', '')}/t/${post.topic_id}/${post.post_number || 1};
         
-        result += `${i + 1}. ${title}\n`;
-        result += `   ${shortLink}\n\n`;
+        result += ${i + 1}. ${title}\n;
+        result +=    ${shortLink}\n\n;
       }
       
-      result += `🔗 Visit ${this.discourseApiUrl.replace('/api', '')} for more`;
+      result += 🔗 Visit ${this.discourseApiUrl.replace('/api', '')} for more;
       
       return result;
       
@@ -6053,9 +6053,9 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       console.error('Error fetching latest posts:', error);
       
       // Fallback to generic message on error
-      return `📰 Latest Forum Posts\n\n` +
-             `Unable to fetch posts at this time.\n\n` +
-             `🔗 Visit forum.irregularchat.com directly`;
+      return 📰 Latest Forum Posts\n\n +
+             Unable to fetch posts at this time.\n\n +
+             🔗 Visit forum.irregularchat.com directly;
     }
   }
 
@@ -6076,76 +6076,76 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
       
       // Fallback to contextual results when API isn't available
-      const searchUrl = `https://forum.irregularchat.com/search?q=${encodeURIComponent(query)}`;
+      const searchUrl = https://forum.irregularchat.com/search?q=${encodeURIComponent(query)};
       
       // For now, provide a structured response with common search categories
       // This gives users immediate value while we await API configuration
-      let results = `OpenAI [Community]: Forum Search for "${query}":\n\n`;
+      let results = OpenAI [Community]: Forum Search for "${query}":\n\n;
       
       // Provide contextual results based on common queries
       const queryLower = query.toLowerCase();
       
       if (queryLower.includes('job') || queryLower.includes('work') || queryLower.includes('career')) {
-        results += `📋 Top Results:\n\n`;
-        results += `1. Job Opportunities Board\n`;
-        results += `   https://forum.irregularchat.com/c/opportunities/5\n\n`;
-        results += `2. Remote Work Discussion\n`;
-        results += `   https://forum.irregularchat.com/t/remote-work-best-practices/142\n\n`;
-        results += `3. Career Development Resources\n`;
-        results += `   https://forum.irregularchat.com/t/career-development-resources/89\n\n`;
-        results += `4. Freelancing Tips & Tricks\n`;
-        results += `   https://forum.irregularchat.com/t/freelancing-guide/201\n\n`;
-        results += `5. Tech Industry Job Market\n`;
-        results += `   https://forum.irregularchat.com/t/tech-job-market-2024/315\n\n`;
+        results += 📋 Top Results:\n\n;
+        results += 1. Job Opportunities Board\n;
+        results +=    https://forum.irregularchat.com/c/opportunities/5\n\n;
+        results += 2. Remote Work Discussion\n;
+        results +=    https://forum.irregularchat.com/t/remote-work-best-practices/142\n\n;
+        results += 3. Career Development Resources\n;
+        results +=    https://forum.irregularchat.com/t/career-development-resources/89\n\n;
+        results += 4. Freelancing Tips & Tricks\n;
+        results +=    https://forum.irregularchat.com/t/freelancing-guide/201\n\n;
+        results += 5. Tech Industry Job Market\n;
+        results +=    https://forum.irregularchat.com/t/tech-job-market-2024/315\n\n;
       } else if (queryLower.includes('security') || queryLower.includes('privacy')) {
-        results += `🔒 Top Results:\n\n`;
-        results += `1. Security Best Practices Guide\n`;
-        results += `   https://forum.irregularchat.com/t/security-best-practices/45\n\n`;
-        results += `2. Privacy Tools & Services\n`;
-        results += `   https://forum.irregularchat.com/t/privacy-tools-recommendations/78\n\n`;
-        results += `3. End-to-End Encryption Discussion\n`;
-        results += `   https://forum.irregularchat.com/t/e2e-encryption-explained/112\n\n`;
-        results += `4. VPN Comparison Thread\n`;
-        results += `   https://forum.irregularchat.com/t/vpn-services-compared/234\n\n`;
-        results += `5. Data Protection Strategies\n`;
-        results += `   https://forum.irregularchat.com/t/data-protection-guide/298\n\n`;
+        results += 🔒 Top Results:\n\n;
+        results += 1. Security Best Practices Guide\n;
+        results +=    https://forum.irregularchat.com/t/security-best-practices/45\n\n;
+        results += 2. Privacy Tools & Services\n;
+        results +=    https://forum.irregularchat.com/t/privacy-tools-recommendations/78\n\n;
+        results += 3. End-to-End Encryption Discussion\n;
+        results +=    https://forum.irregularchat.com/t/e2e-encryption-explained/112\n\n;
+        results += 4. VPN Comparison Thread\n;
+        results +=    https://forum.irregularchat.com/t/vpn-services-compared/234\n\n;
+        results += 5. Data Protection Strategies\n;
+        results +=    https://forum.irregularchat.com/t/data-protection-guide/298\n\n;
       } else if (queryLower.includes('rule') || queryLower.includes('guideline') || queryLower.includes('community')) {
-        results += `📜 Top Results:\n\n`;
-        results += `1. Community Rules & Guidelines\n`;
-        results += `   https://forum.irregularchat.com/t/community-rules/1\n\n`;
-        results += `2. Welcome to IrregularChat\n`;
-        results += `   https://forum.irregularchat.com/t/welcome-new-members/2\n\n`;
-        results += `3. Code of Conduct\n`;
-        results += `   https://forum.irregularchat.com/t/code-of-conduct/3\n\n`;
-        results += `4. How to Report Issues\n`;
-        results += `   https://forum.irregularchat.com/t/reporting-guidelines/15\n\n`;
-        results += `5. Community FAQ\n`;
-        results += `   https://forum.irregularchat.com/t/frequently-asked-questions/8\n\n`;
+        results += 📜 Top Results:\n\n;
+        results += 1. Community Rules & Guidelines\n;
+        results +=    https://forum.irregularchat.com/t/community-rules/1\n\n;
+        results += 2. Welcome to IrregularChat\n;
+        results +=    https://forum.irregularchat.com/t/welcome-new-members/2\n\n;
+        results += 3. Code of Conduct\n;
+        results +=    https://forum.irregularchat.com/t/code-of-conduct/3\n\n;
+        results += 4. How to Report Issues\n;
+        results +=    https://forum.irregularchat.com/t/reporting-guidelines/15\n\n;
+        results += 5. Community FAQ\n;
+        results +=    https://forum.irregularchat.com/t/frequently-asked-questions/8\n\n;
       } else {
         // Generic search results structure
-        results += `🔍 Searching for: "${query}"\n\n`;
-        results += `Top categories to explore:\n\n`;
-        results += `1. General Discussion\n`;
-        results += `   https://forum.irregularchat.com/c/general/1\n\n`;
-        results += `2. Technical Topics\n`;
-        results += `   https://forum.irregularchat.com/c/technical/3\n\n`;
-        results += `3. Community Projects\n`;
-        results += `   https://forum.irregularchat.com/c/projects/4\n\n`;
-        results += `4. Resources & Tutorials\n`;
-        results += `   https://forum.irregularchat.com/c/resources/6\n\n`;
-        results += `5. Announcements\n`;
-        results += `   https://forum.irregularchat.com/c/announcements/2\n\n`;
+        results += 🔍 Searching for: "${query}"\n\n;
+        results += Top categories to explore:\n\n;
+        results += 1. General Discussion\n;
+        results +=    https://forum.irregularchat.com/c/general/1\n\n;
+        results += 2. Technical Topics\n;
+        results +=    https://forum.irregularchat.com/c/technical/3\n\n;
+        results += 3. Community Projects\n;
+        results +=    https://forum.irregularchat.com/c/projects/4\n\n;
+        results += 4. Resources & Tutorials\n;
+        results +=    https://forum.irregularchat.com/c/resources/6\n\n;
+        results += 5. Announcements\n;
+        results +=    https://forum.irregularchat.com/c/announcements/2\n\n;
       }
       
-      results += `View all results: ${searchUrl}`;
+      results += View all results: ${searchUrl};
       
       return results;
       
     } catch (error) {
       console.error('Forum search error:', error);
-      return `OpenAI [Community]: Search temporarily unavailable.\n\n` +
-             `Try searching directly:\n` +
-             `https://forum.irregularchat.com/search?q=${encodeURIComponent(query)}`;
+      return OpenAI [Community]: Search temporarily unavailable.\n\n +
+             Try searching directly:\n +
+             https://forum.irregularchat.com/search?q=${encodeURIComponent(query)};
     }
   }
 
@@ -6166,7 +6166,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
       
       // Search using Discourse API
-      const searchUrl = `${this.discourseApiUrl}/search.json?q=${encodeURIComponent(query)}`;
+      const searchUrl = ${this.discourseApiUrl}/search.json?q=${encodeURIComponent(query)};
       const response = await fetch(searchUrl, {
         headers: {
           'Api-Key': this.discourseApiKey,
@@ -6175,7 +6175,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       });
       
       if (!response.ok) {
-        throw new Error(`Search failed: ${response.status}`);
+        throw new Error(Search failed: ${response.status});
       }
       
       const data = await response.json();
@@ -6183,13 +6183,13 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       const topics = data.topics || [];
       
       if (posts.length === 0) {
-        return `OpenAI [Community]: No results found for "${query}"\n\n` +
-               `Try different keywords or browse categories:\n` +
-               `https://forum.irregularchat.com/categories`;
+        return OpenAI [Community]: No results found for "${query}"\n\n +
+               Try different keywords or browse categories:\n +
+               https://forum.irregularchat.com/categories;
       }
       
       // Build results (top 5)
-      let results = `OpenAI [Community]: Forum Search Results for "${query}":\n\n`;
+      let results = OpenAI [Community]: Forum Search Results for "${query}":\n\n;
       
       const maxResults = Math.min(5, posts.length);
       for (let i = 0; i < maxResults; i++) {
@@ -6204,19 +6204,19 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         const baseUrl = this.discourseApiUrl ? 
           this.discourseApiUrl.replace('/api/v3', '').replace('http://', '').replace('https://', '') :
           'forum.irregularchat.com';
-        const postUrl = `https://${baseUrl}/t/${topic.slug || post.topic_slug}/${post.topic_id}/${post.post_number || 1}`;
+        const postUrl = https://${baseUrl}/t/${topic.slug || post.topic_slug}/${post.topic_id}/${post.post_number || 1};
         
         // Add tags if available
-        const tags = topic.tags && topic.tags.length > 0 ? ` [${topic.tags.slice(0, 2).join(', ')}]` : '';
+        const tags = topic.tags && topic.tags.length > 0 ?  [${topic.tags.slice(0, 2).join(', ')}] : '';
         
-        results += `${i + 1}. ${truncatedTitle}${tags}\n`;
-        results += `   ${postUrl}\n\n`;
+        results += ${i + 1}. ${truncatedTitle}${tags}\n;
+        results +=    ${postUrl}\n\n;
       }
       
       // Add search link for more results
       if (posts.length > 5) {
-        results += `📊 Showing 5 of ${posts.length} results\n`;
-        results += `🔗 More: https://forum.irregularchat.com/search?q=${encodeURIComponent(query)}`;
+        results += 📊 Showing 5 of ${posts.length} results\n;
+        results += 🔗 More: https://forum.irregularchat.com/search?q=${encodeURIComponent(query)};
       }
       
       return results;
@@ -6225,15 +6225,15 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       console.error('Forum search error:', error);
       
       // Fallback with direct link
-      return `OpenAI [Community]: Forum Search for "${query}":\n\n` +
-             `Direct search link:\n` +
-             `https://forum.irregularchat.com/search?q=${encodeURIComponent(query)}\n\n` +
-             `💡 Browse all topics: https://forum.irregularchat.com`;
+      return OpenAI [Community]: Forum Search for "${query}":\n\n +
+             Direct search link:\n +
+             https://forum.irregularchat.com/search?q=${encodeURIComponent(query)}\n\n +
+             💡 Browse all topics: https://forum.irregularchat.com;
     }
   }
 
   async handleCategories(context) {
-    return `📁 Forum Categories:\n\n• General Discussion\n• Technology\n• Security & Privacy\n• Community Events\n• Support & Help\n• Off-Topic\n\n🔗 Browse at forum.irregularchat.com`;
+    return 📁 Forum Categories:\n\n• General Discussion\n• Technology\n• Security & Privacy\n• Community Events\n• Support & Help\n• Off-Topic\n\n🔗 Browse at forum.irregularchat.com;
   }
 
   // PDF Plugin Handlers
@@ -6352,7 +6352,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
               },
               { 
                 role: 'user', 
-                content: `Summarize this document in 3-5 paragraphs:\n\n${textContent}`
+                content: Summarize this document in 3-5 paragraphs:\n\n${textContent}
               }
             ],
             max_completion_tokens: 1000  // Increased for GPT-5 thinking model
@@ -6378,9 +6378,9 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Prepare response
       const wordCount = textContent.split(/\s+/).length;
       
-      let response = `PDF Summary: ${pdfFilename}\n`;
-      response += `Pages: ${pageCount} | Words: ~${wordCount}\n\n`;
-      response += `Summary:\n${summary}\n\n`;
+      let response = PDF Summary: ${pdfFilename}\n;
+      response += Pages: ${pageCount} | Words: ~${wordCount}\n\n;
+      response += Summary:\n${summary}\n\n;
       
       // Add first few lines as preview if summary failed
       if (summary === 'AI summary unavailable' || summary === 'AI summarization is not enabled') {
@@ -6388,14 +6388,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         if (preview.length > 300) {
           preview = preview.substring(0, 300) + '...';
         }
-        response += `Preview:\n${preview}`;
+        response += Preview:\n${preview};
       }
       
       return response;
       
     } catch (error) {
       console.error('PDF processing error:', error);
-      return `Failed to process PDF: ${error.message}`;
+      return Failed to process PDF: ${error.message};
     }
   }
 
@@ -6520,29 +6520,29 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     
     // Add title
     if (sections.title) {
-      condensedContent += `Title: ${sections.title}\n\n`;
+      condensedContent += Title: ${sections.title}\n\n;
     }
     
     // Add abstract if found
     if (sections.abstract) {
-      condensedContent += `Abstract:\n${sections.abstract.substring(0, 500)}\n\n`;
+      condensedContent += Abstract:\n${sections.abstract.substring(0, 500)}\n\n;
     }
     
     // Add table of contents if found (helps understand structure)
     if (sections.toc) {
-      condensedContent += `Table of Contents:\n${sections.toc.substring(0, 300)}\n\n`;
+      condensedContent += Table of Contents:\n${sections.toc.substring(0, 300)}\n\n;
     }
     
     // Add introduction
     if (sections.introduction) {
-      condensedContent += `Introduction:\n${sections.introduction.substring(0, 600)}\n\n`;
+      condensedContent += Introduction:\n${sections.introduction.substring(0, 600)}\n\n;
     }
     
     // Add chapter headings and key content
     if (sections.chapters.length > 0) {
-      condensedContent += `Main Chapters:\n`;
+      condensedContent += Main Chapters:\n;
       sections.chapters.slice(0, 10).forEach(ch => {
-        condensedContent += `- ${ch}\n`;
+        condensedContent += - ${ch}\n;
       });
       condensedContent += '\n';
     }
@@ -6550,12 +6550,12 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     // Add some key content from chapters
     if (sections.keyContent.length > 0) {
       const keySnippet = sections.keyContent.slice(0, 20).join('\n');
-      condensedContent += `Key Content:\n${keySnippet.substring(0, 800)}\n\n`;
+      condensedContent += Key Content:\n${keySnippet.substring(0, 800)}\n\n;
     }
     
     // Add conclusion
     if (sections.conclusion) {
-      condensedContent += `Conclusion:\n${sections.conclusion.substring(0, 500)}\n`;
+      condensedContent += Conclusion:\n${sections.conclusion.substring(0, 500)}\n;
     }
     
     // If we didn't find structured content, fall back to first/last approach
@@ -6563,7 +6563,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       console.log('📄 No clear structure found, using first/last pages approach');
       const firstPart = lines.slice(0, 100).join('\n').substring(0, 2000);
       const lastPart = lines.slice(-50).join('\n').substring(0, 1000);
-      condensedContent = `Beginning of document:\n${firstPart}\n\n[...]\n\nEnd of document:\n${lastPart}`;
+      condensedContent = Beginning of document:\n${firstPart}\n\n[...]\n\nEnd of document:\n${lastPart};
     }
     
     // Ensure we don't exceed token limits
@@ -6572,7 +6572,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       condensedContent = condensedContent.substring(0, maxLength) + '\n\n[Content truncated for processing]';
     }
     
-    console.log(`📊 Extracted ${condensedContent.length} chars from ${fullText.length} chars (${Math.round(condensedContent.length/fullText.length*100)}% of original)`);
+    console.log(📊 Extracted ${condensedContent.length} chars from ${fullText.length} chars (${Math.round(condensedContent.length/fullText.length*100)}% of original));
     
     return condensedContent;
   }
@@ -6592,13 +6592,13 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     if (!args || args.length === 0) {
       // Check if they have a pending request
       if (this.pendingRequests.has(sourceNumber)) {
-        return `⏳ You already have a pending request. Please provide your introduction:\n\n` +
-               `1. NAME\n` +
-               `2. YOUR_ORGANIZATION\n` +
-               `3. Who invited you (mention them)\n` +
-               `4. EMAIL_OR_EMAIL_ALIAS\n` +
-               `5. YOUR_INTERESTS\n` +
-               `6. LinkedIn profile (optional)`;
+        return ⏳ You already have a pending request. Please provide your introduction:\n\n +
+               1. NAME\n +
+               2. YOUR_ORGANIZATION\n +
+               3. Who invited you (mention them)\n +
+               4. EMAIL_OR_EMAIL_ALIAS\n +
+               5. YOUR_INTERESTS\n +
+               6. LinkedIn profile (optional);
       }
       
       // Send the onboarding prompt
@@ -6624,18 +6624,18 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     });
     
     // Notify admins
-    const adminNotification = `🆕 New member request from ${sender}:\n\n` +
-                            `${introText}\n\n` +
-                            `✅ Approve with: !gtg ${sourceNumber}\n` +
-                            `❌ Timeout in: ${this.requestTimeoutMinutes / 60} hours`;
+    const adminNotification = 🆕 New member request from ${sender}:\n\n +
+                            ${introText}\n\n +
+                            ✅ Approve with: !gtg ${sourceNumber}\n +
+                            ❌ Timeout in: ${this.requestTimeoutMinutes / 60} hours;
     
     // Log to console for now (would send to admin channel)
     console.log('📨 Admin notification:', adminNotification);
     
-    return `✅ Your introduction has been submitted!\n\n` +
-           `An admin will review your request shortly.\n` +
-           `You'll be notified once approved.\n\n` +
-           `⏰ Request expires in ${this.requestTimeoutMinutes / 60} hours.`;
+    return ✅ Your introduction has been submitted!\n\n +
+           An admin will review your request shortly.\n +
+           You'll be notified once approved.\n\n +
+           ⏰ Request expires in ${this.requestTimeoutMinutes / 60} hours.;
   }
   
   async sendOnboardingPrompt(phoneNumber, groupId, sender) {
@@ -6656,25 +6656,25 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       status: 'awaiting_intro'
     });
     
-    const prompt = `You've requested to join the IrregularChat Community.\n\n` +
-                  `Bonafides: Everyone in the chat has been invited by an irregularchat member.\n` +
-                  `So that we can add you to the right groups, we need to know:\n\n` +
-                  `1. NAME\n` +
-                  `2. YOUR_ORGANIZATION\n` +
-                  `3. Who invited you (Add & mention them in this chat)\n` +
-                  `4. EMAIL_OR_EMAIL_ALIAS\n` +
-                  `5. YOUR_INTERESTS\n` +
-                  `6. Link to your LinkedIn profile (if you want others to endorse your skills)\n\n` +
-                  `Reply with !request followed by your introduction.`;
+    const prompt = You've requested to join the IrregularChat Community.\n\n +
+                  Bonafides: Everyone in the chat has been invited by an irregularchat member.\n +
+                  So that we can add you to the right groups, we need to know:\n\n +
+                  1. NAME\n +
+                  2. YOUR_ORGANIZATION\n +
+                  3. Who invited you (Add & mention them in this chat)\n +
+                  4. EMAIL_OR_EMAIL_ALIAS\n +
+                  5. YOUR_INTERESTS\n +
+                  6. Link to your LinkedIn profile (if you want others to endorse your skills)\n\n +
+                  Reply with !request followed by your introduction.;
     
     return prompt;
   }
   
   async sendOnboardingRequest(targetUser, groupId, requester) {
     // Send onboarding request to specific user
-    const message = `👋 Introduction request sent to ${targetUser}\n\n` +
-                   `They will receive instructions to introduce themselves.\n` +
-                   `Timeout: ${this.requestTimeoutMinutes / 60} hours`;
+    const message = 👋 Introduction request sent to ${targetUser}\n\n +
+                   They will receive instructions to introduce themselves.\n +
+                   Timeout: ${this.requestTimeoutMinutes / 60} hours;
     
     // Would send DM to target user with onboarding prompt
     // For now, just return confirmation
@@ -6682,7 +6682,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   }
   
   async handleRequestTimeout(phoneNumber, groupId) {
-    console.log(`⏰ Request timeout for ${phoneNumber} in group ${groupId}`);
+    console.log(⏰ Request timeout for ${phoneNumber} in group ${groupId});
     
     // Remove from pending requests
     const request = this.pendingRequests.get(phoneNumber);
@@ -6691,11 +6691,11 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       this.pendingRequests.delete(phoneNumber);
       
       // Would remove user from group here
-      console.log(`🚫 Would remove ${phoneNumber} from group ${groupId} due to timeout`);
+      console.log(🚫 Would remove ${phoneNumber} from group ${groupId} due to timeout);
       
       // Notify admins
-      const notification = `⏰ Request timeout: ${phoneNumber} has been removed from pending list.\n` +
-                         `No !gtg was provided within ${this.requestTimeoutMinutes / 60} hours.`;
+      const notification = ⏰ Request timeout: ${phoneNumber} has been removed from pending list.\n +
+                         No !gtg was provided within ${this.requestTimeoutMinutes / 60} hours.;
       console.log(notification);
     }
   }
@@ -6714,7 +6714,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Using mentions - get the UUID of the mentioned user
       targetUuid = mentions[0].uuid;
       targetUser = mentions[0].name || 'User';
-      console.log(`🎯 Approving mentioned user: ${targetUser} (UUID: ${targetUuid})`);
+      console.log(🎯 Approving mentioned user: ${targetUser} (UUID: ${targetUuid}));
     } else if (args.length < 1) {
       return '❌ Usage: Reply to a user\'s intro message with !gtg';
     } else {
@@ -6739,7 +6739,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Generate credentials
       const username = this.generateUsername(introData.name || targetUser || 'user');
       const password = this.generateSecurePassword();
-      const email = introData.email || `${username}@irregularchat.com`;
+      const email = introData.email || ${username}@irregularchat.com;
       
       // Create user in database (would integrate with Authentik in production)
       const userData = {
@@ -6768,17 +6768,17 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
       
       // Log the approval
-      console.log(`✅ Approved user: ${username} (${email})`);
+      console.log(✅ Approved user: ${username} (${email}));
       
-      return `✅ Good to go. Thanks for verifying. This is how we keep the community safe.\n\n` +
-             `1. User has been removed from this chat\n` +
-             `2. They'll receive a direct message with their IrregularChat Login\n` +
-             `3. They can join all the Chats that interest them\n` +
-             `4. Wiki: https://irregularpedia.org\n\n` +
-             `See you out there!`;
+      return ✅ Good to go. Thanks for verifying. This is how we keep the community safe.\n\n +
+             1. User has been removed from this chat\n +
+             2. They'll receive a direct message with their IrregularChat Login\n +
+             3. They can join all the Chats that interest them\n +
+             4. Wiki: https://irregularpedia.org\n\n +
+             See you out there!;
     } catch (error) {
       console.error('❌ Error during user approval:', error);
-      return `❌ Error approving user: ${error.message}\n\nPlease try again or contact an admin.`;
+      return ❌ Error approving user: ${error.message}\n\nPlease try again or contact an admin.;
     }
   }
   
@@ -6831,7 +6831,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     
     // Add random suffix to ensure uniqueness
     const suffix = Math.floor(Math.random() * 999) + 1;
-    return `${base}_${suffix}`;
+    return ${base}_${suffix};
   }
   
   // Helper function to generate secure password
@@ -6850,28 +6850,28 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     const randomNumber = Math.floor(Math.random() * 99) + 1;
     const specialChar = '!@#$%^&*'[Math.floor(Math.random() * 8)];
     
-    return `${selectedWords.join('')}${randomNumber}${specialChar}`;
+    return ${selectedWords.join('')}${randomNumber}${specialChar};
   }
   
   // Helper function to format credentials message
   formatCredentials(username, password, email) {
-    return `🌟 Your First Step Into the IrregularChat! 🌟\n\n` +
-           `You've just joined a community focused on breaking down silos, ` +
-           `fostering innovation, and supporting service members and veterans.\n\n` +
-           `---\n` +
-           `Use This Username and Temporary Password ⬇️\n\n` +
-           `Username: ${username}\n` +
-           `Temporary Password: ${password}\n` +
-           `Exactly as shown above 👆🏼\n\n` +
-           `1️⃣ Step 1:\n` +
-           `Use the username and temporary password to log in to https://sso.irregularchat.com\n\n` +
-           `2️⃣ Step 2:\n` +
-           `You'll be prompted to create your own password\n\n` +
-           `3️⃣ Step 3:\n` +
-           `Use the links in #links to join all the Signal chats\n\n` +
-           `4️⃣ Step 4:\n` +
-           `Check out the wiki: https://irregularpedia.org\n\n` +
-           `Welcome to IrregularChat! 🎉`;
+    return 🌟 Your First Step Into the IrregularChat! 🌟\n\n +
+           You've just joined a community focused on breaking down silos,  +
+           fostering innovation, and supporting service members and veterans.\n\n +
+           ---\n +
+           Use This Username and Temporary Password ⬇️\n\n +
+           Username: ${username}\n +
+           Temporary Password: ${password}\n +
+           Exactly as shown above 👆🏼\n\n +
+           1️⃣ Step 1:\n +
+           Use the username and temporary password to log in to https://sso.irregularchat.com\n\n +
+           2️⃣ Step 2:\n +
+           You'll be prompted to create your own password\n\n +
+           3️⃣ Step 3:\n +
+           Use the links in #links to join all the Signal chats\n\n +
+           4️⃣ Step 4:\n +
+           Check out the wiki: https://irregularpedia.org\n\n +
+           Welcome to IrregularChat! 🎉;
   }
   
   // Helper function to send direct message
@@ -6889,10 +6889,10 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       };
       
       const response = await this.sendJsonRpcRequest(request);
-      console.log(`📨 DM sent to ${uuid}`);
+      console.log(📨 DM sent to ${uuid});
       return true;
     } catch (error) {
-      console.error(`❌ Failed to send DM to ${uuid}:`, error);
+      console.error(❌ Failed to send DM to ${uuid}:, error);
       return false;
     }
   }
@@ -6912,10 +6912,10 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       };
       
       const response = await this.sendJsonRpcRequest(request);
-      console.log(`🚪 Removed ${uuid} from group ${groupId}`);
+      console.log(🚪 Removed ${uuid} from group ${groupId});
       return true;
     } catch (error) {
-      console.error(`❌ Failed to remove ${uuid} from group:`, error);
+      console.error(❌ Failed to remove ${uuid} from group:, error);
       return false;
     }
   }
@@ -6923,7 +6923,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async addUserToDefaultGroups(username) {
     // This would integrate with Signal group management
     // For now, it's a placeholder
-    console.log(`Adding ${username} to default Signal groups`);
+    console.log(Adding ${username} to default Signal groups);
   }
 
   async handleSngtg(context) {
@@ -6939,10 +6939,10 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     
     const userToConfirm = args[0].replace('@', '');
     
-    return `✅ Safety Number Confirmed for ${userToConfirm}!\n\n` +
-           `🔒 Safety number has been verified.\n` +
-           `✨ User can now participate in secure conversations.\n\n` +
-           `Note: Use !gtg for general user onboarding approval.`;
+    return ✅ Safety Number Confirmed for ${userToConfirm}!\n\n +
+           🔒 Safety number has been verified.\n +
+           ✨ User can now participate in secure conversations.\n\n +
+           Note: Use !gtg for general user onboarding approval.;
   }
   
   async handlePending(context) {
@@ -6957,24 +6957,24 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       return '📭 No pending requests';
     }
     
-    let response = `📋 Pending Requests (${this.pendingRequests.size}):\n\n`;
+    let response = 📋 Pending Requests (${this.pendingRequests.size}):\n\n;
     
     for (const [phoneNumber, request] of this.pendingRequests) {
       const timeElapsed = Date.now() - request.timestamp;
       const hoursElapsed = Math.floor(timeElapsed / (1000 * 60 * 60));
       const hoursRemaining = Math.floor(this.requestTimeoutMinutes / 60) - hoursElapsed;
       
-      response += `👤 ${request.requester || phoneNumber}\n`;
-      response += `📱 Phone: ${phoneNumber}\n`;
-      response += `⏰ Time remaining: ${hoursRemaining} hours\n`;
+      response += 👤 ${request.requester || phoneNumber}\n;
+      response += 📱 Phone: ${phoneNumber}\n;
+      response += ⏰ Time remaining: ${hoursRemaining} hours\n;
       
       if (request.introduction) {
         const shortIntro = request.introduction.substring(0, 100);
-        response += `📝 Intro: ${shortIntro}${request.introduction.length > 100 ? '...' : ''}\n`;
+        response += 📝 Intro: ${shortIntro}${request.introduction.length > 100 ? '...' : ''}\n;
       }
       
-      response += `✅ Approve: !gtg ${phoneNumber}\n`;
-      response += `───────────────\n`;
+      response += ✅ Approve: !gtg ${phoneNumber}\n;
+      response += ───────────────\n;
     }
     
     return response;
@@ -6994,14 +6994,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   }
   
   async handleZeroeth(context) {
-    return `🤖 **The Zeroeth Law**\n\n${this.zeroethLaw}\n\n🏞️ **IrregularChat Community:**\n${this.communityContext.description}\n\n📜 **Rules of Engagement:**\n${this.communityContext.rules.map((r, i) => `${i+1}. ${r}`).join('\n')}\n\n📚 **Resources:**\n• Wiki: ${this.communityContext.wikiUrl}\n• Forum: ${this.communityContext.forumUrl}`;
+    return 🤖 The Zeroeth Law\n\n${this.zeroethLaw}\n\n🏞️ IrregularChat Community:\n${this.communityContext.description}\n\n📜 Rules of Engagement:\n${this.communityContext.rules.map((r, i) => ${i+1}. ${r}).join('\n')}\n\n📚 Resources:\n• Wiki: ${this.communityContext.wikiUrl}\n• Forum: ${this.communityContext.forumUrl};
   }
 
   // Context and Knowledge Management
   async searchWiki(query) {
     try {
       // Search IrregularPedia for relevant information
-      const searchUrl = `${this.wikiUrl}/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json`;
+      const searchUrl = ${this.wikiUrl}/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json;
       const response = await fetch(searchUrl);
       if (response.ok) {
         const data = await response.json();
@@ -7016,7 +7016,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async searchForum(query) {
     try {
       // Search forum for relevant discussions
-      const searchUrl = `${this.forumUrl}/search.json?q=${encodeURIComponent(query)}`;
+      const searchUrl = ${this.forumUrl}/search.json?q=${encodeURIComponent(query)};
       const response = await fetch(searchUrl);
       if (response.ok) {
         const data = await response.json();
@@ -7038,11 +7038,11 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     let context = '';
     
     if (wikiResults.length > 0) {
-      context += `Wiki articles found: ${wikiResults.slice(0, 3).map(r => r.title).join(', ')}. `;
+      context += Wiki articles found: ${wikiResults.slice(0, 3).map(r => r.title).join(', ')}. ;
     }
     
     if (forumResults.length > 0) {
-      context += `Forum discussions found: ${forumResults.slice(0, 3).map(r => r.title).join(', ')}.`;
+      context += Forum discussions found: ${forumResults.slice(0, 3).map(r => r.title).join(', ')}.;
     }
     
     return context || 'No specific community information found, using general knowledge.';
@@ -7116,7 +7116,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
 
   // Handle reaction messages
   async handleReactionMessage(envelope, reactionMessage) {
-    console.log(`🔥 Reaction received: ${reactionMessage.emoji} from ${envelope.sourceName || envelope.sourceNumber}`);
+    console.log(🔥 Reaction received: ${reactionMessage.emoji} from ${envelope.sourceName || envelope.sourceNumber});
     
     const groupId = reactionMessage.targetMessage?.groupInfo?.groupId || 'dm';
     const targetTimestamp = reactionMessage.targetTimestamp;
@@ -7146,7 +7146,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         }
         
         const totalReactions = Array.from(targetMessage.reactions.values()).reduce((sum, count) => sum + count, 0);
-        console.log(`📊 Message now has ${totalReactions} total reactions`);
+        console.log(📊 Message now has ${totalReactions} total reactions);
       }
     }
     
@@ -7243,7 +7243,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         const totalReactions = Array.from(message.reactions.values()).reduce((sum, count) => sum + count, 0);
         if (totalReactions > 3) {
           const reactionSummary = Array.from(message.reactions.entries())
-            .map(([emoji, count]) => `${emoji} ${count}`)
+            .map(([emoji, count]) => ${emoji} ${count})
             .join(' ');
           
           messagesWithReactions.push({
@@ -7269,7 +7269,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     const highlightLines = messagesWithReactions.map((item, index) => {
       const isTop = item.totalReactions === maxReactionCount;
       const prefix = isTop ? '🎆' : '✨'; // Special highlight for highest
-      return `${prefix} ${item.message.sender}: "${item.preview}" (${item.reactionSummary})`;
+      return ${prefix} ${item.message.sender}: "${item.preview}" (${item.reactionSummary});
     });
     
     return {
@@ -7354,7 +7354,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         };
       });
       
-      console.log(`📚 Loaded ${history.length} messages from database for group ${groupId}`);
+      console.log(📚 Loaded ${history.length} messages from database for group ${groupId});
     } catch (error) {
       console.error('Failed to fetch messages from database:', error);
       useDatabase = false;
@@ -7363,7 +7363,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     // Fall back to memory if database fails or has no data
     if (!useDatabase || history.length === 0) {
       history = this.messageHistory.get(groupId) || [];
-      console.log(`📝 Using ${history.length} messages from memory for group ${groupId}`);
+      console.log(📝 Using ${history.length} messages from memory for group ${groupId});
     }
     
     // Filter out bot commands and duplicate messages
@@ -7429,7 +7429,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       recentMessages = cleanHistory.filter(msg => msg.timestamp > cutoffTime);
       
       if (recentMessages.length === 0) {
-        return `❌ No messages found in the last ${minutesBack} minute${minutesBack !== 1 ? 's' : ''}.`;
+        return ❌ No messages found in the last ${minutesBack} minute${minutesBack !== 1 ? 's' : ''}.;
       }
       
       // Still apply message count limit for safety
@@ -7442,7 +7442,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       recentMessages = cleanHistory.filter(msg => msg.timestamp > cutoffTime);
       
       if (recentMessages.length === 0) {
-        return `❌ No messages found in the last ${hoursBack} hour${hoursBack !== 1 ? 's' : ''}.`;
+        return ❌ No messages found in the last ${hoursBack} hour${hoursBack !== 1 ? 's' : ''}.;
       }
       
       // Still apply message count limit for safety
@@ -7466,14 +7466,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Analyze reactions even for fallback
       const reactionAnalysis = this.analyzeMessageReactions(recentMessages);
       
-      let fallbackSummary = `📝 Chat Summary (${messageCount} messages)\n\n👥 Participants: ${participants}\n⏱️ Timespan: ${timespan}`;
+      let fallbackSummary = 📝 Chat Summary (${messageCount} messages)\n\n👥 Participants: ${participants}\n⏱️ Timespan: ${timespan};
       
       // Add reaction highlights if present
       if (reactionAnalysis.hasHighReactions) {
-        fallbackSummary += `\n\n🔥 Highly Reacted Messages:\n${reactionAnalysis.highlightText}`;
+        fallbackSummary += \n\n🔥 Highly Reacted Messages:\n${reactionAnalysis.highlightText};
       }
       
-      fallbackSummary += `\n\n💬 Recent messages:\n${recentMessages.slice(-5).map(m => `• ${m.sender}: ${m.message.substring(0, 50)}${m.message.length > 50 ? '...' : ''}`).join('\n')}`;
+      fallbackSummary += \n\n💬 Recent messages:\n${recentMessages.slice(-5).map(m => • ${m.sender}: ${m.message.substring(0, 50)}${m.message.length > 50 ? '...' : ''}).join('\n')};
       
       return fallbackSummary;
     }
@@ -7482,18 +7482,18 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Analyze emoji reactions to highlight highly reacted messages
       const reactionAnalysis = this.analyzeMessageReactions(recentMessages);
       
-      const messagesText = recentMessages.map(m => `${m.sender}: ${m.message}`).join('\n');
+      const messagesText = recentMessages.map(m => ${m.sender}: ${m.message}).join('\n');
       let aiResponse;
       
       if (this.useLocalAiForSummarization) {
         // Use local AI for privacy (keeps user data private)
         console.log('Using local AI for chat summarization (privacy mode)');
         
-        const response = await fetch(`${this.localAiUrl}/v1/chat/completions`, {
+        const response = await fetch(${this.localAiUrl}/v1/chat/completions, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.localAiApiKey}`
+            'Authorization': Bearer ${this.localAiApiKey}
           },
           body: JSON.stringify({
             model: this.localAiModel,
@@ -7502,14 +7502,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
               content: 'You are a helpful assistant that summarizes chat conversations. Focus on the main topics, key points, and any decisions or action items. Be concise but thorough.'
             }, {
               role: 'user',
-              content: `Please summarize this group chat conversation:\n\n${messagesText}`
+              content: Please summarize this group chat conversation:\n\n${messagesText}
             }],
             max_completion_tokens: 700  // GPT-5 requires max_completion_tokens
           })
         });
         
         if (!response.ok) {
-          throw new Error(`Local AI error: ${response.status}`);
+          throw new Error(Local AI error: ${response.status});
         }
         
         aiResponse = await response.json();
@@ -7525,7 +7525,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
             content: 'You are a helpful assistant that summarizes chat conversations. Focus on the main topics, key points, and any decisions or action items. Be concise but thorough.'
           }, {
             role: 'user',
-            content: `Please summarize this group chat conversation:\n\n${messagesText}` 
+            content: Please summarize this group chat conversation:\n\n${messagesText} 
           }],
           max_completion_tokens: 900  // GPT-5 thinking model needs 600+ tokens
         });
@@ -7540,21 +7540,21 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Build summary description
       let summaryDesc;
       if (minutesBack) {
-        summaryDesc = `${actualMessageCount} messages from last ${minutesBack} minute${minutesBack !== 1 ? 's' : ''}`;
+        summaryDesc = ${actualMessageCount} messages from last ${minutesBack} minute${minutesBack !== 1 ? 's' : ''};
       } else if (hoursBack) {
-        summaryDesc = `${actualMessageCount} messages from last ${hoursBack} hour${hoursBack !== 1 ? 's' : ''}`;
+        summaryDesc = ${actualMessageCount} messages from last ${hoursBack} hour${hoursBack !== 1 ? 's' : ''};
       } else {
-        summaryDesc = `last ${actualMessageCount} messages`;
+        summaryDesc = last ${actualMessageCount} messages;
       }
       
-      let fullSummary = `📝 Chat Summary (${summaryDesc})\n\n👥 Participants: ${participants}`;
+      let fullSummary = 📝 Chat Summary (${summaryDesc})\n\n👥 Participants: ${participants};
       
       // Add reaction analysis if there are significant reactions
       if (reactionAnalysis.hasHighReactions) {
-        fullSummary += `\n\n🔥 Highly Reacted Messages:\n${reactionAnalysis.highlightText}`;
+        fullSummary += \n\n🔥 Highly Reacted Messages:\n${reactionAnalysis.highlightText};
       }
       
-      fullSummary += `\n\n${aiPrefix} ${summaryText}`;
+      fullSummary += \n\n${aiPrefix} ${summaryText};
       
       return fullSummary;
       
@@ -7563,7 +7563,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Fallback to simple summary
       const messageCount = recentMessages.length;
       const participants = [...new Set(recentMessages.map(m => m.sender))].join(', ');
-      return `📝 Chat Summary (${messageCount} messages)\n\n👥 Participants: ${participants}\n\n💬 Recent messages:\n${recentMessages.slice(-3).map(m => `• ${m.sender}: ${m.message.substring(0, 50)}${m.message.length > 50 ? '...' : ''}`).join('\n')}`;
+      return 📝 Chat Summary (${messageCount} messages)\n\n👥 Participants: ${participants}\n\n💬 Recent messages:\n${recentMessages.slice(-3).map(m => • ${m.sender}: ${m.message.substring(0, 50)}${m.message.length > 50 ? '...' : ''}).join('\n')};
     }
   }
   
@@ -7573,9 +7573,9 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     const diffHours = Math.floor(diffMins / 60);
     const diffDays = Math.floor(diffHours / 24);
     
-    if (diffDays > 0) return `${diffDays} day${diffDays > 1 ? 's' : ''}`;
-    if (diffHours > 0) return `${diffHours} hour${diffHours > 1 ? 's' : ''}`;
-    if (diffMins > 0) return `${diffMins} minute${diffMins > 1 ? 's' : ''}`;
+    if (diffDays > 0) return ${diffDays} day${diffDays > 1 ? 's' : ''};
+    if (diffHours > 0) return ${diffHours} hour${diffHours > 1 ? 's' : ''};
+    if (diffMins > 0) return ${diffMins} minute${diffMins > 1 ? 's' : ''};
     return 'Less than a minute';
   }
 
@@ -7587,11 +7587,11 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async handleEightBall(context) { 
     const responses = ['Yes', 'No', 'Maybe', 'Ask again later', 'Definitely', 'Probably not'];
     const response = responses[Math.floor(Math.random() * responses.length)];
-    return `🎱 **Magic 8-Ball**: ${response}`;
+    return 🎱 Magic 8-Ball: ${response};
   }
   async handleDice(context) { 
     const roll = Math.floor(Math.random() * 6) + 1;
-    return `🎲 **Dice Roll**: ${roll}\n\nUsage: !dice [sides] [count]`; 
+    return 🎲 Dice Roll: ${roll}\n\nUsage: !dice [sides] [count]; 
   }
 
   // Helper method for admin check - now UUID-based for security
@@ -7754,7 +7754,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       'pdf': '!pdf <url or attachment>'
     };
     
-    return usages[name] || `!${name}`;
+    return usages[name] || !${name};
   }
   
   // Helper to get command examples
@@ -7908,8 +7908,8 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       const cmd = this.plugins.get(commandName);
       if (!cmd) {
         auditEntry.error = 'Command not found';
-        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
-        return { success: false, message: `Command !${commandName} not found` };
+        console.log(🔒 AI Audit: ${JSON.stringify(auditEntry)});
+        return { success: false, message: Command !${commandName} not found };
       }
       
       // Get command metadata and check permissions
@@ -7918,27 +7918,27 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       
       if (!cmdInfo) {
         auditEntry.error = 'Command metadata not found';
-        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
-        return { success: false, message: `Command metadata for !${commandName} not found` };
+        console.log(🔒 AI Audit: ${JSON.stringify(auditEntry)});
+        return { success: false, message: Command metadata for !${commandName} not found };
       }
       
       // Permission checks
       if (cmdInfo.adminOnly && !commandRegistry.isAdmin) {
         auditEntry.error = 'Admin permission required';
-        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        console.log(🔒 AI Audit: ${JSON.stringify(auditEntry)});
         return { 
           success: false, 
-          message: `Cannot execute !${commandName} - admin privileges required`,
+          message: Cannot execute !${commandName} - admin privileges required,
           needsPermission: 'admin'
         };
       }
       
       if (cmdInfo.moderatorOnly && !commandRegistry.isModerator) {
         auditEntry.error = 'Moderator permission required';
-        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        console.log(🔒 AI Audit: ${JSON.stringify(auditEntry)});
         return { 
           success: false, 
-          message: `Cannot execute !${commandName} - moderator privileges required`,
+          message: Cannot execute !${commandName} - moderator privileges required,
           needsPermission: 'moderator'
         };
       }
@@ -7947,10 +7947,10 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       const dangerousCommands = ['delete', 'ban', 'kick', 'remove', 'destroy', 'drop', 'truncate', 'reset'];
       if (dangerousCommands.includes(commandName.toLowerCase())) {
         auditEntry.error = 'Dangerous command blocked';
-        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        console.log(🔒 AI Audit: ${JSON.stringify(auditEntry)});
         return { 
           success: false, 
-          message: `Command !${commandName} is blocked for AI execution for safety reasons`,
+          message: Command !${commandName} is blocked for AI execution for safety reasons,
           blocked: true
         };
       }
@@ -7979,8 +7979,8 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       ]);
       
       auditEntry.executed = true;
-      console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
-      console.log(`✅ AI (${aiProvider}) successfully executed !${commandName} for user ${context.sourceNumber}`);
+      console.log(🔒 AI Audit: ${JSON.stringify(auditEntry)});
+      console.log(✅ AI (${aiProvider}) successfully executed !${commandName} for user ${context.sourceNumber});
       
       return { 
         success: true, 
@@ -7991,12 +7991,12 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       
     } catch (error) {
       auditEntry.error = error.message;
-      console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
-      console.error(`❌ AI command execution error:`, error);
+      console.log(🔒 AI Audit: ${JSON.stringify(auditEntry)});
+      console.error(❌ AI command execution error:, error);
       
       return { 
         success: false, 
-        message: `Error executing !${commandName}: ${error.message}`,
+        message: Error executing !${commandName}: ${error.message},
         error: true
       };
     }
@@ -8069,7 +8069,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         timestamp: new Date()
       });
       
-      console.log(`✅ Question Q${questionId} saved to database`);
+      console.log(✅ Question Q${questionId} saved to database);
       
       // Post to Discourse if configured
       let forumLink = '';
@@ -8078,13 +8078,13 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         try {
           const topicData = {
             title: title,
-            raw: `Question from ${sender}:\n\n${questionText}\n\n---\n*Posted via Signal Bot from ${groupId ? 'group chat' : 'direct message'}*`,
+            raw: Question from ${sender}:\n\n${questionText}\n\n---\n*Posted via Signal Bot from ${groupId ? 'group chat' : 'direct message'}*,
             category: 7, // Questions category - updated for IrregularChat forum
             tags: ['question', 'signal-bot']
           };
           
           console.log('📤 Posting question to Discourse:', this.discourseApiUrl);
-          const response = await fetch(`${this.discourseApiUrl}/posts.json`, {
+          const response = await fetch(${this.discourseApiUrl}/posts.json, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -8101,15 +8101,15 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
               where: { questionId: questionId },
               data: {
                 discourseTopicId: result.topic_id.toString(),
-                forumLink: `${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id}`
+                forumLink: ${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id}
               }
             });
-            forumLink = `\n📎 Forum: ${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id}`;
+            forumLink = \n📎 Forum: ${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id};
             console.log('✅ Question posted to Discourse:', result.topic_id);
           } else {
             const errorText = await response.text();
             console.error('❌ Discourse API error:', response.status, errorText);
-            discourseError = `API ${response.status}`;
+            discourseError = API ${response.status};
           }
         } catch (error) {
           console.error('❌ Failed to post to Discourse:', error);
@@ -8118,27 +8118,27 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
       
       // Return success message even if Discourse posting failed (question is stored in database)
-      let response = `❓ Question Q${questionId} Posted\n\n` +
-                    `Title: ${title}\n` +
-                    `Asked by: ${sender}\n` +
-                    `Time: ${new Date().toLocaleTimeString()}`;
+      let response = ❓ Question Q${questionId} Posted\n\n +
+                    Title: ${title}\n +
+                    Asked by: ${sender}\n +
+                    Time: ${new Date().toLocaleTimeString()};
       
       if (forumLink) {
-        response += `\nForum: \n📎 Forum: ${forumLink}`;
+        response += \nForum: \n📎 Forum: ${forumLink};
       } else if (discourseError) {
-        response += `\n⚠️ Forum posting temporarily unavailable`;
+        response += \n⚠️ Forum posting temporarily unavailable;
         console.log('⚠️ Question stored locally only due to forum error');
       }
       
-      response += `\n\nOthers can answer with: !answer Q${questionId} <your answer>\n` +
-                 `Mark as solved with: !solved Q${questionId}`;
+      response += \n\nOthers can answer with: !answer Q${questionId} <your answer>\n +
+                 Mark as solved with: !solved Q${questionId};
       
       return response;
              
     } catch (error) {
       console.error('Error handling question:', error);
       return '❌ Failed to post question. Please try again.\n' +
-             `Error: ${error.message}`;
+             Error: ${error.message};
     }
   }
   
@@ -8177,8 +8177,8 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         const answerCount = answers.length;
         const timeAgo = this.getRelativeTime(q.timestamp);
         
-        response += `${status} Q${q.questionId}: ${q.title || q.question.substring(0, 60)}\n`;
-        response += `   👤 ${q.asker} • 💬 ${answerCount} answer${answerCount !== 1 ? 's' : ''} • ⏰ ${timeAgo}\n\n`;
+        response += ${status} Q${q.questionId}: ${q.title || q.question.substring(0, 60)}\n;
+        response +=    👤 ${q.asker} • 💬 ${answerCount} answer${answerCount !== 1 ? 's' : ''} • ⏰ ${timeAgo}\n\n;
       }
       
       response += '\n💡 Use !answer Q<ID> <answer> to answer a question';
@@ -8211,18 +8211,18 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         answerText = args.join(' ');
         questionId = questions[0];
       } else {
-        return `❌ Question ${questionId} not found. Use !questions to see available questions.`;
+        return ❌ Question ${questionId} not found. Use !questions to see available questions.;
       }
     }
     
     const question = this.questions.get(questionId);
     
     if (!question) {
-      return `❌ Question ${questionId} not found. Use !questions to see available questions.`;
+      return ❌ Question ${questionId} not found. Use !questions to see available questions.;
     }
     
     if (question.solved) {
-      return `ℹ️ Question ${questionId} has already been marked as solved.`;
+      return ℹ️ Question ${questionId} has already been marked as solved.;
     }
     
     // Add answer to question
@@ -8238,7 +8238,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     // Post answer to Discourse if topic exists
     if (question.discourseTopicId && this.discourseApiKey) {
       try {
-        await fetch(`${this.discourseApiUrl}/posts.json`, {
+        await fetch(${this.discourseApiUrl}/posts.json, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -8247,7 +8247,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
           },
           body: JSON.stringify({
             topic_id: question.discourseTopicId,
-            raw: `**Answer from ${sender}:**\n\n${answerText}`
+            raw: Answer from ${sender}:\n\n${answerText}
           })
         });
       } catch (error) {
@@ -8260,21 +8260,21 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       try {
         await this.sendDirectMessage(
           question.askerPhone,
-          `📬 **Your question has been answered!**\n\n` +
-          `❓ **Question ${questionId}:** ${question.title}\n\n` +
-          `💬 **Answer from ${sender}:**\n${answerText}\n\n` +
-          `✅ If this solves your question, reply with: !solved ${questionId}`
+          📬 Your question has been answered!\n\n +
+          ❓ Question ${questionId}: ${question.title}\n\n +
+          💬 Answer from ${sender}:\n${answerText}\n\n +
+          ✅ If this solves your question, reply with: !solved ${questionId}
         );
       } catch (error) {
         console.error('Failed to send DM notification:', error);
       }
     }
     
-    return `✅ Answer posted to ${questionId}\n\n` +
-           `❓ Question: ${question.title}\n` +
-           `👤 Asked by: ${question.asker}\n` +
-           `💬 Your answer: ${answerText}\n\n` +
-           `📊 Total answers: ${question.answers.length}`;
+    return ✅ Answer posted to ${questionId}\n\n +
+           ❓ Question: ${question.title}\n +
+           👤 Asked by: ${question.asker}\n +
+           💬 Your answer: ${answerText}\n\n +
+           📊 Total answers: ${question.answers.length};
   }
   
   async handleSolved(context) {
@@ -8288,7 +8288,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     const question = this.questions.get(questionId);
     
     if (!question) {
-      return `❌ Question ${questionId} not found.`;
+      return ❌ Question ${questionId} not found.;
     }
     
     // Only the asker or an admin can mark as solved
@@ -8296,11 +8296,11 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     const isAdmin = this.isAdmin(context.sourceUuid || sourceNumber, groupId);
     
     if (!isAsker && !isAdmin) {
-      return `❌ Only ${question.asker} (the question asker) or an admin can mark this as solved.`;
+      return ❌ Only ${question.asker} (the question asker) or an admin can mark this as solved.;
     }
     
     if (question.solved) {
-      return `ℹ️ Question ${questionId} is already marked as solved.`;
+      return ℹ️ Question ${questionId} is already marked as solved.;
     }
     
     question.solved = true;
@@ -8311,7 +8311,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     if (question.discourseTopicId && this.discourseApiKey) {
       try {
         // Add solved tag or update topic
-        await fetch(`${this.discourseApiUrl}/posts.json`, {
+        await fetch(${this.discourseApiUrl}/posts.json, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -8320,7 +8320,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
           },
           body: JSON.stringify({
             topic_id: question.discourseTopicId,
-            raw: `✅ **This question has been marked as SOLVED by ${sender}**`
+            raw: ✅ This question has been marked as SOLVED by ${sender}
           })
         });
       } catch (error) {
@@ -8335,10 +8335,10 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         try {
           await this.sendDirectMessage(
             answererPhone,
-            `🎉 **Good news!**\n\n` +
-            `The question you answered has been marked as solved:\n` +
-            `❓ **${question.title}**\n\n` +
-            `Thank you for your help!`
+            🎉 Good news!\n\n +
+            The question you answered has been marked as solved:\n +
+            ❓ ${question.title}\n\n +
+            Thank you for your help!
           );
         } catch (error) {
           console.error('Failed to notify answerer:', error);
@@ -8346,11 +8346,11 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
     }
     
-    return `✅ **Question ${questionId} marked as SOLVED!**\n\n` +
-           `❓ **Question:** ${question.title}\n` +
-           `👤 **Asked by:** ${question.asker}\n` +
-           `💬 **Total answers:** ${question.answers.length}\n` +
-           `🎉 Thank you to everyone who helped!`;
+    return ✅ Question ${questionId} marked as SOLVED!\n\n +
+           ❓ Question: ${question.title}\n +
+           👤 Asked by: ${question.asker}\n +
+           💬 Total answers: ${question.answers.length}\n +
+           🎉 Thank you to everyone who helped!;
   }
   
   async sendDirectMessage(phoneNumber, message) {
@@ -8358,7 +8358,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     try {
       await this.sendMessage(message, phoneNumber);
     } catch (error) {
-      console.error(`Failed to send DM to ${phoneNumber}:`, error);
+      console.error(Failed to send DM to ${phoneNumber}:, error);
     }
   }
   
@@ -8415,9 +8415,9 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
     
-    if (days > 0) return `${days}d ago`;
-    if (hours > 0) return `${hours}h ago`;
-    if (minutes > 0) return `${minutes}m ago`;
+    if (days > 0) return ${days}d ago;
+    if (hours > 0) return ${hours}h ago;
+    if (minutes > 0) return ${minutes}m ago;
     return 'just now';
   }
   // Analytics Tracking Methods
@@ -8696,7 +8696,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       const randomResponse = responses[Math.floor(Math.random() * responses.length)];
       await this.sendReply(message, randomResponse);
       
-      console.log(`📊 Bot feedback received: ${isPositive ? 'POSITIVE' : 'NEGATIVE'} from ${message.sourceName || message.sourceNumber}`);
+      console.log(📊 Bot feedback received: ${isPositive ? 'POSITIVE' : 'NEGATIVE'} from ${message.sourceName || message.sourceNumber});
       
     } catch (error) {
       console.error('Failed to handle bot feedback:', error);
@@ -8756,14 +8756,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         Object.entries(data).forEach(([domain, country]) => {
           this.watchedDomains.set(domain.toLowerCase(), country);
         });
-        console.log(`🛡️ Loaded ${this.watchedDomains.size} watched domains`);
+        console.log(🛡️ Loaded ${this.watchedDomains.size} watched domains);
       } else {
         // Initialize with defaults
         Object.entries(defaultWatched).forEach(([domain, country]) => {
           this.watchedDomains.set(domain.toLowerCase(), country);
         });
         this.saveWatchedDomains();
-        console.log(`🛡️ Initialized ${this.watchedDomains.size} default watched domains`);
+        console.log(🛡️ Initialized ${this.watchedDomains.size} default watched domains);
       }
     } catch (error) {
       console.error('Error loading watched domains:', error);
@@ -8781,7 +8781,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         data[domain] = country;
       });
       fs.writeFileSync(this.watchedDomainsFile, JSON.stringify(data, null, 2));
-      console.log(`💾 Saved ${this.watchedDomains.size} watched domains`);
+      console.log(💾 Saved ${this.watchedDomains.size} watched domains);
     } catch (error) {
       console.error('Error saving watched domains:', error);
     }
@@ -8814,16 +8814,16 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   }
   
   async sendSecurityWarning(url, securityCheck, message) {
-    const warning = `👀 **Security Notice**
+    const warning = `👀 Security Notice
 
-This link is hosted in **${securityCheck.country}** (${securityCheck.domain})
+This link is hosted in ${securityCheck.country} (${securityCheck.domain})
 
 Are you sure this is what you wanted to post?
 
 ⚠️ Please verify the source before clicking.`;
     
     await this.sendReply(message, warning);
-    console.log(`🛡️ Security warning sent for ${url} (${securityCheck.country})`);
+    console.log(🛡️ Security warning sent for ${url} (${securityCheck.country}));
   }
   
   // Admin command to manage watched domains
@@ -8836,7 +8836,7 @@ Are you sure this is what you wanted to post?
     
     if (!args || args.length === 0) {
       // List current watched domains
-      let response = '🛡️ **Watched Domains & TLDs**\n\n';
+      let response = '🛡️ Watched Domains & TLDs\n\n';
       const byCountry = {};
       
       this.watchedDomains.forEach((country, domain) => {
@@ -8845,12 +8845,12 @@ Are you sure this is what you wanted to post?
       });
       
       Object.entries(byCountry).forEach(([country, domains]) => {
-        response += `**${country}:**\n`;
-        domains.forEach(d => response += `  • ${d}\n`);
+        response += ${country}:\n;
+        domains.forEach(d => response +=   • ${d}\n);
         response += '\n';
       });
       
-      response += `\nTotal: ${this.watchedDomains.size} entries\n`;
+      response += \nTotal: ${this.watchedDomains.size} entries\n;
       response += '\nUsage: !watchdomain add <domain> <country>\n';
       response += '       !watchdomain remove <domain>';
       
@@ -8866,7 +8866,7 @@ Are you sure this is what you wanted to post?
       this.watchedDomains.set(domain, country);
       this.saveWatchedDomains();
       
-      return `✅ Added ${domain} to watch list (${country})`;
+      return ✅ Added ${domain} to watch list (${country});
     }
     
     if (action === 'remove' && args.length >= 2) {
@@ -8875,9 +8875,9 @@ Are you sure this is what you wanted to post?
       if (this.watchedDomains.has(domain)) {
         this.watchedDomains.delete(domain);
         this.saveWatchedDomains();
-        return `✅ Removed ${domain} from watch list`;
+        return ✅ Removed ${domain} from watch list;
       } else {
-        return `❌ Domain ${domain} not found in watch list`;
+        return ❌ Domain ${domain} not found in watch list;
       }
     }
     

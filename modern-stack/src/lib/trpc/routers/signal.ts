@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { enhancedSignalClient } from '@/lib/signal/enhanced-api-client';
 import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
 import { NativeSignalBotService } from '@/lib/signal-cli/native-daemon-service';
+import { signalCliHealthMonitor } from '@/lib/signal-cli-health';
 
 let nativeBot: NativeSignalBotService | null = null;
 
@@ -21,7 +22,7 @@ function getNativeBot() {
 }
 
 export const signalRouter = createTRPCRouter({
-  // Get Signal groups with enhanced display names
+  // Get Signal groups using native daemon
   getGroups: moderatorProcedure
     .input(
       z.object({
@@ -30,14 +31,8 @@ export const signalRouter = createTRPCRouter({
     )
     .query(async ({ input }) => {
       try {
-        // Set phone number from environment if not provided
-        const phoneNumber = input.phoneNumber || process.env.SIGNAL_PHONE_NUMBER;
-        if (!phoneNumber) {
-          throw new Error('Signal phone number not configured');
-        }
-
-        enhancedSignalClient.setPhoneNumber(phoneNumber);
-        const groups = await enhancedSignalClient.getGroupsWithNames();
+        const bot = getNativeBot();
+        const groups = await bot.getGroups();
         
         return groups;
       } catch (error) {
@@ -46,7 +41,7 @@ export const signalRouter = createTRPCRouter({
       }
     }),
 
-  // Get Signal users/contacts with enhanced display names
+  // Get Signal users/contacts using native daemon
   getUsers: moderatorProcedure
     .input(
       z.object({
@@ -55,16 +50,10 @@ export const signalRouter = createTRPCRouter({
     )
     .query(async ({ input }) => {
       try {
-        // Set phone number from environment if not provided
-        const phoneNumber = input.phoneNumber || process.env.SIGNAL_PHONE_NUMBER;
-        if (!phoneNumber) {
-          throw new Error('Signal phone number not configured');
-        }
-
-        enhancedSignalClient.setPhoneNumber(phoneNumber);
-        const users = await enhancedSignalClient.getUsersWithNames();
+        const bot = getNativeBot();
+        const contacts = await bot.getContacts();
         
-        return users;
+        return contacts;
       } catch (error) {
         console.error('Error fetching Signal users:', error);
         throw new Error('Failed to fetch Signal users');
@@ -282,12 +271,12 @@ export const signalRouter = createTRPCRouter({
     }
   }),
 
-  // Get health status (alias for getServiceStatus for backward compatibility)  
+  // Get health status - Updated to use native daemon socket instead of REST API
   getHealth: moderatorProcedure.query(async () => {
-    const baseUrl = process.env.SIGNAL_CLI_REST_API_BASE_URL || 'http://localhost:50240';
+    const socketPath = process.env.SIGNAL_CLI_SOCKET_PATH || '/tmp/signal-cli-socket';
     const phoneNumber = process.env.SIGNAL_BOT_PHONE_NUMBER || process.env.SIGNAL_PHONE_NUMBER;
     
-    if (!baseUrl || !phoneNumber) {
+    if (!phoneNumber) {
       return {
         status: 'unhealthy',
         containerStatus: 'unknown',
@@ -298,40 +287,40 @@ export const signalRouter = createTRPCRouter({
     }
 
     try {
+      const fs = require('fs').promises;
       const startTime = Date.now();
-      const response = await fetch(`${baseUrl}/v1/about`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(5000)
-      });
-      const apiResponseTime = Date.now() - startTime;
-
-      if (response.ok) {
-        // Check if phone number is registered
-        const accountsResponse = await fetch(`${baseUrl}/v1/accounts`, {
-          method: 'GET',
-          signal: AbortSignal.timeout(5000)
-        });
-        
-        let registrationStatus = 'unregistered';
-        if (accountsResponse.ok) {
-          const accounts = await accountsResponse.json();
-          const isRegistered = Array.isArray(accounts) && accounts.some((acc: any) => 
-            acc.number === phoneNumber || acc === phoneNumber
-          );
-          registrationStatus = isRegistered ? 'registered' : 'unregistered';
-        }
-
-        return {
-          status: 'healthy',
-          containerStatus: 'running',
-          registrationStatus,
-          apiResponseTime,
-          messagesSentToday: 0 // TODO: implement message counting
-        };
-      } else {
+      
+      // Check if socket file exists
+      try {
+        await fs.access(socketPath);
+      } catch {
         return {
           status: 'unhealthy',
-          containerStatus: 'error',
+          containerStatus: 'socket_not_found',
+          registrationStatus: 'unknown',
+          apiResponseTime: null,
+          messagesSentToday: undefined
+        };
+      }
+      
+      // Try to get health from native bot
+      try {
+        const bot = getNativeBot();
+        const healthCheck = await bot.getHealth();
+        const apiResponseTime = Date.now() - startTime;
+        
+        return {
+          status: healthCheck.status === 'healthy' ? 'healthy' : 'unhealthy',
+          containerStatus: 'running',
+          registrationStatus: healthCheck.isRegistered ? 'registered' : 'unregistered',
+          apiResponseTime,
+          messagesSentToday: 0
+        };
+      } catch (healthError) {
+        const apiResponseTime = Date.now() - startTime;
+        return {
+          status: 'unhealthy',
+          containerStatus: 'daemon_error',
           registrationStatus: 'unknown',
           apiResponseTime,
           messagesSentToday: undefined
@@ -348,98 +337,67 @@ export const signalRouter = createTRPCRouter({
     }
   }),
 
-  // Get Signal CLI service health and registration status
+  // Get Signal CLI service health and registration status - Updated to use native daemon
   getServiceStatus: moderatorProcedure.query(async () => {
-    const baseUrl = process.env.SIGNAL_CLI_REST_API_BASE_URL || 'http://localhost:50240';
+    const socketPath = process.env.SIGNAL_CLI_SOCKET_PATH || '/tmp/signal-cli-socket';
     const phoneNumber = process.env.SIGNAL_PHONE_NUMBER;
     
-    if (!baseUrl || !phoneNumber) {
+    if (!phoneNumber) {
       return {
         isHealthy: false,
         isRegistered: false,
-        error: 'Signal CLI not configured - missing base URL or phone number',
-        configuration: { baseUrl, phoneNumber }
+        error: 'Signal CLI not configured - missing phone number',
+        configuration: { socketPath, phoneNumber }
       };
     }
 
     try {
-      // Check service health
-      const healthResponse = await fetch(`${baseUrl}/v1/health`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(5000)
-      });
-
-      const isHealthy = healthResponse.status === 204 || healthResponse.status === 200;
+      const fs = require('fs').promises;
       
-      if (!isHealthy) {
+      // Check if socket file exists
+      try {
+        await fs.access(socketPath);
+      } catch {
         return {
           isHealthy: false,
           isRegistered: false,
-          error: `Signal CLI service unhealthy (HTTP ${healthResponse.status})`,
-          configuration: { baseUrl, phoneNumber }
+          error: 'Native Signal CLI daemon socket not found - bot may not be running',
+          configuration: { socketPath, phoneNumber }
         };
       }
-
-      // Check if phone number is registered
-      let isRegistered = false;
-      let registrationError = null;
-
+      
+      // Try to get health status from native bot
       try {
-        const accountsResponse = await fetch(`${baseUrl}/v1/accounts`, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(5000)
-        });
-
-        if (accountsResponse.ok) {
-          const accounts = await accountsResponse.json();
-          isRegistered = Array.isArray(accounts) && accounts.includes(phoneNumber);
-          
-          if (!isRegistered) {
-            registrationError = `Phone number ${phoneNumber} is not registered with Signal CLI`;
-          }
-        } else {
-          registrationError = `Failed to check account registration (HTTP ${accountsResponse.status})`;
-        }
-      } catch (regError) {
-        registrationError = `Failed to check registration: ${regError instanceof Error ? regError.message : 'Unknown error'}`;
+        const bot = getNativeBot();
+        const healthCheck = await bot.getHealth();
+        
+        return {
+          isHealthy: healthCheck.status === 'healthy',
+          isRegistered: healthCheck.isRegistered || false,
+          error: healthCheck.status !== 'healthy' ? healthCheck.error || 'Daemon unhealthy' : null,
+          configuration: { socketPath, phoneNumber },
+          accountInfo: healthCheck.isRegistered ? {
+            phoneNumber,
+            displayName: 'Community Dashboard Bot',
+            socketPath
+          } : null,
+          lastChecked: new Date().toISOString()
+        };
+      } catch (healthError) {
+        return {
+          isHealthy: false,
+          isRegistered: false,
+          error: `Failed to check daemon health: ${healthError instanceof Error ? healthError.message : 'Unknown error'}`,
+          configuration: { socketPath, phoneNumber }
+        };
       }
-
-      // Try to get account info for more details if registered
-      let accountInfo = null;
-      if (isRegistered) {
-        try {
-          const accountResponse = await fetch(`${baseUrl}/v1/accounts/${encodeURIComponent(phoneNumber)}`, {
-            method: 'GET',
-            headers: { 'Content-Type': 'application/json' },
-            signal: AbortSignal.timeout(5000)
-          });
-          
-          if (accountResponse.ok) {
-            accountInfo = await accountResponse.json();
-          }
-        } catch (error) {
-          // Non-critical error, continue without account info
-          console.warn('Could not fetch account info:', error instanceof Error ? error.message : 'Unknown error');
-        }
-      }
-
-      return {
-        isHealthy,
-        isRegistered,
-        error: registrationError,
-        configuration: { baseUrl, phoneNumber },
-        accountInfo,
-        lastChecked: new Date().toISOString()
-      };
 
     } catch (error) {
       return {
         isHealthy: false,
         isRegistered: false,
-        error: `Signal CLI service unavailable: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        configuration: { baseUrl, phoneNumber }
+        error: `Signal CLI daemon unavailable: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        configuration: { socketPath, phoneNumber }
       };
     }
   }),
@@ -1232,4 +1190,92 @@ export const signalRouter = createTRPCRouter({
         });
       }
     }),
+
+  // Signal CLI Database Health Monitoring
+  getSignalCliHealth: moderatorProcedure.query(async ({ ctx }) => {
+    try {
+      const healthStatus = await signalCliHealthMonitor.checkHealth();
+      
+      // Log admin event for health check
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'signal_cli_health_check',
+          username: ctx.session.user.username || 'unknown',
+          details: `Signal CLI health check: ${healthStatus.isHealthy ? 'Healthy' : 'Unhealthy'} - ${healthStatus.errorMessages.length} errors, ${healthStatus.recommendations.length} recommendations`,
+        },
+      });
+
+      return healthStatus;
+    } catch (error) {
+      console.error('Error checking Signal CLI health:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to check Signal CLI health'
+      });
+    }
+  }),
+
+  createSignalCliBackup: moderatorProcedure.mutation(async ({ ctx }) => {
+    try {
+      const backupResult = await signalCliHealthMonitor.createBackup();
+      
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'signal_cli_backup',
+          username: ctx.session.user.username || 'unknown',
+          details: `Signal CLI backup ${backupResult.success ? 'created' : 'failed'}: ${backupResult.success ? `${backupResult.backupPath} (${(backupResult.backupSize || 0 / 1024 / 1024).toFixed(1)}MB)` : backupResult.errorMessage}`,
+        },
+      });
+
+      return backupResult;
+    } catch (error) {
+      console.error('Error creating Signal CLI backup:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to create Signal CLI backup'
+      });
+    }
+  }),
+
+  restoreSignalCliFromBackup: moderatorProcedure
+    .input(z.object({
+      backupPath: z.string()
+    }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const restoreResult = await signalCliHealthMonitor.restoreFromBackup(input.backupPath);
+        
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'signal_cli_restore',
+            username: ctx.session.user.username || 'unknown',
+            details: `Signal CLI restore ${restoreResult.success ? 'completed' : 'failed'}: ${restoreResult.success ? `Restored from ${input.backupPath}` : restoreResult.errorMessage}`,
+          },
+        });
+
+        return restoreResult;
+      } catch (error) {
+        console.error('Error restoring Signal CLI from backup:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to restore Signal CLI from backup'
+        });
+      }
+    }),
+
+  getSignalCliBackups: moderatorProcedure.query(async () => {
+    try {
+      // This would list available backups - implement based on signalCliHealthMonitor methods
+      // For now, return empty array as placeholder
+      return { backups: [] };
+    } catch (error) {
+      console.error('Error getting Signal CLI backups:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get Signal CLI backups'
+      });
+    }
+  }),
 });

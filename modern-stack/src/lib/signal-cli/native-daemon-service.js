@@ -174,10 +174,10 @@ class NativeSignalBotService extends EventEmitter {
     this.plugins = this.loadPlugins();
     
     console.log('🚀 Native Signal CLI Daemon Service initialized');
-    console.log(📱 Phone: ${this.phoneNumber});
-    console.log(📂 Data Dir: ${this.dataDir});
-    console.log(🔌 Socket: ${this.socketPath});
-    console.log(🔒 Instance ID: ${this.instanceId} (for duplicate prevention));
+    console.log(`📱 Phone: ${this.phoneNumber}`);
+    console.log(`📂 Data Dir: ${this.dataDir}`);
+    console.log(`🔌 Socket: ${this.socketPath}`);
+    console.log(`🔒 Instance ID: ${this.instanceId} (for duplicate prevention)`);
     
     // Start cleanup interval for duplicate detection
     this.startCleanupInterval();
@@ -197,12 +197,12 @@ class NativeSignalBotService extends EventEmitter {
     
     // Check for recent messages with same content (temporal deduplication)
     const now = Date.now();
-    const messageKey = ${envelope.sourceNumber || envelope.sourceUuid}_${envelope.dataMessage?.message || ''};
+    const messageKey = `${envelope.sourceNumber || envelope.sourceUuid}_${envelope.dataMessage?.message || ''}`;
     
     if (this.messageTimestamps.has(messageKey)) {
       const lastSeen = this.messageTimestamps.get(messageKey);
       if (now - lastSeen < this.duplicateDetectionWindow) {
-        console.log(⚠️ [Instance ${this.instanceId}] Temporal duplicate detected within ${this.duplicateDetectionWindow}ms);
+        console.log(`⚠️ [Instance ${this.instanceId}] Temporal duplicate detected within ${this.duplicateDetectionWindow}ms`);
         return true;
       }
     }
@@ -216,7 +216,7 @@ class NativeSignalBotService extends EventEmitter {
 
   // Create unique message ID
   createMessageId(envelope) {
-    return ${envelope.timestamp}_${envelope.sourceNumber || envelope.sourceUuid}_${envelope.dataMessage?.message?.substring(0, 50) || 'reaction'};
+    return `${envelope.timestamp}_${envelope.sourceNumber || envelope.sourceUuid}_${envelope.dataMessage?.message?.substring(0, 50) || 'reaction'}`;
   }
 
   // Cleanup old entries to prevent memory leaks
@@ -246,7 +246,7 @@ class NativeSignalBotService extends EventEmitter {
   validateInput(input, type, fieldName = 'input') {
     // Basic null/undefined check
     if (input === null || input === undefined) {
-      return { valid: false, error: ${fieldName} is required };
+      return { valid: false, error: `${fieldName} is required` };
     }
 
     // Convert to string if not already
@@ -257,7 +257,7 @@ class NativeSignalBotService extends EventEmitter {
     if (maxLength && inputStr.length > maxLength) {
       return { 
         valid: false, 
-        error: ${fieldName} exceeds maximum length of ${maxLength} characters 
+        error: `${fieldName} exceeds maximum length of ${maxLength} characters` 
       };
     }
 
@@ -266,7 +266,7 @@ class NativeSignalBotService extends EventEmitter {
     if (pattern && !pattern.test(inputStr)) {
       return { 
         valid: false, 
-        error: ${fieldName} contains invalid characters or format for type ${type} 
+        error: `${fieldName} contains invalid characters or format for type ${type}` 
       };
     }
 
@@ -346,21 +346,21 @@ class NativeSignalBotService extends EventEmitter {
     for (const [index, arg] of sanitizedArgs.entries()) {
       // Check for URL arguments
       if (arg.startsWith('http://') || arg.startsWith('https://')) {
-        const urlValidation = this.validateInput(arg, 'url', argument ${index + 1});
+        const urlValidation = this.validateInput(arg, 'url', `argument ${index + 1}`);
         if (!urlValidation.valid) {
           validationResults.push(urlValidation.error);
         }
       }
       // Check for phone number arguments
       else if (arg.startsWith('+')) {
-        const phoneValidation = this.validateInput(arg, 'phoneNumber', argument ${index + 1});
+        const phoneValidation = this.validateInput(arg, 'phoneNumber', `argument ${index + 1}`);
         if (!phoneValidation.valid) {
           validationResults.push(phoneValidation.error);
         }
       }
       // General string validation for other arguments
       else {
-        const safeValidation = this.validateInput(arg, 'safeString', argument ${index + 1});
+        const safeValidation = this.validateInput(arg, 'safeString', `argument ${index + 1}`);
         if (!safeValidation.valid) {
           validationResults.push(safeValidation.error);
         }
@@ -381,7 +381,7 @@ class NativeSignalBotService extends EventEmitter {
   // Security: Rate limiting per user
   checkRateLimit(identifier, commandName) {
     const now = Date.now();
-    const rateLimitKey = ${identifier}:${commandName};
+    const rateLimitKey = `${identifier}:${commandName}`;
     
     if (!this.rateLimits) {
       this.rateLimits = new Map();
@@ -410,7 +410,7 @@ class NativeSignalBotService extends EventEmitter {
       const remainingTime = Math.ceil((userRateData.resetTime - now) / 1000);
       return { 
         allowed: false, 
-        error: Rate limit exceeded. Please wait ${remainingTime} seconds before using !${commandName} again. 
+        error: `Rate limit exceeded. Please wait ${remainingTime} seconds before using !${commandName} again.` 
       };
     }
 
@@ -574,7 +574,7 @@ class NativeSignalBotService extends EventEmitter {
       }
       // Skip arrays and other complex types for security
       else {
-        console.warn(Skipping sanitization of complex data type for key ${key}:, typeof value);
+        console.warn(`Skipping sanitization of complex data type for key ${key}:`, typeof value);
       }
     }
     
@@ -592,7 +592,7 @@ class NativeSignalBotService extends EventEmitter {
     for (const [key, value] of Object.entries(where)) {
       // Skip if key contains dangerous characters
       if (typeof key === 'string' && /[^a-zA-Z0-9_.]/.test(key)) {
-        console.warn(Skipping dangerous WHERE key: ${key});
+        console.warn(`Skipping dangerous WHERE key: ${key}`);
         continue;
       }
 
@@ -742,14 +742,14 @@ class NativeSignalBotService extends EventEmitter {
           try {
             return await cmd.handler(context);
           } catch (error) {
-            console.error(❌ Command ${cmd.name} failed:, error);
-            return ❌ Command failed: ${error.message};
+            console.error(`❌ Command ${cmd.name} failed:`, error);
+            return `❌ Command failed: ${error.message}`;
           }
         }
       });
     }
     
-    console.log(📦 Loaded ${commands.size} total commands (${basicCommands.size} basic + ${pluginCommands.length} plugin));
+    console.log(`📦 Loaded ${commands.size} total commands (${basicCommands.size} basic + ${pluginCommands.length} plugin)`);
     return commands;
   }
 
@@ -780,25 +780,25 @@ class NativeSignalBotService extends EventEmitter {
           '📊 Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'feedback', 'watchdomain']
         };
         
-        let helpText = 🤖 Signal Bot Commands\n\n;
+        let helpText = `🤖 Signal Bot Commands\n\n`;
         
         // Show user commands
         for (const [category, cmds] of Object.entries(userCommandsByCategory)) {
-          helpText += ${category}:\n;
-          helpText += cmds.map(cmd => • !${cmd}).join(', ') + '\n\n';
+          helpText += `${category}:\n`;
+          helpText += cmds.map(cmd => `• !${cmd}`).join(', ') + '\n\n';
         }
         
         // Only show admin commands if user is admin
         if (isAdmin) {
           for (const [category, cmds] of Object.entries(adminCommandsByCategory)) {
-            helpText += ${category}:\n;
-            helpText += cmds.map(cmd => • !${cmd}).join(', ') + '\n\n';
+            helpText += `${category}:\n`;
+            helpText += cmds.map(cmd => `• !${cmd}`).join(', ') + '\n\n';
           }
           helpText += '🔒 You have admin privileges\n';
         }
         
         helpText += '💡 Use any command to get started!\n';
-        helpText += 📱 Total: ${this.plugins.size} commands available;
+        helpText += `📱 Total: ${this.plugins.size} commands available`;
         
         return helpText;
       }
@@ -823,13 +823,13 @@ class NativeSignalBotService extends EventEmitter {
           const userQuery = context.args.join(' ') || 'Hello';
           
           // Store thread context - this user prefers OpenAI
-          const threadKey = ${context.groupId || 'dm'}:${context.sourceNumber};
+          const threadKey = `${context.groupId || 'dm'}:${context.sourceNumber}`;
           this.userAiPreference.set(threadKey, {
             provider: 'openai',
             timestamp: Date.now(),
             lastMessage: userQuery
           });
-          console.log(🔄 Thread context: User ${context.sender} selected OpenAI);
+          console.log(`🔄 Thread context: User ${context.sender} selected OpenAI`);
           
           // Phase 1: Command Registry Access
           const commandRegistry = this.getCommandRegistry(context);
@@ -852,9 +852,9 @@ class NativeSignalBotService extends EventEmitter {
             responseMode = 'command';
             // Enhanced command context with descriptions and permissions
             const commandList = commandRegistry.available.map(cmd => 
-              !${cmd.name} - ${cmd.description}${cmd.adminOnly ? ' (admin)' : ''}${cmd.moderatorOnly ? ' (mod)' : ''}
+              `!${cmd.name} - ${cmd.description}${cmd.adminOnly ? ' (admin)' : ''}${cmd.moderatorOnly ? ' (mod)' : ''}`
             ).join('\n');
-            contextInfo = User is asking about bot commands. They ${commandRegistry.isAdmin ? 'ARE an admin' : commandRegistry.isModerator ? 'ARE a moderator' : 'are NOT admin/moderator'}.\n\nAvailable commands:\n${commandList};
+            contextInfo = `User is asking about bot commands. They ${commandRegistry.isAdmin ? 'ARE an admin' : commandRegistry.isModerator ? 'ARE a moderator' : 'are NOT admin/moderator'}.\n\nAvailable commands:\n${commandList}`;
           }
           
           // 2. Check if asking about IrregularChat community
@@ -863,7 +863,7 @@ class NativeSignalBotService extends EventEmitter {
           
           if (isCommunityQuery && !isCommandQuery) {
             responseMode = 'community';
-            contextInfo = User is asking about the IrregularChat community. ${this.communityContext.description} Rules: ${this.communityContext.rules.join('; ')};
+            contextInfo = `User is asking about the IrregularChat community. ${this.communityContext.description} Rules: ${this.communityContext.rules.join('; ')}`;
           }
           
           // 3. Check if AI should execute a command internally
@@ -887,13 +887,13 @@ class NativeSignalBotService extends EventEmitter {
               const execResult = await this.safeCommandExecutor(argPattern.command, cmdArgs, context, 'openai');
               
               if (execResult.success) {
-                return ${getAiPrefix(responseMode)} ${execResult.result};
+                return `${getAiPrefix(responseMode)} ${execResult.result}`;
               } else if (execResult.needsPermission) {
-                return ${getAiPrefix(responseMode)} That command requires ${execResult.needsPermission} privileges which you don't have.;
+                return `${getAiPrefix(responseMode)} That command requires ${execResult.needsPermission} privileges which you don't have.`;
               } else if (!execResult.success && execResult.message.includes('not found')) {
                 // Command not found, continue to other patterns
               } else {
-                return ${getAiPrefix(responseMode)} ${execResult.message};
+                return `${getAiPrefix(responseMode)} ${execResult.message}`;
               }
             }
           }
@@ -921,11 +921,11 @@ class NativeSignalBotService extends EventEmitter {
               const execResult = await this.safeCommandExecutor(mapping.command, [], context, 'openai');
               
               if (execResult.success) {
-                return ${getAiPrefix(responseMode)} ${execResult.result};
+                return `${getAiPrefix(responseMode)} ${execResult.result}`;
               } else if (execResult.needsPermission) {
-                return ${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires ${execResult.needsPermission} privileges. You can ask an ${execResult.needsPermission} to run it for you.;
+                return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires ${execResult.needsPermission} privileges. You can ask an ${execResult.needsPermission} to run it for you.`;
               } else if (execResult.blocked) {
-                return ${getAiPrefix(responseMode)} The !${mapping.command} command is blocked for safety reasons.;
+                return `${getAiPrefix(responseMode)} The !${mapping.command} command is blocked for safety reasons.`;
               }
               // If command not found, continue to next mapping
             }
@@ -943,13 +943,13 @@ class NativeSignalBotService extends EventEmitter {
             const execResult = await this.safeCommandExecutor(cmdName, cmdArgs, context, 'openai');
             
             if (execResult.success) {
-              return OpenAI: Executed !${cmdName}:\n\n${execResult.result};
+              return `OpenAI: Executed !${cmdName}:\n\n${execResult.result}`;
             } else if (execResult.needsPermission) {
-              return OpenAI: Cannot execute !${cmdName} - ${execResult.needsPermission} privileges required. You don't have ${execResult.needsPermission} access.;
+              return `OpenAI: Cannot execute !${cmdName} - ${execResult.needsPermission} privileges required. You don't have ${execResult.needsPermission} access.`;
             } else if (execResult.blocked) {
-              return OpenAI: Command !${cmdName} is blocked for safety reasons. Please execute it manually if needed.;
+              return `OpenAI: Command !${cmdName} is blocked for safety reasons. Please execute it manually if needed.`;
             } else {
-              return OpenAI: ${execResult.message};
+              return `OpenAI: ${execResult.message}`;
             }
           }
           
@@ -969,9 +969,9 @@ class NativeSignalBotService extends EventEmitter {
               const execResult = await this.safeCommandExecutor(implicitCmd.command, cmdArgs, context, 'openai');
               
               if (execResult.success) {
-                return OpenAI: ${execResult.result};
+                return `OpenAI: ${execResult.result}`;
               } else if (execResult.needsPermission) {
-                return OpenAI: That action requires ${execResult.needsPermission} privileges, which you don't have.;
+                return `OpenAI: That action requires ${execResult.needsPermission} privileges, which you don't have.`;
               } else {
                 // Don't reveal the command failed, just say we can't do it
                 return OpenAI: I'm unable to perform that action. ${execResult.needsPermission ? It requires ${execResult.needsPermission} privileges. : 'Please try a different approach.'};
@@ -1055,11 +1055,11 @@ class NativeSignalBotService extends EventEmitter {
             
             // Add context indicator to response
             const aiResponse = response.choices[0].message.content;
-            console.log(✅ AI Response length: ${aiResponse.length} chars);
-            return ${getAiPrefix(responseMode)} ${aiResponse};
+            console.log(`✅ AI Response length: ${aiResponse.length} chars`);
+            return `${getAiPrefix(responseMode)} ${aiResponse}`;
           } catch (apiError) {
             console.error('❌ OpenAI API error:', apiError);
-            return OpenAI: Error - ${apiError.message};
+            return `OpenAI: Error - ${apiError.message}`;
           }
         }
       });
@@ -1081,7 +1081,7 @@ class NativeSignalBotService extends EventEmitter {
             timestamp: Date.now(),
             lastMessage: userQuery
           });
-          console.log(🔄 Thread context: User ${context.sender} selected LocalAI);
+          console.log(`🔄 Thread context: User ${context.sender} selected LocalAI`);
           
           // Phase 1: Command Registry Access
           const commandRegistry = this.getCommandRegistry(context);
@@ -1104,9 +1104,9 @@ class NativeSignalBotService extends EventEmitter {
             responseMode = 'command';
             // Enhanced command context with descriptions and permissions
             const commandList = commandRegistry.available.map(cmd => 
-              !${cmd.name} - ${cmd.description}${cmd.adminOnly ? ' (admin)' : ''}${cmd.moderatorOnly ? ' (mod)' : ''}
+              `!${cmd.name} - ${cmd.description}${cmd.adminOnly ? ' (admin)' : ''}${cmd.moderatorOnly ? ' (mod)' : ''}`
             ).join('\n');
-            contextInfo = User is asking about bot commands. They ${commandRegistry.isAdmin ? 'ARE an admin' : commandRegistry.isModerator ? 'ARE a moderator' : 'are NOT admin/moderator'}.\n\nAvailable commands:\n${commandList};
+            contextInfo = `User is asking about bot commands. They ${commandRegistry.isAdmin ? 'ARE an admin' : commandRegistry.isModerator ? 'ARE a moderator' : 'are NOT admin/moderator'}.\n\nAvailable commands:\n${commandList}`;
           }
           
           // 2. Check if asking about IrregularChat community
@@ -1115,7 +1115,7 @@ class NativeSignalBotService extends EventEmitter {
           
           if (isCommunityQuery && !isCommandQuery) {
             responseMode = 'community';
-            contextInfo = User is asking about the IrregularChat community. ${this.communityContext.description} Rules: ${this.communityContext.rules.join('; ')};
+            contextInfo = `User is asking about the IrregularChat community. ${this.communityContext.description} Rules: ${this.communityContext.rules.join('; ')}`;
           }
           
           // 3. Check if AI should execute a command internally
@@ -1139,13 +1139,13 @@ class NativeSignalBotService extends EventEmitter {
               const execResult = await this.safeCommandExecutor(argPattern.command, cmdArgs, context, 'openai');
               
               if (execResult.success) {
-                return ${getAiPrefix(responseMode)} ${execResult.result};
+                return `${getAiPrefix(responseMode)} ${execResult.result}`;
               } else if (execResult.needsPermission) {
-                return ${getAiPrefix(responseMode)} That command requires ${execResult.needsPermission} privileges which you don't have.;
+                return `${getAiPrefix(responseMode)} That command requires ${execResult.needsPermission} privileges which you don't have.`;
               } else if (!execResult.success && execResult.message.includes('not found')) {
                 // Command not found, continue to other patterns
               } else {
-                return ${getAiPrefix(responseMode)} ${execResult.message};
+                return `${getAiPrefix(responseMode)} ${execResult.message}`;
               }
             }
           }
@@ -1173,11 +1173,11 @@ class NativeSignalBotService extends EventEmitter {
               const execResult = await this.safeCommandExecutor(mapping.command, [], context, 'openai');
               
               if (execResult.success) {
-                return ${getAiPrefix(responseMode)} ${execResult.result};
+                return `${getAiPrefix(responseMode)} ${execResult.result}`;
               } else if (execResult.needsPermission) {
-                return ${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires ${execResult.needsPermission} privileges. You can ask an ${execResult.needsPermission} to run it for you.;
+                return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires ${execResult.needsPermission} privileges. You can ask an ${execResult.needsPermission} to run it for you.`;
               } else if (execResult.blocked) {
-                return ${getAiPrefix(responseMode)} The !${mapping.command} command is blocked for safety reasons.;
+                return `${getAiPrefix(responseMode)} The !${mapping.command} command is blocked for safety reasons.`;
               }
               // If command not found, continue to next mapping
             }
@@ -1195,13 +1195,13 @@ class NativeSignalBotService extends EventEmitter {
             const execResult = await this.safeCommandExecutor(cmdName, cmdArgs, context, 'localai');
             
             if (execResult.success) {
-              return LocalAI: Executed !${cmdName}:\n\n${execResult.result};
+              return `LocalAI: Executed !${cmdName}:\n\n${execResult.result}`;
             } else if (execResult.needsPermission) {
-              return LocalAI: Cannot execute !${cmdName} - ${execResult.needsPermission} privileges required. You don't have ${execResult.needsPermission} access.;
+              return `LocalAI: Cannot execute !${cmdName} - ${execResult.needsPermission} privileges required. You don't have ${execResult.needsPermission} access.`;
             } else if (execResult.blocked) {
-              return LocalAI: Command !${cmdName} is blocked for safety reasons. Please execute it manually if needed.;
+              return `LocalAI: Command !${cmdName} is blocked for safety reasons. Please execute it manually if needed.`;
             } else {
-              return LocalAI: ${execResult.message};
+              return `LocalAI: ${execResult.message}`;
             }
           }
           
@@ -1221,9 +1221,9 @@ class NativeSignalBotService extends EventEmitter {
               const execResult = await this.safeCommandExecutor(implicitCmd.command, cmdArgs, context, 'localai');
               
               if (execResult.success) {
-                return LocalAI: ${execResult.result};
+                return `LocalAI: ${execResult.result}`;
               } else if (execResult.needsPermission) {
-                return LocalAI: That action requires ${execResult.needsPermission} privileges, which you don't have.;
+                return `LocalAI: That action requires ${execResult.needsPermission} privileges, which you don't have.`;
               } else {
                 // Don't reveal the command failed, just say we can't do it
                 return LocalAI: I'm unable to perform that action. ${execResult.needsPermission ? It requires ${execResult.needsPermission} privileges. : 'Please try a different approach.'};
@@ -1313,11 +1313,11 @@ class NativeSignalBotService extends EventEmitter {
             // Clean up thinking process - remove <think>...</think> tags and content
             content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
             
-            return ${getAiPrefix(responseMode)} ${content};
+            return `${getAiPrefix(responseMode)} ${content}`;
             
           } catch (error) {
             console.error('Local AI request failed:', error);
-            return LocalAI: Sorry, the local AI service is currently unavailable. Error: ${error.message};
+            return `LocalAI: Sorry, the local AI service is currently unavailable. Error: ${error.message}`;
           }
         }
       });
@@ -1386,9 +1386,9 @@ class NativeSignalBotService extends EventEmitter {
               max_completion_tokens: 800  // GPT-5 thinking model needs 600+ tokens
             });
             
-            return OpenAI: Article Summary\n\n${aiResponse.choices[0].message.content}\n\n🔗 Source: ${url};
+            return `OpenAI: Article Summary\n\n${aiResponse.choices[0].message.content}\n\n🔗 Source: ${url}`;
           } catch (error) {
-            return ❌ Failed to summarize: ${error.message};
+            return `❌ Failed to summarize: ${error.message}`;
           }
         }
       });
@@ -1454,7 +1454,7 @@ class NativeSignalBotService extends EventEmitter {
               await this.processNewsUrl(url, context);
               return ✅ Successfully processed news URL!;
             } catch (error) {
-              return ❌ Error processing URL: ${error.message};
+              return `❌ Error processing URL: ${error.message}`;
             }
           } else {
             return ❌ URL doesn't match news patterns. Use !news to see stats.;
@@ -1487,7 +1487,7 @@ class NativeSignalBotService extends EventEmitter {
         }
         
         stats += 💡 Usage: Send \!news <url>\ to manually process a news URL\n;
-        stats += 🤖 Auto-processing: News URLs are automatically detected and processed;
+        stats += `🤖 Auto-processing: News URLs are automatically detected and processed`;
         
         return stats;
       }
@@ -1507,13 +1507,13 @@ class NativeSignalBotService extends EventEmitter {
         const domain = args[0].toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0];
         
         if (this.customNewsDomains.has(domain)) {
-          return ℹ️ Domain ${domain} is already in the news list;
+          return `ℹ️ Domain ${domain} is already in the news list`;
         }
         
         this.customNewsDomains.add(domain);
         this.saveCustomNewsDomains();
         
-        return ✅ Added ${domain} to news domains\n📰 Total domains: ${this.customNewsDomains.size};
+        return `✅ Added ${domain} to news domains\n📰 Total domains: ${this.customNewsDomains.size}`;
       }
     });
     
@@ -1550,13 +1550,13 @@ class NativeSignalBotService extends EventEmitter {
         const domain = args[0].toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0];
         
         if (!this.customNewsDomains.has(domain)) {
-          return ❌ Domain ${domain} is not in the news list;
+          return `❌ Domain ${domain} is not in the news list`;
         }
         
         this.customNewsDomains.delete(domain);
         this.saveCustomNewsDomains();
         
-        return ✅ Removed ${domain} from news domains\n📰 Remaining domains: ${this.customNewsDomains.size};
+        return `✅ Removed ${domain} from news domains\n📰 Remaining domains: ${this.customNewsDomains.size}`;
       }
     });
 
@@ -1582,7 +1582,7 @@ class NativeSignalBotService extends EventEmitter {
               await this.processRepositoryUrl(url, context);
               return; // Return nothing, processRepositoryUrl sends the formatted message
             } catch (error) {
-              return ❌ Error processing URL: ${error.message};
+              return `❌ Error processing URL: ${error.message}`;
             }
           } else {
             return ❌ URL doesn't match repository patterns. Use !repo to see stats.;
@@ -1619,7 +1619,7 @@ class NativeSignalBotService extends EventEmitter {
         }
         
         stats += \n💡 Usage: Send \!repo <url>\ to manually process a repository URL\n;
-        stats += 🤖 Auto-processing: Repository URLs are automatically detected and processed;
+        stats += `🤖 Auto-processing: Repository URLs are automatically detected and processed`;
         
         return stats;
       }
@@ -1653,7 +1653,7 @@ class NativeSignalBotService extends EventEmitter {
     });
     
     this.daemon.stdout.on('data', (data) => {
-      console.log(📡 Daemon: ${data.toString().trim()});
+      console.log(`📡 Daemon: ${data.toString().trim()}`);
     });
     
     this.daemon.stderr.on('data', (data) => {
@@ -1661,7 +1661,7 @@ class NativeSignalBotService extends EventEmitter {
     });
     
     this.daemon.on('close', (code) => {
-      console.log(🔴 Signal daemon exited with code ${code});
+      console.log(`🔴 Signal daemon exited with code ${code}`);
       this.daemon = null;
       
       if (this.isListening && this.reconnectAttempts < this.maxReconnectAttempts) {
@@ -1940,21 +1940,21 @@ class NativeSignalBotService extends EventEmitter {
         // Add eyes emoji reaction to the message
         try {
           // Note: This would require implementing reaction sending via signal-cli
-          console.log(👀 Would add eyes emoji to message about ${url});
+          console.log(`👀 Would add eyes emoji to message about ${url}`);
         } catch (error) {
           console.error('Could not add reaction:', error);
         }
       }
       
       if (this.isNewsUrl(url)) {
-        console.log(📰 Detected news URL: ${url});
+        console.log(`📰 Detected news URL: ${url}`);
         
         // Check if we've already processed this URL recently (within 1 hour)
         const existingProcessed = Array.from(this.processedNews.values())
           .find(p => p.url === url && Date.now() - p.timestamp < 3600000);
         
         if (existingProcessed) {
-          console.log(⏭️ URL already processed recently: ${url});
+          console.log(`⏭️ URL already processed recently: ${url}`);
           continue;
         }
         
@@ -2024,7 +2024,7 @@ class NativeSignalBotService extends EventEmitter {
   }
   
   async processNewsUrl(url, message) {
-    console.log(🔄 Processing news URL: ${url});
+    console.log(`🔄 Processing news URL: ${url}`);
     
     try {
       // Step 1: Clean URL and get bypass links
@@ -2035,7 +2035,7 @@ class NativeSignalBotService extends EventEmitter {
       const content = await this.scrapeNewsContent(cleanedUrl, bypassLinks);
       
       if (!content || !content.title) {
-        console.log(❌ Could not extract content from: ${url});
+        console.log(`❌ Could not extract content from: ${url}`);
         return;
       }
       
@@ -2043,7 +2043,7 @@ class NativeSignalBotService extends EventEmitter {
       const summary = await this.generateNewsSummary(content);
       
       if (!summary) {
-        console.log(❌ Could not generate summary for: ${url});
+        console.log(`❌ Could not generate summary for: ${url}`);
         return;
       }
       
@@ -2096,7 +2096,7 @@ class NativeSignalBotService extends EventEmitter {
       
       await this.sendReply(message, response);
       
-      console.log(✅ Successfully processed news: ${content.title});
+      console.log(`✅ Successfully processed news: ${content.title}`);
       
     } catch (error) {
       console.error(❌ Error processing news URL ${url}:, error);
@@ -2135,7 +2135,7 @@ class NativeSignalBotService extends EventEmitter {
     
     for (const attemptUrl of urls) {
       try {
-        console.log(🌐 Attempting to scrape: ${attemptUrl});
+        console.log(`🌐 Attempting to scrape: ${attemptUrl}`);
         
         const response = await axios.get(attemptUrl, {
           timeout: 15000, // Increased timeout
@@ -2238,19 +2238,19 @@ class NativeSignalBotService extends EventEmitter {
         content = content.replace(/Read more at.*/gi, '');
         
         if (title && content && content.length > 100) {
-          console.log(✅ Successfully scraped from: ${attemptUrl});
+          console.log(`✅ Successfully scraped from: ${attemptUrl}`);
           return { title, content };
         }
         
       } catch (error) {
         if (error.code === 'ECONNREFUSED') {
-          console.log(🚫 Connection refused for ${attemptUrl});
+          console.log(`🚫 Connection refused for ${attemptUrl}`);
         } else if (error.code === 'ETIMEDOUT') {
-          console.log(⏱️ Timeout for ${attemptUrl});
+          console.log(`⏱️ Timeout for ${attemptUrl}`);
         } else if (error.response && error.response.status === 403) {
-          console.log(🚫 Access forbidden for ${attemptUrl});
+          console.log(`🚫 Access forbidden for ${attemptUrl}`);
         } else {
-          console.log(❌ Error scraping ${attemptUrl}: ${error.message});
+          console.log(`❌ Error scraping ${attemptUrl}: ${error.message}`);
         }
         continue;
       }
@@ -2264,7 +2264,7 @@ class NativeSignalBotService extends EventEmitter {
       };
     }
     
-    console.log(❌ Failed to scrape content from all sources for: ${url});
+    console.log(`❌ Failed to scrape content from all sources for: ${url}`);
     return null;
   }
   
@@ -2298,7 +2298,7 @@ ${content.content.substring(0, 3000)}...`;
       });
       
       const summary = response.choices[0].message.content.trim();
-      console.log(✅ Generated summary: ${summary.substring(0, 100)}...);
+      console.log(`✅ Generated summary: ${summary.substring(0, 100)}...`);
       return summary;
       
     } catch (error) {
@@ -2345,7 +2345,7 @@ Posted automatically by Signal Bot`;
       });
       
       const topicId = response.data.topic_id;
-      console.log(✅ Posted to Discourse: ${this.discourseApiUrl}/t/${topicId});
+      console.log(`✅ Posted to Discourse: ${this.discourseApiUrl}/t/${topicId}`);
       return topicId;
       
     } catch (error) {
@@ -2363,7 +2363,7 @@ Posted automatically by Signal Bot`;
     
     // Check for duplicate messages
     if (this.isDuplicateMessage(envelope)) {
-      console.log(⚠️ [Instance ${this.instanceId}] Duplicate message detected, skipping processing);
+      console.log(`⚠️ [Instance ${this.instanceId}] Duplicate message detected, skipping processing`);
       return;
     }
     
@@ -2416,7 +2416,7 @@ Posted automatically by Signal Bot`;
     // Store message in history for summarization
     this.storeMessageInHistory(message);
     
-    console.log(📨 Message from ${message.sourceName || message.sourceNumber}: ${message.message});
+    console.log(`📨 Message from ${message.sourceName || message.sourceNumber}: ${message.message}`);
     
     // Store message in history for context
     if (message.groupId) {
@@ -2477,7 +2477,7 @@ Posted automatically by Signal Bot`;
         if (timeSinceLastAi < fiveMinutes) {
           const isContinuation = this.looksLikeAiContinuation(message, userPref);
           if (isContinuation) {
-            console.log(🔄 Continuing ${userPref.provider} thread for ${message.sourceName});
+            console.log(`🔄 Continuing ${userPref.provider} thread for ${message.sourceName}`);
             
             // Route to appropriate AI handler
             const context = {
@@ -2517,7 +2517,7 @@ Posted automatically by Signal Bot`;
         } else {
           // Thread expired, remove preference
           this.userAiPreference.delete(threadKey);
-          console.log(🔄 Thread expired for ${message.sourceName});
+          console.log(`🔄 Thread expired for ${message.sourceName}`);
         }
       }
     }
@@ -2603,7 +2603,7 @@ Posted automatically by Signal Bot`;
     const commandName = parts[0].toLowerCase();
     const args = parts.slice(1);
     
-    console.log(📝 Processing command: !${commandName} with ${args.length} args);
+    console.log(`📝 Processing command: !${commandName} with ${args.length} args`);
     
     // Security: Validate and sanitize command input
     const context = {
@@ -2617,7 +2617,7 @@ Posted automatically by Signal Bot`;
     const validation = this.validateCommand(commandName, args, context);
     if (!validation.valid) {
       const errorMessage = ❌ Security validation failed: ${validation.errors.join(', ')};
-      console.log(🛡️ ${errorMessage});
+      console.log(`🛡️ ${errorMessage}`);
       await this.sendReply(message, errorMessage);
       return;
     }
@@ -2626,7 +2626,7 @@ Posted automatically by Signal Bot`;
     const userIdentifier = message.sourceUuid || message.sourceNumber;
     const rateLimit = this.checkRateLimit(userIdentifier, commandName);
     if (!rateLimit.allowed) {
-      console.log(🚫 Rate limit exceeded for ${userIdentifier}: ${commandName});
+      console.log(`🚫 Rate limit exceeded for ${userIdentifier}: ${commandName}`);
       await this.sendReply(message, 🚫 ${rateLimit.error});
       return;
     }
@@ -2647,11 +2647,11 @@ Posted automatically by Signal Bot`;
       responseTime: null,
       errorMessage: null
     };
-    console.log(📦 Available commands: ${Array.from(this.plugins.keys()).join(', ')});
+    console.log(`📦 Available commands: ${Array.from(this.plugins.keys()).join(', ')}`);
     
     const command = this.plugins.get(sanitizedCommandName);
     if (!command) {
-      console.log(❌ Command not found: !${sanitizedCommandName});
+      console.log(`❌ Command not found: !${sanitizedCommandName}`);
       usageData.success = false;
       usageData.errorMessage = 'Command not found';
       usageData.responseTime = Date.now() - startTime;
@@ -2739,7 +2739,7 @@ Posted automatically by Signal Bot`;
       };
       
       const result = await this.sendJsonRpcRequest(request);
-      console.log(✅ Added ${userNumber} to group ${groupId});
+      console.log(`✅ Added ${userNumber} to group ${groupId}`);
       return result;
     } catch (error) {
       console.error(Failed to add user to group: ${error.message});
@@ -2751,7 +2751,7 @@ Posted automatically by Signal Bot`;
   async sendToGroup(groupId, message) {
     try {
       await this.sendGroupMessage(groupId, message);
-      console.log(✅ Sent message to group ${groupId});
+      console.log(`✅ Sent message to group ${groupId}`);
     } catch (error) {
       console.error(Failed to send to group: ${error.message});
       throw error;
@@ -2919,7 +2919,7 @@ Posted automatically by Signal Bot`;
         const data = fs.readFileSync(this.newsDomainsFile, 'utf8');
         const domains = JSON.parse(data);
         this.customNewsDomains = new Set(domains);
-        console.log(📰 Loaded ${this.customNewsDomains.size} custom news domains);
+        console.log(`📰 Loaded ${this.customNewsDomains.size} custom news domains`);
       }
     } catch (error) {
       console.error('❌ Error loading custom news domains:', error.message);
@@ -2930,7 +2930,7 @@ Posted automatically by Signal Bot`;
     try {
       const domains = Array.from(this.customNewsDomains);
       fs.writeFileSync(this.newsDomainsFile, JSON.stringify(domains, null, 2));
-      console.log(💾 Saved ${this.customNewsDomains.size} custom news domains);
+      console.log(`💾 Saved ${this.customNewsDomains.size} custom news domains`);
     } catch (error) {
       console.error('❌ Error saving custom news domains:', error.message);
     }
@@ -2961,14 +2961,14 @@ Posted automatically by Signal Bot`;
       }
       
       if (this.isRepositoryUrl(url)) {
-        console.log(🔧 Detected repository URL: ${url});
+        console.log(`🔧 Detected repository URL: ${url}`);
         
         // Check if we've already processed this URL recently (within 6 hours)
         const existingProcessed = Array.from(this.processedRepositories.values())
           .find(p => p.url === url && Date.now() - p.timestamp < 21600000); // 6 hours
         
         if (existingProcessed) {
-          console.log(⏭️ Repository already processed recently: ${url});
+          console.log(`⏭️ Repository already processed recently: ${url}`);
           continue;
         }
         
@@ -3064,20 +3064,20 @@ Posted automatically by Signal Bot`;
   }
   
   async processRepositoryUrl(url, message) {
-    console.log(🔄 Processing repository URL: ${url});
+    console.log(`🔄 Processing repository URL: ${url}`);
     
     try {
       // Step 1: Extract repository information from URL
       const repoInfo = this.parseRepositoryUrl(url);
       if (!repoInfo) {
-        console.log(❌ Could not parse repository URL: ${url});
+        console.log(`❌ Could not parse repository URL: ${url}`);
         return;
       }
       
       // Step 2: Fetch repository data from API
       const repoData = await this.fetchRepositoryData(repoInfo);
       if (!repoData) {
-        console.log(❌ Could not fetch repository data: ${url});
+        console.log(`❌ Could not fetch repository data: ${url}`);
         return;
       }
       
@@ -3105,7 +3105,7 @@ Posted automatically by Signal Bot`;
         console.error('Database tracking failed (continuing without tracking):', dbError.message);
       }
       
-      console.log(✅ Successfully processed repository: ${repoData.full_name || repoData.path_with_namespace});
+      console.log(`✅ Successfully processed repository: ${repoData.full_name || repoData.path_with_namespace}`);
       
     } catch (error) {
       console.error(❌ Error processing repository ${url}:, error.message);
@@ -3196,7 +3196,7 @@ Posted automatically by Signal Bot`;
       
       if (!response.ok) {
         if (response.status === 404) {
-          console.log(Repository not found: ${repoInfo.fullName});
+          console.log(`Repository not found: ${repoInfo.fullName}`);
           return null;
         }
         throw new Error(GitHub API error: ${response.status} ${response.statusText});
@@ -3265,7 +3265,7 @@ Posted automatically by Signal Bot`;
       
       if (!response.ok) {
         if (response.status === 404) {
-          console.log(GitLab repository not found: ${repoInfo.fullName});
+          console.log(`GitLab repository not found: ${repoInfo.fullName}`);
           return null;
         }
         throw new Error(GitLab API error: ${response.status} ${response.statusText});
@@ -3466,7 +3466,7 @@ Posted automatically by Signal Bot`;
           this.discourseTags.set(tag.id, tag);
         });
         this.discourseTagsLoaded = true;
-        console.log(✅ Loaded ${this.discourseTags.size} Discourse tags);
+        console.log(`✅ Loaded ${this.discourseTags.size} Discourse tags`);
       }
       
       // Load categories
@@ -3482,7 +3482,7 @@ Posted automatically by Signal Bot`;
           this.discourseCategories.set(category.id, category);
         });
         this.discourseCategoriesLoaded = true;
-        console.log(✅ Loaded ${this.discourseCategories.size} Discourse categories);
+        console.log(`✅ Loaded ${this.discourseCategories.size} Discourse categories`);
       }
       
     } catch (error) {
@@ -3567,7 +3567,7 @@ Posted automatically by Signal Bot`;
   }
 
   async registerAccount(captchaToken) {
-    console.log(📱 Registering account ${this.phoneNumber}...);
+    console.log(`📱 Registering account ${this.phoneNumber}...`);
     
     return new Promise((resolve, reject) => {
       const register = spawn('signal-cli', [
@@ -3601,7 +3601,7 @@ Posted automatically by Signal Bot`;
   }
 
   async verifyAccount(verificationCode) {
-    console.log(🔐 Verifying account ${this.phoneNumber}...);
+    console.log(`🔐 Verifying account ${this.phoneNumber}...`);
     
     return new Promise((resolve, reject) => {
       const verify = spawn('signal-cli', [
@@ -3817,7 +3817,7 @@ Posted automatically by Signal Bot`;
         orderBy: { memberCount: 'desc' }
       });
       
-      console.log(📊 Retrieved ${groups.length} groups from database);
+      console.log(`📊 Retrieved ${groups.length} groups from database`);
       return groups;
     } catch (error) {
       console.error('Error fetching groups from database:', error);
@@ -3842,7 +3842,7 @@ Posted automatically by Signal Bot`;
         return;
       }
       
-      console.log(🔄 Syncing ${signalGroups.length} groups to database...);
+      console.log(`🔄 Syncing ${signalGroups.length} groups to database...`);
       
       // Sync each group to database using upsert
       for (const group of signalGroups) {
@@ -3874,7 +3874,7 @@ Posted automatically by Signal Bot`;
         });
       }
       
-      console.log(✅ Synced ${signalGroups.length} groups to database);
+      console.log(`✅ Synced ${signalGroups.length} groups to database`);
       
     } catch (error) {
       console.error('Error syncing groups to database:', error);
@@ -4022,7 +4022,7 @@ Posted automatically by Signal Bot`;
       };
       
       await fsPromises.writeFile(cacheFile, JSON.stringify(cacheData, null, 2));
-      console.log(✅ Cached ${groups ? groups.length : 0} groups);
+      console.log(`✅ Cached ${groups ? groups.length : 0} groups`);
       
       return groups || [];
     } catch (error) {
@@ -4148,14 +4148,14 @@ Posted automatically by Signal Bot`;
         if (mention.uuid) {
           // Sometimes Signal puts the UUID in the name field when the actual name isn't available
           const displayName = (mention.name && mention.name !== mention.uuid) ? mention.name : 'User';
-          console.log(✅ Using UUID from mention: ${mention.uuid} for ${displayName});
+          console.log(`✅ Using UUID from mention: ${mention.uuid} for ${displayName}`);
           users.push({
             identifier: mention.uuid,
             display: displayName
           });
         } else if (mention.number) {
           const displayName = (mention.name && mention.name !== mention.number) ? mention.name : mention.number;
-          console.log(📱 Using phone from mention: ${mention.number} for ${displayName});
+          console.log(`📱 Using phone from mention: ${mention.number} for ${displayName}`);
           users.push({
             identifier: mention.number,
             display: displayName
@@ -4175,11 +4175,11 @@ Posted automatically by Signal Bot`;
           users.push({ identifier: userArg, display: userArg });
         } else if (userArg.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
           // Direct UUID
-          console.log(📍 Direct UUID provided: ${userArg});
+          console.log(`📍 Direct UUID provided: ${userArg}`);
           users.push({ identifier: userArg, display: userArg });
         } else {
           // Try to look up in group members
-          console.log(🔍 Looking for ${userArg} in group members...);
+          console.log(`🔍 Looking for ${userArg} in group members...`);
           try {
             const groups = await this.getSignalGroups(false);
             const targetGroup = groups[parseInt(groupIdentifier) - 1];
@@ -4191,10 +4191,10 @@ Posted automatically by Signal Bot`;
               );
               
               if (member && member.uuid) {
-                console.log(✅ Found UUID in group members: ${member.uuid});
+                console.log(`✅ Found UUID in group members: ${member.uuid}`);
                 users.push({ identifier: member.uuid, display: userArg });
               } else {
-                console.log(⚠️ Could not find UUID for ${userArg});
+                console.log(`⚠️ Could not find UUID for ${userArg}`);
                 return ❌ Could not find user "${userArg}". Please use @mention or provide their UUID.;
               }
             }
@@ -4232,7 +4232,7 @@ Posted automatically by Signal Bot`;
       }
       
       if (users.length === 0) {
-        return ❌ No users specified to add to ${targetGroup.name};
+        return `❌ No users specified to add to ${targetGroup.name}`;
       }
       
       // Attempt to add users via Signal CLI
@@ -4256,16 +4256,16 @@ Posted automatically by Signal Bot`;
           };
           
           console.log(📤 Sending updateGroup request:);
-          console.log(   Group: ${targetGroup.name});
-          console.log(   User UUID: ${userIdentifier});
-          console.log(   Display: ${user.display});
+          console.log(`   Group: ${targetGroup.name}`);
+          console.log(`   User UUID: ${userIdentifier}`);
+          console.log(`   Display: ${user.display}`);
           
           const success = await this.sendJsonRpcRequest(request);
           if (success) {
-            console.log(✅ Successfully added ${user.display});
+            console.log(`✅ Successfully added ${user.display}`);
             results.push(✅ ${user.display} added successfully);
           } else {
-            console.log(⚠️ Failed to add ${user.display});
+            console.log(`⚠️ Failed to add ${user.display}`);
             results.push(⚠️ ${user.display} (could not add - check if UUID is valid));
           }
         } catch (error) {
@@ -4355,7 +4355,7 @@ Posted automatically by Signal Bot`;
           
           // Don't reject on timeout for send messages and updateGroup - they often succeed but don't respond
           if (request.method === 'send' || request.method === 'updateGroup') {
-            console.log(⚠️ ${request.method} request timed out but may have succeeded);
+            console.log(`⚠️ ${request.method} request timed out but may have succeeded`);
             resolve(true);
           } else {
             reject(new Error('Request timeout'));
@@ -4392,7 +4392,7 @@ Posted automatically by Signal Bot`;
   async handleGroupInfo(context) {
     const { args } = context;
     if (!args) return '❌ Usage: !groupinfo <group>';
-    return 📊 Group: ${args}\nMembers: 25\nActive today: 8\nDescription: Community discussions;
+    return `📊 Group: ${args}\nMembers: 25\nActive today: 8\nDescription: Community discussions`;
   }
 
   async handleMembers(context) {
@@ -4831,13 +4831,13 @@ That's it! The onboarding process will begin once you type !request.`;
       
     } catch (error) {
       console.error('Advanced search error:', error);
-      return ❌ Search error occurred. Please try again.\n\nYou can also try:\n• !wiki ${query}\n• !fsearch ${query};
+      return `❌ Search error occurred. Please try again.\n\nYou can also try:\n• !wiki ${query}\n• !fsearch ${query}`;
     }
   }
 
   async handleForum(context) {
     const { args } = context;
-    return 💬 Forum Search${args ? : "${args}" : ''}\n\nVisit: https://forum.irregularchat.com\n\n💡 Use the forum for detailed discussions.;
+    return `💬 Forum Search${args ? : "${args}" : ''}\n\nVisit: https://forum.irregularchat.com\n\n💡 Use the forum for detailed discussions.`;
   }
 
   async handleEvents(context) {
@@ -4886,7 +4886,7 @@ That's it! The onboarding process will begin once you type !request.`;
       
       // Format events for display
       if (events.length === 0) {
-        return 📅 Upcoming Events:\n\nNo upcoming events scheduled.\n\nTo add an event, use: !eventadd <event details>\n\nView calendar: ${this.discourseApiUrl}/upcoming-events;
+        return `📅 Upcoming Events:\n\nNo upcoming events scheduled.\n\nTo add an event, use: !eventadd <event details>\n\nView calendar: ${this.discourseApiUrl}/upcoming-events`;
       }
       
       let response = '📅 Upcoming Events:\n\n';
@@ -4917,7 +4917,7 @@ That's it! The onboarding process will begin once you type !request.`;
       
     } catch (error) {
       console.error('Error fetching events:', error);
-      return 📅 Upcoming Events:\n\n⚠️ Unable to fetch events at this time.\n\nView events online: ${this.discourseApiUrl}/upcoming-events;
+      return `📅 Upcoming Events:\n\n⚠️ Unable to fetch events at this time.\n\nView events online: ${this.discourseApiUrl}/upcoming-events`;
     }
   }
   
@@ -4979,7 +4979,7 @@ That's it! The onboarding process will begin once you type !request.`;
                📎 Forum link: ${createdEvent.url}\n\n +
                The event has been posted to the forum calendar and saved to our database.;
       } else {
-        return LocalAI: ❌ Failed to create event: ${createdEvent.error};
+        return `LocalAI: ❌ Failed to create event: ${createdEvent.error}`;
       }
     }
     
@@ -5039,7 +5039,7 @@ That's it! The onboarding process will begin once you type !request.`;
     }
     
     const eventDescription = args.join(' ').trim();
-    console.log(📅 Processing event add request from ${sender}: ${eventDescription});
+    console.log(`📅 Processing event add request from ${sender}: ${eventDescription}`);
     
     try {
       // Use LocalAI to parse the natural language event description
@@ -5599,14 +5599,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   // User Plugin Handlers
   async handleProfile(context) {
     const { sender, senderName } = context;
-    return 👤 Your Profile:\n\nSignal: ${sender}\nName: ${senderName || 'Not set'}\nTimezone: Not set\n\n💡 Use !timezone to set your timezone.;
+    return `👤 Your Profile:\n\nSignal: ${sender}\nName: ${senderName || 'Not set'}\nTimezone: Not set\n\n💡 Use !timezone to set your timezone.`;
   }
 
 
   async handleTimezone(context) {
     const { args } = context;
     if (!args) return '❌ Usage: !timezone <timezone>\nExample: !timezone EST';
-    return ✅ Timezone set to: ${args};
+    return `✅ Timezone set to: ${args}`;
   }
 
 
@@ -5697,12 +5697,12 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       const hours = Math.floor(uptime / 3600);
       const minutes = Math.floor((uptime % 3600) / 60);
       
-      return 📊 Bot Statistics (Last ${days} days)\n\n📈 Usage:\n• Total Commands: ${totalCommands}\n• Success Rate: ${successRate}%\n• Avg/Day: ${avgPerDay}\n\n👥 Activity:\n• Active Users: ${uniqueUsers.length}\n• Active Groups: ${uniqueGroups.length}\n\n⏱️ Uptime: ${hours}h ${minutes}m\n💡 Use !topcommands for popular commands;
+      return `📊 Bot Statistics (Last ${days} days)\n\n📈 Usage:\n• Total Commands: ${totalCommands}\n• Success Rate: ${successRate}%\n• Avg/Day: ${avgPerDay}\n\n👥 Activity:\n• Active Users: ${uniqueUsers.length}\n• Active Groups: ${uniqueGroups.length}\n\n⏱️ Uptime: ${hours}h ${minutes}m\n💡 Use !topcommands for popular commands`;
       
     } catch (error) {
       console.error('Failed to get stats:', error);
       const uptime = Math.floor((Date.now() - this.startTime) / 1000);
-      return 📊 Bot Statistics\n\nUptime: ${uptime}s\nCommands: ${this.plugins.size}\nStatus: ✅ Online;
+      return `📊 Bot Statistics\n\nUptime: ${uptime}s\nCommands: ${this.plugins.size}\nStatus: ✅ Online`;
     }
   }
   
@@ -5915,20 +5915,20 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   getTimeAgo(date) {
     const seconds = Math.floor((new Date() - new Date(date)) / 1000);
     
-    if (seconds < 60) return ${seconds}s ago;
+    if (seconds < 60) return `${seconds}s ago`;
     const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return ${minutes}m ago;
+    if (minutes < 60) return `${minutes}m ago`;
     const hours = Math.floor(minutes / 60);
-    if (hours < 24) return ${hours}h ago;
+    if (hours < 24) return `${hours}h ago`;
     const days = Math.floor(hours / 24);
-    return ${days}d ago;
+    return `${days}d ago`;
   }
 
   // Utility Plugin Handlers
   async handleWeather(context) { return 'Weather service placeholder - !weather <location>'; }
   async handleTime(context) { 
     const now = new Date().toLocaleString();
-    return 🕒 Current Time: ${now}\n\nUsage: !time <timezone>; 
+    return `🕒 Current Time: ${now}\n\nUsage: !time <timezone>`; 
   }
   async handleTranslate(context) { return 'Translation service placeholder - !translate <text>'; }
   async handleShorten(context) { return 'URL shortener placeholder - !shorten <url>'; }
@@ -5938,11 +5938,11 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async handleCalc(context) { return 'Calculator placeholder - !calc <expression>'; }
   async handleRandom(context) { 
     const num = Math.floor(Math.random() * 100) + 1;
-    return 🎲 Random Number: ${num}\n\nUsage: !random <min> <max>; 
+    return `🎲 Random Number: ${num}\n\nUsage: !random <min> <max>`; 
   }
   async handleFlip(context) { 
     const result = Math.random() < 0.5 ? 'heads' : 'tails';
-    return 🪙 Coin Flip: ${result.toUpperCase()}!; 
+    return `🪙 Coin Flip: ${result.toUpperCase()}!`; 
   }
   async handleWayback(context) {
     const { args } = context;
@@ -5989,7 +5989,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async handleFPost(context) {
     const { args } = context;
     if (!args) return '❌ Usage: !fpost <url> [title]\nPost an article to the forum';
-    return ✅ Posted to forum: ${args.split(' ')[0]}\n🔗 Check the forum for your post!;
+    return `✅ Posted to forum: ${args.split(' ')[0]}\n🔗 Check the forum for your post!`;
   }
 
   async handleFLatest(context) {
@@ -6395,7 +6395,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       
     } catch (error) {
       console.error('PDF processing error:', error);
-      return Failed to process PDF: ${error.message};
+      return `Failed to process PDF: ${error.message}`;
     }
   }
 
@@ -6682,7 +6682,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   }
   
   async handleRequestTimeout(phoneNumber, groupId) {
-    console.log(⏰ Request timeout for ${phoneNumber} in group ${groupId});
+    console.log(`⏰ Request timeout for ${phoneNumber} in group ${groupId}`);
     
     // Remove from pending requests
     const request = this.pendingRequests.get(phoneNumber);
@@ -6691,7 +6691,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       this.pendingRequests.delete(phoneNumber);
       
       // Would remove user from group here
-      console.log(🚫 Would remove ${phoneNumber} from group ${groupId} due to timeout);
+      console.log(`🚫 Would remove ${phoneNumber} from group ${groupId} due to timeout`);
       
       // Notify admins
       const notification = ⏰ Request timeout: ${phoneNumber} has been removed from pending list.\n +
@@ -6778,7 +6778,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
              See you out there!;
     } catch (error) {
       console.error('❌ Error during user approval:', error);
-      return ❌ Error approving user: ${error.message}\n\nPlease try again or contact an admin.;
+      return `❌ Error approving user: ${error.message}\n\nPlease try again or contact an admin.`;
     }
   }
   
@@ -6831,7 +6831,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     
     // Add random suffix to ensure uniqueness
     const suffix = Math.floor(Math.random() * 999) + 1;
-    return ${base}_${suffix};
+    return `${base}_${suffix}`;
   }
   
   // Helper function to generate secure password
@@ -6850,7 +6850,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     const randomNumber = Math.floor(Math.random() * 99) + 1;
     const specialChar = '!@#$%^&*'[Math.floor(Math.random() * 8)];
     
-    return ${selectedWords.join('')}${randomNumber}${specialChar};
+    return `${selectedWords.join('')}${randomNumber}${specialChar}`;
   }
   
   // Helper function to format credentials message
@@ -6889,7 +6889,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       };
       
       const response = await this.sendJsonRpcRequest(request);
-      console.log(📨 DM sent to ${uuid});
+      console.log(`📨 DM sent to ${uuid}`);
       return true;
     } catch (error) {
       console.error(❌ Failed to send DM to ${uuid}:, error);
@@ -6912,7 +6912,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       };
       
       const response = await this.sendJsonRpcRequest(request);
-      console.log(🚪 Removed ${uuid} from group ${groupId});
+      console.log(`🚪 Removed ${uuid} from group ${groupId}`);
       return true;
     } catch (error) {
       console.error(❌ Failed to remove ${uuid} from group:, error);
@@ -6923,7 +6923,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async addUserToDefaultGroups(username) {
     // This would integrate with Signal group management
     // For now, it's a placeholder
-    console.log(Adding ${username} to default Signal groups);
+    console.log(`Adding ${username} to default Signal groups`);
   }
 
   async handleSngtg(context) {
@@ -6994,7 +6994,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   }
   
   async handleZeroeth(context) {
-    return 🤖 The Zeroeth Law\n\n${this.zeroethLaw}\n\n🏞️ IrregularChat Community:\n${this.communityContext.description}\n\n📜 Rules of Engagement:\n${this.communityContext.rules.map((r, i) => ${i+1}. ${r}).join('\n')}\n\n📚 Resources:\n• Wiki: ${this.communityContext.wikiUrl}\n• Forum: ${this.communityContext.forumUrl};
+    return `🤖 The Zeroeth Law\n\n${this.zeroethLaw}\n\n🏞️ IrregularChat Community:\n${this.communityContext.description}\n\n📜 Rules of Engagement:\n${this.communityContext.rules.map((r, i) => ${i+1}. ${r}).join('\n')}\n\n📚 Resources:\n• Wiki: ${this.communityContext.wikiUrl}\n• Forum: ${this.communityContext.forumUrl}`;
   }
 
   // Context and Knowledge Management
@@ -7116,7 +7116,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
 
   // Handle reaction messages
   async handleReactionMessage(envelope, reactionMessage) {
-    console.log(🔥 Reaction received: ${reactionMessage.emoji} from ${envelope.sourceName || envelope.sourceNumber});
+    console.log(`🔥 Reaction received: ${reactionMessage.emoji} from ${envelope.sourceName || envelope.sourceNumber}`);
     
     const groupId = reactionMessage.targetMessage?.groupInfo?.groupId || 'dm';
     const targetTimestamp = reactionMessage.targetTimestamp;
@@ -7146,7 +7146,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         }
         
         const totalReactions = Array.from(targetMessage.reactions.values()).reduce((sum, count) => sum + count, 0);
-        console.log(📊 Message now has ${totalReactions} total reactions);
+        console.log(`📊 Message now has ${totalReactions} total reactions`);
       }
     }
     
@@ -7269,7 +7269,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     const highlightLines = messagesWithReactions.map((item, index) => {
       const isTop = item.totalReactions === maxReactionCount;
       const prefix = isTop ? '🎆' : '✨'; // Special highlight for highest
-      return ${prefix} ${item.message.sender}: "${item.preview}" (${item.reactionSummary});
+      return `${prefix} ${item.message.sender}: "${item.preview}" (${item.reactionSummary})`;
     });
     
     return {
@@ -7354,7 +7354,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         };
       });
       
-      console.log(📚 Loaded ${history.length} messages from database for group ${groupId});
+      console.log(`📚 Loaded ${history.length} messages from database for group ${groupId}`);
     } catch (error) {
       console.error('Failed to fetch messages from database:', error);
       useDatabase = false;
@@ -7363,7 +7363,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     // Fall back to memory if database fails or has no data
     if (!useDatabase || history.length === 0) {
       history = this.messageHistory.get(groupId) || [];
-      console.log(📝 Using ${history.length} messages from memory for group ${groupId});
+      console.log(`📝 Using ${history.length} messages from memory for group ${groupId}`);
     }
     
     // Filter out bot commands and duplicate messages
@@ -7429,7 +7429,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       recentMessages = cleanHistory.filter(msg => msg.timestamp > cutoffTime);
       
       if (recentMessages.length === 0) {
-        return ❌ No messages found in the last ${minutesBack} minute${minutesBack !== 1 ? 's' : ''}.;
+        return `❌ No messages found in the last ${minutesBack} minute${minutesBack !== 1 ? 's' : ''}.`;
       }
       
       // Still apply message count limit for safety
@@ -7442,7 +7442,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       recentMessages = cleanHistory.filter(msg => msg.timestamp > cutoffTime);
       
       if (recentMessages.length === 0) {
-        return ❌ No messages found in the last ${hoursBack} hour${hoursBack !== 1 ? 's' : ''}.;
+        return `❌ No messages found in the last ${hoursBack} hour${hoursBack !== 1 ? 's' : ''}.`;
       }
       
       // Still apply message count limit for safety
@@ -7563,7 +7563,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Fallback to simple summary
       const messageCount = recentMessages.length;
       const participants = [...new Set(recentMessages.map(m => m.sender))].join(', ');
-      return 📝 Chat Summary (${messageCount} messages)\n\n👥 Participants: ${participants}\n\n💬 Recent messages:\n${recentMessages.slice(-3).map(m => • ${m.sender}: ${m.message.substring(0, 50)}${m.message.length > 50 ? '...' : ''}).join('\n')};
+      return `📝 Chat Summary (${messageCount} messages)\n\n👥 Participants: ${participants}\n\n💬 Recent messages:\n${recentMessages.slice(-3).map(m => • ${m.sender}: ${m.message.substring(0, 50)}${m.message.length > 50 ? '...' : ''}).join('\n')}`;
     }
   }
   
@@ -7573,9 +7573,9 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     const diffHours = Math.floor(diffMins / 60);
     const diffDays = Math.floor(diffHours / 24);
     
-    if (diffDays > 0) return ${diffDays} day${diffDays > 1 ? 's' : ''};
-    if (diffHours > 0) return ${diffHours} hour${diffHours > 1 ? 's' : ''};
-    if (diffMins > 0) return ${diffMins} minute${diffMins > 1 ? 's' : ''};
+    if (diffDays > 0) return `${diffDays} day${diffDays > 1 ? 's' : ''}`;
+    if (diffHours > 0) return `${diffHours} hour${diffHours > 1 ? 's' : ''}`;
+    if (diffMins > 0) return `${diffMins} minute${diffMins > 1 ? 's' : ''}`;
     return 'Less than a minute';
   }
 
@@ -7587,11 +7587,11 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async handleEightBall(context) { 
     const responses = ['Yes', 'No', 'Maybe', 'Ask again later', 'Definitely', 'Probably not'];
     const response = responses[Math.floor(Math.random() * responses.length)];
-    return 🎱 Magic 8-Ball: ${response};
+    return `🎱 Magic 8-Ball: ${response}`;
   }
   async handleDice(context) { 
     const roll = Math.floor(Math.random() * 6) + 1;
-    return 🎲 Dice Roll: ${roll}\n\nUsage: !dice [sides] [count]; 
+    return `🎲 Dice Roll: ${roll}\n\nUsage: !dice [sides] [count]`; 
   }
 
   // Helper method for admin check - now UUID-based for security
@@ -7754,7 +7754,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       'pdf': '!pdf <url or attachment>'
     };
     
-    return usages[name] || !${name};
+    return `usages[name] || !${name}`;
   }
   
   // Helper to get command examples
@@ -7908,8 +7908,8 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       const cmd = this.plugins.get(commandName);
       if (!cmd) {
         auditEntry.error = 'Command not found';
-        console.log(🔒 AI Audit: ${JSON.stringify(auditEntry)});
-        return { success: false, message: Command !${commandName} not found };
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        return `{ success: false, message: Command !${commandName} not found }`;
       }
       
       // Get command metadata and check permissions
@@ -7918,14 +7918,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       
       if (!cmdInfo) {
         auditEntry.error = 'Command metadata not found';
-        console.log(🔒 AI Audit: ${JSON.stringify(auditEntry)});
-        return { success: false, message: Command metadata for !${commandName} not found };
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        return `{ success: false, message: Command metadata for !${commandName} not found }`;
       }
       
       // Permission checks
       if (cmdInfo.adminOnly && !commandRegistry.isAdmin) {
         auditEntry.error = 'Admin permission required';
-        console.log(🔒 AI Audit: ${JSON.stringify(auditEntry)});
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
         return { 
           success: false, 
           message: Cannot execute !${commandName} - admin privileges required,
@@ -7935,7 +7935,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       
       if (cmdInfo.moderatorOnly && !commandRegistry.isModerator) {
         auditEntry.error = 'Moderator permission required';
-        console.log(🔒 AI Audit: ${JSON.stringify(auditEntry)});
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
         return { 
           success: false, 
           message: Cannot execute !${commandName} - moderator privileges required,
@@ -7947,7 +7947,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       const dangerousCommands = ['delete', 'ban', 'kick', 'remove', 'destroy', 'drop', 'truncate', 'reset'];
       if (dangerousCommands.includes(commandName.toLowerCase())) {
         auditEntry.error = 'Dangerous command blocked';
-        console.log(🔒 AI Audit: ${JSON.stringify(auditEntry)});
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
         return { 
           success: false, 
           message: Command !${commandName} is blocked for AI execution for safety reasons,
@@ -7979,8 +7979,8 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       ]);
       
       auditEntry.executed = true;
-      console.log(🔒 AI Audit: ${JSON.stringify(auditEntry)});
-      console.log(✅ AI (${aiProvider}) successfully executed !${commandName} for user ${context.sourceNumber});
+      console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+      console.log(`✅ AI (${aiProvider}) successfully executed !${commandName} for user ${context.sourceNumber}`);
       
       return { 
         success: true, 
@@ -7991,7 +7991,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       
     } catch (error) {
       auditEntry.error = error.message;
-      console.log(🔒 AI Audit: ${JSON.stringify(auditEntry)});
+      console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
       console.error(❌ AI command execution error:, error);
       
       return { 
@@ -8069,7 +8069,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         timestamp: new Date()
       });
       
-      console.log(✅ Question Q${questionId} saved to database);
+      console.log(`✅ Question Q${questionId} saved to database`);
       
       // Post to Discourse if configured
       let forumLink = '';
@@ -8211,18 +8211,18 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         answerText = args.join(' ');
         questionId = questions[0];
       } else {
-        return ❌ Question ${questionId} not found. Use !questions to see available questions.;
+        return `❌ Question ${questionId} not found. Use !questions to see available questions.`;
       }
     }
     
     const question = this.questions.get(questionId);
     
     if (!question) {
-      return ❌ Question ${questionId} not found. Use !questions to see available questions.;
+      return `❌ Question ${questionId} not found. Use !questions to see available questions.`;
     }
     
     if (question.solved) {
-      return ℹ️ Question ${questionId} has already been marked as solved.;
+      return `ℹ️ Question ${questionId} has already been marked as solved.`;
     }
     
     // Add answer to question
@@ -8288,7 +8288,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     const question = this.questions.get(questionId);
     
     if (!question) {
-      return ❌ Question ${questionId} not found.;
+      return `❌ Question ${questionId} not found.`;
     }
     
     // Only the asker or an admin can mark as solved
@@ -8296,11 +8296,11 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     const isAdmin = this.isAdmin(context.sourceUuid || sourceNumber, groupId);
     
     if (!isAsker && !isAdmin) {
-      return ❌ Only ${question.asker} (the question asker) or an admin can mark this as solved.;
+      return `❌ Only ${question.asker} (the question asker) or an admin can mark this as solved.`;
     }
     
     if (question.solved) {
-      return ℹ️ Question ${questionId} is already marked as solved.;
+      return `ℹ️ Question ${questionId} is already marked as solved.`;
     }
     
     question.solved = true;
@@ -8415,9 +8415,9 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
     
-    if (days > 0) return ${days}d ago;
-    if (hours > 0) return ${hours}h ago;
-    if (minutes > 0) return ${minutes}m ago;
+    if (days > 0) return `${days}d ago`;
+    if (hours > 0) return `${hours}h ago`;
+    if (minutes > 0) return `${minutes}m ago`;
     return 'just now';
   }
   // Analytics Tracking Methods
@@ -8696,7 +8696,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       const randomResponse = responses[Math.floor(Math.random() * responses.length)];
       await this.sendReply(message, randomResponse);
       
-      console.log(📊 Bot feedback received: ${isPositive ? 'POSITIVE' : 'NEGATIVE'} from ${message.sourceName || message.sourceNumber});
+      console.log(`📊 Bot feedback received: ${isPositive ? 'POSITIVE' : 'NEGATIVE'} from ${message.sourceName || message.sourceNumber}`);
       
     } catch (error) {
       console.error('Failed to handle bot feedback:', error);
@@ -8756,14 +8756,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         Object.entries(data).forEach(([domain, country]) => {
           this.watchedDomains.set(domain.toLowerCase(), country);
         });
-        console.log(🛡️ Loaded ${this.watchedDomains.size} watched domains);
+        console.log(`🛡️ Loaded ${this.watchedDomains.size} watched domains`);
       } else {
         // Initialize with defaults
         Object.entries(defaultWatched).forEach(([domain, country]) => {
           this.watchedDomains.set(domain.toLowerCase(), country);
         });
         this.saveWatchedDomains();
-        console.log(🛡️ Initialized ${this.watchedDomains.size} default watched domains);
+        console.log(`🛡️ Initialized ${this.watchedDomains.size} default watched domains`);
       }
     } catch (error) {
       console.error('Error loading watched domains:', error);
@@ -8781,7 +8781,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         data[domain] = country;
       });
       fs.writeFileSync(this.watchedDomainsFile, JSON.stringify(data, null, 2));
-      console.log(💾 Saved ${this.watchedDomains.size} watched domains);
+      console.log(`💾 Saved ${this.watchedDomains.size} watched domains`);
     } catch (error) {
       console.error('Error saving watched domains:', error);
     }
@@ -8866,7 +8866,7 @@ Are you sure this is what you wanted to post?
       this.watchedDomains.set(domain, country);
       this.saveWatchedDomains();
       
-      return ✅ Added ${domain} to watch list (${country});
+      return `✅ Added ${domain} to watch list (${country})`;
     }
     
     if (action === 'remove' && args.length >= 2) {
@@ -8875,9 +8875,9 @@ Are you sure this is what you wanted to post?
       if (this.watchedDomains.has(domain)) {
         this.watchedDomains.delete(domain);
         this.saveWatchedDomains();
-        return ✅ Removed ${domain} from watch list;
+        return `✅ Removed ${domain} from watch list`;
       } else {
-        return ❌ Domain ${domain} not found in watch list;
+        return `❌ Domain ${domain} not found in watch list`;
       }
     }
     

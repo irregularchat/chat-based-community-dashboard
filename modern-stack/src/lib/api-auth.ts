@@ -129,8 +129,11 @@ export function isDangerousOperationsAllowed(): boolean {
          process.env.ALLOW_DANGEROUS_OPERATIONS === 'true';
 }
 
+// In-memory rate limit store (use Redis in production)
+const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
+
 /**
- * Rate limiting check (placeholder for future implementation)
+ * Rate limiting check with in-memory storage
  * @param req - NextRequest object
  * @param identifier - Rate limiting identifier (IP, user ID, etc.)
  * @param limit - Number of requests allowed
@@ -143,7 +146,117 @@ export async function checkRateLimit(
   limit: number = 60,
   windowMs: number = 60000
 ): Promise<{ success: boolean; remaining?: number; reset?: number }> {
-  // TODO: Implement proper rate limiting with Redis/Upstash
-  // For now, return success to maintain functionality
-  return { success: true };
+  const now = Date.now();
+  const key = `${identifier}:${Math.floor(now / windowMs)}`;
+  
+  // Clean up old entries periodically
+  if (Math.random() < 0.01) { // 1% chance to cleanup on each call
+    for (const [storeKey, data] of rateLimitStore.entries()) {
+      if (data.resetTime < now) {
+        rateLimitStore.delete(storeKey);
+      }
+    }
+  }
+  
+  let record = rateLimitStore.get(key);
+  
+  if (!record) {
+    // First request in this window
+    record = {
+      count: 1,
+      resetTime: now + windowMs
+    };
+    rateLimitStore.set(key, record);
+    
+    return {
+      success: true,
+      remaining: limit - 1,
+      reset: record.resetTime
+    };
+  }
+  
+  if (now > record.resetTime) {
+    // Window has expired, reset
+    record.count = 1;
+    record.resetTime = now + windowMs;
+    rateLimitStore.set(key, record);
+    
+    return {
+      success: true,
+      remaining: limit - 1,
+      reset: record.resetTime
+    };
+  }
+  
+  if (record.count >= limit) {
+    // Rate limit exceeded
+    await logSecurityEvent(
+      'rate_limit_exceeded',
+      null,
+      `Rate limit exceeded for ${identifier}: ${record.count}/${limit} requests in window`,
+      'warning'
+    );
+    
+    return {
+      success: false,
+      remaining: 0,
+      reset: record.resetTime
+    };
+  }
+  
+  // Increment count
+  record.count++;
+  rateLimitStore.set(key, record);
+  
+  return {
+    success: true,
+    remaining: limit - record.count,
+    reset: record.resetTime
+  };
+}
+
+/**
+ * Apply rate limiting to an API route
+ * @param req - NextRequest object
+ * @param identifier - Rate limiting identifier (defaults to IP address)
+ * @param limit - Number of requests allowed (default: 60)
+ * @param windowMs - Time window in milliseconds (default: 60000 = 1 minute)
+ * @returns NextResponse error if rate limited, null if allowed
+ */
+export async function applyRateLimit(
+  req: NextRequest,
+  identifier?: string,
+  limit: number = 60,
+  windowMs: number = 60000
+): Promise<NextResponse | null> {
+  // Use IP address as default identifier
+  const rateLimitIdentifier = identifier || 
+    req.ip || 
+    req.headers.get('x-forwarded-for') || 
+    req.headers.get('x-real-ip') || 
+    'unknown';
+
+  const result = await checkRateLimit(req, rateLimitIdentifier, limit, windowMs);
+  
+  if (!result.success) {
+    return NextResponse.json(
+      { 
+        success: false, 
+        error: 'Rate limit exceeded. Please try again later.',
+        remaining: result.remaining,
+        reset: result.reset
+      }, 
+      { 
+        status: 429,
+        headers: {
+          'X-RateLimit-Limit': limit.toString(),
+          'X-RateLimit-Remaining': result.remaining?.toString() || '0',
+          'X-RateLimit-Reset': result.reset?.toString() || '',
+        }
+      }
+    );
+  }
+  
+  // Add rate limit headers to successful responses
+  return null; // No error, rate limit passed
 }

@@ -974,7 +974,7 @@ class NativeSignalBotService extends EventEmitter {
                 return `OpenAI: That action requires ${execResult.needsPermission} privileges, which you don't have.`;
               } else {
                 // Don't reveal the command failed, just say we can't do it
-                return OpenAI: I'm unable to perform that action. ${execResult.needsPermission ? It requires ${execResult.needsPermission} privileges. : 'Please try a different approach.'};
+                return `OpenAI: I'm unable to perform that action. ${execResult.needsPermission ? `It requires ${execResult.needsPermission} privileges.` : 'Please try a different approach.'}`;
               }
             }
           }

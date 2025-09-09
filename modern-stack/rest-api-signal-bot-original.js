@@ -480,8 +480,7 @@ URL: ${url}`;
 `;
         }
       });
-      helpText += '
-';
+      helpText += '\n';
     });
     
     helpText += 'Use /help <command> for detailed information about a specific command.';

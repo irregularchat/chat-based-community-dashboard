@@ -705,6 +705,58 @@ model BotError {
   @@map("bot_errors")
 }
 
+// Signal Member - Track unique members across groups with proper deduplication
+model SignalMember {
+  id                String    @id @default(cuid())
+  uuid              String?   @unique // Signal UUID for unique identification
+  phoneNumber       String?   @map("phone_number") // Phone number (if available)
+  displayName       String?   @map("display_name") // Current display name
+  firstName         String?   @map("first_name") 
+  lastName          String?   @map("last_name")
+  profileName       String?   @map("profile_name") // Signal profile name
+  profilePicture    String?   @map("profile_picture") // Profile picture URL
+  isBot             Boolean   @default(false) @map("is_bot")
+  lastSeenAt        DateTime? @map("last_seen_at") // Last time member sent a message
+  firstSeenAt       DateTime  @default(now()) @map("first_seen_at") // First time we saw this member
+  totalGroups       Int       @default(0) @map("total_groups") // Count of groups member belongs to
+  totalMessages     Int       @default(0) @map("total_messages") // Total messages sent
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  
+  // Relationships
+  groupMemberships  SignalMemberGroupMembership[]
+  
+  @@index([uuid])
+  @@index([phoneNumber])
+  @@index([lastSeenAt])
+  @@index([totalGroups])
+  @@index([totalMessages])
+  @@map("signal_members")
+}
+
+// Signal Member Group Membership - Track which groups each member belongs to
+model SignalMemberGroupMembership {
+  id            String       @id @default(cuid())
+  memberId      String       @map("member_id")
+  groupId       String       @map("group_id")
+  groupName     String?      @map("group_name")
+  joinedAt      DateTime     @default(now()) @map("joined_at")
+  lastActiveAt  DateTime?    @map("last_active_at") // Last time member was active in this group
+  messageCount  Int          @default(0) @map("message_count") // Messages sent in this group
+  isActive      Boolean      @default(true) @map("is_active") // Still in group
+  leftAt        DateTime?    @map("left_at") // When member left group (if applicable)
+  
+  // Relationships
+  member        SignalMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  
+  @@unique([memberId, groupId])
+  @@index([memberId])
+  @@index([groupId])
+  @@index([lastActiveAt])
+  @@index([isActive])
+  @@map("signal_member_group_memberships")
+}
+
 // Q&A System - Track questions and answers
 model QAndAQuestion {
   id                String    @id @default(cuid())

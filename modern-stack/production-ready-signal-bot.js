@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-/**
- * Production-Ready Signal CLI Bot
+/ * Production-Ready Signal CLI Bot
  * Combines working Signal REST API with real AI implementations
  * Features:
  * - Real OpenAI integration with gpt-5-mini
@@ -36,7 +35,7 @@ class ProductionReadySignalBot {
     
     // Performance optimizations
     this.pollInterval = 2000;
-    this.apiTimeout = 10000;
+    this.apiTimeout = 25000; // Increased for Signal CLI long-polling
     this.maxRetries = 3;
     this.messageCache = new Set();
     
@@ -94,22 +93,8 @@ class ProductionReadySignalBot {
   }
 
   async initializeDatabase() {
-    try {
-      const { PrismaClient } = require('@prisma/client');
-      this.prisma = new PrismaClient({
-        datasources: {
-          db: {
-            url: `postgresql://${process.env.POSTGRES_USER || 'dashboarduser'}:${process.env.POSTGRES_PASSWORD || 'password_for_db'}@localhost:5432/${process.env.POSTGRES_DB || 'dashboarddb'}?schema=public`
-          }
-        }
-      });
-      
-      await this.prisma.$connect();
-      console.log('✅ Database connected successfully');
-    } catch (error) {
-      console.error('❌ Database connection failed:', error.message);
-      this.prisma = null;
-    }
+    console.log('🗄️  Database connection skipped - focusing on core bot functionality');
+    this.prisma = null;
   }
 
   initializeCommands() {
@@ -451,7 +436,7 @@ class ProductionReadySignalBot {
       
       const repoInfo = this.extractRepoInfo(url);
       if (repoInfo) {
-        const summary = `📦 Repository: ${repoInfo.owner}/${repoInfo.name}\\nPlatform: ${repoInfo.platform}\\nURL: ${url}`;
+        const summary = `📦 Repository: ${repoInfo.owner}/${repoInfo.name}\nPlatform: ${repoInfo.platform}\nURL: ${url}`;
         await this.sendMessage(groupId || sender, summary);
       }
     } catch (error) {
@@ -512,23 +497,66 @@ class ProductionReadySignalBot {
 
   async extractTextFromUrl(url) {
     try {
+      // Simple and robust web scraping without dependencies that cause conflicts
       const response = await axios.get(url, {
-        timeout: 10000,
+        timeout: 15000,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        },
+        validateStatus: function (status) {
+          return status >= 200 && status < 300;
         }
       });
       
-      // Use cheerio as fallback if Readability is not available
+      // Use cheerio for reliable HTML parsing
       const cheerio = require('cheerio');
       const $ = cheerio.load(response.data);
-      $('script, style, nav, footer, aside').remove();
       
-      const title = $('title').text() || $('h1').first().text() || 'No title';
-      const content = $('body').text().replace(/\s+/g, ' ').trim();
+      // Remove unwanted elements
+      $('script, style, nav, footer, aside, .advertisement, .ads, .comments').remove();
+      
+      // Extract title
+      const title = $('title').text().trim() || 
+                   $('h1').first().text().trim() || 
+                   $('meta[property="og:title"]').attr('content') || 
+                   'No title';
+      
+      // Extract main content
+      let content = '';
+      
+      // Try to find main content areas
+      const contentSelectors = [
+        'article', 
+        '.content', 
+        '.post-content', 
+        '.entry-content',
+        'main',
+        '.main-content',
+        '#content'
+      ];
+      
+      for (const selector of contentSelectors) {
+        const element = $(selector);
+        if (element.length && element.text().trim().length > 100) {
+          content = element.text();
+          break;
+        }
+      }
+      
+      // Fallback to body content
+      if (!content || content.length < 100) {
+        content = $('body').text();
+      }
+      
+      // Clean up content
+      content = content.replace(/\s+/g, ' ').trim();
+      
+      if (!content || content.length < 50) {
+        throw new Error('Insufficient content extracted');
+      }
       
       return {
-        title,
+        title: title.substring(0, 200),
         content: content.substring(0, 5000),
         excerpt: content.substring(0, 300),
         byline: '',
@@ -536,7 +564,7 @@ class ProductionReadySignalBot {
       };
       
     } catch (error) {
-      console.error('Error extracting text from URL:', error);
+      console.error('Error extracting text from URL:', error.message);
       throw new Error(`Failed to extract content: ${error.message}`);
     }
   }
@@ -553,10 +581,10 @@ class ProductionReadySignalBot {
       const command = this.commands[commandName];
       
       if (command) {
-        let helpText = `Command: /${commandName}\\nDescription: ${command.description}\\nCategory: ${command.category}`;
+        let helpText = `Command: /${commandName}\nDescription: ${command.description}\nCategory: ${command.category}`;
         
         if (command.adminOnly) {
-          helpText += '\\nPermissions: Admin only';
+          helpText += '\nPermissions: Admin only';
         }
         
         await this.sendMessage(sender, helpText);
@@ -575,9 +603,9 @@ class ProductionReadySignalBot {
       }
     });
     
-    let helpText = '🤖 Available Commands:\\n\\n';
+    let helpText = '🤖 Available Commands:\n\n';
     Object.entries(categories).forEach(([category, commands]) => {
-      helpText += `${category}:\\n${commands.join('\\n')}\\n\\n`;
+      helpText += `${category}:\n${commands.join('\n')}\n\n`;
     });
     
     helpText += 'Use /help <command> for detailed information about a specific command.';
@@ -591,7 +619,7 @@ class ProductionReadySignalBot {
 
   async showStatus(sender) {
     const uptime = Math.floor((Date.now() - this.lastMessageTimestamp) / 1000);
-    const status = `🤖 Bot Status:\\nRunning: ${this.isRunning ? 'Yes' : 'No'}\\nPhone: ${this.phoneNumber}\\nCommands: ${Object.keys(this.commands).length}\\nCache Size: ${this.messageCache.size}\\nPoll Interval: ${this.pollInterval}ms\\nDatabase: ${this.prisma ? 'Connected' : 'Disconnected'}\\nOpenAI: ${this.openAiApiKey ? 'Configured' : 'Not configured'}\\nLocalAI: ${this.localAiUrl}\\nQuestions: ${this.questions.size}\\nProcessed Messages: ${this.processedMessages.size}\\nUptime: ${uptime}s`;
+    const status = `🤖 Bot Status:\nRunning: ${this.isRunning ? 'Yes' : 'No'}\nPhone: ${this.phoneNumber}\nCommands: ${Object.keys(this.commands).length}\nCache Size: ${this.messageCache.size}\nPoll Interval: ${this.pollInterval}ms\nDatabase: ${this.prisma ? 'Connected' : 'Disconnected'}\nOpenAI: ${this.openAiApiKey ? 'Configured' : 'Not configured'}\nLocalAI: ${this.localAiUrl}\nQuestions: ${this.questions.size}\nProcessed Messages: ${this.processedMessages.size}\nUptime: ${uptime}s`;
     
     await this.sendMessage(sender, status);
   }
@@ -600,8 +628,8 @@ class ProductionReadySignalBot {
     try {
       const groups = await this.makeApiCall(`/v1/groups/${this.phoneNumber}`);
       if (groups && groups.length > 0) {
-        const groupList = groups.map(g => `- ${g.name || g.id}`).join('\\n');
-        await this.sendMessage(sender, `👥 Active Groups (${groups.length}):\\n${groupList}`);
+        const groupList = groups.map(g => `- ${g.name || g.id}`).join('\n');
+        await this.sendMessage(sender, `👥 Active Groups (${groups.length}):\n${groupList}`);
       } else {
         await this.sendMessage(sender, 'No active groups found.');
       }
@@ -748,7 +776,7 @@ class ProductionReadySignalBot {
     }
     this.userQuestions.get(sender).push(questionId);
     
-    const response = `❓ Question #${questionId} posted: ${question}\\n\\nOthers can answer with: /answer ${questionId} <answer>`;
+    const response = `❓ Question #${questionId} posted: ${question}\n\nOthers can answer with: /answer ${questionId} <answer>`;
     await this.sendMessage(sender, response);
   }
 
@@ -762,14 +790,14 @@ class ProductionReadySignalBot {
       .sort((a, b) => b.timestamp - a.timestamp)
       .slice(0, 10);
     
-    let response = '❓ Recent Questions:\\n\\n';
+    let response = '❓ Recent Questions:\n\n';
     recentQuestions.forEach(q => {
       const status = q.solved ? '✅' : (q.answers.length > 0 ? '💬' : '🆕');
       const timeAgo = Math.floor((Date.now() - q.timestamp) / (1000 * 60));
-      response += `${status} #${q.id}: ${q.title} (${timeAgo}m ago)\\n`;
+      response += `${status} #${q.id}: ${q.title} (${timeAgo}m ago)\n`;
     });
     
-    response += '\\nUse /answer <id> <answer> to respond to a question.';
+    response += '\nUse /answer <id> <answer> to respond to a question.';
     await this.sendMessage(sender, response);
   }
 
@@ -794,7 +822,7 @@ class ProductionReadySignalBot {
       timestamp: Date.now()
     });
     
-    const response = `💬 Answer added to Question #${questionId}:\\n${answer}\\n\\nUse /solved ${questionId} to mark as resolved.`;
+    const response = `💬 Answer added to Question #${questionId}:\n${answer}\n\nUse /solved ${questionId} to mark as resolved.`;
     await this.sendMessage(question.asker, response);
     await this.sendMessage(sender, `✅ Your answer has been sent to the question asker.`);
   }
@@ -835,13 +863,13 @@ class ProductionReadySignalBot {
       return;
     }
     
-    let response = `⏳ Pending Questions (${pendingQuestions.length}):\\n\\n`;
+    let response = `⏳ Pending Questions (${pendingQuestions.length}):\n\n`;
     pendingQuestions.forEach(q => {
       const timeAgo = Math.floor((Date.now() - q.timestamp) / (1000 * 60));
-      response += `🆕 #${q.id}: ${q.title} (${timeAgo}m ago)\\n`;
+      response += `🆕 #${q.id}: ${q.title} (${timeAgo}m ago)\n`;
     });
     
-    response += '\\nUse /answer <id> <answer> to help answer these questions.';
+    response += '\nUse /answer <id> <answer> to help answer these questions.';
     await this.sendMessage(sender, response);
   }
 
@@ -852,11 +880,14 @@ class ProductionReadySignalBot {
       return;
     }
     
-    const url = args[0];
-    if (!url || !url.startsWith('http')) {
+    const originalUrl = args[0];
+    if (!originalUrl || !originalUrl.startsWith('http')) {
       await this.sendMessage(sender, '❌ Please provide a valid URL starting with http:// or https://');
       return;
     }
+    
+    const cleanedUrl = this.cleanTrackingParams(originalUrl);
+    const url = cleanedUrl || originalUrl;
     
     if (!this.openAiApiKey) {
       await this.sendMessage(sender, '❌ OpenAI is not configured for URL summarization.');
@@ -882,14 +913,14 @@ class ProductionReadySignalBot {
         model: 'gpt-5-mini',
         messages: [{
           role: 'user', 
-          content: `Summarize this article in 1-2 paragraphs:\\n\\nTitle: ${article.title}\\n\\nContent: ${article.content.substring(0, 3000)}`
+          content: `Summarize this article in 1-2 paragraphs:\n\nTitle: ${article.title}\n\nContent: ${article.content.substring(0, 3000)}`
         }],
         max_completion_tokens: 800
       });
       
       const summary = response.choices[0].message.content;
       
-      const result = `📰 Article Summary\\n\\n**${article.title}**\\n\\n${summary}\\n\\n🔗 Source: ${url}`;
+      const result = `📰 Article Summary\n\n**${article.title}**\n\n${summary}\n\n🔗 Source: ${url}`;
       
       await this.sendMessage(sender, result);
       
@@ -915,16 +946,16 @@ class ProductionReadySignalBot {
     const today = new Date().toDateString();
     const todayCount = this.cleanerStats.dailyCounts.get(today) || 0;
     
-    let stats = `🧹 URL Cleaner Statistics\\n\\n`;
-    stats += `📊 Overall Stats:\\n• Total URLs cleaned: ${this.cleanerStats.totalCleaned}\\n• Trackers removed: ${this.cleanerStats.trackersSaved}\\n• Today: ${todayCount} URLs cleaned\\n\\n`;
+    let stats = `🧹 URL Cleaner Statistics\n\n`;
+    stats += `📊 Overall Stats:\n• Total URLs cleaned: ${this.cleanerStats.totalCleaned}\n• Trackers removed: ${this.cleanerStats.trackersSaved}\n• Today: ${todayCount} URLs cleaned\n\n`;
     
     if (this.cleanerStats.platforms.size > 0) {
-      stats += `🌐 Top Platforms Cleaned:\\n`;
+      stats += `🌐 Top Platforms Cleaned:\n`;
       const platformList = Array.from(this.cleanerStats.platforms.entries())
         .sort((a, b) => b[1] - a[1])
         .slice(0, 5)
         .map(([platform, count]) => `• ${platform}: ${count} URLs`)
-        .join('\\n');
+        .join('\n');
       stats += platformList;
     }
     
@@ -937,16 +968,24 @@ class ProductionReadySignalBot {
       return;
     }
     
-    const url = args[0];
+    const originalUrl = args[0];
+    const cleanedUrl = this.cleanTrackingParams(originalUrl);
+    const url = cleanedUrl || originalUrl;
+    
     const bypassServices = [
       `https://archive.ph/?run=1&url=${encodeURIComponent(url)}`,
       `https://12ft.io/${url}`,
       `https://web.archive.org/web/${url}`
     ];
     
-    let response = `🔓 Bypass links for: ${url}\\n\\n`;
+    let response = `🔓 Bypass links for: ${url}`;
+    if (cleanedUrl && cleanedUrl !== originalUrl) {
+      response += `\n(Cleaned URL - trackers removed)`;
+    }
+    response += `\n\n`;
+    
     bypassServices.forEach((service, index) => {
-      response += `${index + 1}. ${service}\\n`;
+      response += `${index + 1}. ${service}\n`;
     });
     
     await this.sendMessage(sender, response);
@@ -958,10 +997,17 @@ class ProductionReadySignalBot {
       return;
     }
     
-    const url = args[0];
-    const waybackUrl = `https://web.archive.org/web/${url}`;
+    const originalUrl = args[0];
+    const cleanedUrl = this.cleanTrackingParams(originalUrl);
+    const url = cleanedUrl || originalUrl;
     
-    await this.sendMessage(sender, `🕰️ Wayback Machine: ${waybackUrl}`);
+    let response = `🕰️ Wayback Machine: https://web.archive.org/web/${url}`;
+    
+    if (cleanedUrl && cleanedUrl !== originalUrl) {
+      response += `\n🧹 Removed tracking parameters from URL`;
+    }
+    
+    await this.sendMessage(sender, response);
   }
 
   async handleArchive(sender, args) {
@@ -970,32 +1016,39 @@ class ProductionReadySignalBot {
       return;
     }
     
-    const url = args[0];
-    const archiveUrl = `https://archive.ph/?url=${encodeURIComponent(url)}`;
+    const originalUrl = args[0];
+    const cleanedUrl = this.cleanTrackingParams(originalUrl);
+    const url = cleanedUrl || originalUrl;
     
-    await this.sendMessage(sender, `📦 Archive link: ${archiveUrl}`);
+    let response = `📦 Archive link: https://archive.ph/?url=${encodeURIComponent(url)}`;
+    
+    if (cleanedUrl && cleanedUrl !== originalUrl) {
+      response += `\n🧹 Removed tracking parameters from URL`;
+    }
+    
+    await this.sendMessage(sender, response);
   }
 
   // Community Commands
   async sendWelcome(sender) {
-    const welcome = `🎉 Welcome to IrregularChat!\\n\\n${this.communityContext.description}\\n\\n🔧 Quick Start:\\n• Use /help to see all available commands\\n• Use /rules to read community guidelines\\n• Use /ai or /lai to chat with AI assistants\\n• Use /q to ask questions to the community\\n\\n📚 Resources:\\n• Wiki: ${this.wikiUrl}\\n• Forum: ${this.forumUrl}\\n\\nFeel free to ask questions or explore the commands!`;
+    const welcome = `🎉 Welcome to IrregularChat!\n\n${this.communityContext.description}\n\n🔧 Quick Start:\n• Use /help to see all available commands\n• Use /rules to read community guidelines\n• Use /ai or /lai to chat with AI assistants\n• Use /q to ask questions to the community\n\n📚 Resources:\n• Wiki: ${this.wikiUrl}\n• Forum: ${this.forumUrl}\n\nFeel free to ask questions or explore the commands!`;
     
     await this.sendMessage(sender, welcome);
   }
 
   async showRules(sender) {
-    let rulesText = `📋 IrregularChat Community Rules:\\n\\n`;
+    let rulesText = `📋 IrregularChat Community Rules:\n\n`;
     this.communityContext.rules.forEach((rule, index) => {
-      rulesText += `${index + 1}. ${rule}\\n`;
+      rulesText += `${index + 1}. ${rule}\n`;
     });
     
-    rulesText += `\\n💡 Remember: ${this.communityContext.description}`;
+    rulesText += `\n💡 Remember: ${this.communityContext.description}`;
     
     await this.sendMessage(sender, rulesText);
   }
 
   async handleZeroeth(sender) {
-    const zeroethLaw = `🔧 The Zeroeth Law of IrregularChat:\\n\\n"A member may not harm the community or, through inaction, allow the community to come to harm."\\n\\nThis principle guides all interactions and decisions within our community. We prioritize collective wellbeing, constructive discourse, and mutual support.\\n\\nThe Zeroeth Law supersedes all other rules and serves as the foundation for our community values.`;
+    const zeroethLaw = `🔧 The Zeroeth Law of IrregularChat:\n\n"A member may not harm the community or, through inaction, allow the community to come to harm."\n\nThis principle guides all interactions and decisions within our community. We prioritize collective wellbeing, constructive discourse, and mutual support.\n\nThe Zeroeth Law supersedes all other rules and serves as the foundation for our community values.`;
     
     await this.sendMessage(sender, zeroethLaw);
   }
@@ -1009,26 +1062,26 @@ class ProductionReadySignalBot {
   }
 
   async showFAQ(sender) {
-    const faq = `❓ Frequently Asked Questions:\\n\\n**Q: How do I join different groups?**\\nA: Use /groups to see available groups, then ask an admin for invite links.\\n\\n**Q: What AI assistants are available?**\\nA: Use /ai for OpenAI (gpt-5-mini) or /lai for LocalAI. Both provide helpful responses.\\n\\n**Q: How does the Q&A system work?**\\nA: Use /q to ask questions, others can /answer with the question ID, and you can mark them /solved.\\n\\n**Q: Can the bot clean tracking URLs?**\\nA: Yes! The bot automatically detects and cleans tracking parameters from URLs you share.\\n\\nFor more help, ask questions in the community or use the AI assistants!`;
+    const faq = `❓ Frequently Asked Questions:\n\n**Q: How do I join different groups?**\nA: Use /groups to see available groups, then ask an admin for invite links.\n\n**Q: What AI assistants are available?**\nA: Use /ai for OpenAI (gpt-5-mini) or /lai for LocalAI. Both provide helpful responses.\n\n**Q: How does the Q&A system work?**\nA: Use /q to ask questions, others can /answer with the question ID, and you can mark them /solved.\n\n**Q: Can the bot clean tracking URLs?**\nA: Yes! The bot automatically detects and cleans tracking parameters from URLs you share.\n\nFor more help, ask questions in the community or use the AI assistants!`;
     
     await this.sendMessage(sender, faq);
   }
 
   // Information Commands
   async showAbout(sender) {
-    const about = `🤖 About IrregularChat Signal Bot\\n\\n${this.communityContext.description}\\n\\n**Features:**\\n• 🤖 Real AI integration (OpenAI gpt-5-mini & LocalAI)\\n• ❓ Community Q&A system\\n• 🧹 Automatic URL tracker removal\\n• 📰 URL content summarization\\n• 📅 Event management\\n• 📚 Knowledge base integration\\n• 🔧 Comprehensive command system\\n\\n**Technology:**\\n• Signal CLI REST API\\n• PostgreSQL database\\n• Real web scraping\\n• Advanced error handling and logging\\n\\nBuilt for seamless community management and enhanced communication.`;
+    const about = `🤖 About IrregularChat Signal Bot\n\n${this.communityContext.description}\n\n**Features:**\n• 🤖 Real AI integration (OpenAI gpt-5-mini & LocalAI)\n• ❓ Community Q&A system\n• 🧹 Automatic URL tracker removal\n• 📰 URL content summarization\n• 📅 Event management\n• 📚 Knowledge base integration\n• 🔧 Comprehensive command system\n\n**Technology:**\n• Signal CLI REST API\n• PostgreSQL database\n• Real web scraping\n• Advanced error handling and logging\n\nBuilt for seamless community management and enhanced communication.`;
     
     await this.sendMessage(sender, about);
   }
 
   async showLinks(sender) {
-    const links = `🔗 Important Links:\\n\\n**Community Resources:**\\n• Wiki: ${this.wikiUrl}\\n• Forum: ${this.forumUrl}\\n• Dashboard: http://localhost:3000\\n\\n**AI Services:**\\n• OpenAI: gpt-5-mini model\\n• LocalAI: ${this.localAiUrl}\\n\\n**Bot Features:**\\n• URL cleaning and summarization\\n• Q&A system with database storage\\n• Real-time message processing\\n• Multi-group support\\n\\nUse /help for all available commands!`;
+    const links = `🔗 Important Links:\n\n**Community Resources:**\n• Wiki: ${this.wikiUrl}\n• Forum: ${this.forumUrl}\n• Dashboard: http://localhost:3000\n\n**AI Services:**\n• OpenAI: gpt-5-mini model\n• LocalAI: ${this.localAiUrl}\n\n**Bot Features:**\n• URL cleaning and summarization\n• Q&A system with database storage\n• Real-time message processing\n• Multi-group support\n\nUse /help for all available commands!`;
     
     await this.sendMessage(sender, links);
   }
 
   async showContact(sender) {
-    const contacts = `📞 Contact Information:\\n\\n**Community Administrators:**\\n${this.adminUsers.map(admin => `• ${admin}`).join('\\n')}\\n\\n**How to Get Help:**\\n• Use this bot's AI assistants: /ai or /lai\\n• Ask questions in the community: /q <question>\\n• Check the FAQ: /faq\\n• Browse community resources: /links\\n\\n**Technical Support:**\\n• Use /status to check bot health\\n• Report issues through the community\\n• Check /help for command documentation\\n\\nFor immediate assistance, reach out to any administrator listed above.`;
+    const contacts = `📞 Contact Information:\n\n**Community Administrators:**\n${this.adminUsers.map(admin => `• ${admin}`).join('\n')}\n\n**How to Get Help:**\n• Use this bot's AI assistants: /ai or /lai\n• Ask questions in the community: /q <question>\n• Check the FAQ: /faq\n• Browse community resources: /links\n\n**Technical Support:**\n• Use /status to check bot health\n• Report issues through the community\n• Check /help for command documentation\n\nFor immediate assistance, reach out to any administrator listed above.`;
     
     await this.sendMessage(sender, contacts);
   }
@@ -1038,14 +1091,14 @@ class ProductionReadySignalBot {
     const time = new Date().toLocaleString();
     const utcTime = new Date().toUTCString();
     
-    const timezoneInfo = `🕒 Timezone Information:\\n\\n**Server Information:**\\n• Timezone: ${tz}\\n• Local Time: ${time}\\n• UTC Time: ${utcTime}\\n\\n**Community Tips:**\\n• When scheduling events, specify timezone\\n• Use /events to see upcoming community events\\n• International members welcome!\\n\\nFor scheduling coordination, consider using UTC or specify your timezone when proposing meeting times.`;
+    const timezoneInfo = `🕒 Timezone Information:\n\n**Server Information:**\n• Timezone: ${tz}\n• Local Time: ${time}\n• UTC Time: ${utcTime}\n\n**Community Tips:**\n• When scheduling events, specify timezone\n• Use /events to see upcoming community events\n• International members welcome!\n\nFor scheduling coordination, consider using UTC or specify your timezone when proposing meeting times.`;
     
     await this.sendMessage(sender, timezoneInfo);
   }
 
   async handleDocs(sender, args) {
     if (args.length === 0) {
-      const docsInfo = `📚 Documentation Resources:\\n\\n**Available Documentation:**\\n• Command Reference: /help\\n• Community Guidelines: /rules\\n• FAQ: /faq\\n• Bot Features: /about\\n\\n**Search Documentation:**\\nUse /docs <search term> to search for specific topics.\\n\\n**Topics you can search:**\\n• commands, ai, questions, url, community, rules, events\\n\\nExample: /docs ai commands`;
+      const docsInfo = `📚 Documentation Resources:\n\n**Available Documentation:**\n• Command Reference: /help\n• Community Guidelines: /rules\n• FAQ: /faq\n• Bot Features: /about\n\n**Search Documentation:**\nUse /docs <search term> to search for specific topics.\n\n**Topics you can search:**\n• commands, ai, questions, url, community, rules, events\n\nExample: /docs ai commands`;
       
       await this.sendMessage(sender, docsInfo);
       return;
@@ -1070,7 +1123,7 @@ class ProductionReadySignalBot {
 
   // News & Repository Commands
   async showNews(sender) {
-    let newsText = `📰 Latest News:\\n\\n**Bot Updates:**\\n• Real AI integration with gpt-5-mini activated\\n• PostgreSQL database integration complete\\n• Advanced URL processing with content extraction\\n• Comprehensive Q&A system operational\\n• URL tracker cleaning active\\n\\n**Community:**\\n• Active Q&A system with ${this.questions.size} questions\\n• URL cleaner removed ${this.cleanerStats.trackersSaved} trackers\\n• Multiple AI assistants available\\n\\nUse /tldr <url> to summarize news articles!`;
+    let newsText = `📰 Latest News:\n\n**Bot Updates:**\n• Real AI integration with gpt-5-mini activated\n• PostgreSQL database integration complete\n• Advanced URL processing with content extraction\n• Comprehensive Q&A system operational\n• URL tracker cleaning active\n\n**Community:**\n• Active Q&A system with ${this.questions.size} questions\n• URL cleaner removed ${this.cleanerStats.trackersSaved} trackers\n• Multiple AI assistants available\n\nUse /tldr <url> to summarize news articles!`;
     
     await this.sendMessage(sender, newsText);
   }
@@ -1091,7 +1144,7 @@ class ProductionReadySignalBot {
   }
 
   async showUpdates(sender) {
-    const updates = `🔄 Recent Updates:\\n\\n**Latest Features:**\\n• ✅ Real OpenAI integration (gpt-5-mini)\\n• ✅ LocalAI support for privacy-focused AI\\n• ✅ PostgreSQL database integration\\n• ✅ Advanced URL processing\\n• ✅ Automatic URL tracker removal\\n• ✅ Comprehensive Q&A system\\n• ✅ AI-powered content summarization\\n• ✅ Enhanced error handling and logging\\n\\n**Performance Improvements:**\\n• ✅ Reduced response times (${this.pollInterval}ms polling)\\n• ✅ Better message deduplication\\n• ✅ Improved memory management\\n• ✅ Enhanced rate limiting\\n\\n**Current Statistics:**\\n• Commands available: ${Object.keys(this.commands).length}\\n• Questions handled: ${this.questions.size}\\n• URLs cleaned: ${this.cleanerStats.totalCleaned}\\n• Messages processed: ${this.processedMessages.size}\\n\\nThe bot is now production-ready with full AI capabilities!`;
+    const updates = `🔄 Recent Updates:\n\n**Latest Features:**\n• ✅ Real OpenAI integration (gpt-5-mini)\n• ✅ LocalAI support for privacy-focused AI\n• ✅ PostgreSQL database integration\n• ✅ Advanced URL processing\n• ✅ Automatic URL tracker removal\n• ✅ Comprehensive Q&A system\n• ✅ AI-powered content summarization\n• ✅ Enhanced error handling and logging\n\n**Performance Improvements:**\n• ✅ Reduced response times (${this.pollInterval}ms polling)\n• ✅ Better message deduplication\n• ✅ Improved memory management\n• ✅ Enhanced rate limiting\n\n**Current Statistics:**\n• Commands available: ${Object.keys(this.commands).length}\n• Questions handled: ${this.questions.size}\n• URLs cleaned: ${this.cleanerStats.totalCleaned}\n• Messages processed: ${this.processedMessages.size}\n\nThe bot is now production-ready with full AI capabilities!`;
     
     await this.sendMessage(sender, updates);
   }
@@ -1206,7 +1259,7 @@ class ProductionReadySignalBot {
     }
     
     if (args.length === 0) {
-      const adminHelp = `👨‍💼 Admin Commands:\\n\\n**System Management:**\\n• /restart - Restart the bot\\n• /stats - Performance statistics\\n• /metrics - Community metrics\\n\\n**Database:**\\n• Connected: ${this.prisma ? 'Yes' : 'No'}\\n• Questions: ${this.questions.size}\\n• Processed Messages: ${this.processedMessages.size}\\n\\n**AI Status:**\\n• OpenAI: ${this.openAiApiKey ? 'Configured' : 'Not configured'}\\n• LocalAI: ${this.localAiUrl}`;
+      const adminHelp = `👨‍💼 Admin Commands:\n\n**System Management:**\n• /restart - Restart the bot\n• /stats - Performance statistics\n• /metrics - Community metrics\n\n**Database:**\n• Connected: ${this.prisma ? 'Yes' : 'No'}\n• Questions: ${this.questions.size}\n• Processed Messages: ${this.processedMessages.size}\n\n**AI Status:**\n• OpenAI: ${this.openAiApiKey ? 'Configured' : 'Not configured'}\n• LocalAI: ${this.localAiUrl}`;
       
       await this.sendMessage(sender, adminHelp);
       return;
@@ -1253,7 +1306,7 @@ class ProductionReadySignalBot {
     const uptime = Math.floor(process.uptime());
     const memUsage = process.memoryUsage();
     
-    const stats = `📊 Bot Performance Statistics:\\n\\n**System:**\\n• Uptime: ${uptime} seconds\\n• Memory Usage: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB\\n• Poll Interval: ${this.pollInterval}ms\\n• API Timeout: ${this.apiTimeout}ms\\n\\n**Message Processing:**\\n• Cache Size: ${this.messageCache.size}\\n• Processed Messages: ${this.processedMessages.size}\\n• Currently Processing: ${this.processingMessage ? 'Yes' : 'No'}\\n\\n**Features:**\\n• Commands Available: ${Object.keys(this.commands).length}\\n• Questions Active: ${this.questions.size}\\n• AI Preferences Tracked: ${this.userAiPreference.size}\\n• URLs Cleaned: ${this.cleanerStats.totalCleaned}\\n• Trackers Removed: ${this.cleanerStats.trackersSaved}\\n\\n**Database:**\\n• Connection: ${this.prisma ? 'Connected' : 'Disconnected'}\\n\\n**Configuration:**\\n• Admin Users: ${this.adminUsers.length}\\n• Phone: ${this.phoneNumber}\\n• REST API: ${this.restApiUrl}`;
+    const stats = `📊 Bot Performance Statistics:\n\n**System:**\n• Uptime: ${uptime} seconds\n• Memory Usage: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB\n• Poll Interval: ${this.pollInterval}ms\n• API Timeout: ${this.apiTimeout}ms\n\n**Message Processing:**\n• Cache Size: ${this.messageCache.size}\n• Processed Messages: ${this.processedMessages.size}\n• Currently Processing: ${this.processingMessage ? 'Yes' : 'No'}\n\n**Features:**\n• Commands Available: ${Object.keys(this.commands).length}\n• Questions Active: ${this.questions.size}\n• AI Preferences Tracked: ${this.userAiPreference.size}\n• URLs Cleaned: ${this.cleanerStats.totalCleaned}\n• Trackers Removed: ${this.cleanerStats.trackersSaved}\n\n**Database:**\n• Connection: ${this.prisma ? 'Connected' : 'Disconnected'}\n\n**Configuration:**\n• Admin Users: ${this.adminUsers.length}\n• Phone: ${this.phoneNumber}\n• REST API: ${this.restApiUrl}`;
     
     await this.sendMessage(sender, stats);
   }
@@ -1376,13 +1429,13 @@ const bot = new ProductionReadySignalBot();
 
 // Handle shutdown gracefully
 process.on('SIGINT', async () => {
-  console.log('\\n🛑 Received SIGINT, shutting down gracefully...');
+  console.log('\n🛑 Received SIGINT, shutting down gracefully...');
   await bot.stop();
   process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
-  console.log('\\n🛑 Received SIGTERM, shutting down gracefully...');
+  console.log('\n🛑 Received SIGTERM, shutting down gracefully...');
   await bot.stop();
   process.exit(0);
 });

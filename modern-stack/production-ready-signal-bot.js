@@ -13,6 +13,9 @@
  * - Comprehensive error handling and logging
  */
 
+// Load environment variables from .env.local file
+require('dotenv').config({ path: '.env.local' });
+
 const axios = require('axios');
 
 class ProductionReadySignalBot {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-/ * Production-Ready Signal CLI Bot
+/* Production-Ready Signal CLI Bot
  * Combines working Signal REST API with real AI implementations
  * Features:
  * - Real OpenAI integration with gpt-5-mini
@@ -495,9 +495,35 @@ class ProductionReadySignalBot {
     return false;
   }
 
+  /**
+   * Signal Message Formatter - Ensures proper text formatting for Signal protocol
+   * 
+   * @param {string} text - Raw text that may contain formatting issues
+   * @returns {string} - Signal-compatible formatted text
+   * 
+   * Fixes:
+   * - Literal \\n characters → actual newlines
+   * - Excessive whitespace → clean formatting
+   * - Template literal artifacts → proper display
+   * 
+   * Usage: Apply to all multi-line text before sendMessage()
+   */
+  formatForSignal(text) {
+    if (!text) return '';
+    
+    return text
+      .replace(/\\n/g, '\n')           // Fix literal \n characters from templates
+      .replace(/\n{3,}/g, '\n\n')       // Max 2 consecutive newlines
+      .replace(/\t/g, '  ')           // Convert tabs to spaces
+      .replace(/[ ]{3,}/g, '  ')      // Normalize excessive spaces
+      .trim();                        // Clean start/end whitespace
+  }
+
   async extractTextFromUrl(url) {
     try {
-      // Simple and robust web scraping without dependencies that cause conflicts
+      // Use JSDOM instead of cheerio to avoid Node.js environment conflicts
+      const { JSDOM } = require('jsdom');
+      
       const response = await axios.get(url, {
         timeout: 15000,
         headers: {
@@ -508,44 +534,53 @@ class ProductionReadySignalBot {
         }
       });
       
-      // Use cheerio for reliable HTML parsing
-      const cheerio = require('cheerio');
-      const $ = cheerio.load(response.data);
+      // Use JSDOM for Node.js compatibility
+      const dom = new JSDOM(response.data);
+      const document = dom.window.document;
       
       // Remove unwanted elements
-      $('script, style, nav, footer, aside, .advertisement, .ads, .comments').remove();
+      const unwantedSelectors = ['script', 'style', 'nav', 'footer', 'aside', '.advertisement', '.ads', '.comments'];
+      unwantedSelectors.forEach(selector => {
+        const elements = document.querySelectorAll(selector);
+        elements.forEach(el => el.remove());
+      });
       
       // Extract title
-      const title = $('title').text().trim() || 
-                   $('h1').first().text().trim() || 
-                   $('meta[property="og:title"]').attr('content') || 
-                   'No title';
+      const titleEl = document.querySelector('title');
+      const h1El = document.querySelector('h1');
+      const ogTitleEl = document.querySelector('meta[property="og:title"]');
       
-      // Extract main content
+      const title = (titleEl?.textContent || 
+                    h1El?.textContent || 
+                    ogTitleEl?.getAttribute('content') || 
+                    'No title').trim();
+      
+      // Extract main content using multiple strategies
       let content = '';
       
-      // Try to find main content areas
       const contentSelectors = [
-        'article', 
+        'article',
         '.content', 
         '.post-content', 
         '.entry-content',
         'main',
         '.main-content',
-        '#content'
+        '#content',
+        '[role="main"]'
       ];
       
       for (const selector of contentSelectors) {
-        const element = $(selector);
-        if (element.length && element.text().trim().length > 100) {
-          content = element.text();
+        const element = document.querySelector(selector);
+        if (element && element.textContent.trim().length > 100) {
+          content = element.textContent;
           break;
         }
       }
       
       // Fallback to body content
       if (!content || content.length < 100) {
-        content = $('body').text();
+        const bodyEl = document.querySelector('body');
+        content = bodyEl ? bodyEl.textContent : '';
       }
       
       // Clean up content
@@ -565,6 +600,10 @@ class ProductionReadySignalBot {
       
     } catch (error) {
       console.error('Error extracting text from URL:', error.message);
+      // Provide a more helpful error message
+      if (error.message.includes('File is not defined')) {
+        throw new Error('Web scraping dependency error - content extraction failed');
+      }
       throw new Error(`Failed to extract content: ${error.message}`);
     }
   }
@@ -581,7 +620,7 @@ class ProductionReadySignalBot {
       const command = this.commands[commandName];
       
       if (command) {
-        let helpText = `Command: /${commandName}\nDescription: ${command.description}\nCategory: ${command.category}`;
+        let helpText = `Command: !${commandName}\nDescription: ${command.description}\nCategory: ${command.category}`;
         
         if (command.adminOnly) {
           helpText += '\nPermissions: Admin only';
@@ -590,7 +629,7 @@ class ProductionReadySignalBot {
         await this.sendMessage(sender, helpText);
         return;
       } else {
-        await this.sendMessage(sender, `Command /${commandName} not found.`);
+        await this.sendMessage(sender, `Command !${commandName} not found.`);
         return;
       }
     }
@@ -599,7 +638,7 @@ class ProductionReadySignalBot {
     Object.entries(this.commands).forEach(([cmd, info]) => {
       if (!categories[info.category]) categories[info.category] = [];
       if (!info.adminOnly || this.adminUsers.includes(sender)) {
-        categories[info.category].push(`/${cmd} - ${info.description}`);
+        categories[info.category].push(`!${cmd} - ${info.description}`);
       }
     });
     
@@ -608,8 +647,10 @@ class ProductionReadySignalBot {
       helpText += `${category}:\n${commands.join('\n')}\n\n`;
     });
     
-    helpText += 'Use /help <command> for detailed information about a specific command.';
-    await this.sendMessage(sender, helpText);
+    helpText += 'Use !help <command> for detailed information about a specific command.';
+    
+    // Apply Signal formatting before sending
+    await this.sendMessage(sender, this.formatForSignal(helpText));
   }
 
   async handlePing(sender) {
@@ -617,19 +658,29 @@ class ProductionReadySignalBot {
     await this.sendMessage(sender, `🏓 Pong! Response time: ${Date.now() - startTime}ms`);
   }
 
+  /**
+   * Shows comprehensive bot status information
+   * @param {string} sender - User requesting status
+   */
   async showStatus(sender) {
     const uptime = Math.floor((Date.now() - this.lastMessageTimestamp) / 1000);
     const status = `🤖 Bot Status:\nRunning: ${this.isRunning ? 'Yes' : 'No'}\nPhone: ${this.phoneNumber}\nCommands: ${Object.keys(this.commands).length}\nCache Size: ${this.messageCache.size}\nPoll Interval: ${this.pollInterval}ms\nDatabase: ${this.prisma ? 'Connected' : 'Disconnected'}\nOpenAI: ${this.openAiApiKey ? 'Configured' : 'Not configured'}\nLocalAI: ${this.localAiUrl}\nQuestions: ${this.questions.size}\nProcessed Messages: ${this.processedMessages.size}\nUptime: ${uptime}s`;
     
-    await this.sendMessage(sender, status);
+    // Apply Signal formatting to ensure proper display
+    await this.sendMessage(sender, this.formatForSignal(status));
   }
 
+  /**
+   * Lists all active Signal groups the bot is a member of
+   * @param {string} sender - User requesting group list
+   */
   async listGroups(sender) {
     try {
       const groups = await this.makeApiCall(`/v1/groups/${this.phoneNumber}`);
       if (groups && groups.length > 0) {
         const groupList = groups.map(g => `- ${g.name || g.id}`).join('\n');
-        await this.sendMessage(sender, `👥 Active Groups (${groups.length}):\n${groupList}`);
+        const message = `👥 Active Groups (${groups.length}):\n${groupList}`;
+        await this.sendMessage(sender, this.formatForSignal(message));
       } else {
         await this.sendMessage(sender, 'No active groups found.');
       }
@@ -874,6 +925,11 @@ class ProductionReadySignalBot {
   }
 
   // URL Processing Commands
+  /**
+   * Extracts and summarizes content from URLs using AI
+   * @param {string} sender - User requesting the summary
+   * @param {Array} args - Command arguments containing the URL to summarize
+   */
   async handleTLDR(sender, args) {
     if (args.length === 0) {
       await this.sendMessage(sender, 'Usage: /tldr <url>');
@@ -922,7 +978,7 @@ class ProductionReadySignalBot {
       
       const result = `📰 Article Summary\n\n**${article.title}**\n\n${summary}\n\n🔗 Source: ${url}`;
       
-      await this.sendMessage(sender, result);
+      await this.sendMessage(sender, this.formatForSignal(result));
       
       // Store summary
       this.newsSummaries.set(url, {
@@ -937,6 +993,10 @@ class ProductionReadySignalBot {
     }
   }
 
+  /**
+   * Shows statistics about URL tracking parameter cleaning
+   * @param {string} sender - User requesting cleaner statistics
+   */
   async handleCleaner(sender) {
     if (this.cleanerStats.totalCleaned === 0) {
       await this.sendMessage(sender, '🧹 No URLs have been cleaned yet.');
@@ -959,9 +1019,14 @@ class ProductionReadySignalBot {
       stats += platformList;
     }
     
-    await this.sendMessage(sender, stats);
+    await this.sendMessage(sender, this.formatForSignal(stats));
   }
 
+  /**
+   * Provides bypass links for paywalled or restricted URLs
+   * @param {string} sender - User requesting bypass links
+   * @param {Array} args - Command arguments containing the URL
+   */
   async handleBypass(sender, args) {
     if (args.length === 0) {
       await this.sendMessage(sender, 'Usage: /bypass <url>');
@@ -988,9 +1053,14 @@ class ProductionReadySignalBot {
       response += `${index + 1}. ${service}\n`;
     });
     
-    await this.sendMessage(sender, response);
+    await this.sendMessage(sender, this.formatForSignal(response));
   }
 
+  /**
+   * Provides Wayback Machine archive link for URLs
+   * @param {string} sender - User requesting Wayback Machine link
+   * @param {Array} args - Command arguments containing the URL
+   */
   async handleWayback(sender, args) {
     if (args.length === 0) {
       await this.sendMessage(sender, 'Usage: /wayback <url>');
@@ -1007,9 +1077,14 @@ class ProductionReadySignalBot {
       response += `\n🧹 Removed tracking parameters from URL`;
     }
     
-    await this.sendMessage(sender, response);
+    await this.sendMessage(sender, this.formatForSignal(response));
   }
 
+  /**
+   * Provides archive.ph link for permanent URL archiving
+   * @param {string} sender - User requesting archive link
+   * @param {Array} args - Command arguments containing the URL
+   */
   async handleArchive(sender, args) {
     if (args.length === 0) {
       await this.sendMessage(sender, 'Usage: /archive <url>');
@@ -1026,14 +1101,18 @@ class ProductionReadySignalBot {
       response += `\n🧹 Removed tracking parameters from URL`;
     }
     
-    await this.sendMessage(sender, response);
+    await this.sendMessage(sender, this.formatForSignal(response));
   }
 
   // Community Commands
+  /**
+   * Sends welcome message to new community members
+   * @param {string} sender - User receiving the welcome message
+   */
   async sendWelcome(sender) {
     const welcome = `🎉 Welcome to IrregularChat!\n\n${this.communityContext.description}\n\n🔧 Quick Start:\n• Use /help to see all available commands\n• Use /rules to read community guidelines\n• Use /ai or /lai to chat with AI assistants\n• Use /q to ask questions to the community\n\n📚 Resources:\n• Wiki: ${this.wikiUrl}\n• Forum: ${this.forumUrl}\n\nFeel free to ask questions or explore the commands!`;
     
-    await this.sendMessage(sender, welcome);
+    await this.sendMessage(sender, this.formatForSignal(welcome));
   }
 
   async showRules(sender) {
@@ -1044,13 +1123,13 @@ class ProductionReadySignalBot {
     
     rulesText += `\n💡 Remember: ${this.communityContext.description}`;
     
-    await this.sendMessage(sender, rulesText);
+    await this.sendMessage(sender, this.formatForSignal(rulesText));
   }
 
   async handleZeroeth(sender) {
     const zeroethLaw = `🔧 The Zeroeth Law of IrregularChat:\n\n"A member may not harm the community or, through inaction, allow the community to come to harm."\n\nThis principle guides all interactions and decisions within our community. We prioritize collective wellbeing, constructive discourse, and mutual support.\n\nThe Zeroeth Law supersedes all other rules and serves as the foundation for our community values.`;
     
-    await this.sendMessage(sender, zeroethLaw);
+    await this.sendMessage(sender, this.formatForSignal(zeroethLaw));
   }
 
   async showMembers(sender) {
@@ -1064,26 +1143,26 @@ class ProductionReadySignalBot {
   async showFAQ(sender) {
     const faq = `❓ Frequently Asked Questions:\n\n**Q: How do I join different groups?**\nA: Use /groups to see available groups, then ask an admin for invite links.\n\n**Q: What AI assistants are available?**\nA: Use /ai for OpenAI (gpt-5-mini) or /lai for LocalAI. Both provide helpful responses.\n\n**Q: How does the Q&A system work?**\nA: Use /q to ask questions, others can /answer with the question ID, and you can mark them /solved.\n\n**Q: Can the bot clean tracking URLs?**\nA: Yes! The bot automatically detects and cleans tracking parameters from URLs you share.\n\nFor more help, ask questions in the community or use the AI assistants!`;
     
-    await this.sendMessage(sender, faq);
+    await this.sendMessage(sender, this.formatForSignal(faq));
   }
 
   // Information Commands
   async showAbout(sender) {
     const about = `🤖 About IrregularChat Signal Bot\n\n${this.communityContext.description}\n\n**Features:**\n• 🤖 Real AI integration (OpenAI gpt-5-mini & LocalAI)\n• ❓ Community Q&A system\n• 🧹 Automatic URL tracker removal\n• 📰 URL content summarization\n• 📅 Event management\n• 📚 Knowledge base integration\n• 🔧 Comprehensive command system\n\n**Technology:**\n• Signal CLI REST API\n• PostgreSQL database\n• Real web scraping\n• Advanced error handling and logging\n\nBuilt for seamless community management and enhanced communication.`;
     
-    await this.sendMessage(sender, about);
+    await this.sendMessage(sender, this.formatForSignal(about));
   }
 
   async showLinks(sender) {
     const links = `🔗 Important Links:\n\n**Community Resources:**\n• Wiki: ${this.wikiUrl}\n• Forum: ${this.forumUrl}\n• Dashboard: http://localhost:3000\n\n**AI Services:**\n• OpenAI: gpt-5-mini model\n• LocalAI: ${this.localAiUrl}\n\n**Bot Features:**\n• URL cleaning and summarization\n• Q&A system with database storage\n• Real-time message processing\n• Multi-group support\n\nUse /help for all available commands!`;
     
-    await this.sendMessage(sender, links);
+    await this.sendMessage(sender, this.formatForSignal(links));
   }
 
   async showContact(sender) {
     const contacts = `📞 Contact Information:\n\n**Community Administrators:**\n${this.adminUsers.map(admin => `• ${admin}`).join('\n')}\n\n**How to Get Help:**\n• Use this bot's AI assistants: /ai or /lai\n• Ask questions in the community: /q <question>\n• Check the FAQ: /faq\n• Browse community resources: /links\n\n**Technical Support:**\n• Use /status to check bot health\n• Report issues through the community\n• Check /help for command documentation\n\nFor immediate assistance, reach out to any administrator listed above.`;
     
-    await this.sendMessage(sender, contacts);
+    await this.sendMessage(sender, this.formatForSignal(contacts));
   }
 
   async showTimezone(sender) {
@@ -1093,7 +1172,7 @@ class ProductionReadySignalBot {
     
     const timezoneInfo = `🕒 Timezone Information:\n\n**Server Information:**\n• Timezone: ${tz}\n• Local Time: ${time}\n• UTC Time: ${utcTime}\n\n**Community Tips:**\n• When scheduling events, specify timezone\n• Use /events to see upcoming community events\n• International members welcome!\n\nFor scheduling coordination, consider using UTC or specify your timezone when proposing meeting times.`;
     
-    await this.sendMessage(sender, timezoneInfo);
+    await this.sendMessage(sender, this.formatForSignal(timezoneInfo));
   }
 
   async handleDocs(sender, args) {
@@ -1125,7 +1204,7 @@ class ProductionReadySignalBot {
   async showNews(sender) {
     let newsText = `📰 Latest News:\n\n**Bot Updates:**\n• Real AI integration with gpt-5-mini activated\n• PostgreSQL database integration complete\n• Advanced URL processing with content extraction\n• Comprehensive Q&A system operational\n• URL tracker cleaning active\n\n**Community:**\n• Active Q&A system with ${this.questions.size} questions\n• URL cleaner removed ${this.cleanerStats.trackersSaved} trackers\n• Multiple AI assistants available\n\nUse /tldr <url> to summarize news articles!`;
     
-    await this.sendMessage(sender, newsText);
+    await this.sendMessage(sender, this.formatForSignal(newsText));
   }
 
   async handleRepo(sender, args) {
@@ -1146,7 +1225,7 @@ class ProductionReadySignalBot {
   async showUpdates(sender) {
     const updates = `🔄 Recent Updates:\n\n**Latest Features:**\n• ✅ Real OpenAI integration (gpt-5-mini)\n• ✅ LocalAI support for privacy-focused AI\n• ✅ PostgreSQL database integration\n• ✅ Advanced URL processing\n• ✅ Automatic URL tracker removal\n• ✅ Comprehensive Q&A system\n• ✅ AI-powered content summarization\n• ✅ Enhanced error handling and logging\n\n**Performance Improvements:**\n• ✅ Reduced response times (${this.pollInterval}ms polling)\n• ✅ Better message deduplication\n• ✅ Improved memory management\n• ✅ Enhanced rate limiting\n\n**Current Statistics:**\n• Commands available: ${Object.keys(this.commands).length}\n• Questions handled: ${this.questions.size}\n• URLs cleaned: ${this.cleanerStats.totalCleaned}\n• Messages processed: ${this.processedMessages.size}\n\nThe bot is now production-ready with full AI capabilities!`;
     
-    await this.sendMessage(sender, updates);
+    await this.sendMessage(sender, this.formatForSignal(updates));
   }
 
   // Utility Commands  
@@ -1308,7 +1387,7 @@ class ProductionReadySignalBot {
     
     const stats = `📊 Bot Performance Statistics:\n\n**System:**\n• Uptime: ${uptime} seconds\n• Memory Usage: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB\n• Poll Interval: ${this.pollInterval}ms\n• API Timeout: ${this.apiTimeout}ms\n\n**Message Processing:**\n• Cache Size: ${this.messageCache.size}\n• Processed Messages: ${this.processedMessages.size}\n• Currently Processing: ${this.processingMessage ? 'Yes' : 'No'}\n\n**Features:**\n• Commands Available: ${Object.keys(this.commands).length}\n• Questions Active: ${this.questions.size}\n• AI Preferences Tracked: ${this.userAiPreference.size}\n• URLs Cleaned: ${this.cleanerStats.totalCleaned}\n• Trackers Removed: ${this.cleanerStats.trackersSaved}\n\n**Database:**\n• Connection: ${this.prisma ? 'Connected' : 'Disconnected'}\n\n**Configuration:**\n• Admin Users: ${this.adminUsers.length}\n• Phone: ${this.phoneNumber}\n• REST API: ${this.restApiUrl}`;
     
-    await this.sendMessage(sender, stats);
+    await this.sendMessage(sender, this.formatForSignal(stats));
   }
 
   async showMetrics(sender) {

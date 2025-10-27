@@ -45,6 +45,8 @@ class ProductionReadySignalBot {
     // AI Configuration
     this.openAiApiKey = process.env.OPENAI_API_KEY;
     this.localAiUrl = process.env.LOCAL_AI_URL || 'http://localhost:8080';
+    this.localAiApiKey = process.env.LOCAL_AI_API_KEY;
+    this.localAiModel = process.env.LOCAL_AI_MODEL || 'irregularbot:latest';
     
     // AI thread tracking
     this.userAiPreference = new Map();
@@ -704,7 +706,11 @@ class ProductionReadySignalBot {
     }
     
     const userQuery = args.join(' ');
-    const userId = `dm:${sender}`;
+    
+    // Extract group ID from envelope if message is from a group
+    const groupId = envelope?.dataMessage?.groupV2?.id || envelope?.dataMessage?.groupInfo?.groupId;
+    const responseTarget = groupId || sender;
+    const userId = `${groupId || 'dm'}:${sender}`;
     
     // Track AI preference
     this.userAiPreference.set(userId, {
@@ -714,7 +720,7 @@ class ProductionReadySignalBot {
     });
     
     try {
-      await this.sendMessage(sender, '🤖 Thinking...');
+      await this.sendMessage(responseTarget, '🤖 Thinking...');
       
       const { OpenAI } = require('openai');
       const openai = new OpenAI({ apiKey: this.openAiApiKey });
@@ -740,17 +746,17 @@ class ProductionReadySignalBot {
       
       if (!response.choices[0]?.message?.content) {
         console.error('⚠️ OpenAI returned empty response');
-        await this.sendMessage(sender, 'OpenAI: I apologize, but I was unable to generate a response. Please try again.');
+        await this.sendMessage(responseTarget, 'OpenAI: I apologize, but I was unable to generate a response. Please try again.');
         return;
       }
       
       const aiResponse = response.choices[0].message.content;
       console.log(`✅ AI Response length: ${aiResponse.length} chars`);
-      await this.sendMessage(sender, `🤖 OpenAI: ${aiResponse}`);
+      await this.sendMessage(responseTarget, `🤖 OpenAI: ${aiResponse}`);
       
     } catch (error) {
       console.error('OpenAI API error:', error.message);
-      await this.sendMessage(sender, '❌ OpenAI API error. Please try again later.');
+      await this.sendMessage(responseTarget, '❌ OpenAI API error. Please try again later.');
     }
   }
 
@@ -761,7 +767,11 @@ class ProductionReadySignalBot {
     }
     
     const userQuery = args.join(' ');
-    const userId = `dm:${sender}`;
+    
+    // Extract group ID from envelope if message is from a group
+    const groupId = envelope?.dataMessage?.groupV2?.id || envelope?.dataMessage?.groupInfo?.groupId;
+    const responseTarget = groupId || sender;
+    const userId = `${groupId || 'dm'}:${sender}`;
     
     // Track AI preference
     this.userAiPreference.set(userId, {
@@ -771,7 +781,7 @@ class ProductionReadySignalBot {
     });
     
     try {
-      await this.sendMessage(sender, '🧠 Thinking locally...');
+      await this.sendMessage(responseTarget, '🧠 Thinking locally...');
       
       const messages = [
         {
@@ -784,20 +794,24 @@ class ProductionReadySignalBot {
         }
       ];
       
-      const response = await axios.post(`${this.localAiUrl}/v1/chat/completions`, {
-        model: 'gpt-4',
+      const response = await axios.post(`${this.localAiUrl}/api/chat/completions`, {
+        model: this.localAiModel || 'irregularbot:latest',
         messages: messages,
         max_tokens: 500
       }, {
-        timeout: 30000
+        timeout: 30000,
+        headers: {
+          'Authorization': `Bearer ${this.localAiApiKey}`,
+          'Content-Type': 'application/json'
+        }
       });
       
       const aiResponse = response.data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
-      await this.sendMessage(sender, `🧠 LocalAI: ${aiResponse}`);
+      await this.sendMessage(responseTarget, `🧠 LocalAI: ${aiResponse}`);
       
     } catch (error) {
       console.error('LocalAI error:', error.message);
-      await this.sendMessage(sender, '❌ LocalAI error. Please try again later.');
+      await this.sendMessage(responseTarget, '❌ LocalAI error. Please try again later.');
     }
   }
 

@@ -8,6 +8,8 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "deploy:production": "wrangler deploy --env production",
+    "build": "tsc",
+    "type-check": "tsc --noEmit",
     "tail": "wrangler tail",
     "kv:create": "wrangler kv:namespace create SIGNAL_CACHE",
     "r2:create": "wrangler r2 bucket create signal-cli-data",
@@ -21,6 +23,8 @@
     "@cloudflare/containers": "latest"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250106.0",
+    "typescript": "^5.3.3",
     "wrangler": "^3.94.0"
   }
 }

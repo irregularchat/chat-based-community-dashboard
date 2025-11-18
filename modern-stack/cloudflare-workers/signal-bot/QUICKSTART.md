@@ -1,6 +1,15 @@
-# Signal CLI Bot - Quick Start Guide
+# Signal CLI Bot - Quick Start Guide (Hybrid Architecture)
 
-Get your Signal bot running on Cloudflare in under 10 minutes!
+Get your Signal bot running on Cloudflare Containers while keeping all features in Next.js!
+
+## What is This?
+
+This deploys your Signal CLI to Cloudflare's global edge network while keeping all your custom bot logic, database, and features in your existing Next.js app.
+
+**Architecture:**
+```
+Next.js App (Your Server) → Cloudflare Worker → Container (signal-cli) → Signal Network
+```
 
 ## Prerequisites Checklist
 
@@ -8,135 +17,151 @@ Get your Signal bot running on Cloudflare in under 10 minutes!
 - [ ] Wrangler CLI installed (`npm install -g wrangler`)
 - [ ] Docker installed and running
 - [ ] Authenticated with Cloudflare (`wrangler login`)
+- [ ] Your Next.js app is running
 
-## 5-Step Quick Deploy
+## 3-Step Quick Deploy
 
-### Step 1: Install Dependencies
+### Step 1: Deploy Container to Cloudflare
 
 ```bash
 cd cloudflare-workers/signal-bot
 npm install
-```
 
-### Step 2: Create Infrastructure
+# Login to Cloudflare
+wrangler login
 
-```bash
 # Create KV namespace
 npm run kv:create
+# Copy the namespace ID to wrangler.toml
 
-# Create R2 bucket
-npm run r2:create
-```
-
-**Important:** Copy the KV namespace ID from the output and update `wrangler.toml`:
-
-```toml
-[[kv_namespaces]]
-binding = "SIGNAL_CACHE"
-id = "paste-your-namespace-id-here"
-```
-
-### Step 3: Set Secrets
-
-```bash
-# Set your Signal phone number
+# Set secrets
 npm run secret:set-phone
-# Enter: +19108471202 (or your number)
+# Enter: +19108471202 (your bot's number)
 
-# Optional: Set OpenAI API key for AI features
-npm run secret:set-openai
-```
-
-### Step 4: Deploy Everything
-
-```bash
+# Deploy
 ./deploy.sh
 ```
 
-Or manually:
+Note your Worker URL: `https://signal-cli-bot.your-subdomain.workers.dev`
 
+### Step 2: Register Signal Account in Container
+
+Get captcha: https://signalcaptchas.org/registration/generate.html
+
+Register:
 ```bash
-# Build and deploy
-npm run container:push
+curl -X POST "https://signal-cli-bot.your-subdomain.workers.dev/v1/register/+19108471202" \
+  -H "Content-Type": application/json" \
+  -d '{"captcha": "YOUR_CAPTCHA_TOKEN"}'
 ```
 
-### Step 5: Verify Deployment
-
+Verify with SMS code:
 ```bash
-# Check worker health
-curl https://signal-cli-bot.<your-subdomain>.workers.dev/health
-
-# Check full status
-curl https://signal-cli-bot.<your-subdomain>.workers.dev/status
+curl -X POST "https://signal-cli-bot.your-subdomain.workers.dev/v1/register/+19108471202/verify/123456"
 ```
 
-## Expected Output
+### Step 3: Connect Next.js App to Container
 
-If successful, you should see:
+Edit `.env.local` in your Next.js project root:
 
+```bash
+# Change this line:
+SIGNAL_CLI_REST_API_BASE_URL=https://signal-cli-bot.your-subdomain.workers.dev
+
+# Keep everything else unchanged!
+```
+
+Restart Next.js:
+```bash
+npm run dev
+```
+
+Start bot:
+```bash
+node start-native-signal-bot.js
+```
+
+## Verify It Works
+
+### Test 1: Worker Health
+
+```bash
+curl https://signal-cli-bot.your-subdomain.workers.dev/health
+```
+
+Expected:
 ```json
 {
-  "worker": {
-    "status": "healthy",
-    "version": "1.0.0",
-    "timestamp": "2025-01-18T12:00:00.000Z"
-  },
-  "container": {
-    "status": "healthy",
-    "instance": "primary-bot",
-    "lastChecked": "2025-01-18T12:00:00.000Z"
-  }
+  "status": "healthy",
+  "worker": "signal-cli-bot-proxy",
+  "version": "2.0.0",
+  "role": "proxy",
+  "architecture": "hybrid"
 }
 ```
 
-## Register Signal Account (If Needed)
-
-If you don't have an existing Signal account in the container:
-
-### 1. Get Captcha
-
-Visit: https://signalcaptchas.org/registration/generate.html
-
-Copy the captcha token.
-
-### 2. Register Phone Number
+### Test 2: Container Health
 
 ```bash
-curl -X POST "https://signal-cli-bot.<your-subdomain>.workers.dev/v1/register/+19108471202" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "captcha": "YOUR_CAPTCHA_TOKEN_HERE"
-  }'
+curl https://signal-cli-bot.your-subdomain.workers.dev/v1/health
 ```
 
-### 3. Verify with SMS Code
-
-You'll receive an SMS code. Use it to verify:
-
-```bash
-curl -X POST "https://signal-cli-bot.<your-subdomain>.workers.dev/v1/register/+19108471202/verify/123456"
+Expected:
+```json
+{
+  "status": "healthy"
+}
 ```
 
-Replace `123456` with your actual SMS code.
+### Test 3: Bot Commands
 
-## Migrate Existing Signal Data (Optional)
+Send a message in any Signal group the bot is in:
 
-If you have existing signal-data from local setup:
-
-```bash
-# Navigate to project root
-cd ../..
-
-# Install wrangler if not already
-npm install -g wrangler
-
-# Upload signal data to R2
-wrangler r2 object put signal-cli-data/accounts.json \
-  --file=./signal-data/data/accounts.json
-
-# Upload avatars (if any)
-# Repeat for other files as needed
 ```
+!ping
+```
+
+Expected response:
+```
+🏓 Pong! Bot is responsive.
+```
+
+### Test 4: Admin Panel
+
+1. Go to: `http://localhost:3000/admin/signal`
+2. Check "Signal Bot Health" - should be green
+3. Try "Get Groups" - should list your groups
+4. Check database features work (Q&A, news tracking, etc.)
+
+## What Changed vs. Local Setup?
+
+| Component | Before | After | Changed? |
+|-----------|--------|-------|----------|
+| Signal CLI | Localhost | Cloudflare Container | ✅ Yes |
+| Next.js App | Localhost | Localhost | ❌ No |
+| Database | PostgreSQL | PostgreSQL | ❌ No |
+| Bot Logic | Next.js | Next.js | ❌ No |
+| All Features | Working | Working | ❌ No |
+
+**Summary:** Only Signal CLI moved to Cloudflare. Everything else unchanged!
+
+## All Features Still Work
+
+✅ All bot commands (`!help`, `!ping`, `!ai`, etc.)
+✅ Q&A system (`!ask`, `!questions`, `!answer`)
+✅ News link tracking (automatic)
+✅ Repository analysis (GitHub/GitLab links)
+✅ URL summarization (`!tldr`)
+✅ Member tracking system
+✅ Join request moderation
+✅ AI integration (OpenAI, Local AI)
+✅ Discourse integration
+✅ Database operations
+✅ Analytics & monitoring
+✅ Admin panel
+✅ tRPC API routes
+
+**Nothing was removed or disabled.**
 
 ## Troubleshooting
 
@@ -150,93 +175,114 @@ npm run logs
 
 **Common fixes:**
 - Ensure Docker is running
-- Check if secrets are set correctly
-- Increase memory in wrangler.toml
+- Check SIGNAL_PHONE_NUMBER secret is set
+- Verify container deployed: Check Cloudflare Dashboard
 
-### "Account not registered"
+### "Bot not responding to commands"
 
-Either:
-- Upload existing signal-data to R2 (see above)
-- Register new account (see "Register Signal Account")
+**Checklist:**
+1. Is Next.js app running? (`npm run dev`)
+2. Is bot started? (`node start-native-signal-bot.js` or admin panel)
+3. Is `.env.local` updated with Worker URL?
+4. Is account registered in container?
+
+**Test manually:**
+```bash
+# Test Worker
+curl https://signal-cli-bot.your-subdomain.workers.dev/health
+
+# Test Next.js connection to Worker
+# Check Next.js terminal logs for errors
+```
+
+### "Database features not working"
+
+**This shouldn't happen** - database didn't change.
+
+**Check:**
+1. Next.js app is running
+2. DATABASE_URL in `.env.local` is correct
+3. Prisma is connected: `npx prisma studio`
 
 ### "Rate limit exceeded"
 
-Adjust limits in `src/index.js`:
-```javascript
-const limit = 100; // Change to higher value
+Increase limit in `wrangler.toml`:
+```toml
+[env.production.vars]
+RATE_LIMIT_PER_MINUTE = "200"
 ```
 
-### "Deployment failed"
+## Rollback to Local Setup
 
-1. Check you're on Workers Paid plan
-2. Verify wrangler is authenticated: `wrangler whoami`
-3. Check KV namespace ID is set in wrangler.toml
-4. View detailed error: `npm run tail`
-
-## Next Steps
-
-Once deployed and healthy:
-
-1. **Update your app** to use the Worker URL:
-   ```bash
-   # In your .env.local
-   SIGNAL_CLI_REST_API_BASE_URL=https://signal-cli-bot.<your-subdomain>.workers.dev
-   ```
-
-2. **Test sending a message:**
-   ```bash
-   curl -X POST "https://signal-cli-bot.<your-subdomain>.workers.dev/v1/send" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "number": "+19108471202",
-       "recipients": ["+1234567890"],
-       "message": "Hello from Cloudflare!"
-     }'
-   ```
-
-3. **Monitor your bot:**
-   - Cloudflare Dashboard: https://dash.cloudflare.com
-   - Real-time logs: `npm run logs`
-   - Metrics: View in Cloudflare dashboard
-
-4. **Set up custom domain (optional):**
-   ```bash
-   wrangler publish --routes="bot.yourdomain.com/*"
-   ```
-
-## Cost Breakdown
-
-| Service | Cost |
-|---------|------|
-| Workers Paid Plan | $5/month (base) |
-| Containers | TBD (beta) |
-| R2 Storage | ~$0.01-0.15/month |
-| KV Reads/Writes | ~$0.50-5/month |
-| **Estimated Total** | **$10-30/month** |
-
-## Getting Help
-
-- 📚 Full docs: `README.md`
-- 💬 Cloudflare Discord: https://discord.gg/cloudflaredev
-- 📖 Cloudflare Docs: https://developers.cloudflare.com/containers/
-- 🤖 Signal CLI API: https://bbernhard.github.io/signal-cli-rest-api/
-
-## Rollback to Local Bot
-
-If needed, you can always rollback:
+If needed, rollback is instant:
 
 ```bash
-# Delete Cloudflare deployment
-cd cloudflare-workers/signal-bot
-wrangler delete signal-cli-bot
+# 1. Stop bot (Ctrl+C)
 
-# Start local bot
-cd ../..
+# 2. Edit .env.local
+SIGNAL_CLI_REST_API_BASE_URL=http://localhost:50240
+
+# 3. Start local container
+docker-compose -f docker-compose.signal-cli.yml up -d
+
+# 4. Start bot
 node start-native-signal-bot.js
 ```
 
-Your local signal-data is unchanged!
+Done! Back to local setup.
+
+## Why This Architecture?
+
+### Advantages
+
+✅ **Global Performance**: Signal CLI at edge (low latency worldwide)
+✅ **Zero Downtime**: Container auto-scales and restarts
+✅ **No Infrastructure**: Let Cloudflare manage containers
+✅ **All Features Kept**: Database & business logic untouched
+✅ **Easy Rollback**: Just change one URL
+✅ **Clean Separation**: Signal protocol ≠ business logic
+
+### Trade-offs
+
+⚠️ **Network Hop**: Adds ~10-50ms latency (negligible)
+⚠️ **Two Services**: Next.js + Container (but cleaner)
+⚠️ **Beta Pricing**: Container costs TBD (public beta)
+
+## Cost Breakdown
+
+| Service | Monthly Cost |
+|---------|-------------|
+| Cloudflare Worker | $5 (Paid plan) |
+| Cloudflare Container | TBD (beta) |
+| R2 Storage | ~$0.01-0.15 |
+| KV Cache | ~$0.50-5 |
+| Next.js hosting | (your existing cost) |
+| PostgreSQL | (your existing cost) |
+| **New costs** | **~$10-30/month** |
+
+## Next Steps
+
+1. ✅ **Monitor for 24 hours** - Check everything works
+2. ✅ **Test all commands** - Verify features work
+3. ✅ **Check database** - Ensure data is being saved
+4. ✅ **Review logs** - Worker + Next.js logs
+5. ✅ **Optimize** - Adjust rate limits if needed
+
+## Documentation
+
+- **Architecture Details**: `ARCHITECTURE.md`
+- **Full Migration Guide**: `MIGRATION.md`
+- **Complete Docs**: `README.md`
+
+## Getting Help
+
+- 📚 Read `ARCHITECTURE.md` for design details
+- 🔍 Check Worker logs: `npm run logs`
+- 💬 Cloudflare Discord: https://discord.gg/cloudflaredev
+- 📖 Cloudflare Docs: https://developers.cloudflare.com/containers/
 
 ---
 
-**That's it!** Your Signal bot is now running globally on Cloudflare's edge network. 🎉
+**That's it!** Your Signal bot is now running globally on Cloudflare's edge while all your custom features stay safely in your Next.js app. 🎉
+
+**Key takeaway:** Container = Signal CLI only. Your app = Everything else.

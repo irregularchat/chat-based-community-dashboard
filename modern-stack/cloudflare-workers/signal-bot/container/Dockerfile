@@ -58,6 +58,11 @@ COPY --from=builder /app/package*.json ./
 # Install production dependencies only
 RUN npm ci --only=production
 
+# Copy sync and entrypoint scripts
+COPY sync-signal-data.sh /app/sync-signal-data.sh
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/sync-signal-data.sh /app/entrypoint.sh
+
 # Create directory for signal-cli data
 RUN mkdir -p /app/signal-data
 
@@ -73,5 +78,5 @@ ENV NODE_ENV=production
 ENV PORT=8080
 ENV SIGNAL_CLI_CONFIG_DIR=/app/signal-data
 
-# Run the bot
-CMD ["node", "dist/index.js"]
+# Use entrypoint script that handles R2 sync
+ENTRYPOINT ["/app/entrypoint.sh"]

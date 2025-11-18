@@ -193,7 +193,7 @@ export async function handleList(request: Request, env: Env): Promise<Response> 
         etag: obj.etag,
       })),
       truncated: listed.truncated,
-      cursor: listed.cursor,
+      cursor: (listed as any).cursor,
       total: listed.objects.length,
     }), {
       status: 200,

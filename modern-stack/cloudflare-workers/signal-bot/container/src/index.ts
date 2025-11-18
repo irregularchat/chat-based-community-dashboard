@@ -11,7 +11,7 @@
  */
 
 import express from 'express';
-import { SignalBot } from './bot/signal-bot.js';
+import { SignalBot, BotConfig } from './bot/signal-bot.js';
 import { WorkerAPIClient } from './api/worker-api-client.js';
 import { HealthMonitor } from './lib/health-monitor.js';
 
@@ -33,7 +33,7 @@ app.use((req, res, next) => {
 });
 
 // Configuration
-const config = {
+const configRaw = {
   phoneNumber: process.env.SIGNAL_PHONE_NUMBER || process.env.SIGNAL_BOT_PHONE_NUMBER,
   dataDir: process.env.SIGNAL_CLI_CONFIG_DIR || '/app/signal-data',
   workerApiUrl: process.env.WORKER_API_URL,
@@ -48,16 +48,19 @@ const config = {
 };
 
 // Validate configuration
-if (!config.phoneNumber) {
+if (!configRaw.phoneNumber) {
   console.error('❌ SIGNAL_PHONE_NUMBER not set');
   process.exit(1);
 }
 
-if (!config.workerApiUrl) {
+if (!configRaw.workerApiUrl) {
   console.error('❌ WORKER_API_URL not set');
   console.error('💡 Set this to your Worker URL for database access');
   process.exit(1);
 }
+
+// After validation, we know phoneNumber and workerApiUrl are defined
+const config: BotConfig = configRaw as BotConfig;
 
 console.log('🤖 Signal CLI Bot Container - Cloudflare Native');
 console.log('📱 Phone:', config.phoneNumber);
@@ -84,9 +87,9 @@ let bot: SignalBot | null = null;
  */
 app.get('/health', (req, res) => {
   const health = healthMonitor.getHealth();
-  const status = health.status === 'healthy' ? 200 : 503;
+  const statusCode = health.status === 'healthy' ? 200 : 503;
 
-  res.status(status).json({
+  res.status(statusCode).json({
     status: health.status,
     container: 'signal-bot',
     version: '3.0.0',
@@ -96,7 +99,9 @@ app.get('/health', (req, res) => {
       phoneNumber: config.phoneNumber,
       uptime: bot.getUptime(),
     } : { running: false },
-    ...health,
+    uptime: health.uptime,
+    timestamp: health.timestamp,
+    checks: health.checks,
   });
 });
 

@@ -44,7 +44,7 @@ export class WebSocketManager {
     this.rooms = new Map();
 
     // Start connection health checker (every 30 seconds)
-    this.state.setAlarm(Date.now() + 30000);
+    (this.state as any).setAlarm(Date.now() + 30000);
   }
 
   /**
@@ -78,7 +78,7 @@ export class WebSocketManager {
 
       // Disconnect a client
       if (pathname === '/disconnect' && request.method === 'POST') {
-        const { connectionId } = await request.json();
+        const { connectionId } = await request.json() as { connectionId: string };
         return this.disconnect(connectionId);
       }
 
@@ -371,7 +371,7 @@ export class WebSocketManager {
     }
 
     // Schedule next check
-    this.state.setAlarm(Date.now() + 30000);
+    (this.state as any).setAlarm(Date.now() + 30000);
   }
 
   /**

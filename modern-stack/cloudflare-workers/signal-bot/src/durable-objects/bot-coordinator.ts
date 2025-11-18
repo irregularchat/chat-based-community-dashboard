@@ -54,7 +54,7 @@ export class BotCoordinator {
     });
 
     // Start heartbeat checker (check every 30 seconds)
-    this.state.setAlarm(Date.now() + 30000);
+    (this.state as any).setAlarm(Date.now() + 30000);
   }
 
   /**
@@ -73,13 +73,13 @@ export class BotCoordinator {
 
       // Heartbeat from bot instance
       if (pathname === '/heartbeat' && request.method === 'POST') {
-        const { containerId } = await request.json();
+        const { containerId } = await request.json() as { containerId: string };
         return this.heartbeat(containerId);
       }
 
       // Unregister bot instance
       if (pathname === '/unregister' && request.method === 'POST') {
-        const { containerId } = await request.json();
+        const { containerId } = await request.json() as { containerId: string };
         return this.unregisterInstance(containerId);
       }
 
@@ -264,7 +264,7 @@ export class BotCoordinator {
     }
 
     // Schedule next check
-    this.state.setAlarm(Date.now() + 30000);
+    (this.state as any).setAlarm(Date.now() + 30000);
   }
 
   /**

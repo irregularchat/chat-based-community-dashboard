@@ -20,11 +20,10 @@ workers_dev = true
 # ============================================================================
 
 # D1 Database (primary data store)
-# Run: ./database/setup.sh to create database and get ID
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "signal-bot-db"
-# database_id = "YOUR_DATABASE_ID_HERE"
+[[d1_databases]]
+binding = "DB"
+database_name = "signal-bot-db"
+database_id = "0def1bbd-8079-4383-a1ec-2269b1f0f25f"
 
 # R2 bucket for file storage (avatars, attachments, backups)
 [[r2_buckets]]
@@ -33,11 +32,9 @@ bucket_name = "signal-cli-data"
 preview_bucket_name = "signal-cli-data-preview"
 
 # KV namespace for caching and rate limiting
-# Run: wrangler kv:namespace create SIGNAL_CACHE
-# [[kv_namespaces]]
-# binding = "SIGNAL_CACHE"
-# id = "YOUR_KV_NAMESPACE_ID_HERE"
-# preview_id = "YOUR_PREVIEW_ID_HERE"
+[[kv_namespaces]]
+binding = "SIGNAL_CACHE"
+id = "988122bc32a4435588cc7a233ca0c177"
 
 # Durable Objects for state management
 [[durable_objects.bindings]]

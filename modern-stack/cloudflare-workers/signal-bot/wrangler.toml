@@ -1,0 +1,53 @@
+# Wrangler configuration for Signal CLI Bot Container
+# Cloudflare Workers with Containers support
+
+name = "signal-cli-bot"
+main = "src/index.js"
+compatibility_date = "2025-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+# Worker configuration
+workers_dev = true
+route = ""
+
+# Container configuration
+[[containers]]
+name = "signal-bot-container"
+image = "signal-cli-bot:latest"
+memory = "2GiB"
+cpu = 2
+port = 8080
+
+# Environment variables for the container
+[containers.env]
+MODE = "json-rpc"
+PORT = "8080"
+
+# Container scaling configuration
+[containers.scaling]
+min_instances = 0
+max_instances = 10
+sleep_after = "10m"  # Stop after 10 minutes of inactivity
+
+# Bindings
+[env.production]
+# Add your environment-specific configuration here
+# SIGNAL_PHONE_NUMBER will be set via secrets
+
+# R2 bucket for signal-data storage (we'll create this)
+[[r2_buckets]]
+binding = "SIGNAL_DATA"
+bucket_name = "signal-cli-data"
+preview_bucket_name = "signal-cli-data-preview"
+
+# KV namespace for caching (optional)
+[[kv_namespaces]]
+binding = "SIGNAL_CACHE"
+id = "" # Will be filled after creation
+preview_id = ""
+
+# Secrets (set via: wrangler secret put VARIABLE_NAME)
+# Required secrets:
+# - SIGNAL_PHONE_NUMBER
+# - OPENAI_API_KEY (optional, for AI features)
+# - DATABASE_URL (if using Hyperdrive)

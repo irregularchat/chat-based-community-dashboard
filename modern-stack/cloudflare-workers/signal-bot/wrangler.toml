@@ -1,5 +1,6 @@
 # Wrangler configuration for Signal CLI Bot Container
-# Cloudflare Workers with Containers support
+# Wrangler configuration for Signal CLI Bot (Cloudflare Native)
+# Full integration with D1, R2, KV, Durable Objects, and Containers
 
 name = "signal-cli-bot"
 main = "src/index.js"
@@ -8,7 +9,6 @@ compatibility_flags = ["nodejs_compat"]
 
 # Worker configuration
 workers_dev = true
-route = ""
 
 # Container configuration
 [[containers]]
@@ -22,6 +22,7 @@ port = 8080
 [containers.env]
 MODE = "json-rpc"
 PORT = "8080"
+# WORKER_API_URL will be set via secret to call back to Worker
 
 # Container scaling configuration
 [containers.scaling]
@@ -29,25 +30,82 @@ min_instances = 0
 max_instances = 10
 sleep_after = "10m"  # Stop after 10 minutes of inactivity
 
-# Bindings
-[env.production]
-# Add your environment-specific configuration here
-# SIGNAL_PHONE_NUMBER will be set via secrets
+# ============================================================================
+# CLOUDFLARE BINDINGS
+# ============================================================================
 
-# R2 bucket for signal-data storage (we'll create this)
+# D1 Database (primary data store)
+[[d1_databases]]
+binding = "DB"
+database_name = "signal-bot-db"
+database_id = "" # Run: ./database/setup.sh to create and get ID
+
+# R2 bucket for file storage (avatars, attachments, backups)
 [[r2_buckets]]
 binding = "SIGNAL_DATA"
 bucket_name = "signal-cli-data"
 preview_bucket_name = "signal-cli-data-preview"
 
-# KV namespace for caching (optional)
+# KV namespace for caching and rate limiting
 [[kv_namespaces]]
 binding = "SIGNAL_CACHE"
-id = "" # Will be filled after creation
+id = "" # Run: wrangler kv:namespace create SIGNAL_CACHE
 preview_id = ""
 
-# Secrets (set via: wrangler secret put VARIABLE_NAME)
+# Durable Objects for state management
+[[durable_objects.bindings]]
+name = "BOT_COORDINATOR"
+class_name = "BotCoordinator"
+script_name = "signal-cli-bot"
+
+[[durable_objects.bindings]]
+name = "MESSAGE_QUEUE"
+class_name = "MessageQueue"
+script_name = "signal-cli-bot"
+
+[[durable_objects.bindings]]
+name = "WEBSOCKET_MANAGER"
+class_name = "WebSocketManager"
+script_name = "signal-cli-bot"
+
+# Define Durable Objects (implemented in src/durable-objects/)
+[[migrations]]
+tag = "v1"
+new_classes = ["BotCoordinator", "MessageQueue", "WebSocketManager"]
+
+# ============================================================================
+# ENVIRONMENT VARIABLES
+# ============================================================================
+
+[vars]
+# Environment (development, staging, production)
+ENVIRONMENT = "development"
+
+# Rate limiting configuration
+RATE_LIMIT_PER_MINUTE = "100"
+RATE_LIMIT_WINDOW_SECONDS = "60"
+
+# Bot configuration
+BOT_VERSION = "3.0.0"
+BOT_ARCHITECTURE = "cloudflare-native"
+
+# Production environment overrides
+[env.production]
+vars = { ENVIRONMENT = "production", RATE_LIMIT_PER_MINUTE = "500" }
+
+# ============================================================================
+# SECRETS (set via: wrangler secret put VARIABLE_NAME)
+# ============================================================================
+
 # Required secrets:
-# - SIGNAL_PHONE_NUMBER
-# - OPENAI_API_KEY (optional, for AI features)
-# - DATABASE_URL (if using Hyperdrive)
+# - SIGNAL_PHONE_NUMBER        Bot's phone number (+19108471202)
+# - WORKER_API_URL             URL for container to call Worker API
+# - API_AUTH_TOKEN             Authentication token for Worker API (optional)
+#
+# Optional secrets:
+# - OPENAI_API_KEY             OpenAI API key for AI features
+# - LOCAL_AI_API_KEY           Local AI API key
+# - LOCAL_AI_URL               Local AI endpoint
+# - DISCOURSE_API_KEY          Discourse forum API key
+# - DISCOURSE_API_URL          Discourse forum URL
+# - DISCOURSE_API_USERNAME     Discourse API username

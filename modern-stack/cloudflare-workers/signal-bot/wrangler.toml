@@ -11,34 +11,20 @@ compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
 # Container configuration
-[[containers]]
-name = "signal-bot-container"
-image = "signal-cli-bot:latest"
-memory = "2GiB"
-cpu = 2
-port = 8080
-
-# Environment variables for the container
-[containers.env]
-MODE = "json-rpc"
-PORT = "8080"
-# WORKER_API_URL will be set via secret to call back to Worker
-
-# Container scaling configuration
-[containers.scaling]
-min_instances = 0
-max_instances = 10
-sleep_after = "10m"  # Stop after 10 minutes of inactivity
+# Note: Containers are deployed separately using: wrangler deploy --container
+# See container/Dockerfile for the container image build
+# Container will call back to Worker API for D1/R2 access
 
 # ============================================================================
 # CLOUDFLARE BINDINGS
 # ============================================================================
 
 # D1 Database (primary data store)
-[[d1_databases]]
-binding = "DB"
-database_name = "signal-bot-db"
-database_id = "" # Run: ./database/setup.sh to create and get ID
+# Run: ./database/setup.sh to create database and get ID
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "signal-bot-db"
+# database_id = "YOUR_DATABASE_ID_HERE"
 
 # R2 bucket for file storage (avatars, attachments, backups)
 [[r2_buckets]]
@@ -47,10 +33,11 @@ bucket_name = "signal-cli-data"
 preview_bucket_name = "signal-cli-data-preview"
 
 # KV namespace for caching and rate limiting
-[[kv_namespaces]]
-binding = "SIGNAL_CACHE"
-id = "" # Run: wrangler kv:namespace create SIGNAL_CACHE
-preview_id = ""
+# Run: wrangler kv:namespace create SIGNAL_CACHE
+# [[kv_namespaces]]
+# binding = "SIGNAL_CACHE"
+# id = "YOUR_KV_NAMESPACE_ID_HERE"
+# preview_id = "YOUR_PREVIEW_ID_HERE"
 
 # Durable Objects for state management
 [[durable_objects.bindings]]

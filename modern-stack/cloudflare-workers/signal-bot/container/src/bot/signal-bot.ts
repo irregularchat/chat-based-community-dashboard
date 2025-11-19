@@ -1,13 +1,21 @@
 /**
- * Signal Bot
+ * Signal Bot V2 - JSON-RPC Edition
  *
- * Main bot class that handles Signal CLI integration and message processing
+ * Updated bot implementation using signal-cli's JSON-RPC interface over TCP
+ * for better performance and reliability.
+ *
+ * Key improvements over V1:
+ * - Uses JSON-RPC protocol (no config file locking issues)
+ * - Automatic reconnection on connection loss
+ * - Better error handling and logging
+ * - Cloudflare R2 integration for persistent storage
  */
 
 import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import { WorkerAPIClient } from '../api/worker-api-client.js';
 import { CommandHandler } from './command-handler.js';
+import { SignalJsonRpcClient } from './signal-jsonrpc-client.js';
 
 export interface BotConfig {
   phoneNumber: string;
@@ -48,11 +56,26 @@ export interface SignalMessage {
   };
 }
 
+/**
+ * Signal Bot V2 - Modern JSON-RPC Implementation
+ *
+ * This bot uses signal-cli's JSON-RPC TCP interface for communication,
+ * eliminating config file locking issues and improving reliability.
+ *
+ * Architecture:
+ * 1. Spawns signal-cli daemon in TCP mode (localhost:7583)
+ * 2. Connects SignalJsonRpcClient to TCP socket
+ * 3. Receives messages via JSON-RPC notifications
+ * 4. Sends messages via JSON-RPC requests
+ * 5. Stores messages in Cloudflare D1 via Worker API
+ * 6. Backs up Signal data to Cloudflare R2
+ */
 export class SignalBot extends EventEmitter {
   private config: BotConfig;
   private workerApi: WorkerAPIClient;
   private commandHandler: CommandHandler;
   private daemonProcess: ChildProcess | null = null;
+  private rpcClient: SignalJsonRpcClient | null = null;
   private isRunningFlag = false;
   private startTime: number = 0;
   private stats = {
@@ -71,6 +94,9 @@ export class SignalBot extends EventEmitter {
     this.config = config;
     this.workerApi = workerApi;
     this.commandHandler = new CommandHandler(config, workerApi);
+
+    // Pass bot instance to command handler so it can access bot methods like getGroups()
+    this.commandHandler.setBotInstance(this);
   }
 
   /**
@@ -81,16 +107,13 @@ export class SignalBot extends EventEmitter {
       throw new Error('Bot is already running');
     }
 
-    console.log('🚀 Starting Signal bot...');
+    console.log('🚀 Starting Signal bot (V2 - JSON-RPC)...');
 
-    // Check if account is registered
-    const registered = await this.isAccountRegistered();
-    if (!registered) {
-      throw new Error(`Account ${this.config.phoneNumber} is not registered. Please register first.`);
-    }
-
-    // Start signal-cli daemon
+    // Start signal-cli daemon in TCP mode
     await this.startDaemon();
+
+    // Connect JSON-RPC client
+    await this.connectRpcClient();
 
     this.isRunningFlag = true;
     this.startTime = Date.now();
@@ -109,6 +132,12 @@ export class SignalBot extends EventEmitter {
 
     console.log('🛑 Stopping Signal bot...');
 
+    // Disconnect RPC client
+    if (this.rpcClient) {
+      this.rpcClient.disconnect();
+      this.rpcClient = null;
+    }
+
     // Stop daemon
     if (this.daemonProcess) {
       this.daemonProcess.kill('SIGTERM');
@@ -122,17 +151,18 @@ export class SignalBot extends EventEmitter {
   }
 
   /**
-   * Start signal-cli daemon
+   * Start signal-cli daemon in TCP mode
    */
   private async startDaemon(): Promise<void> {
     return new Promise((resolve, reject) => {
-      console.log('📡 Starting signal-cli daemon...');
+      console.log('📡 Starting signal-cli daemon in TCP mode...');
 
       const args = [
         '-a', this.config.phoneNumber,
         '--config', this.config.dataDir,
         'daemon',
-        '--json',
+        '--tcp', 'localhost:7583',
+        '--receive-mode', 'manual', // Manual mode - we control receiving via JSON-RPC receive() calls
       ];
 
       console.log(`Running: signal-cli ${args.join(' ')}`);
@@ -143,34 +173,30 @@ export class SignalBot extends EventEmitter {
 
       let started = false;
 
-      // Handle stdout (JSON messages)
+      // Handle stdout
       this.daemonProcess.stdout?.on('data', (data) => {
-        const lines = data.toString().split('\n').filter((line: string) => line.trim());
+        const message = data.toString().trim();
+        if (message) {
+          console.log('Signal CLI:', message);
 
-        for (const line of lines) {
-          try {
-            const message: SignalMessage = JSON.parse(line);
-            this.handleMessage(message);
-          } catch (error) {
-            // Not JSON, might be daemon output
-            console.log('Signal CLI:', line);
-
-            if (line.includes('Started') && !started) {
-              started = true;
-              resolve();
-            }
+          if (!started && (message.includes('Started') || message.includes('Listening'))) {
+            started = true;
+            // Give it a moment to fully initialize
+            setTimeout(() => resolve(), 1000);
           }
         }
       });
 
       // Handle stderr
       this.daemonProcess.stderr?.on('data', (data) => {
-        const message = data.toString();
-        console.error('Signal CLI Error:', message);
+        const message = data.toString().trim();
+        if (message) {
+          console.log('Signal CLI:', message);
 
-        if (!started && message.includes('Started')) {
-          started = true;
-          resolve();
+          if (!started && (message.includes('Started') || message.includes('Listening'))) {
+            started = true;
+            setTimeout(() => resolve(), 1000);
+          }
         }
       });
 
@@ -195,14 +221,77 @@ export class SignalBot extends EventEmitter {
         }
       });
 
-      // Timeout if not started within 10 seconds
+      // Timeout if not started within 15 seconds
       setTimeout(() => {
         if (!started) {
           this.daemonProcess?.kill();
           reject(new Error('Signal CLI daemon start timeout'));
         }
-      }, 10000);
+      }, 15000);
     });
+  }
+
+  /**
+   * Connect JSON-RPC client to signal-cli daemon
+   */
+  private async connectRpcClient(): Promise<void> {
+    console.log('🔌 Connecting to signal-cli JSON-RPC interface...');
+
+    this.rpcClient = new SignalJsonRpcClient('localhost', 7583);
+
+    // Handle incoming notifications (messages)
+    this.rpcClient.on('notification', (notification) => {
+      this.handleJsonRpcNotification(notification);
+    });
+
+    // Handle connection events
+    this.rpcClient.on('connected', async () => {
+      console.log('✅ Connected to signal-cli JSON-RPC');
+
+      // Subscribe to receive messages - CRITICAL for message receiving!
+      try {
+        if (this.rpcClient) {
+          await this.rpcClient.subscribeReceive();
+          console.log('📬 Subscribed to receive messages');
+        }
+      } catch (error) {
+        console.error('Failed to subscribe to messages:', error);
+        this.stats.errors++;
+      }
+    });
+
+    this.rpcClient.on('disconnected', () => {
+      console.log('⚠️  Disconnected from signal-cli JSON-RPC');
+    });
+
+    this.rpcClient.on('error', (error) => {
+      console.error('JSON-RPC Error:', error);
+      this.stats.errors++;
+    });
+
+    // Connect to daemon
+    await this.rpcClient.connect();
+  }
+
+  /**
+   * Handle JSON-RPC notification (incoming message)
+   */
+  private handleJsonRpcNotification(notification: any): void {
+    try {
+      // JSON-RPC notifications from signal-cli subscribeReceive have this format:
+      // { params: { subscription: 0, result: { envelope: {...} } } }
+      if (notification.params?.result?.envelope) {
+        this.handleMessage({ envelope: notification.params.result.envelope });
+      } else if (notification.params?.envelope) {
+        // Fallback: some notifications might have envelope directly in params
+        this.handleMessage({ envelope: notification.params.envelope });
+      } else {
+        console.log('Received notification without envelope:', JSON.stringify(notification).substring(0, 200));
+      }
+    } catch (error) {
+      console.error('Error handling JSON-RPC notification:', error);
+      this.stats.errors++;
+    }
   }
 
   /**
@@ -242,12 +331,12 @@ export class SignalBot extends EventEmitter {
 
       console.log(`📨 Message from ${sourceName} (${sourceNumber})${groupId ? ` in group ${groupId}` : ''}: ${messageText}`);
 
-      // Save message to database
+      // Save message to Cloudflare D1 via Worker API
       try {
         await this.workerApi.saveMessage({
           id: this.generateMessageId(),
           groupId,
-          groupName: undefined, // TODO: Get group name
+          groupName: undefined, // Will be populated by group discovery
           sourceNumber,
           sourceName,
           sourceUuid,
@@ -260,7 +349,7 @@ export class SignalBot extends EventEmitter {
           quotedText: envelope.dataMessage?.quote?.text,
         });
       } catch (error) {
-        console.error('Failed to save message:', error);
+        console.error('Failed to save message to D1:', error);
       }
 
       // Check if it's a command (starts with !)
@@ -316,7 +405,7 @@ export class SignalBot extends EventEmitter {
 
       this.stats.commandsProcessed++;
 
-      // Log command usage
+      // Log command usage to Cloudflare D1
       await this.workerApi.logCommand({
         command: command.split(' ')[0].substring(1), // Remove ! prefix
         args: command.split(' ').slice(1).join(' ') || undefined,
@@ -331,7 +420,7 @@ export class SignalBot extends EventEmitter {
       console.error('Command error:', error);
       this.stats.errors++;
 
-      // Log error
+      // Log error to Cloudflare D1
       await this.workerApi.logError({
         errorType: 'command_error',
         errorMessage: error instanceof Error ? error.message : 'Unknown error',
@@ -368,122 +457,47 @@ export class SignalBot extends EventEmitter {
   }
 
   /**
-   * Send a message via Signal
+   * Send a message via Signal using JSON-RPC
    */
   async sendMessage(params: {
     recipient?: string;
     groupId?: string;
     message: string;
   }): Promise<void> {
-    if (!this.isRunningFlag) {
+    if (!this.isRunningFlag || !this.rpcClient) {
       throw new Error('Bot is not running');
     }
 
-    const args = [
-      '-a', this.config.phoneNumber,
-      '--config', this.config.dataDir,
-      'send',
-      '-m', params.message,
-    ];
+    try {
+      // Use JSON-RPC client to send message
+      await this.rpcClient.sendMessage({
+        message: params.message,
+        recipient: params.recipient ? [params.recipient] : undefined,
+        groupId: params.groupId,
+      });
 
-    if (params.groupId) {
-      args.push('-g', params.groupId);
-    } else if (params.recipient) {
-      args.push(params.recipient);
-    } else {
-      throw new Error('Either recipient or groupId must be provided');
+      this.stats.messagesSent++;
+      console.log(`✉️  Message sent to ${params.recipient || params.groupId}`);
+    } catch (error) {
+      console.error('Failed to send message via JSON-RPC:', error);
+      throw error;
     }
-
-    return new Promise((resolve, reject) => {
-      const process = spawn('signal-cli', args);
-
-      let output = '';
-      let errorOutput = '';
-
-      process.stdout?.on('data', (data) => {
-        output += data.toString();
-      });
-
-      process.stderr?.on('data', (data) => {
-        errorOutput += data.toString();
-      });
-
-      process.on('exit', (code) => {
-        if (code === 0) {
-          this.stats.messagesSent++;
-          resolve();
-        } else {
-          reject(new Error(`Failed to send message (exit code ${code}): ${errorOutput}`));
-        }
-      });
-
-      process.on('error', (error) => {
-        reject(error);
-      });
-    });
   }
 
   /**
-   * Get list of groups
+   * Get list of groups using JSON-RPC
    */
   async getGroups(): Promise<any[]> {
-    return new Promise((resolve, reject) => {
-      const args = [
-        '-a', this.config.phoneNumber,
-        '--config', this.config.dataDir,
-        'listGroups',
-        '--detailed',
-      ];
+    if (!this.rpcClient) {
+      throw new Error('JSON-RPC client not connected');
+    }
 
-      const process = spawn('signal-cli', args);
-
-      let output = '';
-
-      process.stdout?.on('data', (data) => {
-        output += data.toString();
-      });
-
-      process.on('exit', (code) => {
-        if (code === 0) {
-          try {
-            // Parse output (signal-cli returns various formats)
-            const groups: any[] = [];
-            const lines = output.split('\n');
-
-            for (const line of lines) {
-              if (line.includes('Id:')) {
-                // Simple parsing - you may need to adjust based on actual output
-                const match = line.match(/Id: ([^\s]+)/);
-                if (match) {
-                  groups.push({ id: match[1] });
-                }
-              }
-            }
-
-            resolve(groups);
-          } catch (error) {
-            reject(new Error('Failed to parse groups'));
-          }
-        } else {
-          reject(new Error(`Failed to list groups (exit code ${code})`));
-        }
-      });
-
-      process.on('error', (error) => {
-        reject(error);
-      });
-    });
-  }
-
-  /**
-   * Check if account is registered
-   */
-  private async isAccountRegistered(): Promise<boolean> {
     try {
-      await this.getGroups();
-      return true;
-    } catch {
-      return false;
+      const groups = await this.rpcClient.listGroups();
+      return groups || [];
+    } catch (error) {
+      console.error('Failed to list groups via JSON-RPC:', error);
+      throw error;
     }
   }
 
@@ -509,6 +523,7 @@ export class SignalBot extends EventEmitter {
     return {
       ...this.stats,
       uptime: this.getUptime(),
+      rpcConnected: this.rpcClient?.isConnected() || false,
     };
   }
 

@@ -1,0 +1,308 @@
+/**
+ * Social Media Content Downloader
+ *
+ * Downloads videos and images from social media platforms using yt-dlp.
+ * Inspired by the `download_video` function in ~/Git/dotfiles/platforms/macos/config/.zsh_functions
+ *
+ * Requirements:
+ * - yt-dlp must be installed in the container
+ * - ffmpeg must be installed for video processing
+ */
+
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import { removeTrackers, getSocialMediaPlatform, getContentType } from './social-media-detector.js';
+
+const execAsync = promisify(exec);
+
+export interface DownloadOptions {
+  quality?: '1080p' | '720p' | '480p' | '360p' | 'best' | 'worst';
+  audioOnly?: boolean;
+  outputDir?: string;
+  maxFileSizeMB?: number; // Signal has 95 MB cross-platform limit
+}
+
+export interface DownloadResult {
+  success: boolean;
+  filePath?: string;
+  fileName?: string;
+  fileSize?: number;
+  contentType?: string;
+  cleanUrl: string;
+  error?: string;
+}
+
+/**
+ * Check if yt-dlp is installed
+ */
+export async function isYtDlpInstalled(): Promise<boolean> {
+  try {
+    await execAsync('which yt-dlp');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if ffmpeg is installed
+ */
+export async function isFfmpegInstalled(): Promise<boolean> {
+  try {
+    await execAsync('which ffmpeg');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Sanitize filename - remove spaces and special characters
+ * Matches sanitize_filename() from dotfiles
+ */
+function sanitizeFilename(filename: string): string {
+  return filename
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_.-]/g, '');
+}
+
+/**
+ * Download social media content
+ *
+ * Inspired by download_video() function from dotfiles:
+ * - Uses yt-dlp for downloading
+ * - Outputs Signal/iOS/Android-compatible MP4 (H.264 Main + AAC + yuv420p)
+ * - Saves to /tmp/ by default (with fallback to ./ or ~/)
+ * - Sanitizes filenames
+ * - Enforces 95 MB size limit for Signal compatibility
+ */
+export async function downloadContent(
+  url: string,
+  options: DownloadOptions = {}
+): Promise<DownloadResult> {
+  const {
+    quality = 'best',
+    audioOnly = false,
+    outputDir = '/tmp',
+    maxFileSizeMB = 95, // Signal's cross-platform limit
+  } = options;
+
+  // Remove trackers from URL
+  const cleanUrl = removeTrackers(url);
+  const platform = getSocialMediaPlatform(cleanUrl);
+  const contentType = getContentType(cleanUrl);
+
+  console.log(`📥 Downloading ${contentType} from ${platform?.name || 'unknown platform'}`);
+  console.log(`🔗 Clean URL: ${cleanUrl}`);
+
+  // Check if yt-dlp is installed
+  if (!(await isYtDlpInstalled())) {
+    return {
+      success: false,
+      cleanUrl,
+      error: 'yt-dlp not installed. Install with: apt-get install yt-dlp',
+    };
+  }
+
+  // Check if ffmpeg is installed (needed for format conversion)
+  if (!(await isFfmpegInstalled())) {
+    console.warn('⚠️  ffmpeg not installed. Video format conversion may fail.');
+  }
+
+  // Ensure output directory exists and is writable
+  try {
+    await fs.access(outputDir, fs.constants.W_OK);
+  } catch {
+    return {
+      success: false,
+      cleanUrl,
+      error: `Output directory not writable: ${outputDir}`,
+    };
+  }
+
+  // Build yt-dlp arguments (matching download_video function logic)
+  const ytdlArgs: string[] = [];
+
+  if (audioOnly) {
+    // Audio-only download (extract audio as MP3)
+    ytdlArgs.push('-x', '--audio-format', 'mp3');
+  } else {
+    // Video download with quality selection
+    // Instagram and some platforms don't have separate video+audio streams
+    // So we need to fall back to single-format selection
+    switch (quality) {
+      case '1080p':
+        ytdlArgs.push('-f', 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best');
+        break;
+      case '720p':
+        ytdlArgs.push('-f', 'bestvideo[height<=720]+bestaudio/best[height<=720]/best');
+        break;
+      case '480p':
+        ytdlArgs.push('-f', 'bestvideo[height<=480]+bestaudio/best[height<=480]/best');
+        break;
+      case '360p':
+        ytdlArgs.push('-f', 'bestvideo[height<=360]+bestaudio/best[height<=360]/best');
+        break;
+      case 'worst':
+        ytdlArgs.push('-f', 'worstvideo+worstaudio/worst');
+        break;
+      case 'best':
+      default:
+        ytdlArgs.push('-f', 'bestvideo+bestaudio/best');
+        break;
+    }
+
+    // Signal-compatible format (H.264 Main + AAC + yuv420p + MP4)
+    // Matches the download_video function's Signal optimization
+    ytdlArgs.push(
+      '--merge-output-format', 'mp4',
+      '--postprocessor-args',
+      'ffmpeg:-c:v libx264 -profile:v main -level 3.1 -pix_fmt yuv420p -preset medium -crf 23 -c:a aac -b:a 128k -ac 2 -movflags +faststart'
+    );
+  }
+
+  // Output template: auto-generate sanitized filename from title
+  const outputTemplate = path.join(outputDir, '%(title)s.%(ext)s');
+  ytdlArgs.push('-o', outputTemplate);
+
+  // Quiet output (only errors)
+  ytdlArgs.push('--quiet', '--no-warnings');
+
+  // Add URL
+  ytdlArgs.push(cleanUrl);
+
+  console.log(`⚙️  Quality: ${quality}, Audio-only: ${audioOnly}`);
+
+  try {
+    // Execute yt-dlp download
+    // Build command with proper quoting for shell execution
+    const quotedArgs = ytdlArgs.map(arg => {
+      // Quote arguments that contain spaces or special shell characters
+      // < and > are shell redirection operators and must be quoted
+      if (arg.includes(' ') || arg.includes('$') || arg.includes('(') || arg.includes(')') ||
+          arg.includes('<') || arg.includes('>') || arg.includes('[') || arg.includes(']')) {
+        return `'${arg.replace(/'/g, "'\\''")}'`;
+      }
+      return arg;
+    });
+    const command = `yt-dlp ${quotedArgs.join(' ')}`;
+    console.log(`🔧 Running: yt-dlp [args omitted]`);
+
+    const { stdout, stderr } = await execAsync(command, {
+      timeout: 120000, // 2 minute timeout
+    });
+
+    if (stderr && stderr.length > 0) {
+      console.warn('⚠️  yt-dlp warnings:', stderr);
+    }
+
+    // Get the downloaded filename
+    const getFilenameCommand = `yt-dlp --get-filename -o "%(title)s.%(ext)s" "${cleanUrl}"`;
+    const { stdout: filenameOutput } = await execAsync(getFilenameCommand);
+    const rawFilename = filenameOutput.trim();
+    const downloadedFile = path.join(outputDir, rawFilename);
+
+    // Check if file exists
+    try {
+      await fs.access(downloadedFile);
+    } catch {
+      return {
+        success: false,
+        cleanUrl,
+        error: 'Download completed but file not found',
+      };
+    }
+
+    // Sanitize filename
+    const fileExt = path.extname(downloadedFile);
+    const fileBase = path.basename(downloadedFile, fileExt);
+    const sanitizedName = sanitizeFilename(fileBase);
+    const newFilePath = path.join(outputDir, `${sanitizedName}${fileExt}`);
+
+    if (downloadedFile !== newFilePath) {
+      console.log(`📝 Sanitizing filename: ${path.basename(downloadedFile)} -> ${path.basename(newFilePath)}`);
+      await fs.rename(downloadedFile, newFilePath);
+    }
+
+    // Get file size
+    const stats = await fs.stat(newFilePath);
+    const fileSizeMB = stats.size / (1024 * 1024);
+
+    console.log(`✅ Download complete: ${path.basename(newFilePath)} (${fileSizeMB.toFixed(2)} MB)`);
+
+    // Check Signal size limit
+    if (fileSizeMB > maxFileSizeMB) {
+      console.warn(`⚠️  File size (${fileSizeMB.toFixed(2)} MB) exceeds Signal limit (${maxFileSizeMB} MB)`);
+      console.warn('   Signal may compress or reject this file.');
+    }
+
+    return {
+      success: true,
+      filePath: newFilePath,
+      fileName: path.basename(newFilePath),
+      fileSize: stats.size,
+      contentType,
+      cleanUrl,
+    };
+  } catch (error: any) {
+    console.error('❌ Download failed:', error.message);
+
+    // Parse yt-dlp error messages
+    let errorMsg = 'Download failed';
+
+    if (error.message.includes('No video could be found')) {
+      errorMsg = 'No video found in this URL (may be text/images only)';
+    } else if (error.message.includes('Unsupported URL')) {
+      errorMsg = 'Unsupported platform or URL format';
+    } else if (error.message.includes('Private video') || error.message.includes('This video is private')) {
+      errorMsg = 'Video is private or requires authentication';
+    } else if (error.message.includes('Video unavailable')) {
+      errorMsg = 'Video unavailable (may be deleted or restricted)';
+    } else if (error.message.includes('timed out')) {
+      errorMsg = 'Download timed out (video too large or slow connection)';
+    } else {
+      // Extract first line of error
+      const firstLine = error.message.split('\n')[0];
+      errorMsg = firstLine.replace(/^ERROR:\s*/i, '');
+    }
+
+    return {
+      success: false,
+      cleanUrl,
+      error: errorMsg,
+    };
+  }
+}
+
+/**
+ * Get video/post metadata without downloading
+ */
+export async function getMetadata(url: string): Promise<{
+  title?: string;
+  description?: string;
+  duration?: number;
+  thumbnail?: string;
+  uploader?: string;
+}> {
+  const cleanUrl = removeTrackers(url);
+
+  try {
+    const command = `yt-dlp --dump-json "${cleanUrl}"`;
+    const { stdout } = await execAsync(command, { timeout: 30000 });
+    const metadata = JSON.parse(stdout);
+
+    return {
+      title: metadata.title,
+      description: metadata.description,
+      duration: metadata.duration,
+      thumbnail: metadata.thumbnail,
+      uploader: metadata.uploader,
+    };
+  } catch (error: any) {
+    console.error('Failed to fetch metadata:', error.message);
+    return {};
+  }
+}

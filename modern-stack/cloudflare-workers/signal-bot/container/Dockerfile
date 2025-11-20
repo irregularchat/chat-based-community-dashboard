@@ -21,28 +21,40 @@ COPY types ./types
 RUN npm run build
 
 # Stage 2: Install signal-cli
-FROM debian:bookworm-slim AS signal-cli
+FROM debian:trixie-slim AS signal-cli
 
 # Install dependencies for signal-cli
 RUN apt-get update && apt-get install -y \
-    openjdk-17-jre-headless \
+    openjdk-21-jre-headless \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Download and install signal-cli
-ARG SIGNAL_CLI_VERSION=0.13.9
-RUN wget https://github.com/AsamK/signal-cli/releases/download/v${SIGNAL_CLI_VERSION}/signal-cli-${SIGNAL_CLI_VERSION}-Linux.tar.gz \
-    && tar xf signal-cli-${SIGNAL_CLI_VERSION}-Linux.tar.gz -C /opt \
+ARG SIGNAL_CLI_VERSION=0.13.22
+RUN wget https://github.com/AsamK/signal-cli/releases/download/v${SIGNAL_CLI_VERSION}/signal-cli-${SIGNAL_CLI_VERSION}.tar.gz \
+    && tar xf signal-cli-${SIGNAL_CLI_VERSION}.tar.gz -C /opt \
     && ln -sf /opt/signal-cli-${SIGNAL_CLI_VERSION}/bin/signal-cli /usr/local/bin/signal-cli \
-    && rm signal-cli-${SIGNAL_CLI_VERSION}-Linux.tar.gz
+    && rm signal-cli-${SIGNAL_CLI_VERSION}.tar.gz
 
 # Stage 3: Final runtime image
 FROM node:20-slim
 
-# Install Java (needed for signal-cli) and other dependencies
+# Install Java 21 from Adoptium and other dependencies
 RUN apt-get update && apt-get install -y \
-    openjdk-17-jre-headless \
     curl \
+    wget \
+    apt-transport-https \
+    gnupg \
+    sqlite3 \
+    ffmpeg \
+    python3 \
+    python3-pip \
+    && mkdir -p /etc/apt/keyrings \
+    && wget -O - https://packages.adoptium.net/artifactory/api/gpg/key/public | tee /etc/apt/keyrings/adoptium.asc \
+    && echo "deb [signed-by=/etc/apt/keyrings/adoptium.asc] https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" | tee /etc/apt/sources.list.d/adoptium.list \
+    && apt-get update \
+    && apt-get install -y temurin-21-jre \
+    && pip3 install --no-cache-dir --break-system-packages yt-dlp \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -11,7 +11,7 @@
  */
 
 import express from 'express';
-import { SignalBot, BotConfig } from './bot/signal-bot.js';
+import { SignalBot, BotConfig } from './bot/signal-bot-v2.js';
 import { WorkerAPIClient } from './api/worker-api-client.js';
 import { HealthMonitor } from './lib/health-monitor.js';
 

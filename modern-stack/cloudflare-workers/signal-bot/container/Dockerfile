@@ -67,6 +67,9 @@ RUN ln -sf /opt/signal-cli/bin/signal-cli /usr/local/bin/signal-cli
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package*.json ./
 
+# Copy configuration files
+COPY config ./config
+
 # Install production dependencies only
 RUN npm ci --only=production
 

@@ -12,10 +12,10 @@ worker-configuration.d.ts
 dist/
 .output/
 
-# Environment variables
+# Environment variables (SECURITY: Never commit secrets)
 .env
-.env.local
-.env.production
+.env.*
+!.env.example
 
 # Logs
 *.log

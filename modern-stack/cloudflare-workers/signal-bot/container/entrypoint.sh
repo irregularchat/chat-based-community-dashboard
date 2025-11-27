@@ -16,19 +16,27 @@ echo "  Signal Bot Container Starting"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Check required environment variables
-if [ -z "$WORKER_API_URL" ]; then
-    echo "❌ ERROR: WORKER_API_URL is not set"
-    exit 1
-fi
-
-if [ -z "$WORKER_API_TOKEN" ]; then
-    echo "❌ ERROR: WORKER_API_TOKEN is not set"
-    exit 1
+# Check deployment mode (self-hosted or cloudflare-native)
+if [ -n "$DB_HOST" ]; then
+    echo "🏠 Running in SELF-HOSTED mode (PostgreSQL)"
+    echo "   Database: $DB_HOST:$DB_PORT"
+    ENTRY_POINT="index-selfhosted.js"
+else
+    echo "☁️  Running in CLOUDFLARE-NATIVE mode (Worker API)"
+    # Check required environment variables for Cloudflare mode
+    if [ -z "$WORKER_API_URL" ]; then
+        echo "❌ ERROR: WORKER_API_URL is not set"
+        exit 1
+    fi
+    if [ -z "$WORKER_API_TOKEN" ]; then
+        echo "❌ ERROR: WORKER_API_TOKEN is not set"
+        exit 1
+    fi
+    echo "   Worker URL: $WORKER_API_URL"
+    ENTRY_POINT="index.js"
 fi
 
 echo "✅ Environment variables configured"
-echo "   Worker URL: $WORKER_API_URL"
 echo ""
 
 # Function to handle graceful shutdown
@@ -52,6 +60,49 @@ echo "📥 Checking for existing Signal data in R2..."
 /app/sync-signal-data.sh download || echo "ℹ️  Starting with empty Signal data directory"
 echo ""
 
+# Check for database corruption and handle it
+echo "🔍 Checking database integrity..."
+DB_CORRUPT=false
+
+# Check if signal-data.db exists
+if [ -f /app/signal-data/data/signal-data.db ]; then
+    # Try a simple query to detect corruption
+    if ! sqlite3 /app/signal-data/data/signal-data.db "PRAGMA integrity_check;" > /dev/null 2>&1; then
+        echo "⚠️  Database corruption detected!"
+        DB_CORRUPT=true
+    fi
+
+    # Also check for schema incompatibility (missing columns)
+    if sqlite3 /app/signal-data/data/signal-data.db "SELECT endorsement_expiration_time FROM group LIMIT 1;" > /dev/null 2>&1; then
+        echo "✅ Database schema is compatible"
+    else
+        echo "⚠️  Database schema incompatible with signal-cli v0.13.22"
+        DB_CORRUPT=true
+    fi
+fi
+
+# If corrupt, rebuild database while preserving account registration
+if [ "$DB_CORRUPT" = true ]; then
+    echo "🔧 Rebuilding database (preserving account registration)..."
+
+    # Preserve account registration keys (.storage/ contains account identity)
+    # Delete corrupt database files but keep account registration
+    rm -f /app/signal-data/data/*.db 2>/dev/null || true
+    rm -f /app/signal-data/data/*.db-shm 2>/dev/null || true
+    rm -f /app/signal-data/data/*.db-wal 2>/dev/null || true
+
+    echo "✅ Corrupt database removed, signal-cli will rebuild with correct schema"
+else
+    echo "✅ Database is healthy"
+fi
+
+# Remove lock files
+echo "🔓 Removing any lock files..."
+rm -f /app/signal-data/data/*.lock 2>/dev/null || true
+rm -f /app/signal-data/data/.*.lock 2>/dev/null || true
+echo "✅ Lock files cleared"
+echo ""
+
 # Start periodic backup in background (every 5 minutes)
 (
     while true; do
@@ -63,10 +114,11 @@ echo ""
 BACKUP_PID=$!
 
 echo "🚀 Starting Signal Bot..."
+echo "📝 Entry point: $ENTRY_POINT"
 echo ""
 
 # Start the Node.js application
-node dist/index.js &
+node dist/$ENTRY_POINT &
 APP_PID=$!
 
 # Wait for the application to exit

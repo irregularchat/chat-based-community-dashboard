@@ -1,0 +1,215 @@
+# Docker Compose for Self-Hosted Signal Bot with VPN
+# Full stack with PostgreSQL, Redis, Mullvad VPN (gluetun), and Signal Bot
+# Location: /home/signal-bot-selfhosted/
+#
+# Security: All HTTP traffic from the Signal bot routes through Mullvad VPN
+# This prevents IP disclosure attacks by masking the server's real IP address
+
+version: '3.8'
+
+services:
+  # ============================================================================
+  # Mullvad VPN Gateway (gluetun)
+  # ============================================================================
+  vpn:
+    image: qmcgaw/gluetun:latest
+    container_name: signal-bot-vpn
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      # VPN Provider Configuration
+      VPN_SERVICE_PROVIDER: mullvad
+      VPN_TYPE: wireguard
+
+      # Mullvad WireGuard Configuration (us-nyc-wg-301)
+      WIREGUARD_PRIVATE_KEY: yL1ZOBsyoIaqtf6oWspMjRMRoxfDUUTEZqdPiTjsIH0=
+      WIREGUARD_ADDRESSES: 10.64.64.142/32
+      WIREGUARD_PUBLIC_KEY: IzqkjVCdJYC1AShILfzebchTlKCqVCt/SMEXolaS3Uc=
+      WIREGUARD_ENDPOINT_IP: 143.244.47.65
+      WIREGUARD_ENDPOINT_PORT: 51820
+
+      # DNS Configuration
+      DNS_ADDRESS: 10.64.0.1
+
+      # Firewall Configuration (Kill Switch)
+      FIREWALL_VPN_INPUT_PORTS: 51820
+      FIREWALL_OUTBOUND_SUBNETS: 172.18.0.0/16  # Allow internal docker network
+
+      # Timezone
+      TZ: America/New_York
+    networks:
+      - signal-bot-network
+    healthcheck:
+      test: ["CMD", "ping", "-c", "1", "1.1.1.1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    ports:
+      # Health check endpoint
+      - "8000:8000"
+
+  # ============================================================================
+  # PostgreSQL Database
+  # ============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: signal-bot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: signal_bot
+      POSTGRES_USER: signal_bot
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme123}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - /home/signal-bot-selfhosted/data/postgres:/var/lib/postgresql/data
+      - /home/signal-bot-selfhosted/database:/docker-entrypoint-initdb.d:ro
+      - /home/signal-bot-selfhosted/data/backups:/backups
+    networks:
+      - signal-bot-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U signal_bot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # Redis Cache
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: signal-bot-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - /home/signal-bot-selfhosted/data/redis:/data
+    networks:
+      - signal-bot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # Signal Bot Application (Routes through VPN)
+  # ============================================================================
+  signal-bot:
+    build:
+      context: /home/signal-bot-selfhosted/bot
+      dockerfile: Dockerfile.selfhosted
+    container_name: signal-bot-selfhosted
+    restart: unless-stopped
+    # CRITICAL: Use VPN container's network stack
+    # This routes ALL HTTP traffic through the Mullvad VPN
+    network_mode: "service:vpn"
+    depends_on:
+      vpn:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Database configuration
+      DB_TYPE: postgres
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: signal_bot
+      DB_USER: signal_bot
+      DB_PASSWORD: ${DB_PASSWORD:-changeme123}
+
+      # Redis configuration
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_URL: redis://redis:6379
+
+      # Signal configuration
+      SIGNAL_PHONE_NUMBER: ${SIGNAL_PHONE:-+19108471202}
+      SIGNAL_CLI_CONFIG_DIR: /app/signal-data
+
+      # OpenAI configuration (optional)
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_ACTIVE: true
+
+      # Discourse configuration (optional)
+      DISCOURSE_URL: ${DISCOURSE_URL:-}
+      DISCOURSE_API_KEY: ${DISCOURSE_API_KEY:-}
+      DISCOURSE_USERNAME: ${DISCOURSE_USERNAME:-}
+      DISCOURSE_QA_CATEGORY: ${DISCOURSE_QA_CATEGORY:-5}
+
+      # Application configuration
+      NODE_ENV: production
+      PORT: 8080
+      LOG_LEVEL: info
+    volumes:
+      - /home/signal-bot-selfhosted/data/signal-data:/app/signal-data
+      - /home/signal-bot-selfhosted/data/downloads:/tmp
+    # NOTE: Ports are exposed via the VPN container since we're using network_mode: "service:vpn"
+    # The bot's port 8080 is accessible via the VPN container's network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ============================================================================
+  # PostgreSQL Backup (Optional)
+  # ============================================================================
+  postgres-backup:
+    image: prodrigestivill/postgres-backup-local:16-alpine
+    container_name: signal-bot-backup
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: signal_bot
+      POSTGRES_USER: signal_bot
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme123}
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 6
+      HEALTHCHECK_PORT: 8080
+    volumes:
+      - /home/signal-bot-selfhosted/data/backups:/backups
+    networks:
+      - signal-bot-network
+
+  # ============================================================================
+  # pgAdmin (Optional - Web UI for PostgreSQL)
+  # ============================================================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: signal-bot-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@signal-bot.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+    volumes:
+      - /home/signal-bot-selfhosted/data/pgadmin:/var/lib/pgadmin
+    ports:
+      - "5050:80"
+    networks:
+      - signal-bot-network
+    profiles:
+      - debug  # Only start with: docker-compose --profile debug up
+
+networks:
+  signal-bot-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  signal-data:
+  downloads:
+  backups:
+  pgadmin-data:

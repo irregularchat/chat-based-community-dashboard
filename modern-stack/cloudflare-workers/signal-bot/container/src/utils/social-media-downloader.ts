@@ -252,27 +252,50 @@ export async function downloadContent(
 
     // Parse yt-dlp error messages
     let errorMsg = 'Download failed';
+    let errorDetails = '';
 
     if (error.message.includes('No video could be found')) {
-      errorMsg = 'No video found in this URL (may be text/images only)';
+      errorMsg = 'No video found at this URL';
+      errorDetails = 'This might be a text post, image-only post, or the URL format is unsupported.';
     } else if (error.message.includes('Unsupported URL')) {
       errorMsg = 'Unsupported platform or URL format';
+      errorDetails = 'This URL is not recognized by the downloader. Supported: Instagram, Twitter/X, TikTok, YouTube, Reddit, etc.';
     } else if (error.message.includes('Private video') || error.message.includes('This video is private')) {
-      errorMsg = 'Video is private or requires authentication';
+      errorMsg = 'Content is private or requires login';
+      errorDetails = 'This video/post can only be viewed by authenticated users or approved followers.';
     } else if (error.message.includes('Video unavailable')) {
-      errorMsg = 'Video unavailable (may be deleted or restricted)';
+      errorMsg = 'Content unavailable';
+      errorDetails = 'This content may have been deleted, made private, or is geo-restricted.';
+    } else if (error.message.includes('inappropriate') || error.message.includes('unavailable for certain audiences')) {
+      errorMsg = 'Content is age-restricted or flagged';
+      errorDetails = 'Instagram has flagged this content as potentially inappropriate. Cannot download without authentication/age verification.';
     } else if (error.message.includes('timed out')) {
-      errorMsg = 'Download timed out (video too large or slow connection)';
+      errorMsg = 'Download timed out';
+      errorDetails = 'The download took too long - video may be very large or the connection is slow.';
+    } else if (error.message.includes('HTTP Error 403') || error.message.includes('Forbidden')) {
+      errorMsg = 'Access forbidden';
+      errorDetails = 'The platform blocked access to this content. It may require authentication or have regional restrictions.';
+    } else if (error.message.includes('HTTP Error 404') || error.message.includes('Not Found')) {
+      errorMsg = 'Content not found';
+      errorDetails = 'This post/video no longer exists or the URL is incorrect.';
+    } else if (error.message.includes('Login required') || error.message.includes('Sign in')) {
+      errorMsg = 'Login required';
+      errorDetails = 'This platform requires authentication to download content. The bot cannot provide credentials.';
     } else {
       // Extract first line of error
       const firstLine = error.message.split('\n')[0];
-      errorMsg = firstLine.replace(/^ERROR:\s*/i, '');
+      errorMsg = firstLine.replace(/^ERROR:\s*/i, '').replace(/^\[.*?\]\s*/, '');
+
+      // Add platform-specific context
+      if (platform?.name === 'Instagram') {
+        errorDetails = 'Instagram downloads can fail due to: age restrictions, private accounts, deleted posts, or rate limiting. Try a different post or check if the account is public.';
+      }
     }
 
     return {
       success: false,
       cleanUrl,
-      error: errorMsg,
+      error: `${errorMsg}${errorDetails ? '\n' + errorDetails : ''}`,
     };
   }
 }

@@ -15,6 +15,8 @@
 import { Container, getContainer } from '@cloudflare/containers';
 import * as DBHandler from './api/db-handler';
 import * as R2Handler from './api/r2-handler';
+import * as NewsHandler from './api/news-handler';
+import * as DiscourseHandler from './api/discourse-handler';
 
 export interface Env {
   // D1 Database
@@ -34,6 +36,14 @@ export interface Env {
   API_AUTH_TOKEN?: string;
   RATE_LIMIT_PER_MINUTE?: string;
   RATE_LIMIT_WINDOW_SECONDS?: string;
+
+  // News scraping
+  OPENAI_API_KEY?: string;
+  DISCOURSE_URL?: string;
+  DISCOURSE_API_KEY?: string;
+  DISCOURSE_USERNAME?: string;
+  DISCOURSE_NEWS_CATEGORY?: string;
+  DISCOURSE_QA_CATEGORY?: string;
 
   // Durable Objects (for future use)
   BOT_COORDINATOR?: DurableObjectNamespace;
@@ -157,6 +167,20 @@ export default {
       return R2Handler.handleStats(request, env);
     }
 
+    // News Scraping API
+    if (pathname === '/api/news/scrape' && request.method === 'POST') {
+      return NewsHandler.handleScrape(request, env);
+    }
+
+    // Discourse Q&A API
+    if (pathname === '/api/discourse/questions' && request.method === 'GET') {
+      return DiscourseHandler.handleListQuestions(request, env);
+    }
+
+    if (pathname === '/api/discourse/post-question' && request.method === 'POST') {
+      return DiscourseHandler.handlePostQuestion(request, env);
+    }
+
     // ========================================================================
     // CONTAINER PROXY (for bot control endpoints)
     // ========================================================================
@@ -185,6 +209,9 @@ export default {
         'GET  /api/r2/list',
         'GET  /api/r2/head/:key',
         'GET  /api/r2/stats',
+        'POST /api/news/scrape',
+        'GET  /api/discourse/questions',
+        'POST /api/discourse/post-question',
         'POST /bot/start',
         'POST /bot/stop',
         'GET  /bot/status',

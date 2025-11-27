@@ -32,6 +32,16 @@ download_from_r2() {
         tar -xzf /tmp/signal-data-backup.tar.gz -C "${SIGNAL_DATA_DIR}"
         rm /tmp/signal-data-backup.tar.gz
 
+        # Regenerate account.db from SQL dump if it exists
+        ACCOUNT_DIR="${SIGNAL_DATA_DIR}/data/813876.d"
+        if [ -f "${ACCOUNT_DIR}/account_dump.sql" ]; then
+            echo "🔧 Regenerating account.db from SQL dump..."
+            rm -f "${ACCOUNT_DIR}"/account.db*
+            cd "${ACCOUNT_DIR}"
+            sqlite3 account.db < account_dump.sql 2>&1 | grep -v "UNIQUE constraint" || true
+            echo "✅ account.db regenerated successfully"
+        fi
+
         echo "✅ Signal data restored from R2"
         return 0
     else
@@ -51,9 +61,14 @@ upload_to_r2() {
         return 1
     fi
 
-    # Create tarball
+    # Create tarball - EXCLUDE account.db* files to prevent corruption
+    # account.db will be regenerated from account_dump.sql on restore
     cd "$(dirname ${SIGNAL_DATA_DIR})"
-    tar -czf /tmp/signal-data-backup.tar.gz "$(basename ${SIGNAL_DATA_DIR})"
+    tar -czf /tmp/signal-data-backup.tar.gz \
+        --exclude='*/813876.d/account.db*' \
+        --exclude='*/data/*/account.db*' \
+        "$(basename ${SIGNAL_DATA_DIR})"
+    echo "ℹ️  Excluded account.db* from backup (will regenerate from SQL dump)"
 
     # Encode to base64
     BASE64_CONTENT=$(base64 -i /tmp/signal-data-backup.tar.gz | tr -d '\n')

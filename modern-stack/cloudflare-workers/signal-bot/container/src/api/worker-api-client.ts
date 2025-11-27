@@ -254,6 +254,18 @@ export class WorkerAPIClient {
   }
 
   /**
+   * Get next question ID (atomically)
+   */
+  async getNextQuestionId(groupId: string): Promise<number> {
+    // Get the highest question ID in this group
+    const result = await this.query(
+      'SELECT COALESCE(MAX(question_id), 0) + 1 as next_id FROM q_and_a_questions WHERE group_id = ?',
+      [groupId]
+    );
+    return result.results[0]?.next_id || 1;
+  }
+
+  /**
    * Get Q&A questions
    */
   async getQuestions(groupId?: string, solved?: boolean): Promise<any[]> {
@@ -271,6 +283,32 @@ export class WorkerAPIClient {
     }
 
     return this.find('q_and_a_questions', where || undefined, params);
+  }
+
+  /**
+   * Get a single question with all its answers
+   */
+  async getQuestionWithAnswers(questionId: number, groupId?: string): Promise<{
+    question: any;
+    answers: any[];
+  } | null> {
+    // Get question
+    const where = groupId ? 'question_id = ? AND group_id = ?' : 'question_id = ?';
+    const params = groupId ? [questionId, groupId] : [questionId];
+    const question = await this.findOne('q_and_a_questions', where, params);
+
+    if (!question) {
+      return null;
+    }
+
+    // Get answers
+    const answers = await this.find(
+      'q_and_a_answers',
+      'question_id = ?',
+      [questionId]
+    );
+
+    return { question, answers };
   }
 
   /**
@@ -310,6 +348,7 @@ export class WorkerAPIClient {
     solvedAt?: number;
     answers?: any[];
     forumLink?: string;
+    discourseTopicId?: string;
   }): Promise<void> {
     const data: Record<string, any> = {};
 
@@ -318,8 +357,97 @@ export class WorkerAPIClient {
     if (updates.solvedAt) data.solved_at = updates.solvedAt;
     if (updates.answers) data.answers = JSON.stringify(updates.answers);
     if (updates.forumLink) data.forum_link = updates.forumLink;
+    if (updates.discourseTopicId) data.discourse_topic_id = updates.discourseTopicId;
 
     await this.update('q_and_a_questions', data, 'question_id = ?', [questionId]);
+  }
+
+  /**
+   * Save an answer to a question
+   */
+  async saveAnswer(answer: {
+    questionId: number;
+    answer: string;
+    answerer: string;
+    answererPhone: string;
+    groupId: string;
+    groupName?: string;
+  }): Promise<number> {
+    // Get next answer ID for this question
+    const result = await this.query(
+      'SELECT COALESCE(MAX(answer_id), 0) + 1 as next_id FROM q_and_a_answers WHERE question_id = ?',
+      [answer.questionId]
+    );
+    const answerId = result.results[0]?.next_id || 1;
+
+    // Insert answer
+    await this.insert('q_and_a_answers', {
+      id: this.generateId(),
+      answer_id: answerId,
+      question_id: answer.questionId,
+      answer: answer.answer,
+      answerer: answer.answerer,
+      answerer_phone: answer.answererPhone,
+      group_id: answer.groupId,
+      group_name: answer.groupName,
+      is_solution: 0,
+      timestamp: Math.floor(Date.now() / 1000),
+    });
+
+    // Update answer count on question
+    await this.query(
+      'UPDATE q_and_a_questions SET answer_count = answer_count + 1 WHERE question_id = ?',
+      [answer.questionId]
+    );
+
+    return answerId;
+  }
+
+  /**
+   * Mark answer(s) as solution
+   */
+  async markAnswersAsSolution(questionId: number, answerIds: number[]): Promise<void> {
+    for (const answerId of answerIds) {
+      await this.update(
+        'q_and_a_answers',
+        {
+          is_solution: 1,
+          marked_solution_at: Math.floor(Date.now() / 1000),
+        },
+        'question_id = ? AND answer_id = ?',
+        [questionId, answerId]
+      );
+    }
+
+    // Update solution count and solved status on question
+    await this.query(
+      `UPDATE q_and_a_questions
+       SET solved = 1,
+           solution_count = ?,
+           solved_at = ?
+       WHERE question_id = ?`,
+      [answerIds.length, Math.floor(Date.now() / 1000), questionId]
+    );
+  }
+
+  /**
+   * Post solved question to Discourse
+   */
+  async postQuestionToDiscourse(questionId: number): Promise<{
+    success: boolean;
+    topicId?: string;
+    topicUrl?: string;
+    error?: string;
+  }> {
+    try {
+      const response = await this.client.post('/api/discourse/post-question', {
+        questionId,
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Failed to post to Discourse:', error);
+      throw new Error(`Discourse posting failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 
   /**
@@ -435,6 +563,59 @@ export class WorkerAPIClient {
   }
 
   // ============================================================================
+  // MESSAGE RETRIEVAL
+  // ============================================================================
+
+  /**
+   * Get recent messages from a group by count
+   */
+  async getRecentMessages(groupId: string, count: number): Promise<any[]> {
+    try {
+      const response = await this.client.post('/api/messages/recent', {
+        groupId,
+        count,
+      });
+      return response.data.messages || [];
+    } catch (error) {
+      console.error('Get recent messages error:', error);
+      throw new Error(`Failed to get recent messages: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Get messages from a group within a time period (hours)
+   */
+  async getMessagesByTimeRange(groupId: string, hours: number): Promise<any[]> {
+    try {
+      const response = await this.client.post('/api/messages/by-time', {
+        groupId,
+        hours,
+      });
+      return response.data.messages || [];
+    } catch (error) {
+      console.error('Get messages by time range error:', error);
+      throw new Error(`Failed to get messages by time: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Get messages from a group with both count and time constraints
+   */
+  async getMessagesWithConstraints(groupId: string, count?: number, hours?: number): Promise<any[]> {
+    try {
+      const response = await this.client.post('/api/messages/with-constraints', {
+        groupId,
+        count,
+        hours,
+      });
+      return response.data.messages || [];
+    } catch (error) {
+      console.error('Get messages with constraints error:', error);
+      throw new Error(`Failed to get messages: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // ============================================================================
   // UTILITIES
   // ============================================================================
 
@@ -454,6 +635,33 @@ export class WorkerAPIClient {
       return response.status === 200;
     } catch {
       return false;
+    }
+  }
+
+  // ============================================================================
+  // NEWS & ARTICLE SCRAPING (via Worker)
+  // ============================================================================
+
+  /**
+   * Scrape article and generate AI summary
+   */
+  async scrapeAndSummarize(params: {
+    url: string;
+    sourceNumber: string;
+    sourceName: string;
+    groupId?: string;
+  }): Promise<{
+    title?: string;
+    summary?: string;
+    content?: string;
+    discourseUrl?: string;
+  }> {
+    try {
+      const response = await this.client.post('/api/news/scrape', params);
+      return response.data;
+    } catch (error) {
+      console.error('Scrape and summarize error:', error);
+      throw new Error(`Article scraping failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 }

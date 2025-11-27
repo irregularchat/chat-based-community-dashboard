@@ -76,6 +76,7 @@ const TRACKING_PARAMS = [
   'source',
   'campaign',
   'medium',
+  'rcm', // LinkedIn tracking parameter
 ];
 
 /**

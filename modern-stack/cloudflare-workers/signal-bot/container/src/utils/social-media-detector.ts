@@ -15,18 +15,19 @@ export interface SocialMediaPlatform {
 }
 
 // Social media platforms that support downloading
+// NOTE: YouTube disabled per user request - only Instagram videos should be downloaded
 export const SOCIAL_MEDIA_PLATFORMS: SocialMediaPlatform[] = [
   { name: 'Instagram', domain: 'instagram.com', supportsDownload: true, icon: '📸' },
-  { name: 'TikTok', domain: 'tiktok.com', supportsDownload: true, icon: '🎵' },
-  { name: 'Twitter/X', domain: 'twitter.com', supportsDownload: true, icon: '🐦' },
-  { name: 'Twitter/X', domain: 'x.com', supportsDownload: true, icon: '🐦' },
-  { name: 'YouTube', domain: 'youtube.com', supportsDownload: true, icon: '📺' },
-  { name: 'YouTube', domain: 'youtu.be', supportsDownload: true, icon: '📺' },
-  { name: 'Facebook', domain: 'facebook.com', supportsDownload: true, icon: '📘' },
-  { name: 'Facebook', domain: 'fb.com', supportsDownload: true, icon: '📘' },
-  { name: 'Reddit', domain: 'reddit.com', supportsDownload: true, icon: '🤖' },
-  { name: 'Vimeo', domain: 'vimeo.com', supportsDownload: true, icon: '🎬' },
-  { name: 'Twitch', domain: 'twitch.tv', supportsDownload: true, icon: '🎮' },
+  { name: 'TikTok', domain: 'tiktok.com', supportsDownload: false, icon: '🎵' },
+  { name: 'Twitter/X', domain: 'twitter.com', supportsDownload: false, icon: '🐦' },
+  { name: 'Twitter/X', domain: 'x.com', supportsDownload: false, icon: '🐦' },
+  { name: 'YouTube', domain: 'youtube.com', supportsDownload: false, icon: '📺' },
+  { name: 'YouTube', domain: 'youtu.be', supportsDownload: false, icon: '📺' },
+  { name: 'Facebook', domain: 'facebook.com', supportsDownload: false, icon: '📘' },
+  { name: 'Facebook', domain: 'fb.com', supportsDownload: false, icon: '📘' },
+  { name: 'Reddit', domain: 'reddit.com', supportsDownload: false, icon: '🤖' },
+  { name: 'Vimeo', domain: 'vimeo.com', supportsDownload: false, icon: '🎬' },
+  { name: 'Twitch', domain: 'twitch.tv', supportsDownload: false, icon: '🎮' },
   { name: 'LinkedIn', domain: 'linkedin.com', supportsDownload: false, icon: '💼' },
   { name: 'Pinterest', domain: 'pinterest.com', supportsDownload: false, icon: '📌' },
   { name: 'Snapchat', domain: 'snapchat.com', supportsDownload: false, icon: '👻' },

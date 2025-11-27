@@ -21,6 +21,48 @@ import { extractURLs } from '../utils/url-security.js';
 import { detectNewsUrls, extractDomain } from '../utils/news-detector.js';
 import { isSocialMediaUrl, getSocialMediaPlatform, removeTrackers, getContentType, formatUrlForDisplay } from '../utils/social-media-detector.js';
 import { downloadContent, isYtDlpInstalled } from '../utils/social-media-downloader.js';
+import { EmojiReactionHandler } from '../utils/emoji-reaction-handler.js';
+import { DebugLogger } from '../utils/debug-logger.js';
+import { PostgresClient } from '../db/postgres-client.js';
+
+/**
+ * Get web.archive.org link - checks for existing archive, falls back to save link
+ * @param url Original URL to archive
+ * @returns Archive URL (existing snapshot or save link)
+ */
+async function getArchiveLink(url: string): Promise<string> {
+  try {
+    // Query Web Archive Availability API
+    const apiUrl = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;
+    const response = await fetch(apiUrl, {
+      headers: { 'User-Agent': 'SignalBot/3.0' },
+      signal: AbortSignal.timeout(5000) // 5 second timeout
+    });
+
+    if (!response.ok) {
+      console.log(`⚠️ Web Archive API returned ${response.status}, using save link`);
+      return `https://web.archive.org/save/${url}`;
+    }
+
+    const data = await response.json() as any;
+
+    // Check if archived snapshots exist
+    if (data.archived_snapshots?.closest?.available && data.archived_snapshots.closest.url) {
+      const archivedUrl = data.archived_snapshots.closest.url;
+      console.log(`✅ Found existing Web Archive snapshot: ${archivedUrl}`);
+      return archivedUrl;
+    }
+
+    // No archive exists, return save link
+    console.log(`📎 No existing Web Archive snapshot, using save link`);
+    return `https://web.archive.org/save/${url}`;
+
+  } catch (error) {
+    console.error('Web Archive API error:', error);
+    // Fallback to save link on error
+    return `https://web.archive.org/save/${url}`;
+  }
+}
 
 export interface BotConfig {
   phoneNumber: string;
@@ -94,11 +136,33 @@ export class SignalBot extends EventEmitter {
   private processedMessages = new Set<string>();
   private readonly DEDUP_WINDOW = 30000; // 30 seconds
 
-  constructor(config: BotConfig, workerApi: WorkerAPIClient) {
+  // Group caching to survive restarts
+  private cachedGroups: any[] = [];
+  private groupsCacheTimestamp: number = 0;
+  private readonly GROUPS_CACHE_TTL = 3600000; // 1 hour in milliseconds
+  private groupRefreshInterval: NodeJS.Timeout | null = null;
+
+  // Emoji reactions handler
+  private emojiReactionHandler: EmojiReactionHandler;
+
+  // Debug logger (optional)
+  private debugLogger?: DebugLogger;
+
+  constructor(config: BotConfig, workerApi: WorkerAPIClient, dbClient?: PostgresClient) {
     super();
     this.config = config;
     this.workerApi = workerApi;
     this.commandHandler = new CommandHandler(config, workerApi);
+    // Pass bot instance to command handler for methods like getGroups()
+    this.commandHandler.setBotInstance(this);
+    // Initialize emoji reaction handler
+    this.emojiReactionHandler = new EmojiReactionHandler();
+
+    // Initialize debug logger if PostgreSQL client is available
+    if (dbClient) {
+      this.debugLogger = new DebugLogger(dbClient, true, true);
+      console.log('📊 Debug logging enabled (PostgreSQL)');
+    }
   }
 
   /**
@@ -111,11 +175,30 @@ export class SignalBot extends EventEmitter {
 
     console.log('🚀 Starting Signal bot (V2 - JSON-RPC)...');
 
+    // Log bot start event
+    await this.debugLogger?.logBotLifecycle('start', {
+      phoneNumber: this.config.phoneNumber,
+      dataDir: this.config.dataDir,
+      hasOpenAI: !!this.config.openAiApiKey,
+      hasLocalAI: !!this.config.localAiUrl,
+      hasDiscourse: !!this.config.discourseApiUrl,
+    });
+
     // Start signal-cli daemon in TCP mode
     await this.startDaemon();
 
     // Connect JSON-RPC client
     await this.connectRpcClient();
+
+    // Initialize group cache from database
+    await this.initializeGroupCache();
+
+    // Set up periodic group refresh (every hour)
+    this.groupRefreshInterval = setInterval(() => {
+      this.refreshGroupCache().catch(err => {
+        console.error('Error refreshing group cache:', err);
+      });
+    }, this.GROUPS_CACHE_TTL);
 
     this.isRunningFlag = true;
     this.startTime = Date.now();
@@ -133,6 +216,18 @@ export class SignalBot extends EventEmitter {
     }
 
     console.log('🛑 Stopping Signal bot...');
+
+    // Log bot stop event
+    await this.debugLogger?.logBotLifecycle('stop', {
+      uptime: this.getUptime(),
+      stats: this.stats,
+    });
+
+    // Clear group refresh interval
+    if (this.groupRefreshInterval) {
+      clearInterval(this.groupRefreshInterval);
+      this.groupRefreshInterval = null;
+    }
 
     // Disconnect RPC client
     if (this.rpcClient) {
@@ -164,10 +259,10 @@ export class SignalBot extends EventEmitter {
         '--config', this.config.dataDir,
         'daemon',
         '--tcp', 'localhost:7583',
-        '--receive-mode', 'on-connection', // Forward messages to JSON-RPC clients
+        '--receive-mode', 'manual', // Manual mode - we'll use subscribeReceive() via JSON-RPC
       ];
 
-      console.log(`Running: signal-cli ${args.join(' ')}`);
+      console.log(`🚀 Starting signal-cli daemon: signal-cli ${args.join(' ')}`);
 
       this.daemonProcess = spawn('signal-cli', args, {
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -239,7 +334,7 @@ export class SignalBot extends EventEmitter {
   private async connectRpcClient(): Promise<void> {
     console.log('🔌 Connecting to signal-cli JSON-RPC interface...');
 
-    this.rpcClient = new SignalJsonRpcClient('localhost', 7583);
+    this.rpcClient = new SignalJsonRpcClient('localhost', 7583, this.debugLogger);
 
     // Handle incoming notifications (messages)
     this.rpcClient.on('notification', (notification) => {
@@ -252,10 +347,13 @@ export class SignalBot extends EventEmitter {
 
       // Subscribe to receive messages via JSON-RPC notifications
       try {
+        console.log('📤 Calling subscribeReceive() to enable message notifications...');
         const subscriptionId = await this.rpcClient!.subscribeReceive();
-        console.log(`📬 Subscribed to receive messages (subscription: ${subscriptionId})`);
+        console.log(`📬 Successfully subscribed to receive messages (subscription ID: ${subscriptionId})`);
+        console.log('🎯 Bot is now ready to receive Signal messages via JSON-RPC notifications');
       } catch (error) {
-        console.error('Failed to subscribe to receive messages:', error);
+        console.error('❌ Failed to subscribe to receive messages:', error);
+        console.error('   Without subscription, incoming messages will NOT be received!');
       }
     });
 
@@ -349,6 +447,7 @@ export class SignalBot extends EventEmitter {
       const messageText = envelope.dataMessage?.message;
       const groupInfo = envelope.dataMessage?.groupInfo;
       const groupId = groupInfo?.groupId;
+      const quotedText = envelope.dataMessage?.quote?.text;
 
       console.log(`🔵 [DEBUG] Message text: "${messageText}", groupId: ${groupId}`);
 
@@ -376,26 +475,30 @@ export class SignalBot extends EventEmitter {
       console.log(`📨 Message from ${sourceName} (${sourceNumber})${groupId ? ` in group ${groupId}` : ''}: ${messageText}`);
       console.log('🔵 [DEBUG] About to save message to D1...');
 
-      // Save message to Cloudflare D1 via Worker API
+      // Save message to database (PostgreSQL for self-hosted, D1 for Cloudflare)
       try {
-        await this.workerApi.saveMessage({
-          id: this.generateMessageId(),
-          groupId,
-          groupName: undefined, // Will be populated by group discovery
-          sourceNumber,
-          sourceName,
-          sourceUuid,
-          message: messageText,
-          timestamp,
-          attachments: envelope.dataMessage?.attachments,
-          mentions: envelope.dataMessage?.mentions,
-          isReply: !!envelope.dataMessage?.quote,
-          quotedMessageId: envelope.dataMessage?.quote?.id?.toString(),
-          quotedText: envelope.dataMessage?.quote?.text,
-        });
-        console.log('🔵 [DEBUG] D1 save completed successfully');
+        if (this.workerApi && typeof this.workerApi.saveMessage === 'function') {
+          await this.workerApi.saveMessage({
+            id: this.generateMessageId(),
+            groupId,
+            groupName: undefined, // Will be populated by group discovery
+            sourceNumber,
+            sourceName,
+            sourceUuid,
+            message: messageText,
+            timestamp,
+            attachments: envelope.dataMessage?.attachments,
+            mentions: envelope.dataMessage?.mentions,
+            isReply: !!envelope.dataMessage?.quote,
+            quotedMessageId: envelope.dataMessage?.quote?.id?.toString(),
+            quotedText: envelope.dataMessage?.quote?.text,
+          });
+          console.log('🔵 [DEBUG] D1 save completed successfully');
+        } else {
+          console.log('🔵 [DEBUG] Skipping D1 save (self-hosted mode)');
+        }
       } catch (error) {
-        console.error('🔵 [DEBUG] Failed to save message to D1:', error);
+        console.error('🔵 [DEBUG] Failed to save message:', error);
       }
 
       console.log('🔵 [DEBUG] Checking if message is a command...');
@@ -408,6 +511,8 @@ export class SignalBot extends EventEmitter {
             sourceName: sourceName || '',
             groupId,
             timestamp,
+            quotedText,
+            mentions: envelope.dataMessage?.mentions,
           });
           console.log('🔵 [DEBUG] Command handling completed');
         } catch (error) {
@@ -416,6 +521,38 @@ export class SignalBot extends EventEmitter {
         }
       } else {
         console.log('🔵 [DEBUG] Message is NOT a command');
+      }
+
+      // Check for emoji reactions (after command handling)
+      if (messageText && sourceNumber && timestamp) {
+        const isOwnMessage = sourceNumber === this.config.phoneNumber;
+        const isCommand = messageText.startsWith('!');
+
+        const matchingEmojis = this.emojiReactionHandler.findMatchingEmojis(
+          messageText,
+          isCommand,
+          isOwnMessage
+        );
+
+        if (matchingEmojis.length > 0) {
+          const messageId = `${sourceNumber}-${timestamp}`;
+          if (!this.emojiReactionHandler.shouldDebounce(messageId)) {
+            for (const emoji of matchingEmojis) {
+              try {
+                await this.sendReaction({
+                  emoji,
+                  targetAuthor: sourceNumber,
+                  targetTimestamp: timestamp,
+                  groupId,
+                  recipient: groupId ? undefined : sourceNumber,
+                });
+                console.log(`✅ Sent ${emoji} reaction to message`);
+              } catch (error) {
+                console.error(`Failed to send ${emoji} reaction:`, error);
+              }
+            }
+          }
+        }
       }
 
       console.log('🔵 [DEBUG] About to check for URLs...');
@@ -474,6 +611,17 @@ export class SignalBot extends EventEmitter {
     } catch (error) {
       console.error('🔵 [DEBUG] Error handling message:', error);
       this.stats.errors++;
+
+      // Log processing error to database
+      if (error instanceof Error) {
+        await this.debugLogger?.logProcessingError('signal-bot', error, {
+          sourceNumber: message.envelope?.sourceNumber || message.envelope?.source,
+          sourceName: message.envelope?.sourceName,
+          groupId: message.envelope?.dataMessage?.groupInfo?.groupId,
+          timestamp: message.envelope?.dataMessage?.timestamp || message.envelope?.timestamp,
+          messagePreview: message.envelope?.dataMessage?.message?.substring(0, 100),
+        });
+      }
     }
   }
 
@@ -487,6 +635,8 @@ export class SignalBot extends EventEmitter {
       sourceName: string;
       groupId?: string;
       timestamp: number;
+      quotedText?: string;
+      mentions?: any[];
     }
   ): Promise<void> {
     const startTime = Date.now();
@@ -506,31 +656,39 @@ export class SignalBot extends EventEmitter {
 
       this.stats.commandsProcessed++;
 
-      // Log command usage to Cloudflare D1
-      await this.workerApi.logCommand({
-        command: command.split(' ')[0].substring(1), // Remove ! prefix
-        args: command.split(' ').slice(1).join(' ') || undefined,
-        groupId: context.groupId,
-        userId: context.sourceNumber,
-        userName: context.sourceName,
-        success: true,
-        responseTime: Date.now() - startTime,
-      });
+      // Log command usage to database (D1 for Cloudflare, PostgreSQL for self-hosted)
+      if (this.workerApi && typeof this.workerApi.logCommand === 'function') {
+        await this.workerApi.logCommand({
+          command: command.split(' ')[0].substring(1), // Remove ! prefix
+          args: command.split(' ').slice(1).join(' ') || undefined,
+          groupId: context.groupId,
+          userId: context.sourceNumber,
+          userName: context.sourceName,
+          success: true,
+          responseTime: Date.now() - startTime,
+        });
+      } else {
+        console.log('🔵 [DEBUG] Skipping command logging (self-hosted mode)');
+      }
 
     } catch (error) {
       console.error('Command error:', error);
       this.stats.errors++;
 
-      // Log error to Cloudflare D1
-      await this.workerApi.logError({
-        errorType: 'command_error',
-        errorMessage: error instanceof Error ? error.message : 'Unknown error',
-        stackTrace: error instanceof Error ? error.stack : undefined,
-        command: command.split(' ')[0].substring(1),
-        groupId: context.groupId,
-        userId: context.sourceNumber,
-        userName: context.sourceName,
-      });
+      // Log error to database (D1 for Cloudflare, PostgreSQL for self-hosted)
+      if (this.workerApi && typeof this.workerApi.logError === 'function') {
+        await this.workerApi.logError({
+          errorType: 'command_error',
+          errorMessage: error instanceof Error ? error.message : 'Unknown error',
+          stackTrace: error instanceof Error ? error.stack : undefined,
+          command: command.split(' ')[0].substring(1),
+          groupId: context.groupId,
+          userId: context.sourceNumber,
+          userName: context.sourceName,
+        });
+      } else {
+        console.log('🔵 [DEBUG] Skipping error logging (self-hosted mode)');
+      }
 
       // Send error message to user
       try {
@@ -544,16 +702,20 @@ export class SignalBot extends EventEmitter {
       }
 
       // Log command failure
-      await this.workerApi.logCommand({
-        command: command.split(' ')[0].substring(1),
-        args: command.split(' ').slice(1).join(' ') || undefined,
-        groupId: context.groupId,
-        userId: context.sourceNumber,
-        userName: context.sourceName,
-        success: false,
-        responseTime: Date.now() - startTime,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error',
-      });
+      if (this.workerApi && typeof this.workerApi.logCommand === 'function') {
+        await this.workerApi.logCommand({
+          command: command.split(' ')[0].substring(1),
+          args: command.split(' ').slice(1).join(' ') || undefined,
+          groupId: context.groupId,
+          userId: context.sourceNumber,
+          userName: context.sourceName,
+          success: false,
+          responseTime: Date.now() - startTime,
+          errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        });
+      } else {
+        console.log('🔵 [DEBUG] Skipping command failure logging (self-hosted mode)');
+      }
     }
   }
 
@@ -588,20 +750,73 @@ export class SignalBot extends EventEmitter {
   }
 
   /**
-   * Get list of groups using JSON-RPC
+   * Update group - add or remove members using JSON-RPC
+   *
+   * Based on proven working implementation from commit 5613326b
+   * Uses JSON-RPC instead of spawn-based CLI approach
    */
-  async getGroups(): Promise<any[]> {
-    if (!this.rpcClient) {
-      throw new Error('JSON-RPC client not connected');
+  async updateGroup(params: {
+    groupId: string;
+    member?: string[];  // Array of phone numbers or UUIDs to add
+    removeMember?: string[];  // Array of phone numbers or UUIDs to remove
+    name?: string;
+    description?: string;
+    avatar?: string;
+  }): Promise<void> {
+    if (!this.isRunningFlag || !this.rpcClient) {
+      throw new Error('Bot is not running');
     }
 
     try {
-      const groups = await this.rpcClient.listGroups();
-      return groups || [];
+      // Use JSON-RPC client to update group
+      await this.rpcClient.updateGroup(params);
+
+      console.log(`✅ Group updated: ${params.groupId}`);
+      if (params.member && params.member.length > 0) {
+        console.log(`   Added members: ${params.member.join(', ')}`);
+      }
+      if (params.removeMember && params.removeMember.length > 0) {
+        console.log(`   Removed members: ${params.removeMember.join(', ')}`);
+      }
     } catch (error) {
-      console.error('Failed to list groups via JSON-RPC:', error);
+      console.error('Failed to update group via JSON-RPC:', error);
       throw error;
     }
+  }
+
+  /**
+   * Send a reaction to a message
+   */
+  async sendReaction(params: {
+    emoji: string;
+    targetAuthor: string;
+    targetTimestamp: number;
+    groupId?: string;
+    recipient?: string;
+  }): Promise<void> {
+    if (!this.rpcClient) {
+      throw new Error('Bot is not running');
+    }
+
+    await this.rpcClient.sendReaction(params);
+    console.log(`🎯 Sent reaction ${params.emoji} to message from ${params.targetAuthor}`);
+  }
+
+  /**
+   * Get list of groups using cached data (survives restarts)
+   */
+  async getGroups(forceRefresh: boolean = false): Promise<any[]> {
+    // If cache is fresh and not forcing refresh, return cached data
+    const cacheAge = Date.now() - this.groupsCacheTimestamp;
+    if (!forceRefresh && this.cachedGroups.length > 0 && cacheAge < this.GROUPS_CACHE_TTL) {
+      console.log(`📋 Using cached groups (${this.cachedGroups.length} groups, age: ${Math.floor(cacheAge / 1000)}s)`);
+      return this.cachedGroups;
+    }
+
+    // Cache is stale or empty, refresh from signal-cli
+    console.log('🔄 Refreshing groups from signal-cli...');
+    await this.refreshGroupCache();
+    return this.cachedGroups;
   }
 
   /**
@@ -627,7 +842,173 @@ export class SignalBot extends EventEmitter {
       ...this.stats,
       uptime: this.getUptime(),
       rpcConnected: this.rpcClient?.isConnected() || false,
+      cachedGroups: this.cachedGroups.length,
+      groupsCacheAge: Math.floor((Date.now() - this.groupsCacheTimestamp) / 1000),
     };
+  }
+
+  /**
+   * Initialize group cache on startup
+   * Loads from database first, falls back to signal-cli if needed
+   */
+  private async initializeGroupCache(): Promise<void> {
+    try {
+      console.log('📋 Initializing group cache...');
+
+      // Try to load from database first
+      const dbGroups = await this.loadGroupsFromDatabase();
+
+      if (dbGroups.length > 0) {
+        this.cachedGroups = dbGroups;
+        this.groupsCacheTimestamp = Date.now();
+        console.log(`✅ Loaded ${dbGroups.length} groups from database`);
+      } else {
+        // No groups in database, fetch from signal-cli
+        console.log('📡 No groups in database, fetching from signal-cli...');
+        await this.refreshGroupCache();
+      }
+    } catch (error) {
+      console.error('❌ Error initializing group cache:', error);
+      // Try to fetch from signal-cli as fallback
+      try {
+        await this.refreshGroupCache();
+      } catch (fallbackError) {
+        console.error('❌ Fallback group fetch also failed:', fallbackError);
+      }
+    }
+  }
+
+  /**
+   * Refresh group cache from signal-cli and save to database
+   */
+  private async refreshGroupCache(): Promise<void> {
+    if (!this.rpcClient) {
+      throw new Error('JSON-RPC client not connected');
+    }
+
+    try {
+      // Fetch groups from signal-cli
+      const groups = await this.rpcClient.listGroups();
+
+      // DEBUG: Log raw data from signal-cli to diagnose admin detection
+      if (groups && groups.length > 0) {
+        console.log('🔍 DEBUG: Total groups returned:', groups.length);
+        console.log('🔍 DEBUG: Bot phone number:', this.config.phoneNumber);
+        console.log('🔍 DEBUG: First group sample:');
+        console.log(JSON.stringify(groups[0], null, 2));
+        console.log('🔍 DEBUG: First group admins field:', groups[0].admins);
+        console.log('🔍 DEBUG: First group admins length:', groups[0].admins?.length);
+        console.log('🔍 DEBUG: First group members length:', groups[0].members?.length);
+
+        this.cachedGroups = groups;
+        this.groupsCacheTimestamp = Date.now();
+
+        // Save to database for persistence
+        await this.saveGroupsToDatabase(groups);
+
+        console.log(`✅ Refreshed ${groups.length} groups from signal-cli and saved to database`);
+      } else {
+        console.log('⚠️  No groups returned from signal-cli');
+      }
+    } catch (error) {
+      console.error('❌ Error refreshing groups:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Load groups from database
+   */
+  private async loadGroupsFromDatabase(): Promise<any[]> {
+    try {
+      // Query the signal_groups table
+      const result = await this.workerApi.query(
+        'SELECT id, name, description, member_count, bot_is_admin, bot_is_member, last_updated FROM signal_groups ORDER BY name'
+      );
+
+      if (result.results && result.results.length > 0) {
+        return result.results.map((row: any) => {
+          // Create a minimal group object that's compatible with signal-cli format
+          const memberCount = row.member_count || 0;
+          const botIsAdmin = row.bot_is_admin || false;
+
+          // Create mock arrays to match signal-cli format
+          // We don't have actual member/admin data, so create empty arrays with the right length
+          const members = new Array(memberCount).fill('');
+          const admins = botIsAdmin ? [this.config.phoneNumber] : [];
+
+          return {
+            id: row.id,
+            name: row.name,
+            description: row.description,
+            members: members,  // Array with correct length for display
+            admins: admins,    // Array containing bot if it's admin
+            isMember: row.bot_is_member !== false,
+            isBlocked: false,
+            messageExpirationTime: 0,
+            pendingMembers: [],
+            requestingMembers: [],
+            banned: [],
+            permissionAddMember: 'EVERY_MEMBER',
+            permissionEditDetails: 'ONLY_ADMINS',
+            permissionSendMessage: 'EVERY_MEMBER'
+          };
+        });
+      }
+
+      return [];
+    } catch (error) {
+      console.error('Error loading groups from database:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Save groups to database
+   */
+  private async saveGroupsToDatabase(groups: any[]): Promise<void> {
+    try {
+      let adminCount = 0;
+
+      for (const group of groups) {
+        // Check if bot is admin in this group
+        // Note: admins is an array of objects like {number: string, uuid: string}
+        const botIsAdmin = group.admins?.some((admin: any) => admin.number === this.config.phoneNumber) || false;
+
+        if (botIsAdmin) {
+          adminCount++;
+          console.log(`🔍 DEBUG: Bot IS admin in group "${group.name}" (${group.id})`);
+          console.log(`🔍 DEBUG: Admins array:`, group.admins);
+        }
+
+        // Upsert each group
+        await this.workerApi.query(
+          `INSERT INTO signal_groups (id, name, description, member_count, bot_is_admin, bot_is_member, last_updated)
+           VALUES ($1, $2, $3, $4, $5, $6, NOW())
+           ON CONFLICT (id)
+           DO UPDATE SET
+             name = EXCLUDED.name,
+             description = EXCLUDED.description,
+             member_count = EXCLUDED.member_count,
+             bot_is_admin = EXCLUDED.bot_is_admin,
+             bot_is_member = EXCLUDED.bot_is_member,
+             last_updated = NOW()`,
+          [
+            group.id,
+            group.name || 'Unknown Group',
+            group.description || null,
+            group.members?.length || 0,
+            botIsAdmin,
+            group.isMember !== false,
+          ]
+        );
+      }
+
+      console.log(`💾 Saved ${groups.length} groups to database (${adminCount} with admin rights)`);
+    } catch (error) {
+      console.error('Error saving groups to database:', error);
+      // Don't throw - this is not critical, just log the error
+    }
   }
 
   /**
@@ -671,37 +1052,46 @@ export class SignalBot extends EventEmitter {
           const domain = extractDomain(url);
           console.log(`📰 Processing news URL: ${url} (${domain})`);
 
-          // Send immediate acknowledgment
+          // Generate bypass link (check for existing archive first)
+          const archiveUrl = await getArchiveLink(url);
+          const bypassLinks = `📎 ${archiveUrl}`;
+
+          // Send immediate acknowledgment with bypass link
           await this.sendMessage({
             recipient: context.groupId ? undefined : context.sourceNumber,
             groupId: context.groupId,
-            message: `📰 News article detected from ${domain}. Processing...`,
+            message: `📰 Processing, in the meantime here's the bypass link:\n\n${bypassLinks}`,
           });
 
-          // Scrape and summarize article via Worker API
-          const result = await this.workerApi.scrapeAndSummarize({
-            url,
-            sourceNumber: context.sourceNumber,
-            sourceName: context.sourceName,
-            groupId: context.groupId,
-          });
+          // Scrape and summarize article (only if workerApi available)
+          let result: any = null;
+          if (this.workerApi && typeof this.workerApi.scrapeAndSummarize === 'function') {
+            result = await this.workerApi.scrapeAndSummarize({
+              url,
+              sourceNumber: context.sourceNumber,
+              sourceName: context.sourceName,
+              groupId: context.groupId,
+            });
+          } else {
+            console.log('🔵 [DEBUG] Skipping scrapeAndSummarize (self-hosted mode)');
+            // In self-hosted mode, just send the bypass links (already done above)
+            continue;
+          }
 
           // Build comprehensive response message
           if (result.summary) {
-            // Generate bypass links
-            const bypassLinks = [
-              `📎 12ft: https://12ft.io/proxy?q=${encodeURIComponent(url)}`,
-              `📎 Archive: https://archive.today/${url}`,
-              `📎 Wayback: https://web.archive.org/web/${url}`
-            ].join('\n');
+            // Use the same archive link we fetched earlier
+            const bypassLinks = `📎 ${archiveUrl}`;
 
             // Build complete message (plain text, no markdown)
-            let responseMessage = `📰 ${result.title || 'Article Summary'}\n\n${result.summary}\n\n🔗 ${url}\n\nBypass Links:\n${bypassLinks}`;
+            let responseMessage = `📰 ${result.title || 'Article Summary'}`;
 
-            // Add Discourse link if available
+            // Add Discourse link right after title if available
             if (result.discourseUrl) {
-              responseMessage += `\n\n📝 Forum Discussion:\n${result.discourseUrl}`;
+              responseMessage += `\n📝 Forum Discussion:${result.discourseUrl}`;
             }
+
+            responseMessage += `\n\n${result.summary}\n\nBypass Links:\n${bypassLinks}`;
 
             await this.sendMessage({
               recipient: context.groupId ? undefined : context.sourceNumber,
@@ -764,22 +1154,18 @@ export class SignalBot extends EventEmitter {
           console.log(`🔗 Original URL: ${url}`);
           console.log(`🧹 Clean URL: ${cleanUrl}`);
 
-          // Send initial acknowledgment
+          // Check if platform supports downloading - if not, silently skip (no response)
+          if (!platform.supportsDownload) {
+            console.log(`⏭️  Skipping ${platform.name} - downloads not supported`);
+            continue;
+          }
+
+          // Send initial acknowledgment (only for Instagram)
           await this.sendMessage({
             recipient: context.groupId ? undefined : context.sourceNumber,
             groupId: context.groupId,
             message: `${platform.icon} ${contentType} detected. Processing...`,
           });
-
-          // Check if platform supports downloading
-          if (!platform.supportsDownload) {
-            await this.sendMessage({
-              recipient: context.groupId ? undefined : context.sourceNumber,
-              groupId: context.groupId,
-              message: `${platform.icon} ${platform.name} - downloading not supported for this platform.\n\n🧹 Clean URL (trackers removed):\n${cleanUrl}`,
-            });
-            continue;
-          }
 
           // Check if yt-dlp is installed
           if (!(await isYtDlpInstalled())) {

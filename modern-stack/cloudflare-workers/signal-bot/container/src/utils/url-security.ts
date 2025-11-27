@@ -54,29 +54,79 @@ const SUSPICIOUS_TLDS: Record<string, string> = {
  * Common tracking parameters to remove
  */
 const TRACKING_PARAMS = [
+  // Google Analytics
   'utm_source',
   'utm_medium',
   'utm_campaign',
   'utm_term',
   'utm_content',
-  'fbclid',
+  'utm_id',
+  'utm_source_platform',
+  'utm_creative_format',
+  'utm_marketing_tactic',
+
+  // Google Ads
   'gclid',
-  'mc_cid',
-  'mc_eid',
-  'yclid',
-  '_openstat',
+  'gclsrc',
+  'dclid',
+  'gbraid',
+  'wbraid',
+
+  // Facebook/Meta
+  'fbclid',
   'fb_action_ids',
   'fb_action_types',
   'fb_ref',
   'fb_source',
-  'action_object_map',
-  'action_type_map',
-  'action_ref_map',
+  'sfnsn',      // Facebook/Snapchat share tracking
+  'mibextid',   // Facebook mobile tracking
+  'mibexttid',  // Facebook mobile tracking (variant)
+  '_rdr',       // Facebook redirect
+
+  // LinkedIn
+  'rcm',
+  'trk',
+  'trkInfo',
+  'lipi',
+
+  // Twitter/X
+  'twclid',
+  's',
+  't',
+
+  // TikTok
+  'tt_medium',
+  'tt_content',
+
+  // MailChimp
+  'mc_cid',
+  'mc_eid',
+
+  // Yandex
+  'yclid',
+  '_openstat',
+
+  // Other common tracking
   'ref',
   'source',
   'campaign',
   'medium',
-  'rcm', // LinkedIn tracking parameter
+  'action_object_map',
+  'action_type_map',
+  'action_ref_map',
+  'hsCtaTracking',    // HubSpot
+  'hsmi',             // HubSpot marketing
+  '_hsenc',           // HubSpot encryption
+  '_hsmi',            // HubSpot
+  'vero_id',          // Vero
+  'wickedid',         // Wicked Reports
+  'oly_anon_id',      // Omeda
+  'oly_enc_id',       // Omeda
+  'msclkid',          // Microsoft/Bing
+  'igshid',           // Instagram
+  'igsh',             // Instagram (short)
+  'share',            // Generic share tracking
+  'sharesource',      // Generic share source
 ];
 
 /**

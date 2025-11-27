@@ -176,6 +176,9 @@ export class CommandHandler {
       case '!random':
         return this.handleRandom(args);
 
+      case '!cast':
+        return this.handleCast(args, context);
+
       // Information Commands
       case '!wiki':
         return this.handleWiki();
@@ -265,7 +268,7 @@ export class CommandHandler {
       '  !categories - Forum categories',
       '',
       '🎲 Utility:',
-      '  !time, !flip, !fact, !8ball, !calc, !random',
+      '  !time, !flip, !fact, !8ball, !calc, !random, !cast',
       '',
       '👤 User:',
       '  !whoami, !version, !stats',
@@ -1553,6 +1556,93 @@ export class CommandHandler {
       `Range: ${min}-${max}\n` +
       `Result: ${result}`
     );
+  }
+
+  /**
+   * !cast - Roll dice for multiple users
+   *
+   * Usage:
+   * - !cast @user1 @user2 @user3           (rolls 1 die per user)
+   * - !cast 6 @user1 @user2 @user3         (rolls 6 dice per user)
+   *
+   * Shows individual die results and totals, sorted by winner
+   */
+  private async handleCast(args: string, context: CommandContext): Promise<string> {
+    // Parse number of dice (default 1)
+    let numDice = 1;
+    let mentionText = args;
+
+    // Check if first arg is a number
+    const parts = args.trim().split(/\s+/);
+    if (parts.length > 0 && /^\d+$/.test(parts[0])) {
+      numDice = parseInt(parts[0]);
+      mentionText = parts.slice(1).join(' ');
+    }
+
+    // Validate dice count
+    if (numDice < 1 || numDice > 20) {
+      return '❌ Please specify between 1 and 20 dice';
+    }
+
+    // Check if we have mentions
+    if (!context.mentions || context.mentions.length === 0) {
+      return this.formatForSignal(
+        '🎲 Cast Dice\n\n' +
+        'Usage:\n' +
+        '  !cast @user1 @user2 @user3\n' +
+        '  !cast 6 @user1 @user2 @user3\n\n' +
+        'Mention users to roll dice for them!'
+      );
+    }
+
+    // Roll dice for each user
+    interface PlayerRoll {
+      name: string;
+      uuid: string;
+      rolls: number[];
+      total: number;
+    }
+
+    const results: PlayerRoll[] = [];
+
+    for (const mention of context.mentions) {
+      // Get user name from mention position in command
+      const userName = mention.uuid || mention.number || 'Unknown';
+
+      // Roll dice
+      const rolls: number[] = [];
+      let total = 0;
+
+      for (let i = 0; i < numDice; i++) {
+        const roll = Math.floor(Math.random() * 6) + 1;
+        rolls.push(roll);
+        total += roll;
+      }
+
+      results.push({
+        name: userName,
+        uuid: mention.uuid || '',
+        rolls,
+        total
+      });
+    }
+
+    // Sort by total (highest first)
+    results.sort((a, b) => b.total - a.total);
+
+    // Format output
+    let output = `🎲 Cast Results (${numDice}d6)\n\n`;
+
+    results.forEach((player, index) => {
+      const rank = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+      const diceEmoji = player.rolls.map(d => ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'][d - 1]).join(' ');
+
+      output += `${rank} ${player.name}\n`;
+      output += `   Rolls: ${diceEmoji}\n`;
+      output += `   Total: ${player.total}\n\n`;
+    });
+
+    return this.formatForSignal(output.trim());
   }
 
   /**

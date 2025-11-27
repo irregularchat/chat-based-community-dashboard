@@ -100,6 +100,36 @@ export interface SignalMessage {
         text?: string;
       };
     };
+    editMessage?: {
+      targetSentTimestamp?: number;
+      dataMessage?: {
+        timestamp?: number;
+        message?: string;
+        groupInfo?: {
+          groupId?: string;
+          type?: string;
+        };
+        mentions?: any[];
+        attachments?: any[];
+        quote?: {
+          id?: number;
+          author?: string;
+          text?: string;
+        };
+      };
+    };
+    receiptMessage?: {
+      when?: number;
+      isDelivery?: boolean;
+      isRead?: boolean;
+      isViewed?: boolean;
+      timestamps?: number[];
+    };
+    typingMessage?: {
+      action?: string;
+      timestamp?: number;
+      groupId?: string;
+    };
   };
 }
 
@@ -377,6 +407,28 @@ export class SignalBot extends EventEmitter {
     try {
       console.log('🔍 [TRACE] Full notification:', JSON.stringify(notification, null, 2));
 
+      // Check for protocol exceptions (UntrustedIdentityException, NoSessionException, etc.)
+      if (notification.params?.result?.exception) {
+        const exception = notification.params.result.exception;
+        const exceptionType = exception.type || 'Unknown';
+        const exceptionMessage = exception.message || 'No message';
+
+        console.warn(`⚠️  Signal Protocol Exception: ${exceptionType}`);
+        console.warn(`   Message: ${exceptionMessage}`);
+
+        // Handle specific exception types
+        if (exceptionType === 'UntrustedIdentityException') {
+          console.warn('   💡 This means a contact changed their safety number');
+          console.warn('   💡 Messages from this contact will be skipped until trust is re-established');
+        } else if (exceptionType === 'ProtocolNoSessionException') {
+          console.warn('   💡 This is a missing session key for group messages');
+          console.warn('   💡 This usually resolves itself as new messages arrive');
+        }
+
+        // Don't process exceptions as messages
+        return;
+      }
+
       // Try multiple possible envelope locations
       // signal-cli JSON-RPC format has changed between versions
       let envelope = null;
@@ -433,21 +485,43 @@ export class SignalBot extends EventEmitter {
         return;
       }
 
+      // Early return for receipt and typing messages to reduce log spam
+      if (envelope.receiptMessage) {
+        // Silently ignore delivery/read receipts
+        return;
+      }
+
+      if (envelope.typingMessage) {
+        // Silently ignore typing indicators
+        return;
+      }
+
       console.log('🔍 [ENVELOPE] envelope keys:', Object.keys(envelope));
+
+      // Handle both regular messages and edited messages
+      // Edit messages have structure: envelope.editMessage.dataMessage
+      // Regular messages have structure: envelope.dataMessage
+      const dataMessage = envelope.dataMessage || envelope.editMessage?.dataMessage;
+      const isEditMessage = !!envelope.editMessage;
+
       console.log('🔍 [ENVELOPE] envelope.dataMessage:', envelope.dataMessage ? 'EXISTS' : 'NULL');
-      if (envelope.dataMessage) {
-        console.log('🔍 [ENVELOPE] dataMessage keys:', Object.keys(envelope.dataMessage));
+      console.log('🔍 [ENVELOPE] envelope.editMessage:', envelope.editMessage ? 'EXISTS' : 'NULL');
+      if (dataMessage) {
+        console.log('🔍 [ENVELOPE] dataMessage keys:', Object.keys(dataMessage));
+        if (isEditMessage) {
+          console.log('✏️ [EDIT] This is an edited message');
+        }
       }
 
       // Extract message data
       const sourceNumber = envelope.sourceNumber || envelope.source;
       const sourceName = envelope.sourceName || sourceNumber;
       const sourceUuid = envelope.sourceUuid;
-      const timestamp = envelope.dataMessage?.timestamp || envelope.timestamp || Date.now();
-      const messageText = envelope.dataMessage?.message;
-      const groupInfo = envelope.dataMessage?.groupInfo;
+      const timestamp = dataMessage?.timestamp || envelope.timestamp || Date.now();
+      const messageText = dataMessage?.message;
+      const groupInfo = dataMessage?.groupInfo;
       const groupId = groupInfo?.groupId;
-      const quotedText = envelope.dataMessage?.quote?.text;
+      const quotedText = dataMessage?.quote?.text;
 
       console.log(`🔵 [DEBUG] Message text: "${messageText}", groupId: ${groupId}`);
 
@@ -487,11 +561,11 @@ export class SignalBot extends EventEmitter {
             sourceUuid,
             message: messageText,
             timestamp,
-            attachments: envelope.dataMessage?.attachments,
-            mentions: envelope.dataMessage?.mentions,
-            isReply: !!envelope.dataMessage?.quote,
-            quotedMessageId: envelope.dataMessage?.quote?.id?.toString(),
-            quotedText: envelope.dataMessage?.quote?.text,
+            attachments: dataMessage?.attachments,
+            mentions: dataMessage?.mentions,
+            isReply: !!dataMessage?.quote,
+            quotedMessageId: dataMessage?.quote?.id?.toString(),
+            quotedText: dataMessage?.quote?.text,
           });
           console.log('🔵 [DEBUG] D1 save completed successfully');
         } else {
@@ -512,7 +586,7 @@ export class SignalBot extends EventEmitter {
             groupId,
             timestamp,
             quotedText,
-            mentions: envelope.dataMessage?.mentions,
+            mentions: dataMessage?.mentions,
           });
           console.log('🔵 [DEBUG] Command handling completed');
         } catch (error) {

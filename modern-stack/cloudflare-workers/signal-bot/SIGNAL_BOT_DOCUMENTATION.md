@@ -1,8 +1,19 @@
 # Signal Bot - Complete Documentation
 
-**Version**: 2.0 (JSON-RPC Edition)
+**Version**: 3.0 (Self-Hosted + Cloudflare Hybrid)
 **Status**: ✅ Production Ready
-**Last Updated**: 2025-11-19
+**Last Updated**: 2025-11-27
+
+## Recent Updates
+
+### Version 3.0 (November 2025)
+- ✅ **Self-hosted deployment** with PostgreSQL, Redis, and VPN support
+- ✅ **Enhanced URL security** - Added LinkedIn tracking parameter (`rcm`) removal
+- ✅ **Database fix** - Resolved PostgreSQL authentication issues
+- ✅ **Dual architecture** - Support for both Cloudflare-native and self-hosted deployments
+- ✅ **Comprehensive documentation** - 15+ docs covering deployment, security, and features
+- ✅ **Test utilities** - URL cleaning tests and message parsing validation
+- ✅ **Deployment scripts** - Automated deployment to Proxmox with environment variable support
 
 ## Table of Contents
 
@@ -83,7 +94,7 @@ Signal Bot is a production-grade Signal messenger bot running on Proxmox with fu
 
 1. **Message Reception**:
    - Signal → signal-cli daemon → JSON-RPC notification → Signal Bot
-   - Bot processes message → Saves to Cloudflare D1 via Worker API
+   - Bot processes message → Saves to Cloudflare D1 via Worker API (or PostgreSQL in self-hosted mode)
    - Bot checks for commands (!) → Executes → Responds via JSON-RPC
 
 2. **Message Sending**:
@@ -91,9 +102,53 @@ Signal Bot is a production-grade Signal messenger bot running on Proxmox with fu
    - Fast (< 3 seconds) - no config file locking!
 
 3. **Data Persistence**:
-   - Container Start → Downloads signal-data from Cloudflare R2
-   - Periodic Backup → Uploads signal-data to Cloudflare R2
-   - Container Stop → Final backup to R2
+   - **Cloudflare Mode**: Downloads/uploads signal-data from Cloudflare R2
+   - **Self-Hosted Mode**: Stores data in PostgreSQL with Redis caching
+
+---
+
+## Deployment Options
+
+The Signal Bot supports two deployment architectures:
+
+### Option 1: Cloudflare-Native (Original)
+- Uses Cloudflare Workers, D1, R2, and KV
+- Best for: Distributed edge deployment, global scale
+- Requires: Cloudflare account, wrangler CLI
+
+### Option 2: Self-Hosted (PostgreSQL)
+- Uses PostgreSQL, Redis, and optional VPN
+- Best for: Full control, data sovereignty, local development
+- Requires: Docker, PostgreSQL 15+, Redis
+
+**Self-Hosted Architecture:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Docker Compose Stack                      │
+│                                                              │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   │
+│  │              │   │              │   │              │   │
+│  │ Signal Bot   │──►│ PostgreSQL   │   │    Redis     │   │
+│  │ (Node.js)    │   │   (DB)       │   │   (Cache)    │   │
+│  │              │   │              │   │              │   │
+│  └──────┬───────┘   └──────────────┘   └──────────────┘   │
+│         │                                                    │
+│         │ (Optional)                                        │
+│         ▼                                                    │
+│  ┌──────────────┐                                           │
+│  │   VPN/Proxy  │                                           │
+│  │  (Gluetun)   │                                           │
+│  └──────────────┘                                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Features of Self-Hosted Mode:**
+- ✅ PostgreSQL for persistent storage (messages, commands, errors)
+- ✅ Redis for caching and rate limiting
+- ✅ Optional VPN support via Gluetun
+- ✅ Database migrations for schema versioning
+- ✅ Health checks and monitoring
+- ✅ Automated backups
 
 ---
 
@@ -661,6 +716,30 @@ wrangler d1 execute signal-bot-db --local --command ".backup backup.db"
 
 ## Security
 
+### URL Privacy Protection
+
+The bot automatically removes tracking parameters from URLs shared in messages to protect user privacy:
+
+**Removed Parameters:**
+- `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content` (Google Analytics)
+- `fbclid`, `fb_*` (Facebook tracking)
+- `gclid` (Google Ads)
+- `rcm` (LinkedIn tracking) ← **NEW in v3.0**
+- `mc_cid`, `mc_eid` (MailChimp)
+- `yclid` (Yandex)
+
+**Example:**
+```
+Original:  https://linkedin.com/posts/...?utm_source=share&rcm=ACoAABr...
+Cleaned:   https://linkedin.com/posts/...
+```
+
+**Testing:**
+```bash
+# Test URL cleaning
+node container/test-url-cleaning.js
+```
+
 ### Best Practices
 
 1. **Secure Worker API Token**:
@@ -670,17 +749,24 @@ wrangler d1 execute signal-bot-db --local --command ".backup backup.db"
    ```
 
 2. **Environment Variables**:
-   - Never commit `.env` files
+   - Never commit `.env` files or secrets in deployment scripts
+   - Use environment variable references: `${VAR_NAME}`
    - Use Docker secrets or encrypted variables
 
 3. **Network Security**:
-   - Keep bot API (port 8919) behind firewall
+   - Keep bot API (port 8080/8919) behind firewall
    - Use HTTPS for Worker API
+   - Consider VPN for additional security (Gluetun support available)
 
 4. **Signal Account**:
    - Use dedicated phone number for bot
    - Enable Signal PINs
-   - Regular R2 backups
+   - Regular R2/PostgreSQL backups
+
+5. **Database Security** (Self-Hosted):
+   - Use strong PostgreSQL passwords
+   - Restrict database access to bot container only
+   - Regular automated backups
 
 ### Access Control
 
@@ -749,6 +835,37 @@ npm run test:e2e
 ---
 
 ## Changelog
+
+### V3.0 (2025-11-27) - Self-Hosted + Security Update
+
+**Major Features:**
+- ✅ Self-hosted deployment with PostgreSQL, Redis, and VPN support
+- ✅ Docker Compose configurations for various deployment scenarios
+- ✅ Database migrations and schema versioning
+- ✅ Comprehensive deployment documentation (15+ docs)
+
+**Security Enhancements:**
+- 🔒 Added LinkedIn tracking parameter (`rcm`) removal to URL privacy protection
+- 🔒 Fixed deployment scripts to use environment variables instead of hardcoded secrets
+- 🔒 Enhanced security audit documentation
+
+**Infrastructure:**
+- 📦 PostgreSQL 15 support with connection pooling
+- 📦 Redis caching layer with rate limiting
+- 📦 Optional Gluetun VPN integration
+- 📦 Health monitoring and automated backups
+
+**Bug Fixes:**
+- 🐛 Fixed PostgreSQL password authentication issues
+- 🐛 Resolved database connection failures in health checks
+- 🐛 Fixed URL tracking parameter detection for LinkedIn URLs
+
+**Documentation:**
+- 📝 Added SELF_HOSTED_DEPLOYMENT.md
+- 📝 Added SECURITY_REMEDIATION.md
+- 📝 Added DATABASE_FIX_SUMMARY.md
+- 📝 Added deployment scripts with Proxmox support
+- 📝 Created test utilities for URL cleaning and message parsing
 
 ### V2.0 (2025-11-19) - JSON-RPC Edition
 

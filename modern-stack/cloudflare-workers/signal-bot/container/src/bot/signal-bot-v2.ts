@@ -8,12 +8,11 @@
  * - Uses JSON-RPC protocol (no config file locking issues)
  * - Automatic reconnection on connection loss
  * - Better error handling and logging
- * - Cloudflare R2 integration for persistent storage
+ * - PostgreSQL for persistent storage
  */
 
 import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
-import { WorkerAPIClient } from '../api/worker-api-client.js';
 import { CommandHandler } from './command-handler.js';
 import { SignalJsonRpcClient } from './signal-jsonrpc-client.js';
 import { processMessageURLs } from '../utils/url-security.js';
@@ -68,8 +67,6 @@ async function getArchiveLink(url: string): Promise<string> {
 export interface BotConfig {
   phoneNumber: string;
   dataDir: string;
-  workerApiUrl: string;
-  workerApiToken?: string;
   openAiApiKey?: string;
   openAiActive?: boolean;
   localAiUrl?: string;
@@ -145,14 +142,12 @@ export interface SignalMessage {
  * 2. Connects SignalJsonRpcClient to TCP socket
  * 3. Receives messages via JSON-RPC notifications
  * 4. Sends messages via JSON-RPC requests
- * 5. Stores messages in Cloudflare D1 via Worker API
- * 6. Backs up Signal data to Cloudflare R2
+ * 5. Stores messages in PostgreSQL database
  */
 export class SignalBot extends EventEmitter {
   private config: BotConfig;
-  private workerApi: WorkerAPIClient;
   private commandHandler: CommandHandler;
-  private dbClient?: PostgresClient; // Database client for direct queries
+  private dbClient: PostgresClient; // PostgreSQL database client
   private daemonProcess: ChildProcess | null = null;
   private rpcClient: SignalJsonRpcClient | null = null;
   private isRunningFlag = false;
@@ -180,22 +175,19 @@ export class SignalBot extends EventEmitter {
   // Debug logger (optional)
   private debugLogger?: DebugLogger;
 
-  constructor(config: BotConfig, workerApi: WorkerAPIClient, dbClient?: PostgresClient) {
+  constructor(config: BotConfig, dbClient: PostgresClient) {
     super();
     this.config = config;
-    this.workerApi = workerApi;
-    this.dbClient = dbClient; // Store database client
-    this.commandHandler = new CommandHandler(config, workerApi);
+    this.dbClient = dbClient;
+    this.commandHandler = new CommandHandler(config, dbClient);
     // Pass bot instance to command handler for methods like getGroups()
     this.commandHandler.setBotInstance(this);
     // Initialize emoji reaction handler
     this.emojiReactionHandler = new EmojiReactionHandler();
 
-    // Initialize debug logger if PostgreSQL client is available
-    if (dbClient) {
-      this.debugLogger = new DebugLogger(dbClient, true, true);
-      console.log('📊 Debug logging enabled (PostgreSQL)');
-    }
+    // Initialize debug logger
+    this.debugLogger = new DebugLogger(dbClient, true, true);
+    console.log('📊 Debug logging enabled (PostgreSQL)');
   }
 
   /**
@@ -550,30 +542,28 @@ export class SignalBot extends EventEmitter {
       this.stats.messagesReceived++;
 
       console.log(`📨 Message from ${sourceName} (${sourceNumber})${groupId ? ` in group ${groupId}` : ''}: ${messageText}`);
-      console.log('🔵 [DEBUG] About to save message to D1...');
+      console.log('🔵 [DEBUG] About to save message to PostgreSQL...');
 
-      // Save message to database (PostgreSQL for self-hosted, D1 for Cloudflare)
+      // Save message to PostgreSQL database
       try {
-        if (this.workerApi && typeof this.workerApi.saveMessage === 'function') {
-          await this.workerApi.saveMessage({
-            id: this.generateMessageId(),
-            groupId,
-            groupName: undefined, // Will be populated by group discovery
-            sourceNumber,
-            sourceName,
-            sourceUuid,
-            message: messageText,
-            timestamp,
-            attachments: dataMessage?.attachments,
-            mentions: dataMessage?.mentions,
-            isReply: !!dataMessage?.quote,
-            quotedMessageId: dataMessage?.quote?.id?.toString(),
-            quotedText: dataMessage?.quote?.text,
-          });
-          console.log('🔵 [DEBUG] D1 save completed successfully');
-        } else {
-          console.log('🔵 [DEBUG] Skipping D1 save (self-hosted mode)');
-        }
+        const messageData = {
+          id: this.generateMessageId(),
+          groupId,
+          groupName: undefined, // Will be populated by group discovery
+          sourceNumber,
+          sourceName,
+          sourceUuid,
+          message: messageText,
+          timestamp,
+          attachments: dataMessage?.attachments,
+          mentions: dataMessage?.mentions,
+          isReply: !!dataMessage?.quote,
+          quotedMessageId: dataMessage?.quote?.id?.toString(),
+          quotedText: dataMessage?.quote?.text,
+        };
+
+        await this.dbClient.saveMessage(messageData);
+        console.log('🔵 [DEBUG] PostgreSQL save completed successfully');
       } catch (error) {
         console.error('🔵 [DEBUG] Failed to save message:', error);
       }
@@ -750,9 +740,9 @@ export class SignalBot extends EventEmitter {
 
       this.stats.commandsProcessed++;
 
-      // Log command usage to database (D1 for Cloudflare, PostgreSQL for self-hosted)
-      if (this.workerApi && typeof this.workerApi.logCommand === 'function') {
-        await this.workerApi.logCommand({
+      // Log command usage to PostgreSQL
+      try {
+        await this.dbClient.logCommand({
           command: command.split(' ')[0].substring(1), // Remove ! prefix
           args: command.split(' ').slice(1).join(' ') || undefined,
           groupId: context.groupId,
@@ -761,17 +751,17 @@ export class SignalBot extends EventEmitter {
           success: true,
           responseTime: Date.now() - startTime,
         });
-      } else {
-        console.log('🔵 [DEBUG] Skipping command logging (self-hosted mode)');
+      } catch (logError) {
+        console.error('Failed to log command:', logError);
       }
 
     } catch (error) {
       console.error('Command error:', error);
       this.stats.errors++;
 
-      // Log error to database (D1 for Cloudflare, PostgreSQL for self-hosted)
-      if (this.workerApi && typeof this.workerApi.logError === 'function') {
-        await this.workerApi.logError({
+      // Log error to PostgreSQL
+      try {
+        await this.dbClient.logError({
           errorType: 'command_error',
           errorMessage: error instanceof Error ? error.message : 'Unknown error',
           stackTrace: error instanceof Error ? error.stack : undefined,
@@ -780,8 +770,8 @@ export class SignalBot extends EventEmitter {
           userId: context.sourceNumber,
           userName: context.sourceName,
         });
-      } else {
-        console.log('🔵 [DEBUG] Skipping error logging (self-hosted mode)');
+      } catch (logError) {
+        console.error('Failed to log error:', logError);
       }
 
       // Send error message to user
@@ -796,8 +786,8 @@ export class SignalBot extends EventEmitter {
       }
 
       // Log command failure
-      if (this.workerApi && typeof this.workerApi.logCommand === 'function') {
-        await this.workerApi.logCommand({
+      try {
+        await this.dbClient.logCommand({
           command: command.split(' ')[0].substring(1),
           args: command.split(' ').slice(1).join(' ') || undefined,
           groupId: context.groupId,
@@ -807,8 +797,8 @@ export class SignalBot extends EventEmitter {
           responseTime: Date.now() - startTime,
           errorMessage: error instanceof Error ? error.message : 'Unknown error',
         });
-      } else {
-        console.log('🔵 [DEBUG] Skipping command failure logging (self-hosted mode)');
+      } catch (logError) {
+        console.error('Failed to log command failure:', logError);
       }
     }
   }
@@ -897,6 +887,34 @@ export class SignalBot extends EventEmitter {
   }
 
   /**
+   * Create a new Signal group
+   */
+  async createGroup(params: {
+    name: string;
+    members: string[];
+    description?: string;
+  }): Promise<{ groupId: string }> {
+    if (!this.rpcClient) {
+      throw new Error('Bot is not running');
+    }
+
+    try {
+      const result = await this.rpcClient.createGroup(params);
+      console.log(`✅ Created group: ${params.name}`);
+      console.log(`   Group ID: ${result?.groupId}`);
+      console.log(`   Members: ${params.members.join(', ')}`);
+
+      // Refresh groups cache
+      await this.getGroups(true);
+
+      return result;
+    } catch (error) {
+      console.error('Failed to create group:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Get list of groups using cached data (survives restarts)
    */
   async getGroups(forceRefresh: boolean = false): Promise<any[]> {
@@ -961,7 +979,7 @@ export class SignalBot extends EventEmitter {
         // Check if membership data exists - if not, trigger a refresh
         // This ensures member UUIDs are stored for unique user counting
         try {
-          const membershipCheck = await this.workerApi.query(
+          const membershipCheck = await this.dbClient.query(
             'SELECT COUNT(*) as count FROM signal_member_group_memberships'
           );
           // PostgreSQL COUNT returns bigint which may come as string through JSON
@@ -1036,7 +1054,7 @@ export class SignalBot extends EventEmitter {
   private async loadGroupsFromDatabase(): Promise<any[]> {
     try {
       // Query the signal_groups table
-      const result = await this.workerApi.query(
+      const result = await this.dbClient.query(
         'SELECT id, name, description, member_count, bot_is_admin, bot_is_member, last_updated FROM signal_groups ORDER BY name'
       );
 
@@ -1065,7 +1083,7 @@ export class SignalBot extends EventEmitter {
           // Load actual member UUIDs for this group
           let members: string[] = [];
           try {
-            const membersResult = await this.workerApi.query(
+            const membersResult = await this.dbClient.query(
               `SELECT member_id FROM signal_member_group_memberships
                WHERE group_id = $1 AND is_active = true`,
               [row.id]
@@ -1172,7 +1190,7 @@ export class SignalBot extends EventEmitter {
         }
 
         // Upsert each group
-        await this.workerApi.query(
+        await this.dbClient.query(
           `INSERT INTO signal_groups (id, name, description, member_count, bot_is_admin, bot_is_member, last_updated)
            VALUES ($1, $2, $3, $4, $5, $6, NOW())
            ON CONFLICT (id)
@@ -1212,7 +1230,7 @@ export class SignalBot extends EventEmitter {
 
             try {
               // First ensure member exists in signal_members (upsert minimal record)
-              await this.workerApi.query(
+              await this.dbClient.query(
                 `INSERT INTO signal_members (id, uuid, created_at, updated_at)
                  VALUES ($1, $1, NOW(), NOW())
                  ON CONFLICT (id) DO NOTHING`,
@@ -1221,7 +1239,7 @@ export class SignalBot extends EventEmitter {
 
               // Then upsert membership record
               const membershipId = `${memberUuid}-${group.id}`;
-              await this.workerApi.query(
+              await this.dbClient.query(
                 `INSERT INTO signal_member_group_memberships (id, member_id, group_id, group_name, is_active, joined_at)
                  VALUES ($1, $2, $3, $4, true, NOW())
                  ON CONFLICT (member_id, group_id) DO UPDATE SET

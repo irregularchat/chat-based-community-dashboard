@@ -14,6 +14,13 @@ export interface Player {
   betAmount?: number;
   lastActivity: number;
   isShooter?: boolean;
+  totalWon: number;   // Track lifetime winnings
+  totalLost: number;  // Track lifetime losses
+  roundsPlayed: number;
+  // Hold betting - persistent bet that auto-applies each round
+  holdBet?: 'pass' | 'fade';  // Held bet type
+  holdAmount?: number;        // Held bet amount
+  eliminated?: boolean;       // Already announced as eliminated
 }
 
 export interface DiceRoll {
@@ -31,6 +38,7 @@ export interface GameState {
   players: Map<string, Player>;
   shooterUuid?: string;
   shooterOrder: string[];  // Order of shooters
+  shooterStake: number;    // Shooter's stake for the round
   point?: number;
   rolls: DiceRoll[];
   roundNumber: number;
@@ -39,6 +47,10 @@ export interface GameState {
   createdAt: number;
   lastActivity: number;
   timeoutMs: number;  // How long to wait for responses
+  // Betting timer fields
+  bettingStartTime?: number;        // When betting phase started
+  bettingTimeoutMs: number;         // Default 60000 (60 seconds)
+  playersSkipped: Set<string>;      // Players who skipped betting this round
 }
 
 export interface GameResult {
@@ -54,6 +66,7 @@ const STARTING_POINTS = 100;
 const DEFAULT_MIN_BET = 10;
 const DEFAULT_MAX_BET = 50;
 const DEFAULT_TIMEOUT_MS = 60000;  // 1 minute to respond
+const DEFAULT_BETTING_TIMEOUT_MS = 60000;  // 60 seconds for betting phase
 const INACTIVITY_TIMEOUT_MS = 180000;  // 3 minutes of inactivity = kicked
 
 // Dice emoji mapping
@@ -115,7 +128,10 @@ export function createGame(creatorUuid: string, creatorName: string, players: Ar
     name: creatorName,
     points: STARTING_POINTS,
     lastActivity: now,
-    isShooter: true
+    isShooter: true,
+    totalWon: 0,
+    totalLost: 0,
+    roundsPlayed: 0
   });
 
   // Add other players
@@ -127,7 +143,10 @@ export function createGame(creatorUuid: string, creatorName: string, players: Ar
         name: p.name,
         phoneNumber: p.phoneNumber,
         points: STARTING_POINTS,
-        lastActivity: now
+        lastActivity: now,
+        totalWon: 0,
+        totalLost: 0,
+        roundsPlayed: 0
       });
       shooterOrder.push(p.uuid);
     }
@@ -139,16 +158,44 @@ export function createGame(creatorUuid: string, creatorName: string, players: Ar
     players: playerMap,
     shooterUuid: creatorUuid,
     shooterOrder,
+    shooterStake: DEFAULT_MIN_BET,  // Default shooter stake
     rolls: [],
     roundNumber: 1,
     minBet: DEFAULT_MIN_BET,
     maxBet: DEFAULT_MAX_BET,
     createdAt: now,
     lastActivity: now,
-    timeoutMs: DEFAULT_TIMEOUT_MS
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    bettingTimeoutMs: DEFAULT_BETTING_TIMEOUT_MS,
+    playersSkipped: new Set<string>()
   };
 
   activeGames.set(gameId, game);
+  return game;
+}
+
+/**
+ * Create a new game in an existing group (for rematch)
+ * Takes the groupId and creates a fresh game with the provided players
+ */
+export function createGameInGroup(
+  groupId: string,
+  creatorUuid: string,
+  creatorName: string,
+  players: Array<{uuid: string; name: string; phoneNumber?: string}>
+): GameState {
+  // First, end any existing game in this group
+  const existingGame = getGameByGroupId(groupId);
+  if (existingGame) {
+    activeGames.delete(existingGame.id);
+  }
+
+  // Create the new game
+  const game = createGame(creatorUuid, creatorName, players);
+
+  // Associate it with the existing group
+  game.groupId = groupId;
+
   return game;
 }
 
@@ -162,14 +209,14 @@ export function getGameRules(): string {
 📋 BASICS
 ━━━━━━━━━━━━━━━━━━━━━━
 • Everyone starts with ${STARTING_POINTS} points
-• Shooter rolls dice until they "seven out"
-• Others bet WITH (!pass) or AGAINST (!fade) the shooter
+• Shooter stakes points, others bet FOR or AGAINST
+• Shooter keeps rolling until they win or seven out
 
 ━━━━━━━━━━━━━━━━━━━━━━
 🎯 COME-OUT ROLL (First Roll)
 ━━━━━━━━━━━━━━━━━━━━━━
-• 7 or 11 → Shooter WINS! (pass wins, fade loses)
-• 2, 3, or 12 → "CRAPS!" Shooter LOSES (fade wins)
+• 7 or 11 → Shooter WINS!
+• 2, 3, or 12 → "CRAPS!" Shooter LOSES
 • 4, 5, 6, 8, 9, or 10 → That's the POINT
 
 ━━━━━━━━━━━━━━━━━━━━━━
@@ -177,23 +224,34 @@ export function getGameRules(): string {
 ━━━━━━━━━━━━━━━━━━━━━━
 • Roll the POINT again → Shooter WINS!
 • Roll a 7 → "SEVEN OUT!" Shooter LOSES
-• Any other number → Keep rolling
 
 ━━━━━━━━━━━━━━━━━━━━━━
-💰 BETTING
+💰 PAYOUTS (1:1)
 ━━━━━━━━━━━━━━━━━━━━━━
-• !pass [amount] - Bet WITH the shooter
-• !fade [amount] - Bet AGAINST the shooter
-• Min bet: ${DEFAULT_MIN_BET} pts | Max: ${DEFAULT_MAX_BET} pts
+• Pass bets pay 1:1 when shooter wins
+• Fade bets pay 1:1 when shooter loses
+• Shooter collects first, then pass bettors
+• Min: ${DEFAULT_MIN_BET} pts | Max: ${DEFAULT_MAX_BET} pts
+
+━━━━━━━━━━━━━━━━━━━━━━
+🔒 HOLD BETTING
+━━━━━━━━━━━━━━━━━━━━━━
+• !hold pass [amt] - Auto-bet pass each round
+• !hold fade [amt] - Auto-bet fade each round
+• !hold off - Clear hold, go manual
+• Holds auto-apply when betting opens!
 
 ━━━━━━━━━━━━━━━━━━━━━━
 🎮 COMMANDS
 ━━━━━━━━━━━━━━━━━━━━━━
-• !roll - Shooter rolls dice
-• !pass [amt] / !fade [amt] - Place bet
-• !points - Check your balance
-• !status - See game status
-• !leave - Leave the game
+• !roll [amt] - Shooter rolls (sets stake)
+• !go - Shooter rolls early
+• !pass [amt] / !fade [amt] - Bet once
+• !hold [pass/fade] [amt] - Auto-bet
+• !skip - Skip this round
+• !points - Check balance
+• !gs - Game status
+• !leave - Leave game
 
 Let's play! 🎲`;
 }
@@ -228,27 +286,107 @@ export function setGameGroupId(gameId: string, groupId: string): void {
 }
 
 /**
- * Start betting phase
+ * Start betting phase with timer
  */
 export function startBetting(game: GameState): string {
   game.phase = 'betting';
   game.lastActivity = Date.now();
+  game.bettingStartTime = Date.now();
+  game.playersSkipped.clear();  // Reset skipped players for new round
 
   const shooter = game.players.get(game.shooterUuid!);
 
-  return `━━━━━━━━━━━━━━━━━━━━━━
+  // Apply any held bets first
+  const holdResults = applyHeldBets(game);
+
+  // Generate leaderboard
+  const leaderboard = getLeaderboard(game);
+
+  const timeoutSecs = Math.floor(game.bettingTimeoutMs / 1000);
+
+  // Check ready status after applying holds
+  const readyStatus = checkAllPlayersReady(game);
+
+  let message = `━━━━━━━━━━━━━━━━━━━━━━
 🎲 ROUND ${game.roundNumber} - PLACE YOUR BETS!
 ━━━━━━━━━━━━━━━━━━━━━━
-🎯 Shooter: ${shooter?.name || 'Unknown'}
 
-💰 Place your bets:
-• !pass [amount] - Bet WITH the shooter
-• !fade [amount] - Bet AGAINST the shooter
+🎯 SHOOTER: ${shooter?.name || 'Unknown'}
+💎 STAKE: ${game.shooterStake} pts
 
-Bets: ${DEFAULT_MIN_BET}-${DEFAULT_MAX_BET} points
-⏱️ You have 60 seconds...
+${leaderboard}`;
 
-When ready: ${shooter?.name}, type !roll`;
+  // Add hold results if any
+  if (holdResults) {
+    message += `\n\n${holdResults}`;
+  }
+
+  message += `\n
+━━━━━━━━━━━━━━━━━━━━━━
+💰 BETTING OPEN (${timeoutSecs}s)
+━━━━━━━━━━━━━━━━━━━━━━
+• !pass [amt] - Bet WITH shooter
+• !fade [amt] - Bet AGAINST shooter
+• !hold [pass/fade] [amt] - Auto-bet
+• !skip - Skip this round
+
+${readyStatus}`;
+
+  return message;
+}
+
+/**
+ * Get leaderboard showing all players' points
+ */
+function getLeaderboard(game: GameState): string {
+  const sortedPlayers = Array.from(game.players.values())
+    .sort((a, b) => b.points - a.points);
+
+  const lines = ['📊 STANDINGS:'];
+  for (let i = 0; i < sortedPlayers.length; i++) {
+    const p = sortedPlayers[i];
+    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '  ';
+    const shooterMark = p.isShooter ? ' 🎯' : '';
+    const netChange = p.totalWon - p.totalLost;
+    const netStr = netChange >= 0 ? `+${netChange}` : `${netChange}`;
+    lines.push(`${medal} ${p.name}: ${p.points} pts (${netStr})${shooterMark}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Set shooter's stake for the round
+ */
+export function setShooterStake(game: GameState, playerUuid: string, amount: number): GameResult {
+  if (playerUuid !== game.shooterUuid) {
+    return { message: '❌ Only the shooter can set the stake!' };
+  }
+
+  if (game.phase !== 'betting' && game.phase !== 'waiting') {
+    return { message: '❌ Cannot change stake now - round in progress!' };
+  }
+
+  const shooter = game.players.get(playerUuid);
+  if (!shooter) {
+    return { message: '❌ Player not found!' };
+  }
+
+  if (amount < game.minBet) {
+    return { message: `❌ Minimum stake is ${game.minBet} points!` };
+  }
+
+  if (amount > game.maxBet) {
+    return { message: `❌ Maximum stake is ${game.maxBet} points!` };
+  }
+
+  if (amount > shooter.points) {
+    return { message: `❌ You only have ${shooter.points} points!` };
+  }
+
+  game.shooterStake = amount;
+  game.lastActivity = Date.now();
+
+  return { message: `🎯 ${shooter.name} sets stake to ${amount} pts!\n\nOthers: bet !pass or !fade against this stake.` };
 }
 
 /**
@@ -266,7 +404,7 @@ export function placeBet(game: GameState, playerUuid: string, betType: 'pass' | 
   }
 
   if (playerUuid === game.shooterUuid) {
-    return { message: '❌ Shooter cannot bet! You\'re automatically betting on yourself.' };
+    return { message: `❌ Shooter can't bet! Use !stake [amt] to set your stake (currently ${game.shooterStake} pts).` };
   }
 
   if (amount < game.minBet) {
@@ -287,11 +425,321 @@ export function placeBet(game: GameState, playerUuid: string, betType: 'pass' | 
   game.lastActivity = Date.now();
 
   const betEmoji = betType === 'pass' ? '✅' : '❌';
-  const betDesc = betType === 'pass' ? 'WITH the shooter' : 'AGAINST the shooter';
+  const betDesc = betType === 'pass' ? 'WITH' : 'AGAINST';
+
+  // Show current bet summary and ready status
+  const readyStatus = checkAllPlayersReady(game);
 
   return {
-    message: `${betEmoji} ${player.name} bets ${amount} pts ${betDesc}!`
+    message: `${betEmoji} ${player.name} bets ${amount} pts ${betDesc} the shooter!\n\n${readyStatus}`
   };
+}
+
+/**
+ * Player skips betting for this round
+ */
+export function playerSkipBetting(game: GameState, playerUuid: string): GameResult {
+  const player = game.players.get(playerUuid);
+
+  if (!player) {
+    return { message: '❌ You are not in this game!' };
+  }
+
+  if (game.phase !== 'betting') {
+    return { message: '❌ Cannot skip - betting phase not active!' };
+  }
+
+  if (playerUuid === game.shooterUuid) {
+    return { message: '❌ Shooter cannot skip! Use !roll to roll the dice.' };
+  }
+
+  // If player already bet, they can't skip
+  if (player.bet && player.betAmount) {
+    return { message: `❌ You already bet ${player.betAmount} pts on ${player.bet}!` };
+  }
+
+  // Mark player as skipped
+  game.playersSkipped.add(playerUuid);
+  game.lastActivity = Date.now();
+  player.lastActivity = Date.now();
+
+  // Check if all non-shooter players have bet or skipped
+  const readyStatus = checkAllPlayersReady(game);
+
+  return {
+    message: `⏭️ ${player.name} skips betting this round.\n\n${readyStatus}`
+  };
+}
+
+/**
+ * Check if all non-shooter players have bet or skipped
+ */
+export function checkAllPlayersReady(game: GameState): string {
+  const nonShooterPlayers = Array.from(game.players.entries())
+    .filter(([uuid]) => uuid !== game.shooterUuid);
+
+  const readyPlayers: string[] = [];
+  const waitingPlayers: string[] = [];
+
+  for (const [uuid, player] of nonShooterPlayers) {
+    if (player.bet && player.betAmount) {
+      readyPlayers.push(`${player.name} (${player.bet} ${player.betAmount})`);
+    } else if (game.playersSkipped.has(uuid)) {
+      readyPlayers.push(`${player.name} (skip)`);
+    } else {
+      waitingPlayers.push(player.name);
+    }
+  }
+
+  const allReady = waitingPlayers.length === 0;
+  const shooter = game.players.get(game.shooterUuid!);
+
+  if (allReady) {
+    return `✅ All players ready!\n🎯 ${shooter?.name}, type !roll to roll the dice!`;
+  }
+
+  // Calculate time remaining
+  const elapsed = game.bettingStartTime ? Date.now() - game.bettingStartTime : 0;
+  const remaining = Math.max(0, Math.ceil((game.bettingTimeoutMs - elapsed) / 1000));
+
+  return `⏳ Waiting: ${waitingPlayers.join(', ')}\n✅ Ready: ${readyPlayers.length > 0 ? readyPlayers.join(', ') : 'none'}\n⏱️ ${remaining}s remaining (or shooter can !go when ready)`;
+}
+
+/**
+ * Check if all players are ready (have bet or skipped)
+ */
+export function areAllPlayersReady(game: GameState): boolean {
+  for (const [uuid, player] of game.players) {
+    if (uuid === game.shooterUuid) continue;
+    if (!player.bet && !player.betAmount && !game.playersSkipped.has(uuid)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Shooter signals they're ready to roll early (!go command)
+ * This ends the betting phase and allows them to roll
+ */
+export function shooterReadyToRoll(game: GameState, playerUuid: string): GameResult {
+  if (playerUuid !== game.shooterUuid) {
+    return { message: '❌ Only the shooter can use !go!' };
+  }
+
+  if (game.phase !== 'betting') {
+    return { message: '❌ Cannot use !go - not in betting phase!' };
+  }
+
+  const shooter = game.players.get(game.shooterUuid!);
+  const betSummary = getBetSummary(game);
+
+  // Mark any players who didn't bet as auto-skipped
+  for (const [uuid, player] of game.players) {
+    if (uuid === game.shooterUuid) continue;
+    if (!player.bet && !player.betAmount && !game.playersSkipped.has(uuid)) {
+      game.playersSkipped.add(uuid);
+    }
+  }
+
+  return {
+    message: `🚀 ${shooter?.name} is ready to roll!\n\n${betSummary}\n\n🎲 Type !roll to throw the dice!`
+  };
+}
+
+/**
+ * Set or clear a hold bet (!hold command)
+ * !hold pass 20 - Hold pass bet of 20 for each round
+ * !hold fade 15 - Hold fade bet of 15 for each round
+ * !hold off - Clear hold
+ * !hold - Show current hold status
+ */
+export function setHoldBet(
+  game: GameState,
+  playerUuid: string,
+  betType?: 'pass' | 'fade' | 'off',
+  amount?: number
+): GameResult {
+  const player = game.players.get(playerUuid);
+
+  if (!player) {
+    return { message: '❌ You are not in this game!' };
+  }
+
+  if (playerUuid === game.shooterUuid) {
+    return { message: '❌ Shooter cannot hold bets! Use !stake to set your stake.' };
+  }
+
+  // No arguments - show current hold status
+  if (!betType) {
+    if (player.holdBet && player.holdAmount) {
+      return {
+        message: `🔒 ${player.name}'s hold: ${player.holdBet.toUpperCase()} ${player.holdAmount} pts\n\nUse !hold off to clear.`
+      };
+    } else {
+      return {
+        message: `📭 ${player.name} has no hold set.\n\nUse !hold pass [amt] or !hold fade [amt] to auto-bet each round.`
+      };
+    }
+  }
+
+  // Clear hold
+  if (betType === 'off') {
+    player.holdBet = undefined;
+    player.holdAmount = undefined;
+    return { message: `🔓 ${player.name} cleared their hold. Manual betting each round.` };
+  }
+
+  // Set hold - validate amount
+  if (!amount || amount < game.minBet) {
+    return { message: `❌ Minimum hold amount is ${game.minBet} points!` };
+  }
+
+  if (amount > game.maxBet) {
+    return { message: `❌ Maximum hold amount is ${game.maxBet} points!` };
+  }
+
+  player.holdBet = betType;
+  player.holdAmount = amount;
+
+  const emoji = betType === 'pass' ? '✅' : '❌';
+  const desc = betType === 'pass' ? 'WITH' : 'AGAINST';
+
+  return {
+    message: `🔒 ${player.name} holds ${emoji} ${betType.toUpperCase()} ${amount} pts\n\nWill auto-bet ${desc} shooter each round until cleared with !hold off.`
+  };
+}
+
+/**
+ * Apply all held bets at the start of betting phase
+ * Returns a summary of auto-applied bets
+ */
+export function applyHeldBets(game: GameState): string {
+  const appliedBets: string[] = [];
+  const skippedBets: string[] = [];
+
+  for (const [uuid, player] of game.players) {
+    if (uuid === game.shooterUuid) continue;
+    if (!player.holdBet || !player.holdAmount) continue;
+
+    // Check if player has enough points
+    if (player.points < player.holdAmount) {
+      // Not enough points - clear the hold
+      skippedBets.push(`${player.name} (insufficient pts - hold cleared)`);
+      player.holdBet = undefined;
+      player.holdAmount = undefined;
+      continue;
+    }
+
+    // Apply the held bet
+    player.bet = player.holdBet;
+    player.betAmount = player.holdAmount;
+    player.lastActivity = Date.now();
+
+    const emoji = player.holdBet === 'pass' ? '✅' : '❌';
+    appliedBets.push(`${emoji} ${player.name}: ${player.holdBet} ${player.holdAmount}`);
+  }
+
+  if (appliedBets.length === 0 && skippedBets.length === 0) {
+    return '';
+  }
+
+  let result = '';
+  if (appliedBets.length > 0) {
+    result += `🔒 AUTO-BETS APPLIED:\n${appliedBets.join('\n')}`;
+  }
+  if (skippedBets.length > 0) {
+    if (result) result += '\n\n';
+    result += `⚠️ HOLDS CLEARED:\n${skippedBets.join('\n')}`;
+  }
+
+  return result;
+}
+
+/**
+ * Get a summary of all current holds
+ */
+export function getHoldsSummary(game: GameState): string {
+  const holds: string[] = [];
+
+  for (const [uuid, player] of game.players) {
+    if (uuid === game.shooterUuid) continue;
+    if (player.holdBet && player.holdAmount) {
+      const emoji = player.holdBet === 'pass' ? '✅' : '❌';
+      holds.push(`${emoji} ${player.name}: ${player.holdBet} ${player.holdAmount}`);
+    }
+  }
+
+  if (holds.length === 0) {
+    return '';
+  }
+
+  return `🔒 HOLDS:\n${holds.join('\n')}`;
+}
+
+/**
+ * Check if betting timer has expired
+ */
+export function isBettingTimeExpired(game: GameState): boolean {
+  if (!game.bettingStartTime) return false;
+  const elapsed = Date.now() - game.bettingStartTime;
+  return elapsed >= game.bettingTimeoutMs;
+}
+
+/**
+ * Get remaining betting time in seconds
+ */
+export function getBettingTimeRemaining(game: GameState): number {
+  if (!game.bettingStartTime) return game.bettingTimeoutMs / 1000;
+  const elapsed = Date.now() - game.bettingStartTime;
+  return Math.max(0, Math.ceil((game.bettingTimeoutMs - elapsed) / 1000));
+}
+
+/**
+ * Get a summary of all current bets
+ */
+export function getBetSummary(game: GameState): string {
+  const shooter = game.players.get(game.shooterUuid!);
+  const lines: string[] = [];
+
+  lines.push(`📋 BET SUMMARY:`);
+  lines.push(`🎯 ${shooter?.name || 'Shooter'} stakes ${game.shooterStake} pts`);
+
+  let passTotal = 0;
+  let fadeTotal = 0;
+  const passBettors: string[] = [];
+  const fadeBettors: string[] = [];
+  const noBet: string[] = [];
+
+  for (const [uuid, player] of game.players) {
+    if (uuid === game.shooterUuid) continue;
+
+    if (player.bet === 'pass' && player.betAmount) {
+      passTotal += player.betAmount;
+      passBettors.push(`${player.name} (${player.betAmount})`);
+    } else if (player.bet === 'fade' && player.betAmount) {
+      fadeTotal += player.betAmount;
+      fadeBettors.push(`${player.name} (${player.betAmount})`);
+    } else {
+      noBet.push(player.name);
+    }
+  }
+
+  if (passBettors.length > 0) {
+    lines.push(`✅ PASS (${passTotal} pts): ${passBettors.join(', ')}`);
+  }
+  if (fadeBettors.length > 0) {
+    lines.push(`❌ FADE (${fadeTotal} pts): ${fadeBettors.join(', ')}`);
+  }
+  if (noBet.length > 0) {
+    lines.push(`⏳ No bet yet: ${noBet.join(', ')}`);
+  }
+
+  if (passBettors.length === 0 && fadeBettors.length === 0) {
+    lines.push(`⏳ Waiting for bets...`);
+  }
+
+  return lines.join('\n');
 }
 
 /**
@@ -306,6 +754,10 @@ export function shooterRoll(game: GameState, playerUuid: string): GameResult {
     return { message: '❌ Cannot roll right now!' };
   }
 
+  // Show bet summary before come-out roll
+  const isFirstRoll = game.phase === 'betting' || game.phase === 'come_out';
+  const preBetSummary = isFirstRoll ? getBetSummary(game) + '\n\n' : '';
+
   const roll = rollDice();
   game.rolls.push(roll);
   game.lastActivity = Date.now();
@@ -314,8 +766,8 @@ export function shooterRoll(game: GameState, playerUuid: string): GameResult {
   shooter.lastActivity = Date.now();
 
   // Process the roll based on game phase
-  if (game.phase === 'betting' || game.phase === 'come_out') {
-    return processComeOutRoll(game, roll);
+  if (isFirstRoll) {
+    return processComeOutRoll(game, roll, preBetSummary);
   } else {
     return processPointRoll(game, roll);
   }
@@ -324,7 +776,7 @@ export function shooterRoll(game: GameState, playerUuid: string): GameResult {
 /**
  * Process come-out roll
  */
-function processComeOutRoll(game: GameState, roll: DiceRoll): GameResult {
+function processComeOutRoll(game: GameState, roll: DiceRoll, betSummary: string): GameResult {
   const shooter = game.players.get(game.shooterUuid!)!;
   const rollDisplay = formatRoll(roll);
 
@@ -334,15 +786,11 @@ function processComeOutRoll(game: GameState, roll: DiceRoll): GameResult {
     const result = resolveRound(game, true);
 
     return {
-      message: `🎲 ${shooter.name} rolls... ${rollDisplay}
+      message: `${betSummary}🎲 ${shooter.name} rolls... ${rollDisplay}
 
 🎉 NATURAL ${roll.total}! SHOOTER WINS! 🎉
 
-${result}
-
-━━━━━━━━━━━━━━━━━━━━━━
-Next round starting...
-Type !roll when ready!`,
+${result}`,
       nextPhase: 'betting'
     };
   }
@@ -352,15 +800,12 @@ Type !roll when ready!`,
     const result = resolveRound(game, false);
 
     return {
-      message: `🎲 ${shooter.name} rolls... ${rollDisplay}
+      message: `${betSummary}🎲 ${shooter.name} rolls... ${rollDisplay}
 
 💀 CRAPS! ${roll.total === 12 ? 'BOXCARS!' : roll.total === 2 ? 'SNAKE EYES!' : 'ACE-DEUCE!'} 💀
 Shooter loses!
 
-${result}
-
-━━━━━━━━━━━━━━━━━━━━━━
-Next shooter up...`,
+${result}`,
       nextPhase: 'betting'
     };
   }
@@ -370,11 +815,12 @@ Next shooter up...`,
   game.phase = 'point';
 
   return {
-    message: `🎲 ${shooter.name} rolls... ${rollDisplay}
+    message: `${betSummary}🎲 ${shooter.name} rolls... ${rollDisplay}
 
 🎯 POINT IS ${game.point}! 🎯
 
 ${shooter.name} must roll ${game.point} again before rolling a 7!
+Bets remain in play until the point is made or seven-out.
 
 Type !roll to continue...`,
     nextPhase: 'point'
@@ -440,50 +886,160 @@ Keep rolling! Type !roll`,
 
 /**
  * Resolve the round and calculate payouts
+ *
+ * PAYOUTS (1:1 system):
+ * - Fade pool = total fader bets (money available to winners)
+ * - Pass pool = shooter stake + total pass bets (money faders can win)
+ *
+ * When SHOOTER WINS:
+ * - Faders lose their bets (goes to fade pool)
+ * - Shooter wins 1:1 up to their stake from fade pool
+ * - Pass bettors win 1:1 from remaining fade pool (proportional if not enough)
+ *
+ * When SHOOTER LOSES:
+ * - Shooter loses their stake
+ * - Pass bettors lose their bets
+ * - Faders split the pass pool proportionally (1:1 up to their bet)
  */
 function resolveRound(game: GameState, shooterWins: boolean): string {
   const shooter = game.players.get(game.shooterUuid!)!;
   const lines: string[] = [];
 
-  let shooterWinnings = 0;
-  const winners: Player[] = [];
-  const losers: Player[] = [];
+  lines.push('━━━━━━━━━━━━━━━━━━━━━━');
+  lines.push('💰 ROUND RESULTS');
+  lines.push('━━━━━━━━━━━━━━━━━━━━━━');
+
+  // Calculate totals
+  let totalFadeBets = 0;
+  let totalPassBets = 0;
+  const faders: Array<{uuid: string, player: Player}> = [];
+  const passers: Array<{uuid: string, player: Player}> = [];
 
   for (const [uuid, player] of game.players) {
-    if (uuid === game.shooterUuid) continue;  // Handle shooter separately
+    if (uuid === game.shooterUuid) continue;
+    if (player.bet === 'fade' && player.betAmount) {
+      totalFadeBets += player.betAmount;
+      faders.push({uuid, player});
+    } else if (player.bet === 'pass' && player.betAmount) {
+      totalPassBets += player.betAmount;
+      passers.push({uuid, player});
+    }
+  }
 
-    if (!player.bet || !player.betAmount) continue;
+  const shooterStake = game.shooterStake;
+  let shooterWinnings = 0;
 
-    const playerWins = (player.bet === 'pass' && shooterWins) || (player.bet === 'fade' && !shooterWins);
+  if (shooterWins) {
+    // === SHOOTER WINS ===
+    // Fade pool is available: all fader bets
+    let fadePoolRemaining = totalFadeBets;
 
-    if (playerWins) {
-      player.points += player.betAmount;
-      shooterWinnings -= player.betAmount;  // Shooter pays winners
-      winners.push(player);
-      lines.push(`✅ ${player.name}: +${player.betAmount} pts (${player.points} total)`);
-    } else {
-      player.points -= player.betAmount;
-      shooterWinnings += player.betAmount;  // Shooter collects from losers
-      losers.push(player);
-      lines.push(`❌ ${player.name}: -${player.betAmount} pts (${player.points} total)`);
+    // Shooter collects 1:1 up to their stake
+    const shooterPayout = Math.min(shooterStake, fadePoolRemaining);
+    shooterWinnings = shooterPayout;
+    fadePoolRemaining -= shooterPayout;
+
+    // Process faders (they all lose their bets)
+    for (const {player} of faders) {
+      player.roundsPlayed++;
+      player.points -= player.betAmount!;
+      player.totalLost += player.betAmount!;
+      lines.push(`❌ ${player.name}: -${player.betAmount} → ${player.points} pts`);
+      player.bet = undefined;
+      player.betAmount = undefined;
     }
 
-    // Clear bet for next round
-    player.bet = undefined;
-    player.betAmount = undefined;
+    // Process pass bettors (they win from remaining fade pool)
+    if (passers.length > 0 && fadePoolRemaining > 0) {
+      // Calculate what pass bettors would ideally win (1:1)
+      const idealPassWinnings = totalPassBets;
+      const passPayoutRatio = Math.min(1, fadePoolRemaining / idealPassWinnings);
+
+      for (const {player} of passers) {
+        player.roundsPlayed++;
+        const payout = Math.floor(player.betAmount! * passPayoutRatio);
+        if (payout > 0) {
+          player.points += payout;
+          player.totalWon += payout;
+          lines.push(`✅ ${player.name}: +${payout} → ${player.points} pts`);
+        } else {
+          lines.push(`➖ ${player.name}: +0 → ${player.points} pts (pool empty)`);
+        }
+        player.bet = undefined;
+        player.betAmount = undefined;
+      }
+    } else if (passers.length > 0) {
+      // No fade pool left for pass bettors
+      for (const {player} of passers) {
+        player.roundsPlayed++;
+        lines.push(`➖ ${player.name}: +0 → ${player.points} pts (no faders)`);
+        player.bet = undefined;
+        player.betAmount = undefined;
+      }
+    }
+
+  } else {
+    // === SHOOTER LOSES ===
+    // Pass pool is available: shooter stake + all pass bets
+    let passPoolRemaining = shooterStake + totalPassBets;
+
+    // Shooter loses their stake
+    shooterWinnings = -Math.min(shooterStake, totalFadeBets); // Only lose what faders can take
+
+    // Process pass bettors (they lose their bets)
+    for (const {player} of passers) {
+      player.roundsPlayed++;
+      player.points -= player.betAmount!;
+      player.totalLost += player.betAmount!;
+      lines.push(`❌ ${player.name}: -${player.betAmount} → ${player.points} pts`);
+      player.bet = undefined;
+      player.betAmount = undefined;
+    }
+
+    // Process faders (they win from pass pool)
+    if (faders.length > 0 && passPoolRemaining > 0) {
+      // Calculate what faders would ideally win (1:1)
+      const idealFadeWinnings = totalFadeBets;
+      const fadePayoutRatio = Math.min(1, passPoolRemaining / idealFadeWinnings);
+
+      for (const {player} of faders) {
+        player.roundsPlayed++;
+        const payout = Math.floor(player.betAmount! * fadePayoutRatio);
+        player.points += payout;
+        player.totalWon += payout;
+        lines.push(`✅ ${player.name}: +${payout} → ${player.points} pts`);
+        player.bet = undefined;
+        player.betAmount = undefined;
+      }
+    }
   }
 
-  // Update shooter's points
+  // Update shooter's stats
   shooter.points += shooterWinnings;
+  shooter.roundsPlayed++;
   if (shooterWinnings >= 0) {
-    lines.unshift(`🎯 ${shooter.name} (Shooter): +${shooterWinnings} pts (${shooter.points} total)`);
+    shooter.totalWon += shooterWinnings;
+    lines.unshift(`🎯 ${shooter.name} (Shooter): +${shooterWinnings} → ${shooter.points} pts`);
   } else {
-    lines.unshift(`🎯 ${shooter.name} (Shooter): ${shooterWinnings} pts (${shooter.points} total)`);
+    shooter.totalLost += Math.abs(shooterWinnings);
+    lines.unshift(`🎯 ${shooter.name} (Shooter): ${shooterWinnings} → ${shooter.points} pts`);
   }
+
+  // Add leaderboard
+  lines.push('');
+  lines.push(getLeaderboard(game));
 
   // Rotate shooter if they lost
   if (!shooterWins) {
     rotateShooter(game);
+    const newShooter = game.players.get(game.shooterUuid!);
+    if (newShooter) {
+      lines.push('');
+      lines.push(`🎯 Next shooter: ${newShooter.name}`);
+    }
+  } else {
+    lines.push('');
+    lines.push(`🎯 ${shooter.name} keeps the dice!`);
   }
 
   game.roundNumber++;
@@ -504,7 +1060,9 @@ function resolveRound(game: GameState, shooterWins: boolean): string {
     game.phase = 'finished';
     if (activePlayers.length === 1) {
       lines.push('');
+      lines.push('━━━━━━━━━━━━━━━━━━━━━━');
       lines.push(`🏆 ${activePlayers[0].name} WINS THE GAME! 🏆`);
+      lines.push('━━━━━━━━━━━━━━━━━━━━━━');
     }
   }
 
@@ -541,14 +1099,16 @@ function rotateShooter(game: GameState): void {
 }
 
 /**
- * Check for eliminated players (0 or negative points)
+ * Check for NEWLY eliminated players (0 or negative points, not already marked)
  */
 function checkEliminations(game: GameState): Player[] {
-  const eliminated: Player[] = [];
+  const newlyEliminated: Player[] = [];
 
   for (const [uuid, player] of game.players) {
-    if (player.points <= 0) {
-      eliminated.push(player);
+    if (player.points <= 0 && !player.eliminated) {
+      // Mark as eliminated so we don't announce again
+      player.eliminated = true;
+      newlyEliminated.push(player);
       // Remove from shooter rotation
       const idx = game.shooterOrder.indexOf(uuid);
       if (idx !== -1) {
@@ -557,7 +1117,7 @@ function checkEliminations(game: GameState): Player[] {
     }
   }
 
-  return eliminated;
+  return newlyEliminated;
 }
 
 /**

@@ -543,6 +543,49 @@ export class PostgresClient {
   }
 
   /**
+   * Save a message to the database
+   */
+  async saveMessage(message: {
+    id: string;
+    groupId?: string;
+    groupName?: string;
+    sourceNumber?: string;
+    sourceName?: string;
+    sourceUuid?: string;
+    message: string;
+    timestamp: number;
+    attachments?: any;
+    mentions?: any;
+    isReply?: boolean;
+    quotedMessageId?: string;
+    quotedText?: string;
+  }): Promise<void> {
+    const sql = `
+      INSERT INTO signal_messages (
+        id, group_id, group_name, source_number, source_name, source_uuid,
+        message, timestamp, attachments, mentions, is_reply, quoted_message_id, quoted_text
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ON CONFLICT (id) DO NOTHING
+    `;
+
+    await this.pool.query(sql, [
+      message.id,
+      message.groupId || null,
+      message.groupName || null,
+      message.sourceNumber || null,
+      message.sourceName || null,
+      message.sourceUuid || null,
+      message.message,
+      message.timestamp,
+      message.attachments ? JSON.stringify(message.attachments) : null,
+      message.mentions ? JSON.stringify(message.mentions) : null,
+      message.isReply || false,
+      message.quotedMessageId || null,
+      message.quotedText || null
+    ]);
+  }
+
+  /**
    * Get messages from a group with both count and time constraints
    * Returns up to 'count' messages from the last 'hours' hours
    */
@@ -571,6 +614,76 @@ export class PostgresClient {
 
     const result = await this.pool.query(sql, params);
     return result.rows.reverse(); // Reverse to get chronological order
+  }
+
+  /**
+   * Log command usage to database
+   */
+  async logCommand(data: {
+    command: string;
+    args?: string;
+    groupId?: string;
+    groupName?: string;
+    userId: string;
+    userName?: string;
+    success: boolean;
+    responseTime?: number;
+    errorMessage?: string;
+  }): Promise<void> {
+    const sql = `
+      INSERT INTO bot_command_usage (
+        id, command, args, group_id, group_name, user_id, user_name,
+        success, response_time, error_message
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `;
+
+    await this.pool.query(sql, [
+      this.generateId(),
+      data.command,
+      data.args || null,
+      data.groupId || null,
+      data.groupName || null,
+      data.userId,
+      data.userName || null,
+      data.success,
+      data.responseTime || null,
+      data.errorMessage || null
+    ]);
+  }
+
+  /**
+   * Log error to database
+   */
+  async logError(data: {
+    errorType: string;
+    errorMessage: string;
+    stackTrace?: string;
+    command?: string;
+    groupId?: string;
+    groupName?: string;
+    userId?: string;
+    userName?: string;
+    context?: any;
+  }): Promise<void> {
+    const sql = `
+      INSERT INTO bot_errors (
+        id, error_type, error_message, stack_trace, command,
+        group_id, group_name, user_id, user_name, context
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `;
+
+    await this.pool.query(sql, [
+      this.generateId(),
+      data.errorType,
+      data.errorMessage,
+      data.stackTrace || null,
+      data.command || null,
+      data.groupId || null,
+      data.groupName || null,
+      data.userId || null,
+      data.userName || null,
+      data.context ? JSON.stringify(data.context) : null
+    ]);
   }
 
   // ============================================================================

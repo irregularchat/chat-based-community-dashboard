@@ -1,26 +1,7 @@
-# Dockerfile for Signal CLI Bot Container (Cloudflare Native)
-# Multi-stage build for optimal image size
+# Dockerfile for Signal CLI Bot Container (Self-hosted)
+# Uses pre-built dist folder for faster builds
 
-# Stage 1: Build TypeScript
-FROM node:20-alpine AS builder
-
-WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-COPY tsconfig.json ./
-
-# Install dependencies
-RUN npm ci
-
-# Copy source code
-COPY src ./src
-COPY types ./types
-
-# Build TypeScript
-RUN npm run build
-
-# Stage 2: Install signal-cli
+# Stage 1: Install signal-cli
 FROM debian:trixie-slim AS signal-cli
 
 # Install dependencies for signal-cli
@@ -49,6 +30,7 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     python3 \
     python3-pip \
+    git \
     && mkdir -p /etc/apt/keyrings \
     && wget -O - https://packages.adoptium.net/artifactory/api/gpg/key/public | tee /etc/apt/keyrings/adoptium.asc \
     && echo "deb [signed-by=/etc/apt/keyrings/adoptium.asc] https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" | tee /etc/apt/sources.list.d/adoptium.list \
@@ -63,9 +45,9 @@ WORKDIR /app
 COPY --from=signal-cli /opt/signal-cli-* /opt/signal-cli/
 RUN ln -sf /opt/signal-cli/bin/signal-cli /usr/local/bin/signal-cli
 
-# Copy built application from builder
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/package*.json ./
+# Copy pre-built application (built locally with npm run build)
+COPY dist ./dist
+COPY package*.json ./
 
 # Copy configuration files
 COPY config ./config

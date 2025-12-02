@@ -162,8 +162,8 @@ app.post('/bot/start', async (req, res) => {
       });
     }
 
-    // Create new bot instance with PostgreSQL client and debug logging
-    bot = new SignalBot(config, dbClient as any, dbClient);
+    // Create new bot instance with PostgreSQL client
+    bot = new SignalBot(config, dbClient);
 
     // Start the bot
     await bot.start();
@@ -418,8 +418,8 @@ app.listen(port, async () => {
     console.log('🚀 Auto-starting bot...');
     try {
       if (dbClient) {
-        // Pass dbClient as both workerApi (for compatibility) and dbClient (for direct DB access)
-        bot = new SignalBot(config, dbClient as any, dbClient);
+        // Create bot with PostgreSQL client
+        bot = new SignalBot(config, dbClient);
         await bot.start();
         console.log('✅ Bot started successfully');
 

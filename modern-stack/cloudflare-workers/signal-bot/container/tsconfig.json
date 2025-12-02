@@ -23,5 +23,13 @@
     }
   },
   "include": ["src/**/*", "types/**/*"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.test.ts",
+    "src/index.ts",
+    "src/bot/signal-bot.ts",
+    "src/bot/signal-bot-v1-backup.ts",
+    "src/api/worker-api-client.ts"
+  ]
 }

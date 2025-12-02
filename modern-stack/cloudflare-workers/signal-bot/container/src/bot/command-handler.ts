@@ -2,10 +2,10 @@
  * Command Handler
  *
  * Processes all bot commands (!help, !ping, !ai, !ask, etc.)
+ * Uses PostgreSQL for all database operations.
  */
 
-import { BotConfig } from './signal-bot.js';
-import { WorkerAPIClient } from '../api/worker-api-client.js';
+import { BotConfig } from './signal-bot-v2.js';
 import { PostgresClient } from '../db/postgres-client.js';
 import OpenAI from 'openai';
 import { scrapeUrl, extractUrls, containsUrl } from '../utils/url-scraper.js';
@@ -21,17 +21,29 @@ import {
 } from '../utils/wiki-search.js';
 import {
   createGame,
+  createGameInGroup,
   getGame,
   getGameByGroupId,
   setGameGroupId,
   startBetting,
   placeBet,
   shooterRoll,
+  setShooterStake,
   getGameStatus,
   getPlayerPoints,
   removePlayer,
   endGame,
   getGameRules,
+  getBetSummary,
+  playerSkipBetting,
+  shooterReadyToRoll,
+  checkAllPlayersReady,
+  areAllPlayersReady,
+  isBettingTimeExpired,
+  getBettingTimeRemaining,
+  setHoldBet,
+  applyHeldBets,
+  getHoldsSummary,
   GameState,
 } from '../utils/dice-game.js';
 
@@ -55,24 +67,15 @@ export interface CommandContext {
 
 export class CommandHandler {
   private config: BotConfig;
-  private workerApi: WorkerAPIClient | null = null;
-  private dbClient: PostgresClient | null = null;
+  private dbClient: PostgresClient;
   private openai: OpenAI | null = null;
   private questionCounter = 0;
   private bot: any | null = null; // SignalBot instance for accessing bot methods
   private announcementHandler: AnnouncementHandler | null = null;
 
-  constructor(config: BotConfig, apiOrDb: WorkerAPIClient | PostgresClient) {
+  constructor(config: BotConfig, dbClient: PostgresClient) {
     this.config = config;
-
-    // Detect if it's WorkerAPIClient or PostgresClient
-    if ('healthCheck' in apiOrDb && typeof (apiOrDb as any).healthCheck === 'function') {
-      // It's a WorkerAPIClient
-      this.workerApi = apiOrDb as WorkerAPIClient;
-    } else {
-      // It's a PostgresClient
-      this.dbClient = apiOrDb as PostgresClient;
-    }
+    this.dbClient = dbClient;
 
     // Initialize OpenAI if configured
     if (config.openAiActive && config.openAiApiKey) {
@@ -88,11 +91,9 @@ export class CommandHandler {
   setBotInstance(bot: any): void {
     this.bot = bot;
 
-    // Initialize announcement handler if dbClient is available
-    if (this.dbClient && bot) {
-      this.announcementHandler = new AnnouncementHandler(this.dbClient, bot);
-      console.log('📢 Announcement handler initialized');
-    }
+    // Initialize announcement handler
+    this.announcementHandler = new AnnouncementHandler(this.dbClient, bot);
+    console.log('📢 Announcement handler initialized');
   }
 
   /**
@@ -259,13 +260,25 @@ export class CommandHandler {
         return this.handleDiceGame(args, context);
 
       case '!roll':
-        return this.handleDiceRoll(context);
+        return this.handleDiceRoll(args, context);
 
       case '!pass':
         return this.handleDiceBet('pass', args, context);
 
       case '!fade':
         return this.handleDiceBet('fade', args, context);
+
+      case '!stake':
+        return this.handleDiceStake(args, context);
+
+      case '!skip':
+        return this.handleDiceSkip(context);
+
+      case '!go':
+        return this.handleDiceGo(context);
+
+      case '!hold':
+        return this.handleDiceHold(args, context);
 
       case '!points':
         return this.handleDicePoints(context);
@@ -276,6 +289,10 @@ export class CommandHandler {
 
       case '!leave':
         return this.handleDiceLeave(context);
+
+      case '!rematch':
+      case '!again':
+        return this.handleDiceRematch(context);
 
       // Information Commands
       case '!wiki':
@@ -310,6 +327,9 @@ export class CommandHandler {
 
       case '!pending':
         return this.handlePending(context);
+
+      case '!remove':
+        return this.handleRemove(args, context);
 
       // Announcement Commands (Admin)
       case '!announce':
@@ -404,7 +424,9 @@ export class CommandHandler {
     if (isAdmin) {
       lines.push(
         '🔐 Admin:',
-        '  !gtg, !pending',
+        '  !gtg @user - Approve user (Good To Go)',
+        '  !pending - Show pending users',
+        '  !remove @user - Remove from all groups (safety number)',
         '',
         '📢 Announcements:',
         '  !announce [-t time] [-g groups] [-dm] message',
@@ -497,15 +519,7 @@ export class CommandHandler {
 
     try {
       // Get next question ID from database (persisted across restarts)
-      let questionId: number;
-
-      if (this.dbClient) {
-        questionId = await this.dbClient.getNextQuestionId(context.groupId);
-      } else if (this.workerApi) {
-        questionId = await this.workerApi.getNextQuestionId(context.groupId);
-      } else {
-        return '❌ Database not configured';
-      }
+      const questionId = await this.dbClient.getNextQuestionId(context.groupId);
 
       // Extract title from first sentence if possible
       const sentences = question.split(/[.!?]/);
@@ -520,11 +534,7 @@ export class CommandHandler {
         groupId: context.groupId,
       };
 
-      if (this.dbClient) {
-        await this.dbClient.saveQuestion(questionData);
-      } else if (this.workerApi) {
-        await this.workerApi.saveQuestion(questionData);
-      }
+      await this.dbClient.saveQuestion(questionData);
 
       return this.formatForSignal(
         `✅ Question #${questionId} recorded!\n\n` +
@@ -548,17 +558,7 @@ export class CommandHandler {
     }
 
     try {
-      let questions: any[];
-
-      if (this.dbClient) {
-        // Use PostgreSQL client directly
-        questions = await this.dbClient.getQuestions(context.groupId, false);
-      } else if (this.workerApi) {
-        // Use Worker API client
-        questions = await this.workerApi.getQuestions(context.groupId, false);
-      } else {
-        return '❌ Database not configured';
-      }
+      const questions = await this.dbClient.getQuestions(context.groupId, false);
 
       if (questions.length === 0) {
         return '📋 No open questions in this group.\n\nAsk one with: !ask <question>';
@@ -614,15 +614,7 @@ export class CommandHandler {
 
     try {
       // Get question to validate it exists
-      let questionData: { question: any; answers: any[] } | null;
-
-      if (this.dbClient) {
-        questionData = await this.dbClient.getQuestionWithAnswers(questionId, context.groupId);
-      } else if (this.workerApi) {
-        questionData = await this.workerApi.getQuestionWithAnswers(questionId, context.groupId);
-      } else {
-        return '❌ Database not configured';
-      }
+      const questionData = await this.dbClient.getQuestionWithAnswers(questionId, context.groupId);
 
       if (!questionData) {
         return `❌ Question #${questionId} not found in this group.`;
@@ -637,15 +629,7 @@ export class CommandHandler {
         groupId: context.groupId,
       };
 
-      let answerId: number;
-
-      if (this.dbClient) {
-        answerId = await this.dbClient.saveAnswer(answerData);
-      } else if (this.workerApi) {
-        answerId = await this.workerApi.saveAnswer(answerData);
-      } else {
-        return '❌ Database not configured';
-      }
+      const answerId = await this.dbClient.saveAnswer(answerData);
 
       const answerCount = questionData.answers.length + 1;
 
@@ -705,15 +689,7 @@ export class CommandHandler {
 
     try {
       // Get question and answers
-      let questionData: { question: any; answers: any[] } | null;
-
-      if (this.dbClient) {
-        questionData = await this.dbClient.getQuestionWithAnswers(questionId, context.groupId);
-      } else if (this.workerApi) {
-        questionData = await this.workerApi.getQuestionWithAnswers(questionId, context.groupId);
-      } else {
-        return '❌ Database not configured';
-      }
+      const questionData = await this.dbClient.getQuestionWithAnswers(questionId, context.groupId);
 
       if (!questionData) {
         return `❌ Question #${questionId} not found in this group.`;
@@ -742,11 +718,7 @@ export class CommandHandler {
       }
 
       // Mark answers as solutions
-      if (this.dbClient) {
-        await this.dbClient.markAnswersAsSolution(questionId, validAnswerIds);
-      } else if (this.workerApi) {
-        await this.workerApi.markAnswersAsSolution(questionId, validAnswerIds);
-      }
+      await this.dbClient.markAnswersAsSolution(questionId, validAnswerIds);
 
       let response = `✅ Question #${questionId} marked as solved!\n\n`;
 
@@ -764,15 +736,7 @@ export class CommandHandler {
       response += `📤 Posting to Discourse forum...`;
 
       try {
-        let discourseResult: { success: boolean; topicUrl?: string; error?: string };
-
-        if (this.dbClient) {
-          discourseResult = await this.dbClient.postQuestionToDiscourse(questionId);
-        } else if (this.workerApi) {
-          discourseResult = await this.workerApi.postQuestionToDiscourse(questionId);
-        } else {
-          discourseResult = { success: false, error: 'Database not configured' };
-        }
+        const discourseResult = await this.dbClient.postQuestionToDiscourse(questionId);
 
         if (discourseResult.success && discourseResult.topicUrl) {
           response += `\n\n✅ Posted to forum:\n${discourseResult.topicUrl}`;
@@ -910,7 +874,17 @@ export class CommandHandler {
     }
 
     try {
-      const groups = await this.bot.getGroups();
+      const allGroups = await this.bot.getGroups();
+
+      // Filter out temporary dice game groups (they start with "🎲" and have patterns like "Dice Game -" or "'s Neon Room")
+      const groups = allGroups.filter((g: any) => {
+        const name = g.name || '';
+        // Exclude dice game groups
+        if (name.startsWith('🎲')) return false;
+        if (name.includes('Dice Game -')) return false;
+        if (name.includes("'s Neon Room")) return false;
+        return true;
+      });
 
       if (groups.length === 0) {
         return '📱 No Signal groups found';
@@ -1017,23 +991,43 @@ export class CommandHandler {
       return '❌ Bot instance not available';
     }
 
-    // Parse format: !addto @user1 @user2 11
-    // OR: !addto 11 @user1 @user2
-    // Try to find group number (could be first or last argument)
+    // Parse format: !addto 2,4,6,9,14 @user (comma-separated group numbers)
+    // OR: !addto tech,cyber,ai @user (keyword search)
+    // OR: !addto 2,tech,5,cyber @user (mixed numbers and keywords)
+    // OR: !addto 11 @user1 @user2 (single group)
     const parts = args.trim().split(/\s+/);
-    let groupNum: number | null = null;
+    let groupSelector = '';
 
-    // Check if first part is a number
-    if (parts.length > 0 && /^\d+$/.test(parts[0])) {
-      groupNum = parseInt(parts[0]);
+    // Helper to check if a string looks like a group selector (not a UUID or phone)
+    const isGroupSelector = (s: string): boolean => {
+      if (!s || s.length === 0) return false;
+      if (s.startsWith('+')) return false; // Phone number
+      // UUID pattern: 8-4-4-4-12 hex chars
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return false;
+      // Signal mention placeholder (Unicode Object Replacement Character)
+      if (s.includes('\uFFFC')) return false;
+      // Should contain at least one alphanumeric
+      if (!/[a-zA-Z0-9]/.test(s)) return false;
+      return true;
+    };
+
+    // Check if first part contains group selector (numbers, keywords, or mixed)
+    if (parts.length > 0 && isGroupSelector(parts[0])) {
+      groupSelector = parts[0];
     }
-    // Check if last part is a number
-    else if (parts.length > 0 && /^\d+$/.test(parts[parts.length - 1])) {
-      groupNum = parseInt(parts[parts.length - 1]);
+    // Check if last part contains group selector
+    else if (parts.length > 0 && isGroupSelector(parts[parts.length - 1])) {
+      groupSelector = parts[parts.length - 1];
     }
 
-    if (!groupNum || isNaN(groupNum)) {
-      return '❌ Please provide a group number\n\nUsage: !addto <group#> <UUID/Phone>\n\nExample: !addto 11 +19105551234';
+    if (!groupSelector) {
+      return '❌ Please provide group number(s) or keyword(s)\n\n' +
+        'Usage:\n' +
+        '  !addto <group#> @user\n' +
+        '  !addto 2,4,6 @user (multiple groups by number)\n' +
+        '  !addto tech,cyber @user (by keyword search)\n' +
+        '  !addto 2,tech,5 @user (mixed)\n\n' +
+        'Example: !addto 11 @Jason';
     }
 
     // Try to extract user identifiers
@@ -1042,7 +1036,7 @@ export class CommandHandler {
     // APPROACH 1: Use Signal protocol mentions (if available)
     if (context.mentions && context.mentions.length > 0) {
       for (const mention of context.mentions) {
-        const identifier = mention.number || mention.uuid;
+        const identifier = mention.uuid || mention.number;
         if (identifier) {
           userIdentifiers.push(identifier);
         }
@@ -1068,11 +1062,16 @@ export class CommandHandler {
 
     if (userIdentifiers.length === 0) {
       return '❌ No users specified\n\n' +
-        'Usage: !addto <group#> <UUID or phone>\n\n' +
+        'Usage:\n' +
+        '  !addto <group#> @user\n' +
+        '  !addto 2,4,6 @user (multiple groups by number)\n' +
+        '  !addto tech,cyber @user (by keyword search)\n\n' +
         'Examples:\n' +
-        '  !addto 11 +19105551234\n' +
-        '  !addto 11 a45aa911-6fe4-4dc4-8b33-4bbef344a123\n\n' +
-        'Note: Use Signal protocol mentions (@ menu) for best results, or provide UUID/phone directly.';
+        '  !addto 11 @Jason\n' +
+        '  !addto 2,4,6,9 @Jason\n' +
+        '  !addto tech,cyber,ai @Jason\n' +
+        '  !addto 11 +19105551234\n\n' +
+        'Note: Use Signal protocol mentions (@ menu) for best results.';
     }
 
     try {
@@ -1085,43 +1084,104 @@ export class CommandHandler {
         return countB - countA;
       });
 
-      const group = sortedGroups[groupNum - 1];
+      // Parse selector into numbers and keywords
+      const selectorParts = groupSelector.split(',').map(s => s.trim().toLowerCase()).filter(s => s.length > 0);
 
-      if (!group) {
-        return `❌ Group #${groupNum} not found\n\nUse !groups to see all groups`;
-      }
+      // Collect target groups (deduplicated by groupId)
+      const targetGroups: Map<string, { group: any; matchedBy: string }> = new Map();
+      const unmatchedSelectors: string[] = [];
+      const skippedShort: string[] = [];
 
-      // Check if bot is admin in this group
-      const isAdmin = this.isBotAdmin(group);
-      if (!isAdmin) {
-        return `❌ Bot is not admin in group #${groupNum} (${group.name})\n\n` +
-          `The bot can only add users to groups where it has admin rights.\n` +
-          `Use !groups to see which groups show 👑 (admin).`;
-      }
-
-      const groupId = group.id;
-      const groupName = group.name;
-
-      const results: string[] = [];
-
-      for (const identifier of userIdentifiers) {
-        try {
-          await this.addUserToGroup(identifier, groupId);
-          results.push(`✅ ${identifier}`);
-        } catch (error) {
-          console.error(`Failed to add ${identifier}:`, error);
-          results.push(`❌ ${identifier} (${error instanceof Error ? error.message : 'failed'})`);
+      for (const part of selectorParts) {
+        // Check if it's a number
+        const num = parseInt(part);
+        if (!isNaN(num) && num > 0) {
+          const group = sortedGroups[num - 1];
+          if (group && !targetGroups.has(group.id)) {
+            targetGroups.set(group.id, { group, matchedBy: `#${num}` });
+          } else if (!group) {
+            unmatchedSelectors.push(`#${num}`);
+          }
+        } else {
+          // It's a keyword - require minimum 3 chars to avoid matching everything
+          if (part.length < 3) {
+            skippedShort.push(part);
+            continue;
+          }
+          // Search group names
+          let foundMatch = false;
+          for (const group of sortedGroups) {
+            const groupName = (group.name || '').toLowerCase();
+            if (groupName.includes(part) && !targetGroups.has(group.id)) {
+              targetGroups.set(group.id, { group, matchedBy: `"${part}"` });
+              foundMatch = true;
+            }
+          }
+          if (!foundMatch) {
+            unmatchedSelectors.push(`"${part}"`);
+          }
         }
       }
 
-      return this.formatForSignal(
-        `📱 Adding Users to Group #${groupNum}\n\n` +
-        `Group: ${groupName}\n` +
-        `Group ID: ${groupId}\n\n` +
-        `Results:\n` +
-        results.join('\n') + '\n\n' +
-        `✨ Process completed. Users with ✅ have been added.`
-      );
+      if (targetGroups.size === 0) {
+        let errorMsg = `❌ No groups found matching: ${groupSelector}\n\n`;
+        if (skippedShort.length > 0) {
+          errorMsg += `⚠️ Keywords must be 3+ chars (skipped: ${skippedShort.join(', ')})\n\n`;
+        }
+        errorMsg += 'Use !groups to see available groups and their numbers.\n' +
+          'Keywords search group names (e.g., "tech" matches "IrregularChat: Tech")';
+        return errorMsg;
+      }
+
+      const allResults: string[] = [];
+      let successCount = 0;
+
+      for (const [_groupId, { group, matchedBy }] of targetGroups) {
+        // Check if bot is admin in this group (use async version)
+        const isAdmin = await this.isBotAdminAsync(group);
+        if (!isAdmin) {
+          allResults.push(`❌ ${group.name} (${matchedBy}): Bot not admin`);
+          continue;
+        }
+
+        const groupResults: string[] = [];
+        let groupSuccess = true;
+
+        for (const identifier of userIdentifiers) {
+          try {
+            await this.addUserToGroup(identifier, group.id);
+            groupResults.push(`✅`);
+          } catch (error) {
+            console.error(`Failed to add ${identifier} to group ${group.name}:`, error);
+            groupResults.push(`❌`);
+            groupSuccess = false;
+          }
+        }
+
+        if (groupSuccess) successCount++;
+        allResults.push(`${groupSuccess ? '✅' : '⚠️'} ${group.name} (${matchedBy}): ${groupResults.join(' ')}`);
+      }
+
+      const userCount = userIdentifiers.length;
+      const groupCount = targetGroups.size;
+
+      // Build response with warnings for unmatched selectors
+      let response = `📱 Adding ${userCount} User${userCount > 1 ? 's' : ''} to ${groupCount} Group${groupCount > 1 ? 's' : ''}\n\n`;
+      response += allResults.join('\n') + '\n\n';
+
+      if (unmatchedSelectors.length > 0) {
+        response += `⚠️ No match: ${unmatchedSelectors.join(', ')}\n`;
+      }
+      if (skippedShort.length > 0) {
+        response += `⚠️ Too short (3+ chars): ${skippedShort.join(', ')}\n`;
+      }
+      if (unmatchedSelectors.length > 0 || skippedShort.length > 0) {
+        response += '\n';
+      }
+
+      response += `✨ ${successCount}/${groupCount} groups successful.`;
+
+      return this.formatForSignal(response);
     } catch (error) {
       console.error('Error adding users:', error);
       return `❌ Failed to add users: ${error instanceof Error ? error.message : 'Unknown error'}`;
@@ -1211,21 +1271,30 @@ export class CommandHandler {
         return countB - countA;
       });
 
-      // Build joinability info for each group
-      const groupInfo = sortedGroups.map((g: any, index: number) => {
-        const isAdmin = this.isBotAdmin(g);
+      // Build joinability info for each group (use async admin check like !groups)
+      const groupInfo: Array<{
+        group: any;
+        index: number;
+        canJoin: boolean;
+        isAdmin: boolean;
+        userInGroup: boolean;
+      }> = [];
+
+      for (let i = 0; i < sortedGroups.length; i++) {
+        const g = sortedGroups[i];
+        const isAdmin = await this.isBotAdminAsync(g);
         const userInGroup = g.members?.some((m: any) => {
           const memberId = typeof m === 'string' ? m : m?.uuid;
           return memberId === userUuid;
         });
-        return {
+        groupInfo.push({
           group: g,
-          index: index + 1, // 1-based numbering (same as !groups)
+          index: i + 1, // 1-based numbering (same as !groups)
           canJoin: isAdmin && !userInGroup,
           isAdmin,
           userInGroup,
-        };
-      });
+        });
+      }
 
       const joinableGroups = groupInfo.filter(g => g.canJoin);
 
@@ -1411,15 +1480,9 @@ export class CommandHandler {
         return '❌ Time/count-based summarization only works in groups.\n\nUsage:\n  !summarize -h 2     (last 2 hours)\n  !summarize -n 20    (last 20 messages)\n  !summarize -h 1 -n 50  (last 50 messages from past hour)';
       }
 
-      if (!this.workerApi && !this.dbClient) {
-        return '❌ Message summarization not available (no database connection)';
-      }
-
       try {
-        // Fetch messages from database (try workerApi first, then dbClient)
-        const messages = this.workerApi
-          ? await this.workerApi.getMessagesWithConstraints(context.groupId, count, hours)
-          : await this.dbClient!.getMessagesWithConstraints(context.groupId, count, hours);
+        // Fetch messages from database
+        const messages = await this.dbClient.getMessagesWithConstraints(context.groupId, count, hours);
 
         if (messages.length === 0) {
           const timeDesc = hours ? `last ${hours} hour${hours !== 1 ? 's' : ''}` : '';
@@ -2722,36 +2785,17 @@ WIKI CONTENT:${wikiContext}`,
       let userIntro = '';
       if (context.groupId) {
         try {
-          // Try workerApi first, then dbClient fallback
-          if (this.workerApi) {
-            const recentMessages = await this.workerApi.getRecentMessages(context.groupId, 50);
-            // Find messages from the mentioned user (look at last 20 messages)
-            const userMessages = recentMessages
-              .filter((msg: any) => msg.source_number === userPhone || msg.source_uuid === userPhone)
-              .slice(0, 5); // Get up to 5 recent messages from user
+          const recentMessages = await this.dbClient.getRecentMessages(context.groupId, 50);
+          const userMessages = recentMessages
+            .filter((msg: any) => msg.source_number === userPhone || msg.source_uuid === userPhone)
+            .slice(0, 5); // Get up to 5 recent messages from user
 
-            // Concatenate their messages to form an intro
-            if (userMessages.length > 0) {
-              userIntro = userMessages
-                .map((msg: any) => msg.message || '')
-                .filter((m: string) => m.trim().length > 0)
-                .join(' ');
-              console.log(`📋 Fetched user intro (${userIntro.length} chars) from workerApi for keyword analysis`);
-            }
-          } else if (this.dbClient) {
-            // Fallback to dbClient
-            const recentMessages = await this.dbClient.getRecentMessages(context.groupId, 50);
-            const userMessages = recentMessages
-              .filter((msg: any) => msg.source_number === userPhone || msg.source_uuid === userPhone)
-              .slice(0, 5);
-
-            if (userMessages.length > 0) {
-              userIntro = userMessages
-                .map((msg: any) => msg.message || '')
-                .filter((m: string) => m.trim().length > 0)
-                .join(' ');
-              console.log(`📋 Fetched user intro (${userIntro.length} chars) from dbClient for keyword analysis`);
-            }
+          if (userMessages.length > 0) {
+            userIntro = userMessages
+              .map((msg: any) => msg.message || '')
+              .filter((m: string) => m.trim().length > 0)
+              .join(' ');
+            console.log(`📋 Fetched user intro (${userIntro.length} chars) for keyword analysis`);
           }
         } catch (error) {
           console.error('Error fetching user messages:', error);
@@ -2818,6 +2862,161 @@ WIKI CONTENT:${wikiContext}`,
       console.error('Error in handleGtg:', error);
       return `❌ Failed to process GTG: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
+  }
+
+  /**
+   * !remove - Remove user(s) from ALL groups (admin only)
+   *
+   * Used when a user fails to verify their safety number after it changed.
+   * Posts a notification to each group before removing them.
+   * Supports multiple users: !remove @user1 @user2 @user3
+   *
+   * Usage: !remove @user [@user2 @user3 ...]
+   */
+  private async handleRemove(args: string, context: CommandContext): Promise<string> {
+    const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
+    if (!isUserAdmin) {
+      return '❌ Admin-only command';
+    }
+
+    if (!context.mentions || context.mentions.length === 0) {
+      return '❌ Please mention one or more users\n\nUsage: !remove @user [@user2 @user3 ...]';
+    }
+
+    // Get all groups the bot is in (fetch once for all users)
+    const allGroups = await this.bot?.getGroups() || [];
+
+    // Process each mentioned user
+    const allResults: string[] = [];
+
+    for (const mention of context.mentions) {
+      const userIdentifier = mention.uuid || mention.number;
+
+      if (!userIdentifier) {
+        allResults.push(`⚠️ Could not resolve one mentioned user - skipping`);
+        continue;
+      }
+
+      // Try to get user's display name from database
+      let userDisplayName = userIdentifier;
+      if (this.dbClient) {
+        try {
+          const result = await this.dbClient.query(
+            'SELECT display_name, profile_name, first_name, last_name, phone_number FROM signal_members WHERE uuid = $1 OR phone_number = $1 LIMIT 1',
+            [userIdentifier]
+          );
+          if (result.results && result.results.length > 0) {
+            const row = result.results[0];
+            userDisplayName = row.display_name || row.profile_name ||
+                             (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name) ||
+                             row.phone_number || userIdentifier;
+          }
+        } catch (error) {
+          console.error('Error looking up user display name:', error);
+        }
+      }
+
+      try {
+        // Find all groups where this user is a member
+        const userGroups: Array<{ groupId: string; name: string }> = [];
+
+        for (const group of allGroups) {
+          if (!group.members || !Array.isArray(group.members)) continue;
+
+          const isMember = group.members.some((m: any) => {
+            const memberId = typeof m === 'string' ? m : (m?.uuid || m?.number);
+            return memberId === userIdentifier;
+          });
+
+          if (isMember && group.id) {
+            userGroups.push({
+              groupId: group.id,
+              name: group.name || 'Unknown Group'
+            });
+          }
+        }
+
+        if (userGroups.length === 0) {
+          allResults.push(`⚠️ ${userDisplayName}: Not found in any groups`);
+          continue;
+        }
+
+        // The removal notification message
+        const removalMessage =
+          `⚠️ ${userDisplayName} is being removed for not verifying themselves after their safety number changed.\n\n` +
+          `This is done to maintain the integrity of the community. This could mean the number was assigned to a different person or their SIM was put into a different device.\n\n` +
+          `They are welcome to request to join anytime but will need to be verified by knowing someone in the community and providing their name and organization.`;
+
+        const removedFrom: string[] = [];
+        const failedRemovals: string[] = [];
+
+        // Process each group for this user
+        for (const group of userGroups) {
+          try {
+            // Check if bot is admin in this group before trying to remove
+            const groupData = allGroups.find((g: any) => g.id === group.groupId);
+            const isBotAdmin = await this.isBotAdminAsync(groupData);
+
+            if (!isBotAdmin) {
+              failedRemovals.push(`${group.name} (bot not admin)`);
+              continue;
+            }
+
+            // First, send the removal notice to the group
+            if (this.bot) {
+              await this.bot.sendMessage({
+                groupId: group.groupId,
+                message: removalMessage,
+              });
+            }
+
+            // Small delay to ensure message is sent before removal
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            // Then remove the user from the group
+            if (this.bot) {
+              await this.bot.updateGroup({
+                groupId: group.groupId,
+                removeMember: [userIdentifier],
+              });
+            }
+
+            removedFrom.push(group.name);
+            console.log(`✅ Removed ${userDisplayName} from ${group.name}`);
+          } catch (error) {
+            console.error(`Failed to remove ${userDisplayName} from ${group.name}:`, error);
+            failedRemovals.push(`${group.name} (${error instanceof Error ? error.message : 'error'})`);
+          }
+        }
+
+        // Build result for this user
+        if (removedFrom.length > 0) {
+          allResults.push(`✅ ${userDisplayName}: Removed from ${removedFrom.length} group(s)`);
+        }
+        if (failedRemovals.length > 0) {
+          allResults.push(`⚠️ ${userDisplayName}: Failed for ${failedRemovals.length} group(s)`);
+        }
+
+      } catch (error) {
+        console.error(`Error processing removal for ${userDisplayName}:`, error);
+        allResults.push(`❌ ${userDisplayName}: Error - ${error instanceof Error ? error.message : 'Unknown'}`);
+      }
+    }
+
+    // Build final response
+    const response = [
+      '🚫 User Removal Complete',
+      '',
+      `Users processed: ${context.mentions.length}`,
+      `Reason: Safety number verification failure`,
+      '',
+      '📋 Results:',
+      ...allResults,
+      '',
+      '📝 Removal notices were posted to each group before removal.',
+    ];
+
+    return this.formatForSignal(response.join('\n'));
   }
 
   /**
@@ -3528,8 +3727,8 @@ WIKI CONTENT:${wikiContext}`,
       );
     }
 
-    if (context.mentions.length > 5) {
-      return '❌ Maximum 5 other players allowed (6 total)';
+    if (context.mentions.length > 11) {
+      return '❌ Maximum 11 other players allowed (12 total)';
     }
 
     // Get sender's info
@@ -3587,32 +3786,77 @@ WIKI CONTENT:${wikiContext}`,
     const creatorUuid = context.sourceUuid || context.sourceNumber || '';
     const game = createGame(creatorUuid, creatorName, players);
 
-    // For now, we'll run the game in the current group instead of creating a new one
-    // (Creating groups requires more complex async handling with the bot instance)
-    if (context.groupId) {
-      setGameGroupId(game.id, context.groupId);
+    // Create a new Signal group for the game
+    if (!this.bot) {
+      return '❌ Bot not available. Cannot create game room.';
     }
 
-    // Build response
-    const playerList = Array.from(game.players.values())
-      .map(p => `  • ${p.name}${p.isShooter ? ' 🎯 (shooter)' : ''}`)
-      .join('\n');
+    try {
+      // Gather member identifiers (UUIDs or phone numbers)
+      const memberIds: string[] = [];
 
-    return this.formatForSignal(
-      `🎰 STREET CRAPS GAME STARTED! 🎰\n\n` +
-      `Game ID: ${game.id}\n\n` +
-      `👥 Players:\n${playerList}\n\n` +
-      `Each player starts with 100 points.\n\n` +
-      getGameRules() + '\n\n' +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      startBetting(game)
-    );
+      // Add the creator
+      if (context.sourceUuid) {
+        memberIds.push(context.sourceUuid);
+      } else if (context.sourceNumber) {
+        memberIds.push(context.sourceNumber);
+      }
+
+      // Add mentioned players
+      for (const mention of context.mentions) {
+        if (mention.uuid) {
+          memberIds.push(mention.uuid);
+        } else if (mention.number) {
+          memberIds.push(mention.number);
+        }
+      }
+
+      // Generate a unique, fun group name
+      const groupName = this.generateDiceGameName(creatorName);
+      const result = await this.bot.createGroup({
+        name: groupName,
+        members: memberIds,
+        description: 'Street Craps Dice Game'
+      });
+
+      if (result && result.groupId) {
+        setGameGroupId(game.id, result.groupId);
+
+        // Build player list for the welcome message
+        const playerList = Array.from(game.players.values())
+          .map(p => `  • ${p.name}${p.isShooter ? ' 🎯 (shooter)' : ''}`)
+          .join('\n');
+
+        // Send welcome message to the new group
+        const welcomeMessage = `🎰 STREET CRAPS GAME STARTED! 🎰\n\n` +
+          `👥 Players:\n${playerList}\n\n` +
+          `Each player starts with 100 points.\n\n` +
+          getGameRules() + '\n\n' +
+          `━━━━━━━━━━━━━━━━━━━━━━\n` +
+          startBetting(game);
+
+        // Send the welcome message to the new group
+        await this.bot.sendMessage({
+          groupId: result.groupId,
+          message: welcomeMessage
+        });
+
+        // Reply to the original message
+        return `🎲 Game room created! Check your groups for "${groupName}"`;
+      } else {
+        return '❌ Failed to create game room. Please try again.';
+      }
+    } catch (error) {
+      console.error('Error creating dice game room:', error);
+      return `❌ Error creating game room: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
   }
 
   /**
-   * !roll - Shooter rolls the dice
+   * !roll [stake] - Shooter rolls the dice (optionally setting stake first)
+   * Examples: !roll (uses current stake), !roll 20 (sets stake to 20 then rolls)
    */
-  private async handleDiceRoll(context: CommandContext): Promise<string> {
+  private async handleDiceRoll(args: string, context: CommandContext): Promise<string> {
     // Find active game for this group
     const game = context.groupId ? getGameByGroupId(context.groupId) : undefined;
 
@@ -3621,13 +3865,25 @@ WIKI CONTENT:${wikiContext}`,
     }
 
     const playerUuid = context.sourceUuid || context.sourceNumber || '';
+
+    // If a number was provided, set stake first
+    const stakeMatch = args.trim().match(/^(\d+)/);
+    if (stakeMatch) {
+      const stakeAmount = parseInt(stakeMatch[1]);
+      const stakeResult = setShooterStake(game, playerUuid, stakeAmount);
+      // If setting stake failed (not shooter, invalid amount, etc.), return error
+      if (stakeResult.message.startsWith('❌')) {
+        return stakeResult.message;
+      }
+    }
+
     const result = shooterRoll(game, playerUuid);
 
     // Check if game is over
     if (game.phase === 'finished') {
       const gameId = game.id;
       endGame(gameId);
-      return result.message + '\n\n🎮 GAME OVER! Thanks for playing!';
+      return result.message + '\n\n🎮 GAME OVER! Thanks for playing!\n\n🔄 Type !rematch to play again\n👋 Or leave this group';
     }
 
     // If new round, add betting prompt
@@ -3658,6 +3914,101 @@ WIKI CONTENT:${wikiContext}`,
     const playerUuid = context.sourceUuid || context.sourceNumber || '';
     const result = placeBet(game, playerUuid, betType, amount);
 
+    return result.message;
+  }
+
+  /**
+   * !stake - Shooter sets their stake for the round
+   */
+  private async handleDiceStake(args: string, context: CommandContext): Promise<string> {
+    const game = context.groupId ? getGameByGroupId(context.groupId) : undefined;
+
+    if (!game) {
+      return '❌ No active dice game in this group!';
+    }
+
+    // Parse stake amount
+    let amount = 10;  // Default
+    const amountMatch = args.trim().match(/^(\d+)/);
+    if (amountMatch) {
+      amount = parseInt(amountMatch[1]);
+    }
+
+    const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    const result = setShooterStake(game, playerUuid, amount);
+
+    return result.message;
+  }
+
+  /**
+   * !skip - Player skips betting for this round
+   */
+  private async handleDiceSkip(context: CommandContext): Promise<string> {
+    const game = context.groupId ? getGameByGroupId(context.groupId) : undefined;
+
+    if (!game) {
+      return '❌ No active dice game in this group!';
+    }
+
+    const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    const result = playerSkipBetting(game, playerUuid);
+
+    return result.message;
+  }
+
+  /**
+   * !go - Shooter signals ready to roll early (before timer expires)
+   */
+  private async handleDiceGo(context: CommandContext): Promise<string> {
+    const game = context.groupId ? getGameByGroupId(context.groupId) : undefined;
+
+    if (!game) {
+      return '❌ No active dice game in this group!';
+    }
+
+    const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    const result = shooterReadyToRoll(game, playerUuid);
+
+    return result.message;
+  }
+
+  /**
+   * !hold - Set or clear a persistent bet
+   * !hold pass 20 - Auto-bet pass 20 each round
+   * !hold fade 15 - Auto-bet fade 15 each round
+   * !hold off - Clear hold
+   * !hold - Show current hold status
+   */
+  private async handleDiceHold(args: string, context: CommandContext): Promise<string> {
+    const game = context.groupId ? getGameByGroupId(context.groupId) : undefined;
+
+    if (!game) {
+      return '❌ No active dice game in this group!';
+    }
+
+    const playerUuid = context.sourceUuid || context.sourceNumber || '';
+
+    // Parse args: "pass 20", "fade 15", "off", or empty
+    const parts = args.trim().toLowerCase().split(/\s+/);
+    const betTypeArg = parts[0];
+    const amountArg = parts[1];
+
+    let betType: 'pass' | 'fade' | 'off' | undefined;
+    let amount: number | undefined;
+
+    if (betTypeArg === 'pass' || betTypeArg === 'fade') {
+      betType = betTypeArg;
+      amount = amountArg ? parseInt(amountArg) : undefined;
+      if (amount && isNaN(amount)) {
+        return '❌ Invalid amount! Usage: !hold pass 20 or !hold fade 15';
+      }
+    } else if (betTypeArg === 'off' || betTypeArg === 'clear') {
+      betType = 'off';
+    } else if (betTypeArg && betTypeArg !== '') {
+      return '❌ Invalid hold type! Use: !hold pass [amt], !hold fade [amt], or !hold off';
+    }
+
+    const result = setHoldBet(game, playerUuid, betType, amount);
     return result.message;
   }
 
@@ -3707,6 +4058,134 @@ WIKI CONTENT:${wikiContext}`,
     }
 
     return result.message;
+  }
+
+  /**
+   * !rematch / !again - Start a new game in the same group with current group members
+   */
+  private async handleDiceRematch(context: CommandContext): Promise<string> {
+    if (!context.groupId) {
+      return '❌ Rematch can only be used in a dice game group!';
+    }
+
+    if (!this.bot) {
+      return '❌ Bot not available.';
+    }
+
+    // Get bot's UUID to filter it out from players
+    let botUuid: string | null = null;
+    if (this.dbClient) {
+      try {
+        const result = await this.dbClient.query(
+          'SELECT uuid FROM signal_members WHERE phone_number = $1 LIMIT 1',
+          [this.config.phoneNumber]
+        );
+        if (result.results && result.results.length > 0) {
+          botUuid = result.results[0].uuid;
+        }
+      } catch (e) {
+        // Bot UUID lookup failed, will use phone number fallback
+      }
+    }
+
+    // Get group members from signal-cli
+    let groupMembers: Array<{uuid: string; name: string}> = [];
+    try {
+      const groups = await this.bot.getGroups();
+      const thisGroup = groups.find((g: any) => g.id === context.groupId);
+      if (thisGroup && thisGroup.members) {
+        // Members can be strings (UUIDs) or objects
+        for (const member of thisGroup.members) {
+          const memberUuid = typeof member === 'string' ? member : member.uuid;
+          if (memberUuid) {
+            // Skip the bot itself
+            if (botUuid && memberUuid === botUuid) {
+              continue;
+            }
+            // Also skip if it matches the bot's phone number
+            if (memberUuid === this.config.phoneNumber) {
+              continue;
+            }
+
+            // Try to get name from database
+            let memberName = memberUuid.substring(0, 8) + '...';
+            if (this.dbClient) {
+              try {
+                const memberInfo = await this.dbClient.query(
+                  'SELECT display_name, profile_name, first_name, last_name FROM signal_members WHERE uuid = $1 LIMIT 1',
+                  [memberUuid]
+                );
+                if (memberInfo.results && memberInfo.results.length > 0) {
+                  const row = memberInfo.results[0];
+                  memberName = row.display_name || row.profile_name ||
+                              (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name) ||
+                              memberName;
+                }
+              } catch (e) {
+                // Use fallback name
+              }
+            }
+            groupMembers.push({ uuid: memberUuid, name: memberName });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error getting group members for rematch:', error);
+    }
+
+    // Need at least 2 players (not counting the bot)
+    if (groupMembers.length < 2) {
+      return '❌ Need at least 2 players in the group for a rematch!';
+    }
+
+    // Get creator info
+    const creatorUuid = context.sourceUuid || context.sourceNumber || '';
+    const creatorName = context.sourceName || 'Player';
+
+    // Create players array (exclude creator since createGameInGroup adds them)
+    const otherPlayers = groupMembers.filter(m => m.uuid !== creatorUuid);
+
+    // Create new game in this group
+    const game = createGameInGroup(context.groupId, creatorUuid, creatorName, otherPlayers);
+
+    // Build player list
+    const playerList = Array.from(game.players.values())
+      .map(p => `  • ${p.name}${p.isShooter ? ' 🎯 (shooter)' : ''}`)
+      .join('\n');
+
+    return `🎰 REMATCH! 🎰
+
+👥 Players:
+${playerList}
+
+Each player starts with 100 points.
+
+${startBetting(game)}`;
+  }
+
+  /**
+   * Generate a unique, fun name for a dice game group
+   */
+  private generateDiceGameName(creatorName: string): string {
+    const adjectives = [
+      'Lucky', 'Hot', 'Rolling', 'High', 'Wild', 'Golden', 'Midnight',
+      'Vegas', 'Street', 'Big', 'Royal', 'Smoky', 'Electric', 'Neon'
+    ];
+    const nouns = [
+      'Rollers', 'Stakes', 'Bones', 'Dice', 'Table', 'Alley', 'Corner',
+      'Club', 'Pit', 'Den', 'Room', 'Spot'
+    ];
+
+    const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+    const noun = nouns[Math.floor(Math.random() * nouns.length)];
+
+    // Get short identifier from timestamp (last 4 chars in base36)
+    const shortId = Date.now().toString(36).slice(-4).toUpperCase();
+
+    // Get first name only if it's a full name
+    const firstName = creatorName.split(' ')[0];
+
+    return `🎲 ${firstName}'s ${adj} ${noun} #${shortId}`;
   }
 
   /**

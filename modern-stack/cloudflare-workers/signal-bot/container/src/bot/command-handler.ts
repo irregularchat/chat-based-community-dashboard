@@ -181,15 +181,6 @@ export class CommandHandler {
       case '!solved':
         return this.handleSolve(args, context);
 
-      case '!whoami':
-        return this.handleWhoAmI(context);
-
-      case '!version':
-        return this.handleVersion();
-
-      case '!stats':
-        return this.handleStats();
-
       // Group Management
       case '!groups':
         return this.handleGroups();
@@ -364,7 +355,6 @@ export class CommandHandler {
       '  !time, !flip, !fact, !8ball, !calc, !random, !cast',
       '',
       '👤 User:',
-      '  !whoami, !version, !stats',
       '  !req, !request - Join community request',
       ''
     );
@@ -758,77 +748,6 @@ export class CommandHandler {
       return `❌ Failed to mark as solved: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
   }
-
-  /**
-   * !whoami - Show user info
-   */
-  private async handleWhoAmI(context: CommandContext): Promise<string> {
-    return this.formatForSignal(
-      `👤 Your Info:\n\n` +
-      `Name: ${context.sourceName}\n` +
-      `Phone: ${context.sourceNumber}\n` +
-      `Group: ${context.groupId || 'Direct message'}`
-    );
-  }
-
-  /**
-   * !version - Show bot version
-   */
-  private async handleVersion(): Promise<string> {
-    return this.formatForSignal(
-      `🤖 Signal Bot v3.0.0\n\n` +
-      `Architecture: Cloudflare Native\n` +
-      `Platform: Cloudflare Container\n` +
-      `Database: Cloudflare D1\n` +
-      `Storage: Cloudflare R2`
-    );
-  }
-
-  /**
-   * !stats - Show bot statistics
-   */
-  private async handleStats(): Promise<string> {
-    try {
-      if (!this.workerApi) {
-        return '❌ Stats not available (Worker API required)';
-      }
-
-      // Get command usage stats
-      const result = await this.workerApi.query(`
-        SELECT
-          command,
-          COUNT(*) as total_uses,
-          SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_uses,
-          AVG(response_time) as avg_response_time
-        FROM bot_command_usage
-        WHERE timestamp > ?
-        GROUP BY command
-        ORDER BY total_uses DESC
-        LIMIT 10
-      `, [Math.floor(Date.now() / 1000) - 86400]); // Last 24 hours
-
-      const stats = result.results;
-
-      if (stats.length === 0) {
-        return '📊 No command usage in last 24 hours.';
-      }
-
-      const lines = [
-        '📊 Bot Statistics (Last 24h):',
-        '',
-      ];
-
-      for (const stat of stats) {
-        lines.push(`${stat.command}: ${stat.total_uses} uses (${stat.successful_uses} successful)`);
-      }
-
-      return this.formatForSignal(lines.join('\n'));
-    } catch (error) {
-      console.error('Error getting stats:', error);
-      return `❌ Failed to get stats: ${error instanceof Error ? error.message : 'Unknown error'}`;
-    }
-  }
-
   // Bot UUID cache - looked up once from database
   private botUuid: string | null = null;
 

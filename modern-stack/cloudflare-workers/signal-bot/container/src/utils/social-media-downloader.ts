@@ -164,9 +164,23 @@ export async function downloadContent(
     );
   }
 
+  // Check for Instagram cookies file (for age-restricted content and authentication)
+  const cookiesPath = '/app/config/instagram-cookies.txt';
+  try {
+    await fs.access(cookiesPath, fs.constants.R_OK);
+    ytdlArgs.push('--cookies', cookiesPath);
+    console.log('🍪 Using Instagram cookies for authentication');
+  } catch {
+    // Cookies file not found or not readable - continue without authentication
+    console.log('ℹ️  No Instagram cookies found (optional)');
+  }
+
   // Output template: auto-generate sanitized filename from title
   const outputTemplate = path.join(outputDir, '%(title)s.%(ext)s');
   ytdlArgs.push('-o', outputTemplate);
+
+  // Prevent .part files to avoid cross-device rename issues on bind mounts
+  ytdlArgs.push('--no-part');
 
   // Quiet output (only errors)
   ytdlArgs.push('--quiet', '--no-warnings');
@@ -251,51 +265,42 @@ export async function downloadContent(
     console.error('❌ Download failed:', error.message);
 
     // Parse yt-dlp error messages
+    // Concise error messages - no verbose explanations
     let errorMsg = 'Download failed';
-    let errorDetails = '';
 
     if (error.message.includes('No video could be found')) {
-      errorMsg = 'No video found at this URL';
-      errorDetails = 'This might be a text post, image-only post, or the URL format is unsupported.';
+      errorMsg = 'No video found (text/image post?)';
     } else if (error.message.includes('Unsupported URL')) {
-      errorMsg = 'Unsupported platform or URL format';
-      errorDetails = 'This URL is not recognized by the downloader. Supported: Instagram, Twitter/X, TikTok, YouTube, Reddit, etc.';
+      errorMsg = 'Unsupported platform/URL format';
     } else if (error.message.includes('Private video') || error.message.includes('This video is private')) {
-      errorMsg = 'Content is private or requires login';
-      errorDetails = 'This video/post can only be viewed by authenticated users or approved followers.';
+      errorMsg = 'Private content';
     } else if (error.message.includes('Video unavailable')) {
       errorMsg = 'Content unavailable';
-      errorDetails = 'This content may have been deleted, made private, or is geo-restricted.';
     } else if (error.message.includes('inappropriate') || error.message.includes('unavailable for certain audiences')) {
-      errorMsg = 'Content is age-restricted or flagged';
-      errorDetails = 'Instagram has flagged this content as potentially inappropriate. Cannot download without authentication/age verification.';
+      errorMsg = 'Age-restricted content';
     } else if (error.message.includes('timed out')) {
-      errorMsg = 'Download timed out';
-      errorDetails = 'The download took too long - video may be very large or the connection is slow.';
+      errorMsg = 'Timed out (file too large?)';
     } else if (error.message.includes('HTTP Error 403') || error.message.includes('Forbidden')) {
       errorMsg = 'Access forbidden';
-      errorDetails = 'The platform blocked access to this content. It may require authentication or have regional restrictions.';
     } else if (error.message.includes('HTTP Error 404') || error.message.includes('Not Found')) {
-      errorMsg = 'Content not found';
-      errorDetails = 'This post/video no longer exists or the URL is incorrect.';
+      errorMsg = 'Not found (deleted?)';
     } else if (error.message.includes('Login required') || error.message.includes('Sign in')) {
-      errorMsg = 'Login required';
-      errorDetails = 'This platform requires authentication to download content. The bot cannot provide credentials.';
+      errorMsg = 'Login required - platform needs authentication';
     } else {
-      // Extract first line of error
-      const firstLine = error.message.split('\n')[0];
-      errorMsg = firstLine.replace(/^ERROR:\s*/i, '').replace(/^\[.*?\]\s*/, '');
-
-      // Add platform-specific context
+      // Short, concise error messages
       if (platform?.name === 'Instagram') {
-        errorDetails = 'Instagram downloads can fail due to: age restrictions, private accounts, deleted posts, or rate limiting. Try a different post or check if the account is public.';
+        errorMsg = 'Unavailable (private/restricted/rate-limited)';
+      } else if (platform?.name === 'TikTok') {
+        errorMsg = 'Unavailable (private/restricted/region-blocked)';
+      } else {
+        errorMsg = 'Unavailable (private or restricted content)';
       }
     }
 
     return {
       success: false,
       cleanUrl,
-      error: `${errorMsg}${errorDetails ? '\n' + errorDetails : ''}`,
+      error: errorMsg,
     };
   }
 }

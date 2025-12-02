@@ -5,6 +5,8 @@
  * for suspicious TLDs and domains.
  */
 
+import { sanitizeUrl } from './url-scraper.js';
+
 export interface URLSecurityResult {
   url: string;
   cleaned: string;
@@ -131,11 +133,19 @@ const TRACKING_PARAMS = [
 
 /**
  * Extract all URLs from text
+ * Applies XSS/HTML injection sanitization to each extracted URL
  */
 export function extractURLs(text: string): string[] {
   const urlRegex = /(https?:\/\/[^\s]+)/gi;
   const matches = text.match(urlRegex);
-  return matches || [];
+  if (!matches) return [];
+
+  // Sanitize each URL to remove XSS/HTML injection payloads
+  const sanitized = matches
+    .map(url => sanitizeUrl(url))
+    .filter((url): url is string => url !== null);
+
+  return sanitized;
 }
 
 /**

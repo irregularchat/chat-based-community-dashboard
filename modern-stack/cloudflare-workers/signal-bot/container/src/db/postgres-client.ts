@@ -46,10 +46,18 @@ export class PostgresClient {
   private static readonly ALLOWED_TABLES = new Set([
     'signal_groups',
     'signal_messages',
+    'signal_members',
+    'signal_member_group_memberships',
     'q_and_a_questions',
     'q_and_a_answers',
     'bot_command_usage',
     'user_preferences',
+    'news_links',
+    'repository_links',
+    'url_summaries',
+    'bot_errors',
+    'scheduled_announcements',
+    'announcement_deliveries',
   ]);
 
   constructor(config: DatabaseConfig) {
@@ -142,7 +150,16 @@ export class PostgresClient {
     const keys = Object.keys(validatedData);
     const values = Object.values(validatedData);
 
-    const setClause = keys.map((key, i) => `${key} = $${i + 1}`).join(', ');
+    // Build SET clause with type casting for numeric values
+    const setClause = keys.map((key, i) => {
+      const value = values[i];
+      // Cast integers explicitly to avoid pg text type issue
+      if (typeof value === 'number' && Number.isInteger(value)) {
+        return `${key} = $${i + 1}::integer`;
+      }
+      return `${key} = $${i + 1}`;
+    }).join(', ');
+
     let whereParamOffset = values.length;
     const whereClause = where.replace(/\?/g, () => `$${++whereParamOffset}`);
 
@@ -603,6 +620,108 @@ export class PostgresClient {
       answers: parseInt(answers.rows[0]?.count || '0'),
       groups: parseInt(groups.rows[0]?.count || '0'),
     };
+  }
+
+  // ============================================================================
+  // ANNOUNCEMENT SPECIFIC METHODS
+  // ============================================================================
+
+  /**
+   * Get members of a specific group
+   */
+  async getGroupMembers(groupId: string): Promise<{
+    uuid: string;
+    phone_number: string | null;
+    display_name: string | null;
+  }[]> {
+    const result = await this.pool.query(`
+      SELECT
+        m.uuid,
+        m.phone_number,
+        COALESCE(m.display_name, m.profile_name, m.phone_number) as display_name
+      FROM signal_members m
+      INNER JOIN signal_member_group_memberships mgm ON m.id = mgm.member_id
+      WHERE mgm.group_id = $1
+        AND mgm.is_active = true
+        AND (m.is_bot = false OR m.is_bot IS NULL)
+      ORDER BY m.display_name
+    `, [groupId]);
+
+    return result.rows;
+  }
+
+  /**
+   * Get pending scheduled announcements that are due
+   */
+  async getPendingAnnouncements(): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT *
+      FROM scheduled_announcements
+      WHERE status = 'pending'
+        AND scheduled_at <= NOW()
+      ORDER BY scheduled_at ASC
+    `);
+
+    return result.rows;
+  }
+
+  /**
+   * Get all pending announcements for a user
+   */
+  async getUserPendingAnnouncements(userId: string): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT
+        id,
+        message,
+        target_group_names,
+        send_as_dm,
+        scheduled_at,
+        status,
+        created_by_name
+      FROM scheduled_announcements
+      WHERE created_by = $1
+        AND status = 'pending'
+      ORDER BY scheduled_at ASC
+      LIMIT 20
+    `, [userId]);
+
+    return result.rows;
+  }
+
+  /**
+   * Mark announcement as sent
+   */
+  async markAnnouncementSent(id: number, recipientCount: number): Promise<void> {
+    await this.pool.query(`
+      UPDATE scheduled_announcements
+      SET status = 'sent', sent_at = NOW(), recipient_count = $2
+      WHERE id = $1
+    `, [id, recipientCount]);
+  }
+
+  /**
+   * Mark announcement as failed
+   */
+  async markAnnouncementFailed(id: number, errorMessage: string): Promise<void> {
+    await this.pool.query(`
+      UPDATE scheduled_announcements
+      SET status = 'failed', error_message = $2
+      WHERE id = $1
+    `, [id, errorMessage]);
+  }
+
+  /**
+   * Cancel a scheduled announcement
+   */
+  async cancelAnnouncement(id: number, userId: string): Promise<boolean> {
+    const result = await this.pool.query(`
+      UPDATE scheduled_announcements
+      SET status = 'cancelled'
+      WHERE id = $1 AND created_by = $2 AND status = 'pending'
+      RETURNING id
+    `, [id, userId]);
+
+    return result.rowCount !== null && result.rowCount > 0;
   }
 
   /**

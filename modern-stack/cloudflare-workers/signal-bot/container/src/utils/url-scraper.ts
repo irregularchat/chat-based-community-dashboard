@@ -296,6 +296,63 @@ export async function scrapeUrl(url: string): Promise<ScrapedContent> {
 }
 
 /**
+ * Sanitize a URL to remove XSS payloads and malicious content
+ * Strips HTML tags (including content), javascript: protocols, and other dangerous patterns
+ */
+export function sanitizeUrl(url: string): string | null {
+  if (!url) return null;
+
+  // Remove script tags AND their content
+  let sanitized = url.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+
+  // Remove style tags AND their content
+  sanitized = sanitized.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+
+  // Remove iframe tags AND their content
+  sanitized = sanitized.replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, '');
+
+  // Remove object/embed tags AND their content
+  sanitized = sanitized.replace(/<object[^>]*>[\s\S]*?<\/object>/gi, '');
+  sanitized = sanitized.replace(/<embed[^>]*>[\s\S]*?<\/embed>/gi, '');
+
+  // Remove any other HTML tags (but keep the content between non-dangerous tags)
+  sanitized = sanitized.replace(/<[^>]*>/g, '');
+
+  // Remove javascript: protocol attempts
+  sanitized = sanitized.replace(/javascript:/gi, '');
+
+  // Remove data: protocol attempts (can contain scripts)
+  sanitized = sanitized.replace(/data:/gi, '');
+
+  // Remove vbscript: protocol attempts
+  sanitized = sanitized.replace(/vbscript:/gi, '');
+
+  // Remove event handlers like onclick=, onerror=, etc.
+  sanitized = sanitized.replace(/\s*on\w+\s*=/gi, '');
+
+  // Remove any remaining angle brackets (malformed tags)
+  sanitized = sanitized.replace(/[<>]/g, '');
+
+  // Trim whitespace
+  sanitized = sanitized.trim();
+
+  // Validate that it's still a valid URL after sanitization
+  try {
+    const urlObj = new URL(sanitized);
+    // Only allow http and https protocols
+    if (!['http:', 'https:'].includes(urlObj.protocol)) {
+      console.warn(`🚨 Blocked non-http(s) URL after sanitization: ${sanitized}`);
+      return null;
+    }
+    return sanitized;
+  } catch {
+    // If URL is invalid after sanitization, return null
+    console.warn(`🚨 Invalid URL after sanitization: ${sanitized}`);
+    return null;
+  }
+}
+
+/**
  * Extract URLs from text
  * Supports:
  * - Standard URLs with TLDs (http://example.com)
@@ -316,7 +373,15 @@ export function extractUrls(text: string): string[] {
   // 6. (?:[-a-zA-Z0-9()@:%_\+.~#?&\/=]*)? - optional path/query
   const urlRegex = /https?:\/\/(?:www\.)?([-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}|localhost|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?\b(?:[-a-zA-Z0-9()@:%_\+.~#?&\/=]*)?/g;
   const matches = text.match(urlRegex);
-  return matches || [];
+
+  if (!matches) return [];
+
+  // Sanitize each URL to remove XSS payloads
+  const sanitized = matches
+    .map(url => sanitizeUrl(url))
+    .filter((url): url is string => url !== null);
+
+  return sanitized;
 }
 
 /**

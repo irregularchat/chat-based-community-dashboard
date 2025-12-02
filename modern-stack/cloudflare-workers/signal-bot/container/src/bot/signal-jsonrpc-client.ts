@@ -452,6 +452,36 @@ export class SignalJsonRpcClient extends EventEmitter {
   }
 
   /**
+   * Create a new group
+   *
+   * Signal creates a group by calling updateGroup without a groupId
+   */
+  async createGroup(params: {
+    name: string;
+    members: string[];  // Array of phone numbers or UUIDs
+    description?: string;
+  }): Promise<{ groupId: string }> {
+    const rpcParams: any = {
+      name: params.name,
+      member: params.members,
+    };
+
+    if (params.description) {
+      rpcParams.description = params.description;
+    }
+
+    const result = await this.request('updateGroup', rpcParams);
+    return result;
+  }
+
+  /**
+   * Leave/quit a group
+   */
+  async quitGroup(groupId: string): Promise<void> {
+    await this.request('quitGroup', { groupId });
+  }
+
+  /**
    * Check if connected
    */
   isConnected(): boolean {

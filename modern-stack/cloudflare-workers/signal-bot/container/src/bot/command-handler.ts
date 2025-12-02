@@ -19,6 +19,21 @@ import {
   generateSearchQueries,
   WikiSearchResult,
 } from '../utils/wiki-search.js';
+import {
+  createGame,
+  getGame,
+  getGameByGroupId,
+  setGameGroupId,
+  startBetting,
+  placeBet,
+  shooterRoll,
+  getGameStatus,
+  getPlayerPoints,
+  removePlayer,
+  endGame,
+  getGameRules,
+  GameState,
+} from '../utils/dice-game.js';
 
 export interface Mention {
   start: number;
@@ -239,6 +254,29 @@ export class CommandHandler {
       case '!cast':
         return this.handleCast(args, context);
 
+      // Dice Game Commands
+      case '!dice':
+        return this.handleDiceGame(args, context);
+
+      case '!roll':
+        return this.handleDiceRoll(context);
+
+      case '!pass':
+        return this.handleDiceBet('pass', args, context);
+
+      case '!fade':
+        return this.handleDiceBet('fade', args, context);
+
+      case '!points':
+        return this.handleDicePoints(context);
+
+      case '!gamestatus':
+      case '!gs':
+        return this.handleDiceStatus(context);
+
+      case '!leave':
+        return this.handleDiceLeave(context);
+
       // Information Commands
       case '!wiki':
         return this.handleWiki();
@@ -353,6 +391,10 @@ export class CommandHandler {
       '',
       '🎲 Utility:',
       '  !time, !flip, !fact, !8ball, !calc, !random, !cast',
+      '',
+      '🎰 Dice Game (Street Craps):',
+      '  !dice @user1 @user2 - Start multiplayer game',
+      '  !roll, !pass, !fade, !points, !leave',
       '',
       '👤 User:',
       '  !req, !request - Join community request',
@@ -3453,6 +3495,218 @@ WIKI CONTENT:${wikiContext}`,
       console.error('Cancel announcement error:', error);
       return `❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
+  }
+
+  // ============================================
+  // DICE GAME HANDLERS
+  // ============================================
+
+  /**
+   * !dice - Start a new dice game with mentioned players
+   *
+   * Usage: !dice @user1 @user2 @user3
+   *
+   * This creates a new Signal group for the game and invites players.
+   * The game runs in the new group with street craps rules.
+   */
+  private async handleDiceGame(args: string, context: CommandContext): Promise<string> {
+    // Check if we have mentions
+    if (!context.mentions || context.mentions.length === 0) {
+      return this.formatForSignal(
+        '🎰 STREET CRAPS\n\n' +
+        'Start a multiplayer dice game!\n\n' +
+        'Usage:\n' +
+        '  !dice @user1 @user2 @user3\n\n' +
+        'Mention 1-5 other players to start.\n' +
+        'A game room will be created with rules posted.\n\n' +
+        'Commands during game:\n' +
+        '  !roll - Shooter rolls dice\n' +
+        '  !pass [amount] - Bet WITH shooter\n' +
+        '  !fade [amount] - Bet AGAINST shooter\n' +
+        '  !points - Check your balance\n' +
+        '  !leave - Leave the game'
+      );
+    }
+
+    if (context.mentions.length > 5) {
+      return '❌ Maximum 5 other players allowed (6 total)';
+    }
+
+    // Get sender's info
+    let creatorName = context.sourceName || 'Player';
+    if (this.dbClient && context.sourceNumber) {
+      try {
+        const senderInfo = await this.dbClient.query(
+          'SELECT display_name, profile_name, first_name, last_name FROM signal_members WHERE phone_number = $1 OR uuid = $1 LIMIT 1',
+          [context.sourceNumber]
+        );
+        if (senderInfo.results && senderInfo.results.length > 0) {
+          const row = senderInfo.results[0];
+          creatorName = row.display_name || row.profile_name ||
+                       (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name) ||
+                       creatorName;
+        }
+      } catch (error) {
+        console.log('Could not look up creator name:', error);
+      }
+    }
+
+    // Build player list
+    const players: Array<{uuid: string; name: string; phoneNumber?: string}> = [];
+
+    for (const mention of context.mentions) {
+      let playerName = 'Player';
+      const playerUuid = mention.uuid || mention.number || '';
+
+      // Look up name in database
+      if (this.dbClient && playerUuid) {
+        try {
+          const memberInfo = await this.dbClient.query(
+            'SELECT display_name, profile_name, first_name, last_name, phone_number FROM signal_members WHERE uuid = $1 OR phone_number = $1 LIMIT 1',
+            [playerUuid]
+          );
+          if (memberInfo.results && memberInfo.results.length > 0) {
+            const row = memberInfo.results[0];
+            playerName = row.display_name || row.profile_name ||
+                        (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name) ||
+                        row.phone_number || playerName;
+          }
+        } catch (error) {
+          console.log('Could not look up player name:', error);
+        }
+      }
+
+      players.push({
+        uuid: playerUuid,
+        name: playerName,
+        phoneNumber: mention.number
+      });
+    }
+
+    // Create the game
+    const creatorUuid = context.sourceUuid || context.sourceNumber || '';
+    const game = createGame(creatorUuid, creatorName, players);
+
+    // For now, we'll run the game in the current group instead of creating a new one
+    // (Creating groups requires more complex async handling with the bot instance)
+    if (context.groupId) {
+      setGameGroupId(game.id, context.groupId);
+    }
+
+    // Build response
+    const playerList = Array.from(game.players.values())
+      .map(p => `  • ${p.name}${p.isShooter ? ' 🎯 (shooter)' : ''}`)
+      .join('\n');
+
+    return this.formatForSignal(
+      `🎰 STREET CRAPS GAME STARTED! 🎰\n\n` +
+      `Game ID: ${game.id}\n\n` +
+      `👥 Players:\n${playerList}\n\n` +
+      `Each player starts with 100 points.\n\n` +
+      getGameRules() + '\n\n' +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      startBetting(game)
+    );
+  }
+
+  /**
+   * !roll - Shooter rolls the dice
+   */
+  private async handleDiceRoll(context: CommandContext): Promise<string> {
+    // Find active game for this group
+    const game = context.groupId ? getGameByGroupId(context.groupId) : undefined;
+
+    if (!game) {
+      return '❌ No active dice game in this group!\nUse !dice @user1 @user2 to start one.';
+    }
+
+    const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    const result = shooterRoll(game, playerUuid);
+
+    // Check if game is over
+    if (game.phase === 'finished') {
+      const gameId = game.id;
+      endGame(gameId);
+      return result.message + '\n\n🎮 GAME OVER! Thanks for playing!';
+    }
+
+    // If new round, add betting prompt
+    if (result.nextPhase === 'betting') {
+      return result.message + '\n\n' + startBetting(game);
+    }
+
+    return result.message;
+  }
+
+  /**
+   * !pass / !fade - Place a bet
+   */
+  private async handleDiceBet(betType: 'pass' | 'fade', args: string, context: CommandContext): Promise<string> {
+    const game = context.groupId ? getGameByGroupId(context.groupId) : undefined;
+
+    if (!game) {
+      return '❌ No active dice game in this group!';
+    }
+
+    // Parse bet amount
+    let amount = 10;  // Default bet
+    const amountMatch = args.trim().match(/^(\d+)/);
+    if (amountMatch) {
+      amount = parseInt(amountMatch[1]);
+    }
+
+    const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    const result = placeBet(game, playerUuid, betType, amount);
+
+    return result.message;
+  }
+
+  /**
+   * !points - Check your current points
+   */
+  private async handleDicePoints(context: CommandContext): Promise<string> {
+    const game = context.groupId ? getGameByGroupId(context.groupId) : undefined;
+
+    if (!game) {
+      return '❌ No active dice game in this group!';
+    }
+
+    const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    return getPlayerPoints(game, playerUuid);
+  }
+
+  /**
+   * !gamestatus / !gs - Check game status
+   */
+  private async handleDiceStatus(context: CommandContext): Promise<string> {
+    const game = context.groupId ? getGameByGroupId(context.groupId) : undefined;
+
+    if (!game) {
+      return '❌ No active dice game in this group!';
+    }
+
+    return getGameStatus(game);
+  }
+
+  /**
+   * !leave - Leave the current game
+   */
+  private async handleDiceLeave(context: CommandContext): Promise<string> {
+    const game = context.groupId ? getGameByGroupId(context.groupId) : undefined;
+
+    if (!game) {
+      return '❌ No active dice game in this group!';
+    }
+
+    const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    const result = removePlayer(game, playerUuid);
+
+    // Check if game should end
+    if (result.gameOver) {
+      endGame(game.id);
+    }
+
+    return result.message;
   }
 
   /**

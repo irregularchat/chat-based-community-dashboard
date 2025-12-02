@@ -10,6 +10,15 @@ import { PostgresClient } from '../db/postgres-client.js';
 import OpenAI from 'openai';
 import { scrapeUrl, extractUrls, containsUrl } from '../utils/url-scraper.js';
 import { getRateLimiter, formatRateLimitMessage } from '../utils/rate-limiter.js';
+import { AnnouncementHandler } from './announcement-handler.js';
+import { formatScheduledTime } from '../utils/time-parser.js';
+import {
+  searchWiki,
+  parallelSearch,
+  fetchArticles,
+  generateSearchQueries,
+  WikiSearchResult,
+} from '../utils/wiki-search.js';
 
 export interface Mention {
   start: number;
@@ -20,11 +29,13 @@ export interface Mention {
 
 export interface CommandContext {
   sourceNumber: string;
+  sourceUuid?: string; // Signal UUID (ACI) - used for admin checks
   sourceName: string;
   groupId?: string;
   timestamp: number;
   quotedText?: string;
   mentions?: Mention[];
+  message?: string; // Full original message text for mention extraction
 }
 
 export class CommandHandler {
@@ -34,6 +45,7 @@ export class CommandHandler {
   private openai: OpenAI | null = null;
   private questionCounter = 0;
   private bot: any | null = null; // SignalBot instance for accessing bot methods
+  private announcementHandler: AnnouncementHandler | null = null;
 
   constructor(config: BotConfig, apiOrDb: WorkerAPIClient | PostgresClient) {
     this.config = config;
@@ -60,6 +72,12 @@ export class CommandHandler {
    */
   setBotInstance(bot: any): void {
     this.bot = bot;
+
+    // Initialize announcement handler if dbClient is available
+    if (this.dbClient && bot) {
+      this.announcementHandler = new AnnouncementHandler(this.dbClient, bot);
+      console.log('📢 Announcement handler initialized');
+    }
   }
 
   /**
@@ -67,8 +85,18 @@ export class CommandHandler {
    *
    * SECURITY: Admin phone numbers are now loaded from environment variable
    * to prevent hardcoded credential exposure (CVE-2025-001)
+   *
+   * Supports both phone numbers and UUIDs. If UUID is provided, looks up
+   * the phone number from database before checking admin list.
+   *
+   * @param identifier - Phone number (E.164) or Signal UUID (ACI)
+   * @returns true if user is admin, false otherwise
    */
-  private isAdmin(phoneNumber: string): boolean {
+  private async isAdmin(identifier: string | undefined): Promise<boolean> {
+    if (!identifier) {
+      return false;
+    }
+
     const admins = (process.env.ADMIN_PHONE_NUMBERS || '')
       .split(',')
       .map(p => p.trim())
@@ -79,7 +107,42 @@ export class CommandHandler {
       return false;
     }
 
-    return admins.includes(phoneNumber);
+    // Direct phone number match
+    if (admins.includes(identifier)) {
+      console.log(`✅ Admin check passed for phone number: ${identifier}`);
+      return true;
+    }
+
+    // UUID lookup - check if this UUID's phone number is in admin list
+    // UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+    if (this.dbClient && identifier.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+      try {
+        console.log(`🔍 Looking up phone number for UUID: ${identifier}`);
+        const result = await this.dbClient.query(
+          'SELECT phone_number FROM signal_members WHERE uuid = $1 LIMIT 1',
+          [identifier]
+        );
+
+        if (result.results && result.results.length > 0 && result.results[0].phone_number) {
+          const phoneNumber = result.results[0].phone_number;
+          console.log(`📱 Found phone number for UUID: ${phoneNumber}`);
+
+          if (admins.includes(phoneNumber)) {
+            console.log(`✅ Admin check passed for UUID → phone number: ${phoneNumber}`);
+            return true;
+          } else {
+            console.log(`❌ Phone number ${phoneNumber} is not in admin list`);
+          }
+        } else {
+          console.log(`⚠️  No phone number found for UUID: ${identifier}`);
+        }
+      } catch (error) {
+        console.error('❌ Database lookup failed during admin check:', error);
+      }
+    }
+
+    console.log(`❌ Admin check failed for identifier: ${identifier}`);
+    return false;
   }
 
   /**
@@ -137,6 +200,12 @@ export class CommandHandler {
       case '!addto':
         return this.handleAddTo(args, context);
 
+      case '!join':
+        return this.handleJoin(args, context);
+
+      case '!leave':
+        return this.handleLeave(args, context);
+
       // Core Commands
       case '!zeroeth':
         return this.handleZeroeth();
@@ -183,11 +252,19 @@ export class CommandHandler {
       case '!wiki':
         return this.handleWiki();
 
+      case '!wikisearch':
+      case '!ws':
+        return this.handleWikiSearch(args, context);
+
+      case '!wikiask':
+      case '!wa':
+        return this.handleWikiAsk(args, context);
+
       case '!forum':
         return this.handleForum();
 
       case '!links':
-        return this.handleLinks();
+        return this.handleLinks(args, context);
 
       case '!faq':
         return this.handleFaq();
@@ -204,6 +281,16 @@ export class CommandHandler {
 
       case '!pending':
         return this.handlePending(context);
+
+      // Announcement Commands (Admin)
+      case '!announce':
+        return this.handleAnnounce(args, context);
+
+      case '!announcements':
+        return this.handleListAnnouncements(context);
+
+      case '!cancelannounce':
+        return this.handleCancelAnnouncement(args, context);
 
       // Request/Onboarding
       case '!req':
@@ -233,7 +320,7 @@ export class CommandHandler {
    * !help - Show available commands
    */
   private async handleHelp(context: CommandContext): Promise<string> {
-    const isAdmin = this.isAdmin(context.sourceNumber);
+    const isAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
 
     const lines = [
       '🤖 Signal Bot Commands (40+ available):',
@@ -249,6 +336,7 @@ export class CommandHandler {
       '',
       '👥 Groups:',
       '  !groups - List all groups',
+      '  !join - Self-service group joining (members only)',
       '  !refreshgroups - Force refresh group cache',
     ];
 
@@ -258,8 +346,13 @@ export class CommandHandler {
 
     lines.push(
       '',
+      '📚 Wiki & Knowledge:',
+      '  !wiki - Wiki links',
+      '  !wikisearch, !ws - Search wiki',
+      '  !wikiask, !wa - AI-powered wiki Q&A',
+      '',
       '📚 Information:',
-      '  !wiki, !forum, !links, !faq, !docs, !events',
+      '  !forum, !links, !faq, !docs, !events',
       '',
       '💬 Forum:',
       '  !fpost - Create forum post',
@@ -280,6 +373,11 @@ export class CommandHandler {
       lines.push(
         '🔐 Admin:',
         '  !gtg, !pending',
+        '',
+        '📢 Announcements:',
+        '  !announce [-t time] [-g groups] [-dm] message',
+        '  !announcements - List pending',
+        '  !cancelannounce <id> - Cancel scheduled',
         ''
       );
     }
@@ -731,40 +829,78 @@ export class CommandHandler {
     }
   }
 
+  // Bot UUID cache - looked up once from database
+  private botUuid: string | null = null;
+
   /**
    * Helper function to check if bot is admin in a group
-   * Handles different Signal identifier formats (UUID, phone number)
+   *
+   * IMPORTANT: signal-cli returns admins as an array of UUID strings,
+   * NOT as an array of objects. Example: ["922faebe-03bd-4cee-85a7-6b62ab446e45", ...]
+   *
+   * This was a bug fixed on 2025-12-01 - see LESSONS_LEARNED_SIGNAL_CLI.md
    */
-  private isBotAdmin(group: any): boolean {
+  private async isBotAdminAsync(group: any): Promise<boolean> {
     if (!group.admins || !Array.isArray(group.admins)) {
       console.log(`❌ No admins array for group: ${group.name}`);
       return false;
     }
 
+    // Look up bot's UUID from database if not cached
+    if (!this.botUuid && this.dbClient) {
+      try {
+        const result = await this.dbClient.query(
+          'SELECT uuid FROM signal_members WHERE phone_number = $1 LIMIT 1',
+          [this.config.phoneNumber]
+        );
+        if (result.results && result.results.length > 0) {
+          this.botUuid = result.results[0].uuid;
+          console.log(`🤖 Bot UUID resolved: ${this.botUuid}`);
+        }
+      } catch (error) {
+        console.error('Failed to look up bot UUID:', error);
+      }
+    }
+
     const botPhone = this.config.phoneNumber;
-    // Normalize bot's phone number (ensure + prefix)
     const normalizedBotPhone = botPhone.startsWith('+') ? botPhone : `+${botPhone}`;
 
     console.log(`🔍 Checking admin status for ${group.name}`);
     console.log(`   Bot phone: ${normalizedBotPhone}`);
+    console.log(`   Bot UUID: ${this.botUuid || 'unknown'}`);
     console.log(`   Admins array length: ${group.admins.length}`);
-    console.log(`   First admin structure: ${JSON.stringify(group.admins[0])}`);
+    if (group.admins.length > 0) {
+      console.log(`   First admin (type: ${typeof group.admins[0]}): ${JSON.stringify(group.admins[0])}`);
+    }
 
+    // signal-cli returns admins as array of UUID strings, not objects
     const isAdmin = group.admins.some((admin: any) => {
-      // Check phone number (normalize admin phone too)
-      if (admin.number) {
-        const normalizedAdminPhone = admin.number.startsWith('+') ? admin.number : `+${admin.number}`;
-        console.log(`   Checking admin.number: ${normalizedAdminPhone} === ${normalizedBotPhone}? ${normalizedAdminPhone === normalizedBotPhone}`);
-        if (normalizedAdminPhone === normalizedBotPhone) {
+      // Case 1: admin is a string (UUID) - this is the actual format from signal-cli
+      if (typeof admin === 'string') {
+        // Check against bot's UUID
+        if (this.botUuid && admin === this.botUuid) {
+          console.log(`   ✅ Match: admin UUID ${admin} === bot UUID ${this.botUuid}`);
           return true;
         }
+        // Also check against phone number in case format varies
+        if (admin === normalizedBotPhone || admin === botPhone) {
+          console.log(`   ✅ Match: admin ${admin} === bot phone`);
+          return true;
+        }
+        return false;
       }
 
-      // Check UUID if available (less common but possible)
-      if (admin.uuid) {
-        console.log(`   Checking admin.uuid: ${admin.uuid}`);
-        // Match UUID against bot's phone number (UUID might be stored in config as phone)
-        if (admin.uuid === normalizedBotPhone || admin.uuid === botPhone) {
+      // Case 2: admin is an object (legacy/fallback support)
+      if (admin && typeof admin === 'object') {
+        if (admin.number) {
+          const normalizedAdminPhone = admin.number.startsWith('+') ? admin.number : `+${admin.number}`;
+          if (normalizedAdminPhone === normalizedBotPhone) {
+            console.log(`   ✅ Match: admin.number ${normalizedAdminPhone} === bot phone`);
+            return true;
+          }
+        }
+        if (admin.uuid && this.botUuid && admin.uuid === this.botUuid) {
+          console.log(`   ✅ Match: admin.uuid ${admin.uuid} === bot UUID`);
           return true;
         }
       }
@@ -774,6 +910,34 @@ export class CommandHandler {
 
     console.log(`   Result: ${isAdmin ? '👑 ADMIN' : '👤 MEMBER'}`);
     return isAdmin;
+  }
+
+  /**
+   * Synchronous version for backwards compatibility - uses cached UUID
+   */
+  private isBotAdmin(group: any): boolean {
+    if (!group.admins || !Array.isArray(group.admins)) {
+      return false;
+    }
+
+    const botPhone = this.config.phoneNumber;
+    const normalizedBotPhone = botPhone.startsWith('+') ? botPhone : `+${botPhone}`;
+
+    return group.admins.some((admin: any) => {
+      if (typeof admin === 'string') {
+        return (this.botUuid && admin === this.botUuid) ||
+               admin === normalizedBotPhone ||
+               admin === botPhone;
+      }
+      if (admin && typeof admin === 'object') {
+        if (admin.number) {
+          const normalizedAdminPhone = admin.number.startsWith('+') ? admin.number : `+${admin.number}`;
+          if (normalizedAdminPhone === normalizedBotPhone) return true;
+        }
+        if (admin.uuid && this.botUuid && admin.uuid === this.botUuid) return true;
+      }
+      return false;
+    });
   }
 
   /**
@@ -802,30 +966,39 @@ export class CommandHandler {
       // Track unique members across all groups
       const uniqueMembers = new Set<string>();
       let totalSlots = 0;
+      let adminGroupCount = 0;
 
-      groups.forEach((group: any, index: number) => {
+      // Use for...of to properly await async admin checks
+      for (let index = 0; index < groups.length; index++) {
+        const group = groups[index];
         const memberCount = group.members?.length || 0;
         totalSlots += memberCount;
 
-        // Add each member's UUID/number to the set for deduplication
+        // Add each member's UUID to the set for deduplication
+        // members can be strings (UUIDs) or objects {number, uuid}
         if (group.members && Array.isArray(group.members)) {
-          group.members.forEach((member: any) => {
-            // Use UUID if available, otherwise use number
-            const memberId = member.uuid || member.number || member;
+          for (const member of group.members) {
+            let memberId: string | null = null;
+            if (typeof member === 'string' && member) {
+              memberId = member;
+            } else if (member && typeof member === 'object') {
+              memberId = member.uuid || member.number || null;
+            }
             if (memberId) {
               uniqueMembers.add(memberId);
             }
-          });
+          }
         }
 
-        // Check if bot is admin using the helper function
-        const isAdmin = this.isBotAdmin(group);
+        // Check if bot is admin using the async helper function (looks up UUID from DB)
+        const isAdmin = await this.isBotAdminAsync(group);
+        if (isAdmin) adminGroupCount++;
         const adminBadge = isAdmin ? ' 👑' : ' 👤';
 
         lines.push(`${index + 1}. ${group.name}${adminBadge}`);
         lines.push(`   Members: ${memberCount}`);
         lines.push('');
-      });
+      }
 
       lines.push('────────────────');
       lines.push(`📊 Total: ${groups.length} groups`);
@@ -833,8 +1006,7 @@ export class CommandHandler {
       lines.push('👑 = Bot has admin rights');
       lines.push('👤 = Bot is regular member');
       lines.push('');
-      const adminGroups = groups.filter((g: any) => this.isBotAdmin(g)).length;
-      lines.push(`✅ Bot can add users to ${adminGroups} group(s)`);
+      lines.push(`✅ Bot can add users to ${adminGroupCount} group(s)`);
       lines.push('Use !addto <group-number> @user to add users');
 
       return this.formatForSignal(lines.join('\n'));
@@ -874,7 +1046,9 @@ export class CommandHandler {
    * !addto - Add users to a group
    */
   private async handleAddTo(args: string, context: CommandContext): Promise<string> {
-    if (!this.isAdmin(context.sourceNumber)) {
+    // Check admin authorization using UUID (preferred) or phone number fallback
+    const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
+    if (!isUserAdmin) {
       return '❌ Admin-only command';
     }
 
@@ -942,10 +1116,26 @@ export class CommandHandler {
 
     try {
       const groups = await this.bot.getGroups();
-      const group = groups[groupNum - 1];
+
+      // Sort groups by member count (same as !groups) to match numbering
+      const sortedGroups = [...groups].sort((a: any, b: any) => {
+        const countA = a.members?.length || 0;
+        const countB = b.members?.length || 0;
+        return countB - countA;
+      });
+
+      const group = sortedGroups[groupNum - 1];
 
       if (!group) {
         return `❌ Group #${groupNum} not found\n\nUse !groups to see all groups`;
+      }
+
+      // Check if bot is admin in this group
+      const isAdmin = this.isBotAdmin(group);
+      if (!isAdmin) {
+        return `❌ Bot is not admin in group #${groupNum} (${group.name})\n\n` +
+          `The bot can only add users to groups where it has admin rights.\n` +
+          `Use !groups to see which groups show 👑 (admin).`;
       }
 
       const groupId = group.id;
@@ -975,6 +1165,245 @@ export class CommandHandler {
       console.error('Error adding users:', error);
       return `❌ Failed to add users: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
+  }
+
+  /**
+   * Check if user is a verified community member
+   * Must be in at least one IrregularChat group (excluding Entry/INDOC)
+   */
+  private async isVerifiedCommunityMember(userUuid: string | undefined): Promise<{
+    isVerified: boolean;
+    memberGroups: string[];
+    reason?: string;
+  }> {
+    if (!userUuid) {
+      return { isVerified: false, memberGroups: [], reason: 'No user UUID provided' };
+    }
+
+    if (!this.dbClient) {
+      return { isVerified: false, memberGroups: [], reason: 'Database not available' };
+    }
+
+    try {
+      // Query groups the user is a member of (excluding Entry/INDOC)
+      const result = await this.dbClient.query(
+        `SELECT g.id, g.name, g.bot_is_admin
+         FROM signal_member_group_memberships m
+         JOIN signal_groups g ON m.group_id = g.id
+         WHERE m.member_id = $1
+           AND m.is_active = true
+           AND LOWER(g.name) NOT LIKE '%entry%'
+           AND LOWER(g.name) NOT LIKE '%indoc%'`,
+        [userUuid]
+      );
+
+      const memberGroups = result.results?.map((r: any) => r.name) || [];
+
+      if (memberGroups.length === 0) {
+        return {
+          isVerified: false,
+          memberGroups: [],
+          reason: 'You must be an existing IrregularChat member to use this command. Contact an admin for access.'
+        };
+      }
+
+      return { isVerified: true, memberGroups };
+    } catch (error) {
+      console.error('Error checking community membership:', error);
+      return { isVerified: false, memberGroups: [], reason: 'Failed to verify membership' };
+    }
+  }
+
+  /**
+   * !join - Self-service group joining for verified community members
+   *
+   * Usage:
+   *   !join           - Show joinable groups
+   *   !join 1 5 12    - Join groups by number (same as !groups numbering)
+   *   !join tech ai   - Join groups by name (partial match)
+   */
+  private async handleJoin(args: string, context: CommandContext): Promise<string> {
+    if (!this.bot) {
+      return '❌ Bot instance not available';
+    }
+
+    const userUuid = context.sourceUuid;
+
+    // Verify user is an existing community member
+    const verification = await this.isVerifiedCommunityMember(userUuid);
+    if (!verification.isVerified) {
+      return this.formatForSignal(
+        `❌ Access Denied\n\n` +
+        `${verification.reason}\n\n` +
+        `The !join command is only available to existing IrregularChat community members.\n\n` +
+        `To join the community, please have a current member vouch for you in the Entry/INDOC group.`
+      );
+    }
+
+    try {
+      const groups = await this.bot.getGroups();
+
+      // Sort groups by size (same as !groups command) to maintain consistent numbering
+      const sortedGroups = [...groups].sort((a: any, b: any) => {
+        const countA = a.members?.length || 0;
+        const countB = b.members?.length || 0;
+        return countB - countA;
+      });
+
+      // Build joinability info for each group
+      const groupInfo = sortedGroups.map((g: any, index: number) => {
+        const isAdmin = this.isBotAdmin(g);
+        const userInGroup = g.members?.some((m: any) => {
+          const memberId = typeof m === 'string' ? m : m?.uuid;
+          return memberId === userUuid;
+        });
+        return {
+          group: g,
+          index: index + 1, // 1-based numbering (same as !groups)
+          canJoin: isAdmin && !userInGroup,
+          isAdmin,
+          userInGroup,
+        };
+      });
+
+      const joinableGroups = groupInfo.filter(g => g.canJoin);
+
+      // If no args, show joinable groups with their !groups numbering
+      if (!args.trim()) {
+        if (joinableGroups.length === 0) {
+          return this.formatForSignal(
+            `📱 No Joinable Groups\n\n` +
+            `You're either already in all groups or the bot doesn't have admin rights to add you.\n\n` +
+            `Current groups you're in: ${verification.memberGroups.slice(0, 5).join(', ')}${verification.memberGroups.length > 5 ? '...' : ''}`
+          );
+        }
+
+        const lines = [
+          '📱 Joinable Groups:',
+          '',
+          'Groups you can join (use number from !groups):',
+          '',
+        ];
+
+        for (const info of joinableGroups) {
+          const memberCount = info.group.members?.length || 0;
+          lines.push(`${info.index}. ${info.group.name} (${memberCount} members)`);
+        }
+
+        lines.push('');
+        lines.push('────────────────');
+        lines.push('Usage: !join <number> or !join <name>');
+        lines.push('  !join 29       - Join group #29');
+        lines.push('  !join tech     - Join groups matching "tech"');
+        lines.push('  !join 1 3 5    - Join multiple groups');
+        lines.push('');
+        lines.push(`✅ Verified member in ${verification.memberGroups.length} group(s)`);
+
+        return this.formatForSignal(lines.join('\n'));
+      }
+
+      // Parse group selections using !groups numbering
+      const parts = args.trim().toLowerCase().split(/\s+/);
+      const selectedGroups: typeof groupInfo = [];
+      const errors: string[] = [];
+
+      for (const part of parts) {
+        // Try as number first (1-based, same as !groups)
+        const num = parseInt(part);
+        if (!isNaN(num) && num >= 1 && num <= sortedGroups.length) {
+          const info = groupInfo[num - 1];
+          if (!info) continue;
+
+          if (info.userInGroup) {
+            errors.push(`#${num} ${info.group.name}: Already a member`);
+            continue;
+          }
+          if (!info.isAdmin) {
+            errors.push(`#${num} ${info.group.name}: Bot is not admin`);
+            continue;
+          }
+          if (!selectedGroups.some(s => s.index === info.index)) {
+            selectedGroups.push(info);
+          }
+          continue;
+        }
+
+        // Try as name match
+        const matches = groupInfo.filter((g) =>
+          g.group.name?.toLowerCase().includes(part) &&
+          g.canJoin &&
+          !selectedGroups.some(s => s.index === g.index)
+        );
+        if (matches.length === 0) {
+          // Check if name matches but can't join
+          const cantJoin = groupInfo.filter((g) =>
+            g.group.name?.toLowerCase().includes(part) && !g.canJoin
+          );
+          if (cantJoin.length > 0) {
+            for (const g of cantJoin) {
+              if (g.userInGroup) {
+                errors.push(`"${part}" → ${g.group.name}: Already a member`);
+              } else if (!g.isAdmin) {
+                errors.push(`"${part}" → ${g.group.name}: Bot is not admin`);
+              }
+            }
+          }
+        }
+        selectedGroups.push(...matches);
+      }
+
+      if (selectedGroups.length === 0) {
+        let msg = `❌ Cannot join the specified group(s)\n\n`;
+        if (errors.length > 0) {
+          msg += `Reasons:\n${errors.join('\n')}\n\n`;
+        }
+        msg += `Use !join to see available groups.`;
+        return this.formatForSignal(msg);
+      }
+
+      // Add user to selected groups
+      const results: string[] = [];
+      for (const info of selectedGroups) {
+        try {
+          await this.addUserToGroup(userUuid!, info.group.id);
+          results.push(`✅ #${info.index} ${info.group.name}`);
+          console.log(`📥 User ${userUuid} self-joined group "${info.group.name}" via !join`);
+        } catch (error) {
+          console.error(`Failed to add user to ${info.group.name}:`, error);
+          results.push(`❌ #${info.index} ${info.group.name} (${error instanceof Error ? error.message : 'failed'})`);
+        }
+      }
+
+      let response = `📱 Joining Groups\n\nResults:\n${results.join('\n')}`;
+      if (errors.length > 0) {
+        response += `\n\nSkipped:\n${errors.join('\n')}`;
+      }
+      response += `\n\n✨ Groups with ✅ have been joined.\nYou should receive invites shortly.`;
+
+      return this.formatForSignal(response);
+
+    } catch (error) {
+      console.error('Error in handleJoin:', error);
+      return `❌ Failed to join groups: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  /**
+   * !leave - Leave groups (self-service)
+   *
+   * Note: Signal doesn't have a "remove member" API that works for self-removal
+   * This command provides guidance on how to leave groups manually
+   */
+  private async handleLeave(args: string, context: CommandContext): Promise<string> {
+    return this.formatForSignal(
+      `📱 Leaving Groups\n\n` +
+      `To leave a Signal group:\n\n` +
+      `1. Open the group chat\n` +
+      `2. Tap the group name at the top\n` +
+      `3. Scroll down and tap "Leave Group"\n\n` +
+      `Note: The bot cannot remove you from groups - you must leave manually through the Signal app.\n\n` +
+      `If you want to be removed from all IrregularChat groups, contact an admin.`
+    );
   }
 
   /**
@@ -1605,9 +2034,80 @@ export class CommandHandler {
 
     const results: PlayerRoll[] = [];
 
+    // Always include the sender/initiator
+    let senderName = context.sourceName || 'You';
+    if (this.dbClient && context.sourceNumber) {
+      try {
+        const senderInfo = await this.dbClient.query(
+          'SELECT display_name, profile_name, first_name, last_name, phone_number FROM signal_members WHERE phone_number = $1 OR uuid = $1 LIMIT 1',
+          [context.sourceNumber]
+        );
+        if (senderInfo.results && senderInfo.results.length > 0) {
+          const row = senderInfo.results[0];
+          senderName = row.display_name || row.profile_name ||
+                      (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name) ||
+                      row.phone_number || senderName;
+        }
+      } catch (error) {
+        console.log('Could not look up sender name:', error);
+      }
+    }
+
+    // Roll for the sender first
+    const senderRolls: number[] = [];
+    let senderTotal = 0;
+    for (let i = 0; i < numDice; i++) {
+      const roll = Math.floor(Math.random() * 6) + 1;
+      senderRolls.push(roll);
+      senderTotal += roll;
+    }
+    results.push({
+      name: senderName,
+      uuid: context.sourceNumber || '',
+      rolls: senderRolls,
+      total: senderTotal
+    });
+
+    // Roll for each mentioned user
     for (const mention of context.mentions) {
-      // Get user name from mention position in command
-      const userName = mention.uuid || mention.number || 'Unknown';
+      // Signal mentions use Unicode placeholder (￼) in message text, NOT actual names
+      // We must use database lookup or phone number/UUID instead
+      let userName = 'Unknown';
+
+      // Try database lookup first if available
+      if (this.dbClient && mention.uuid) {
+        try {
+          const memberInfo = await this.dbClient.query(
+            'SELECT display_name, profile_name, first_name, last_name, phone_number FROM signal_members WHERE uuid = $1 LIMIT 1',
+            [mention.uuid]
+          );
+          if (memberInfo.results && memberInfo.results.length > 0) {
+            const row = memberInfo.results[0];
+            userName = row.display_name || row.profile_name ||
+                      (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name) ||
+                      row.phone_number || userName;
+          }
+        } catch (error) {
+          // Database lookup failed, continue with fallbacks
+          console.log('Could not look up member name:', error);
+        }
+      }
+
+      // Fallback: Use phone number if available
+      if (userName === 'Unknown' && mention.number) {
+        // Format phone number nicely: +12345678901 -> +1-234-567-8901
+        const phone = mention.number;
+        if (phone.startsWith('+1') && phone.length === 12) {
+          userName = `${phone.substring(0, 2)}-${phone.substring(2, 5)}-${phone.substring(5, 8)}-${phone.substring(8)}`;
+        } else {
+          userName = phone;
+        }
+      }
+
+      // Final fallback: Shortened UUID
+      if (userName === 'Unknown' && mention.uuid) {
+        userName = `User-${mention.uuid.substring(0, 8)}`;
+      }
 
       // Roll dice
       const rolls: number[] = [];
@@ -1646,14 +2146,216 @@ export class CommandHandler {
   }
 
   /**
-   * !wiki - IrregularChat wiki
+   * !wiki - IrregularChat wiki (Irregularpedia)
    */
   private async handleWiki(): Promise<string> {
     return this.formatForSignal(
-      '📚 IrregularChat Wiki\n\n' +
-      '🌐 https://wiki.irregularchat.com\n\n' +
-      'Find guides, documentation, and community resources.'
+      '📚 Irregularpedia - Community Wiki\n\n' +
+      '🌐 https://irregularpedia.org\n\n' +
+      'Community-maintained knowledge base with guides, documentation, and resources.\n\n' +
+      '📝 Contribute: https://git.irregularchat.com/irregulars/IrregularChatWiki\n\n' +
+      '🔍 Search: !wikisearch <query> or !ws <query>\n' +
+      '🤖 Ask AI: !wikiask <question> or !wa <question>'
     );
+  }
+
+  /**
+   * !wikisearch / !ws - Search wiki with AI-enriched parallel queries
+   *
+   * Generates multiple search variations and searches in parallel
+   * Returns deduplicated, relevance-ranked results
+   */
+  private async handleWikiSearch(args: string, context: CommandContext): Promise<string> {
+    if (!args.trim()) {
+      return this.formatForSignal(
+        '🔍 Wiki Search\n\n' +
+        'Usage: !wikisearch <query>\n' +
+        '       !ws <query>\n\n' +
+        'Examples:\n' +
+        '  !ws drone certification\n' +
+        '  !wikisearch osint tools\n' +
+        '  !ws privacy hardening\n\n' +
+        'Uses AI-enriched parallel search for better results.'
+      );
+    }
+
+    try {
+      // Generate search query variations
+      const queries = generateSearchQueries(args.trim());
+      console.log(`🔍 Wiki search: "${args}" -> ${queries.length} query variations`);
+
+      // Parallel search with all query variations
+      const results = await parallelSearch(queries, 8);
+
+      if (results.length === 0) {
+        return this.formatForSignal(
+          `🔍 Wiki Search: "${args}"\n\n` +
+          `❌ No results found\n\n` +
+          `Try different keywords or browse:\n` +
+          `🌐 https://irregularpedia.org/tags.html`
+        );
+      }
+
+      // Format results
+      const lines = [
+        `🔍 Wiki Search: "${args}"`,
+        '',
+        `Found ${results.length} result(s):`,
+        '',
+      ];
+
+      for (let i = 0; i < Math.min(results.length, 6); i++) {
+        const r = results[i];
+        const tags = r.article.tags.slice(0, 3).join(', ');
+        lines.push(`${i + 1}. ${r.article.title}`);
+        if (tags) lines.push(`   📑 ${tags}`);
+        lines.push(`   🔗 ${r.article.url}`);
+        lines.push('');
+      }
+
+      if (results.length > 6) {
+        lines.push(`... and ${results.length - 6} more results`);
+        lines.push('');
+      }
+
+      lines.push('💡 For AI-powered answers: !wikiask <your question>');
+
+      return this.formatForSignal(lines.join('\n'));
+
+    } catch (error) {
+      console.error('Error in handleWikiSearch:', error);
+      return `❌ Wiki search failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  /**
+   * !wikiask / !wa - Ask a question with wiki context + AI
+   *
+   * 1. Extracts keywords from question
+   * 2. Searches wiki for relevant articles
+   * 3. Fetches article content
+   * 4. Passes to AI with context for enriched answer
+   */
+  private async handleWikiAsk(args: string, context: CommandContext): Promise<string> {
+    if (!args.trim()) {
+      return this.formatForSignal(
+        '🤖 Wiki Ask (AI-Enhanced)\n\n' +
+        'Usage: !wikiask <question>\n' +
+        '       !wa <question>\n\n' +
+        'Examples:\n' +
+        '  !wa how do I get drone certified?\n' +
+        '  !wikiask what tools are used for osint?\n' +
+        '  !wa best practices for server hardening\n\n' +
+        'Searches wiki and uses AI to provide enriched answers with sources.'
+      );
+    }
+
+    if (!this.openai) {
+      return this.formatForSignal(
+        '❌ AI not configured\n\n' +
+        'The !wikiask command requires OpenAI API.\n\n' +
+        'Use !wikisearch for regular wiki search.'
+      );
+    }
+
+    // Rate limit
+    const rateLimiter = getRateLimiter();
+    const limit = await rateLimiter.checkLimit(`wikiask:${context.sourceNumber}`, 10, 3600);
+    if (!limit.allowed) {
+      return formatRateLimitMessage('wikiask', limit.resetIn);
+    }
+
+    const question = args.trim();
+
+    try {
+      // Step 1: Generate search queries and find relevant articles
+      console.log(`🤖 WikiAsk: "${question}"`);
+      const queries = generateSearchQueries(question);
+      const searchResults = await parallelSearch(queries, 5);
+
+      if (searchResults.length === 0) {
+        // No wiki results - still try to answer with AI but note no wiki context
+        const response = await this.openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a helpful assistant for the IrregularChat community. Answer concisely.',
+            },
+            {
+              role: 'user',
+              content: question,
+            },
+          ],
+          max_tokens: 500,
+          temperature: 0.7,
+        });
+
+        const answer = response.choices[0]?.message?.content || 'No response generated';
+
+        return this.formatForSignal(
+          `🤖 WikiAsk: "${question}"\n\n` +
+          `📚 No wiki articles found for context\n\n` +
+          `${answer}\n\n` +
+          `💡 Browse wiki: https://irregularpedia.org`
+        );
+      }
+
+      // Step 2: Fetch content from top 2-3 articles
+      const articleUrls = searchResults.slice(0, 3).map(r => r.article.url);
+      console.log(`📄 Fetching ${articleUrls.length} wiki articles for context...`);
+      const articles = await fetchArticles(articleUrls);
+
+      // Step 3: Build context from wiki articles
+      let wikiContext = '';
+      const sources: string[] = [];
+
+      for (const article of articles) {
+        // Use excerpt (max 500 chars per article) to stay within token limits
+        wikiContext += `\n\n--- ${article.title} ---\n${article.excerpt}`;
+        sources.push(`• ${article.title}: ${article.url}`);
+      }
+
+      // Step 4: Ask AI with wiki context
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a helpful assistant for the IrregularChat community wiki (Irregularpedia).
+Answer the user's question based on the wiki content provided below.
+Be concise (2-3 paragraphs max).
+If the wiki content doesn't fully answer the question, say so and provide what you can.
+
+WIKI CONTENT:${wikiContext}`,
+          },
+          {
+            role: 'user',
+            content: question,
+          },
+        ],
+        max_tokens: 600,
+        temperature: 0.7,
+      });
+
+      const answer = response.choices[0]?.message?.content || 'No response generated';
+
+      // Format response
+      const lines = [
+        `🤖 WikiAsk: "${question}"`,
+        '',
+        answer,
+        '',
+        '📚 Sources:',
+        ...sources,
+      ];
+
+      return this.formatForSignal(lines.join('\n'));
+
+    } catch (error) {
+      console.error('Error in handleWikiAsk:', error);
+      return `❌ WikiAsk failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
   }
 
   /**
@@ -1668,14 +2370,334 @@ export class CommandHandler {
   }
 
   /**
-   * !links - Important links
+   * !links - Browse shared news links with grouping and statistics
+   *
+   * Default behavior: Shows all recent links across all groups,
+   * categorized by Signal group, with domain statistics at bottom.
+   *
+   * Options:
+   *   -c           Show only current group's links
+   *   -t <time>    Time period (24h, 7d, 30d, etc.)
+   *   -d <domain>  Filter by domain
+   *   -k <keyword> Search in title/URL
+   *   -g <groupId> Filter by specific group ID
+   *   -n <count>   Number of results (default 15, max 30)
    */
-  private async handleLinks(): Promise<string> {
+  private async handleLinks(args: string, context: CommandContext): Promise<string> {
+    if (!this.dbClient) {
+      return this.formatForSignal('❌ Database not available');
+    }
+
+    // Parse options
+    const options = this.parseLinksOptions(args);
+
+    // Show help only if explicitly requested
+    if (options.help) {
+      return this.getLinksHelp();
+    }
+
+    try {
+      // Build query with JOIN to get human-readable group names
+      let sql = `
+        SELECT n.url, n.domain, n.title, n.summary, n.forum_url, n.post_count,
+               n.first_posted_at, n.last_posted_at, n.posted_by_name,
+               n.group_id, COALESCE(g.name, 'Unknown Group') as group_display_name
+        FROM news_links n
+        LEFT JOIN signal_groups g ON n.group_id = g.id
+        WHERE 1=1
+      `;
+      const params: any[] = [];
+      let paramIndex = 1;
+
+      // Only filter by group if explicitly specified with -g flag
+      if (options.groupId) {
+        sql += ` AND n.group_id = $${paramIndex++}`;
+        params.push(options.groupId);
+      }
+      // If -c flag (current group only), filter to current group
+      if (options.currentGroupOnly && context.groupId) {
+        sql += ` AND n.group_id = $${paramIndex++}`;
+        params.push(context.groupId);
+      }
+
+      // Filter by time period
+      if (options.timePeriod) {
+        const cutoff = this.calculateTimeCutoff(options.timePeriod);
+        if (cutoff) {
+          sql += ` AND n.first_posted_at >= $${paramIndex++}`;
+          params.push(cutoff.toISOString());
+        }
+      }
+
+      // Filter by domain
+      if (options.domain) {
+        sql += ` AND n.domain ILIKE $${paramIndex++}`;
+        params.push(`%${options.domain}%`);
+      }
+
+      // Filter by keyword in title or URL
+      if (options.keyword) {
+        sql += ` AND (n.title ILIKE $${paramIndex++} OR n.url ILIKE $${paramIndex++})`;
+        params.push(`%${options.keyword}%`, `%${options.keyword}%`);
+      }
+
+      // Order by most recent first
+      sql += ` ORDER BY n.last_posted_at DESC LIMIT $${paramIndex++}`;
+      const limit = Math.min(options.limit || 15, 30);
+      params.push(limit);
+
+      // Execute query
+      const result = await this.dbClient.query(sql, params);
+      const links = result.results || [];
+
+      if (links.length === 0) {
+        let noResultsMsg = '📭 No links found';
+        if (options.timePeriod) noResultsMsg += ` in last ${options.timePeriod}`;
+        if (options.domain) noResultsMsg += ` from ${options.domain}`;
+        if (options.keyword) noResultsMsg += ` matching "${options.keyword}"`;
+        return this.formatForSignal(noResultsMsg);
+      }
+
+      // Group links by their Signal group for display
+      const linksByGroup = new Map<string, any[]>();
+      const domainCounts = new Map<string, number>();
+      let totalShares = 0;
+
+      for (const link of links) {
+        const groupKey = link.group_display_name || 'Unknown Group';
+        if (!linksByGroup.has(groupKey)) {
+          linksByGroup.set(groupKey, []);
+        }
+        linksByGroup.get(groupKey)!.push(link);
+
+        // Track domain statistics
+        const domain = link.domain || 'unknown';
+        domainCounts.set(domain, (domainCounts.get(domain) || 0) + (link.post_count || 1));
+        totalShares += link.post_count || 1;
+      }
+
+      // Determine which URL to show based on flags
+      const showForum = options.showForum;
+      const showArchive = options.showArchive;
+      // Default: show actual article URL
+
+      // Build response
+      let response = `📰 Recent Links (${links.length})\n\n`;
+
+      // Show links grouped by Signal group
+      for (const [groupName, groupLinks] of linksByGroup) {
+        response += `📁 ${groupName}\n`;
+
+        for (const link of groupLinks) {
+          try {
+            // Format date nicely
+            const dateObj = link.last_posted_at ? new Date(link.last_posted_at) : null;
+            const date = dateObj && !isNaN(dateObj.getTime())
+              ? dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+              : '?';
+
+            // Format title with share count
+            const title = link.title ? this.truncate(link.title, 50) : link.domain || 'Article';
+            const shares = link.post_count > 1 ? ` (${link.post_count}x)` : '';
+            const postedBy = link.posted_by_name && link.posted_by_name !== 'Unknown'
+              ? ` • ${link.posted_by_name}` : '';
+
+            response += `• ${title}${shares}\n`;
+            response += `  ${date}${postedBy}\n`;
+
+            // Choose which URL to display
+            if (showForum && link.forum_url) {
+              response += `  ${link.forum_url}\n`;
+            } else if (showArchive && link.url) {
+              // Generate archive.org Wayback Machine URL
+              response += `  https://web.archive.org/web/${link.url}\n`;
+            } else if (link.url) {
+              // Default: show actual article URL
+              response += `  ${link.url}\n`;
+            }
+            response += '\n';
+          } catch (linkError) {
+            console.warn('Skipping malformed link entry:', linkError);
+            continue;
+          }
+        }
+      }
+
+      // Domain Statistics Section (compact)
+      if (domainCounts.size > 1 && !options.noStats) {
+        response += '📊 ';
+        const sortedDomains = Array.from(domainCounts.entries())
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 4);
+        response += sortedDomains.map(([d, c]) => `${d}(${c})`).join(' • ');
+        response += '\n';
+      }
+
+      // Footer
+      response += '\n💡 -f=forum -a=archive -h=help';
+
+      return this.formatForSignal(response);
+    } catch (error) {
+      console.error('Error in handleLinks:', error);
+      return this.formatForSignal('❌ Error searching links');
+    }
+  }
+
+  /**
+   * Parse !links command options
+   */
+  private parseLinksOptions(args: string): {
+    timePeriod?: string;
+    domain?: string;
+    keyword?: string;
+    groupId?: string;
+    limit?: number;
+    currentGroupOnly?: boolean;
+    showForum?: boolean;
+    showArchive?: boolean;
+    noStats?: boolean;
+    help: boolean;
+  } {
+    const options: any = { help: false };
+
+    // Check for explicit help request
+    if (args && (args.trim() === '-h' || args.trim() === '--help' || args.trim() === 'help')) {
+      options.help = true;
+      return options;
+    }
+
+    // Empty args is fine - will show recent links across all groups
+    if (!args || args.trim() === '') {
+      return options;
+    }
+
+    let remaining = args.trim();
+
+    // Parse -c (current group only)
+    if (remaining.match(/-c\b/i)) {
+      options.currentGroupOnly = true;
+      remaining = remaining.replace(/-c\b/i, '');
+    }
+
+    // Parse -f (show forum links)
+    if (remaining.match(/-f\b/i)) {
+      options.showForum = true;
+      remaining = remaining.replace(/-f\b/i, '');
+    }
+
+    // Parse -a (show archive links)
+    if (remaining.match(/-a\b/i)) {
+      options.showArchive = true;
+      remaining = remaining.replace(/-a\b/i, '');
+    }
+
+    // Parse -s (no stats / simple)
+    if (remaining.match(/-s\b/i)) {
+      options.noStats = true;
+      remaining = remaining.replace(/-s\b/i, '');
+    }
+
+    // Parse -t (time period)
+    const timeMatch = remaining.match(/-t\s+(\S+)/i);
+    if (timeMatch) {
+      options.timePeriod = timeMatch[1];
+      remaining = remaining.replace(timeMatch[0], '');
+    }
+
+    // Parse -d (domain)
+    const domainMatch = remaining.match(/-d\s+(\S+)/i);
+    if (domainMatch) {
+      options.domain = domainMatch[1];
+      remaining = remaining.replace(domainMatch[0], '');
+    }
+
+    // Parse -k (keyword)
+    const keywordMatch = remaining.match(/-k\s+(\S+)/i);
+    if (keywordMatch) {
+      options.keyword = keywordMatch[1];
+      remaining = remaining.replace(keywordMatch[0], '');
+    }
+
+    // Parse -g (group ID - direct group_id string)
+    const groupMatch = remaining.match(/-g\s+(\S+)/i);
+    if (groupMatch) {
+      options.groupId = groupMatch[1];
+      remaining = remaining.replace(groupMatch[0], '');
+    }
+
+    // Parse -n (limit)
+    const limitMatch = remaining.match(/-n\s+(\d+)/i);
+    if (limitMatch) {
+      options.limit = parseInt(limitMatch[1], 10);
+      remaining = remaining.replace(limitMatch[0], '');
+    }
+
+    // Any remaining text is treated as keyword search
+    remaining = remaining.trim();
+    if (remaining && !options.keyword) {
+      options.keyword = remaining;
+    }
+
+    return options;
+  }
+
+  /**
+   * Calculate time cutoff from period string
+   */
+  private calculateTimeCutoff(period: string): Date | null {
+    const now = new Date();
+    const match = period.match(/^(\d+)(h|d|w|m)$/i);
+
+    if (!match) return null;
+
+    const [, numStr, unit] = match;
+    const num = parseInt(numStr, 10);
+
+    switch (unit.toLowerCase()) {
+      case 'h': // hours
+        return new Date(now.getTime() - num * 60 * 60 * 1000);
+      case 'd': // days
+        return new Date(now.getTime() - num * 24 * 60 * 60 * 1000);
+      case 'w': // weeks
+        return new Date(now.getTime() - num * 7 * 24 * 60 * 60 * 1000);
+      case 'm': // months (approximate)
+        return new Date(now.getTime() - num * 30 * 24 * 60 * 60 * 1000);
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Truncate string to max length
+   */
+  private truncate(str: string, maxLen: number): string {
+    if (str.length <= maxLen) return str;
+    return str.substring(0, maxLen - 3) + '...';
+  }
+
+  /**
+   * Get help text for !links command
+   */
+  private getLinksHelp(): string {
     return this.formatForSignal(
-      '🔗 Important Links\n\n' +
-      '🌐 Wiki: https://wiki.irregularchat.com\n' +
-      '💬 Forum: https://forum.irregularchat.com\n' +
-      '📧 Contact: admin@irregularchat.com'
+      '📰 !links - Browse Shared News Links\n\n' +
+      'Shows recent links with actual article URLs.\n\n' +
+      'Usage: !links [options] [search]\n\n' +
+      'URL Options:\n' +
+      '  (default)   Show article URL\n' +
+      '  -f          Show forum discussion URL\n' +
+      '  -a          Show archive.org URL\n\n' +
+      'Filters:\n' +
+      '  -c          This group only\n' +
+      '  -t <time>   Time period (24h, 7d, 1w)\n' +
+      '  -d <domain> Filter by domain\n' +
+      '  -n <count>  Results (max 30)\n\n' +
+      'Examples:\n' +
+      '  !links           Recent links\n' +
+      '  !links -f        With forum links\n' +
+      '  !links -a        With archive links\n' +
+      '  !links -t 7d     Last 7 days\n' +
+      '  !links ukraine   Search "ukraine"'
     );
   }
 
@@ -1685,8 +2707,9 @@ export class CommandHandler {
   private async handleFaq(): Promise<string> {
     return this.formatForSignal(
       '❓ Frequently Asked Questions\n\n' +
-      '🌐 https://wiki.irregularchat.com/faq\n\n' +
-      'Check the wiki FAQ for common questions and answers.'
+      '🌐 https://forum.irregularchat.com/t/irregularchat-forum-start-here-faqs/84\n\n' +
+      'Start here for community FAQ and onboarding info.\n\n' +
+      '📚 Wiki: https://irregularpedia.org'
     );
   }
 
@@ -1696,8 +2719,8 @@ export class CommandHandler {
   private async handleDocs(): Promise<string> {
     return this.formatForSignal(
       '📖 Documentation\n\n' +
-      '🌐 https://wiki.irregularchat.com/docs\n\n' +
-      'Browse technical documentation and guides.'
+      '🌐 https://irregularpedia.org\n\n' +
+      'Browse Irregularpedia for technical documentation, guides, and community knowledge.'
     );
   }
 
@@ -1716,7 +2739,8 @@ export class CommandHandler {
    * !gtg - Good to go (approve user)
    */
   private async handleGtg(args: string, context: CommandContext): Promise<string> {
-    if (!this.isAdmin(context.sourceNumber)) {
+    const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
+    if (!isUserAdmin) {
       return '❌ Admin-only command';
     }
 
@@ -1913,6 +2937,7 @@ export class CommandHandler {
   /**
    * Get list of recommended groups for new users
    * Supports both core groups and keyword-based recommendations
+   * Only returns groups where bot is admin (can add members)
    */
   private async getRecommendedGroups(userIntro?: string): Promise<Array<{ groupId: string; name: string }>> {
     if (!this.bot) {
@@ -1930,32 +2955,56 @@ export class CommandHandler {
         return [];
       }
 
-      // Log first few group names for debugging
-      const sampleNames = allGroups.slice(0, 5).map((g: any) => g.name).join(', ');
-      console.log(`📝 Sample group names: ${sampleNames}`);
+      // Filter to groups where bot is admin (can add members)
+      const adminGroups = allGroups.filter((g: any) => this.isBotAdmin(g));
+      console.log(`👑 Bot is admin in ${adminGroups.length} groups`);
 
-      // Always include core groups
-      const coreGroupNames = [
-        'IrregularChat Main',
-        'Announcements',
-        'General Discussion',
+      // Log first few group names for debugging
+      const sampleNames = adminGroups.slice(0, 5).map((g: any) => g.name).join(', ');
+      console.log(`📝 Sample admin group names: ${sampleNames}`);
+
+      // Core groups for new members (actual group name patterns)
+      // These are groups every new member should be added to
+      const coreGroupPatterns = [
+        'tech',           // IrregularChat: Tech - main tech discussion
+        'announcements',  // IrrChat: Unmanned Announcements
+        'off topic',      // IR: Off Topic Guild
       ];
 
-      const coreGroups = allGroups
-        .filter((g: any) =>
-          coreGroupNames.some(name =>
-            g.name?.toLowerCase().includes(name.toLowerCase())
-          )
-        )
+      // Exclude these groups from auto-add (admin-only, entry, etc.)
+      const excludePatterns = [
+        'entry',          // Entry/INDOC - they're leaving this
+        'indoc',          // Entry/INDOC
+        'admin',          // Admin-only groups
+        'bot development', // Internal development
+        'solo',           // Test groups
+      ];
+
+      const coreGroups = adminGroups
+        .filter((g: any) => {
+          const name = g.name?.toLowerCase() || '';
+          // Must match a core pattern
+          const matchesCore = coreGroupPatterns.some(pattern => name.includes(pattern));
+          // Must NOT match exclude patterns
+          const matchesExclude = excludePatterns.some(pattern => name.includes(pattern));
+          return matchesCore && !matchesExclude;
+        })
         .map((g: any) => ({ groupId: g.id, name: g.name }));
 
-      console.log(`🎯 Found ${coreGroups.length} core groups`);
+      console.log(`🎯 Found ${coreGroups.length} core groups: ${coreGroups.map((g: { groupId: string; name: string }) => g.name).join(', ')}`);
 
       // If we have a user intro, add keyword-matched groups
       let interestGroups: Array<{ groupId: string; name: string }> = [];
       if (userIntro) {
         const keywords = this.extractKeywords(userIntro);
-        interestGroups = this.getGroupsMatchingKeywords(allGroups, keywords);
+        // Only match against groups where bot is admin
+        interestGroups = this.getGroupsMatchingKeywords(adminGroups, keywords);
+
+        // Filter out excluded groups from interest matches too
+        interestGroups = interestGroups.filter(g => {
+          const name = g.name?.toLowerCase() || '';
+          return !excludePatterns.some(pattern => name.includes(pattern));
+        });
 
         if (interestGroups.length > 0) {
           console.log(`🎯 Found ${interestGroups.length} interest-based group(s) from keywords`);
@@ -1972,10 +3021,10 @@ export class CommandHandler {
         }
       }
 
-      // If no core groups found, recommend ALL groups as fallback
+      // If no groups found, return empty (don't add to random groups)
       if (allRecommended.length === 0) {
-        console.warn('⚠️  No core groups found, recommending ALL groups as fallback');
-        return allGroups.map((g: any) => ({ groupId: g.id, name: g.name }));
+        console.warn('⚠️  No recommended groups found - user intro may not match any interest keywords');
+        console.warn('ℹ️  Consider manually adding user to groups with !addto');
       }
 
       console.log(`✅ Returning ${allRecommended.length} recommended groups`);
@@ -2020,7 +3069,8 @@ export class CommandHandler {
    * !pending - Show pending requests
    */
   private async handlePending(context: CommandContext): Promise<string> {
-    if (!this.isAdmin(context.sourceNumber)) {
+    const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
+    if (!isUserAdmin) {
       return '❌ Admin-only command';
     }
 
@@ -2259,6 +3309,230 @@ export class CommandHandler {
         '❌ Failed to Fetch Categories\n\n' +
         `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
+    }
+  }
+
+  // ============================================================================
+  // ANNOUNCEMENT COMMANDS
+  // ============================================================================
+
+  /**
+   * !announce - Send announcement to groups
+   *
+   * Usage: !announce [-t time] [-g groups] [-dm] message
+   */
+  private async handleAnnounce(args: string, context: CommandContext): Promise<string> {
+    // Check admin
+    const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
+    if (!isUserAdmin) {
+      return '❌ Admin-only command';
+    }
+
+    // Check announcement handler
+    if (!this.announcementHandler) {
+      return '❌ Announcement handler not initialized (requires PostgreSQL)';
+    }
+
+    // Show help if no args
+    if (!args || args.trim().length === 0) {
+      return this.announcementHandler.getHelp();
+    }
+
+    try {
+      // Parse command flags
+      const parsed = this.announcementHandler.parseCommand(args);
+
+      if (!parsed.message) {
+        return '❌ No message provided\n\n' + this.announcementHandler.getHelp();
+      }
+
+      // Resolve target groups
+      // Force refresh from signal-cli when DM mode is enabled to get actual member UUIDs
+      // (database cache only stores member counts, not actual UUIDs)
+      const targetGroups = await this.announcementHandler.resolveGroups(
+        parsed.groups,
+        context.groupId,
+        parsed.dm  // forceRefresh when sending DMs
+      );
+
+      if (targetGroups.length === 0) {
+        return '❌ No target groups found\n\nUse !groups to see available groups, then use -g flag';
+      }
+
+      // Calculate total recipients for confirmation
+      let totalRecipients = 0;
+      if (parsed.dm) {
+        for (const group of targetGroups) {
+          const members = await this.announcementHandler.getGroupMembers(group.id);
+          totalRecipients += members.length || group.memberCount;
+        }
+      } else {
+        totalRecipients = targetGroups.length;
+      }
+
+      // If scheduled, save to database
+      if (parsed.time) {
+        const userId = context.sourceUuid || context.sourceNumber;
+        const result = await this.announcementHandler.scheduleAnnouncement(
+          parsed.message,
+          targetGroups,
+          parsed.time.date,
+          parsed.dm,
+          userId,
+          context.sourceName
+        );
+
+        if (result.id) {
+          const groupNames = targetGroups.map(g => g.name).join(', ');
+          const dmNote = parsed.dm ? ' (as DM to each member)' : '';
+
+          return this.formatForSignal([
+            '📅 Announcement Scheduled',
+            '',
+            `ID: ${result.id}`,
+            `Time: ${formatScheduledTime(parsed.time.date)}`,
+            `Groups: ${groupNames}${dmNote}`,
+            `Recipients: ~${totalRecipients}`,
+            '',
+            `Message: "${parsed.message.substring(0, 100)}${parsed.message.length > 100 ? '...' : ''}"`,
+            '',
+            'Use !cancelannounce <id> to cancel',
+          ].join('\n'));
+        } else {
+          return `❌ Failed to schedule: ${result.error || 'Unknown error'}`;
+        }
+      }
+
+      // Immediate send
+      const groupNames = targetGroups.map(g => g.name).join(', ');
+
+      if (parsed.dm) {
+        // Send DM to each member
+        const result = await this.announcementHandler.sendDMsToGroupMembers(
+          targetGroups,
+          parsed.message
+        );
+
+        const lines = [
+          '📢 Announcement Sent (DM)',
+          '',
+          `✅ Sent to: ${result.sent} members`,
+          `Groups: ${groupNames}`,
+        ];
+
+        if (result.errors.length > 0) {
+          lines.push('');
+          lines.push(`⚠️  ${result.errors.length} errors (check logs)`);
+        }
+
+        return this.formatForSignal(lines.join('\n'));
+      } else {
+        // Send to groups
+        const result = await this.announcementHandler.sendToGroups(
+          targetGroups,
+          parsed.message
+        );
+
+        const lines = [
+          '📢 Announcement Sent',
+          '',
+          `✅ Sent to: ${result.sent.join(', ')}`,
+        ];
+
+        if (result.errors.length > 0) {
+          lines.push('');
+          lines.push(`⚠️  Failed: ${result.errors.join(', ')}`);
+        }
+
+        return this.formatForSignal(lines.join('\n'));
+      }
+    } catch (error) {
+      console.error('Announce command error:', error);
+      return `❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  /**
+   * !announcements - List pending scheduled announcements
+   */
+  private async handleListAnnouncements(context: CommandContext): Promise<string> {
+    // Check admin
+    const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
+    if (!isUserAdmin) {
+      return '❌ Admin-only command';
+    }
+
+    if (!this.dbClient) {
+      return '❌ Database not available';
+    }
+
+    try {
+      const userId = context.sourceUuid || context.sourceNumber;
+      const pending = await this.dbClient.getUserPendingAnnouncements(userId);
+
+      if (pending.length === 0) {
+        return '📭 No pending announcements\n\nUse !announce to create one';
+      }
+
+      const lines = [
+        '📋 Pending Announcements',
+        '',
+      ];
+
+      pending.forEach((ann: any) => {
+        const scheduledAt = new Date(ann.scheduled_at);
+        const groupNames = ann.target_group_names
+          ? JSON.parse(ann.target_group_names).join(', ')
+          : 'Unknown';
+        const dmNote = ann.send_as_dm ? ' [DM]' : '';
+        const preview = ann.message.substring(0, 50) + (ann.message.length > 50 ? '...' : '');
+
+        lines.push(`#${ann.id}${dmNote} - ${formatScheduledTime(scheduledAt)}`);
+        lines.push(`   Groups: ${groupNames}`);
+        lines.push(`   "${preview}"`);
+        lines.push('');
+      });
+
+      lines.push('Use !cancelannounce <id> to cancel');
+
+      return this.formatForSignal(lines.join('\n'));
+    } catch (error) {
+      console.error('List announcements error:', error);
+      return `❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  /**
+   * !cancelannounce <id> - Cancel a scheduled announcement
+   */
+  private async handleCancelAnnouncement(args: string, context: CommandContext): Promise<string> {
+    // Check admin
+    const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
+    if (!isUserAdmin) {
+      return '❌ Admin-only command';
+    }
+
+    if (!this.dbClient) {
+      return '❌ Database not available';
+    }
+
+    const announcementId = parseInt(args.trim(), 10);
+    if (isNaN(announcementId)) {
+      return '❌ Invalid announcement ID\n\nUsage: !cancelannounce <id>';
+    }
+
+    try {
+      const userId = context.sourceUuid || context.sourceNumber;
+      const success = await this.dbClient.cancelAnnouncement(announcementId, userId);
+
+      if (success) {
+        return `✅ Announcement #${announcementId} cancelled`;
+      } else {
+        return `❌ Could not cancel #${announcementId}\n\nMake sure it exists and is still pending`;
+      }
+    } catch (error) {
+      console.error('Cancel announcement error:', error);
+      return `❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
   }
 

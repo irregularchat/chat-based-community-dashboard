@@ -13,6 +13,7 @@ import express from 'express';
 import { SignalBot, BotConfig } from './bot/signal-bot-v2.js';
 import { createPostgresClient, PostgresClient } from './db/postgres-client.js';
 import { HealthMonitor } from './lib/health-monitor.js';
+import { AnnouncementScheduler } from './scheduler/announcement-scheduler.js';
 
 const app = express();
 const port = parseInt(process.env.PORT || '8080');
@@ -75,6 +76,9 @@ const healthMonitor = new HealthMonitor();
 
 // Initialize Signal bot
 let bot: SignalBot | null = null;
+
+// Initialize announcement scheduler
+let announcementScheduler: AnnouncementScheduler | null = null;
 
 // ============================================================================
 // API ENDPOINTS
@@ -363,6 +367,11 @@ app.get('/questions', async (req, res) => {
 async function shutdown(signal: string) {
   console.log(`\n${signal} received, shutting down gracefully...`);
 
+  // Stop announcement scheduler
+  if (announcementScheduler) {
+    announcementScheduler.stop();
+  }
+
   // Stop bot
   if (bot && bot.isRunning()) {
     console.log('Stopping Signal bot...');
@@ -409,9 +418,14 @@ app.listen(port, async () => {
     console.log('🚀 Auto-starting bot...');
     try {
       if (dbClient) {
-        bot = new SignalBot(config, dbClient as any);
+        // Pass dbClient as both workerApi (for compatibility) and dbClient (for direct DB access)
+        bot = new SignalBot(config, dbClient as any, dbClient);
         await bot.start();
         console.log('✅ Bot started successfully');
+
+        // Start announcement scheduler
+        announcementScheduler = new AnnouncementScheduler(dbClient, bot);
+        announcementScheduler.start();
       }
     } catch (error) {
       console.error('❌ Failed to auto-start bot:', error);

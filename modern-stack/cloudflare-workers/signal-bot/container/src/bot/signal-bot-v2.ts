@@ -24,6 +24,7 @@ import { downloadContent, isYtDlpInstalled } from '../utils/social-media-downloa
 import { EmojiReactionHandler } from '../utils/emoji-reaction-handler.js';
 import { DebugLogger } from '../utils/debug-logger.js';
 import { PostgresClient } from '../db/postgres-client.js';
+import { postNewsArticleToDiscourse, getDiscourseConfig } from '../utils/discourse-poster.js';
 
 /**
  * Get web.archive.org link - checks for existing archive, falls back to save link
@@ -151,6 +152,7 @@ export class SignalBot extends EventEmitter {
   private config: BotConfig;
   private workerApi: WorkerAPIClient;
   private commandHandler: CommandHandler;
+  private dbClient?: PostgresClient; // Database client for direct queries
   private daemonProcess: ChildProcess | null = null;
   private rpcClient: SignalJsonRpcClient | null = null;
   private isRunningFlag = false;
@@ -182,6 +184,7 @@ export class SignalBot extends EventEmitter {
     super();
     this.config = config;
     this.workerApi = workerApi;
+    this.dbClient = dbClient; // Store database client
     this.commandHandler = new CommandHandler(config, workerApi);
     // Pass bot instance to command handler for methods like getGroups()
     this.commandHandler.setBotInstance(this);
@@ -582,6 +585,7 @@ export class SignalBot extends EventEmitter {
         try {
           await this.handleCommand(messageText, {
             sourceNumber: sourceNumber || '',
+            sourceUuid: sourceUuid,
             sourceName: sourceName || '',
             groupId,
             timestamp,
@@ -631,9 +635,22 @@ export class SignalBot extends EventEmitter {
 
       console.log('🔵 [DEBUG] About to check for URLs...');
       // Check for URLs and send security/privacy alerts
+      // Skip alerts for social media URLs that support downloading - those will be handled by checkForSocialMediaUrls
       console.log(`🔍 Checking message for URLs: ${messageText}`);
-      const urlAlerts = processMessageURLs(messageText);
-      console.log(`🔍 Found ${urlAlerts.length} URL alerts`);
+      const allUrls = extractURLs(messageText);
+      const downloadableSocialUrls = allUrls.filter(url => {
+        const platform = getSocialMediaPlatform(url);
+        return platform?.supportsDownload === true;
+      });
+
+      // Filter out downloadable social media URLs from security alerts
+      // (they'll get clean URL info in the download response)
+      const nonSocialText = downloadableSocialUrls.length > 0
+        ? messageText.replace(new RegExp(downloadableSocialUrls.map(u => u.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g'), '')
+        : messageText;
+
+      const urlAlerts = processMessageURLs(nonSocialText);
+      console.log(`🔍 Found ${urlAlerts.length} URL alerts (excluded ${downloadableSocialUrls.length} social media URLs)`);
       if (urlAlerts.length > 0) {
         console.log('🔵 [DEBUG] URL alerts detected, sending messages...');
         for (const alert of urlAlerts) {
@@ -706,6 +723,7 @@ export class SignalBot extends EventEmitter {
     command: string,
     context: {
       sourceNumber: string;
+      sourceUuid?: string;
       sourceName: string;
       groupId?: string;
       timestamp: number;
@@ -718,7 +736,9 @@ export class SignalBot extends EventEmitter {
     try {
       console.log(`🤖 Processing command: ${command}`);
 
-      const response = await this.commandHandler.handle(command, context);
+      // Add message to context for mention name extraction
+      const contextWithMessage = { ...context, message: command };
+      const response = await this.commandHandler.handle(command, contextWithMessage);
 
       if (response) {
         await this.sendMessage({
@@ -924,6 +944,7 @@ export class SignalBot extends EventEmitter {
   /**
    * Initialize group cache on startup
    * Loads from database first, falls back to signal-cli if needed
+   * Also refreshes if membership data is missing
    */
   private async initializeGroupCache(): Promise<void> {
     try {
@@ -936,6 +957,25 @@ export class SignalBot extends EventEmitter {
         this.cachedGroups = dbGroups;
         this.groupsCacheTimestamp = Date.now();
         console.log(`✅ Loaded ${dbGroups.length} groups from database`);
+
+        // Check if membership data exists - if not, trigger a refresh
+        // This ensures member UUIDs are stored for unique user counting
+        try {
+          const membershipCheck = await this.workerApi.query(
+            'SELECT COUNT(*) as count FROM signal_member_group_memberships'
+          );
+          // PostgreSQL COUNT returns bigint which may come as string through JSON
+          const membershipCount = parseInt(String(membershipCheck.results?.[0]?.count || '0'), 10);
+          if (membershipCount === 0 || isNaN(membershipCount)) {
+            console.log('📡 Membership data empty, refreshing from signal-cli to populate...');
+            await this.refreshGroupCache();
+          } else {
+            console.log(`✅ Membership data exists: ${membershipCount} records`);
+          }
+        } catch (membershipError) {
+          console.log('Could not check membership data, will refresh to be safe...');
+          await this.refreshGroupCache();
+        }
       } else {
         // No groups in database, fetch from signal-cli
         console.log('📡 No groups in database, fetching from signal-cli...');
@@ -1001,22 +1041,53 @@ export class SignalBot extends EventEmitter {
       );
 
       if (result.results && result.results.length > 0) {
-        return result.results.map((row: any) => {
-          // Create a minimal group object that's compatible with signal-cli format
-          const memberCount = row.member_count || 0;
+        // Get bot's UUID for admin array
+        let botUuid: string | null = null;
+        if (this.dbClient) {
+          try {
+            const botResult = await this.dbClient.query(
+              'SELECT uuid FROM signal_members WHERE phone_number = $1 LIMIT 1',
+              [this.config.phoneNumber]
+            );
+            if (botResult.results && botResult.results.length > 0) {
+              botUuid = botResult.results[0].uuid;
+            }
+          } catch (e) {
+            // Ignore error, will use phone number as fallback
+          }
+        }
+
+        // For each group, load actual member UUIDs from signal_member_group_memberships
+        const groups = [];
+        for (const row of result.results) {
           const botIsAdmin = row.bot_is_admin || false;
 
-          // Create mock arrays to match signal-cli format
-          // We don't have actual member/admin data, so create empty arrays with the right length
-          const members = new Array(memberCount).fill('');
-          const admins = botIsAdmin ? [this.config.phoneNumber] : [];
+          // Load actual member UUIDs for this group
+          let members: string[] = [];
+          try {
+            const membersResult = await this.workerApi.query(
+              `SELECT member_id FROM signal_member_group_memberships
+               WHERE group_id = $1 AND is_active = true`,
+              [row.id]
+            );
+            if (membersResult.results && membersResult.results.length > 0) {
+              members = membersResult.results.map((m: any) => m.member_id);
+            }
+          } catch (memberError) {
+            // Fallback to member_count if membership query fails
+            console.log(`Could not load members for group ${row.id}, using count fallback`);
+            members = new Array(row.member_count || 0).fill('');
+          }
 
-          return {
+          // Use bot's UUID for admin array if it's admin
+          const admins = botIsAdmin ? [botUuid || this.config.phoneNumber] : [];
+
+          groups.push({
             id: row.id,
             name: row.name,
             description: row.description,
-            members: members,  // Array with correct length for display
-            admins: admins,    // Array containing bot if it's admin
+            members: members,  // Array of actual member UUIDs
+            admins: admins,    // Array containing bot UUID if it's admin
             isMember: row.bot_is_member !== false,
             isBlocked: false,
             messageExpirationTime: 0,
@@ -1026,8 +1097,10 @@ export class SignalBot extends EventEmitter {
             permissionAddMember: 'EVERY_MEMBER',
             permissionEditDetails: 'ONLY_ADMINS',
             permissionSendMessage: 'EVERY_MEMBER'
-          };
-        });
+          });
+        }
+
+        return groups;
       }
 
       return [];
@@ -1043,16 +1116,59 @@ export class SignalBot extends EventEmitter {
   private async saveGroupsToDatabase(groups: any[]): Promise<void> {
     try {
       let adminCount = 0;
+      let totalMembersStored = 0;
+
+      // Look up bot's UUID from database for admin comparison
+      // IMPORTANT: signal-cli returns admins as an array of UUID strings, NOT objects!
+      // This was a bug fixed on 2025-12-01 - see LESSONS_LEARNED_SIGNAL_CLI.md
+      let botUuid: string | null = null;
+      if (this.dbClient) {
+        try {
+          const result = await this.dbClient.query(
+            'SELECT uuid FROM signal_members WHERE phone_number = $1 LIMIT 1',
+            [this.config.phoneNumber]
+          );
+          if (result.results && result.results.length > 0) {
+            botUuid = result.results[0].uuid;
+            console.log(`🤖 Bot UUID resolved for admin check: ${botUuid}`);
+          }
+        } catch (e) {
+          console.log('Could not look up bot UUID, will use phone number fallback');
+        }
+      }
+
+      const normalizedBotPhone = this.config.phoneNumber.startsWith('+')
+        ? this.config.phoneNumber
+        : `+${this.config.phoneNumber}`;
 
       for (const group of groups) {
         // Check if bot is admin in this group
-        // Note: admins is an array of objects like {number: string, uuid: string}
-        const botIsAdmin = group.admins?.some((admin: any) => admin.number === this.config.phoneNumber) || false;
+        // admins is an array of UUID STRINGS, not objects!
+        let botIsAdmin = false;
+        if (group.admins && Array.isArray(group.admins)) {
+          botIsAdmin = group.admins.some((admin: any) => {
+            // Case 1: admin is a string (UUID) - this is the actual format from signal-cli
+            if (typeof admin === 'string') {
+              return (botUuid && admin === botUuid) ||
+                     admin === normalizedBotPhone ||
+                     admin === this.config.phoneNumber;
+            }
+            // Case 2: admin is an object (legacy/fallback support)
+            if (admin && typeof admin === 'object') {
+              if (admin.number === this.config.phoneNumber || admin.number === normalizedBotPhone) {
+                return true;
+              }
+              if (botUuid && admin.uuid === botUuid) {
+                return true;
+              }
+            }
+            return false;
+          });
+        }
 
         if (botIsAdmin) {
           adminCount++;
-          console.log(`🔍 DEBUG: Bot IS admin in group "${group.name}" (${group.id})`);
-          console.log(`🔍 DEBUG: Admins array:`, group.admins);
+          console.log(`👑 Bot IS admin in group "${group.name}" (${group.id})`);
         }
 
         // Upsert each group
@@ -1076,9 +1192,53 @@ export class SignalBot extends EventEmitter {
             group.isMember !== false,
           ]
         );
+
+        // Store member UUIDs in signal_member_group_memberships table
+        // members can be either:
+        // - array of strings (UUIDs) - what we assumed initially
+        // - array of objects {number, uuid} - actual format from signal-cli JSON-RPC
+        if (group.members && Array.isArray(group.members) && group.members.length > 0) {
+          for (const member of group.members) {
+            // Extract UUID - handle both string and object formats
+            let memberUuid: string | null = null;
+            if (typeof member === 'string' && member) {
+              memberUuid = member;
+            } else if (member && typeof member === 'object' && member.uuid) {
+              memberUuid = member.uuid;
+            }
+
+            // Skip if no valid UUID
+            if (!memberUuid) continue;
+
+            try {
+              // First ensure member exists in signal_members (upsert minimal record)
+              await this.workerApi.query(
+                `INSERT INTO signal_members (id, uuid, created_at, updated_at)
+                 VALUES ($1, $1, NOW(), NOW())
+                 ON CONFLICT (id) DO NOTHING`,
+                [memberUuid]
+              );
+
+              // Then upsert membership record
+              const membershipId = `${memberUuid}-${group.id}`;
+              await this.workerApi.query(
+                `INSERT INTO signal_member_group_memberships (id, member_id, group_id, group_name, is_active, joined_at)
+                 VALUES ($1, $2, $3, $4, true, NOW())
+                 ON CONFLICT (member_id, group_id) DO UPDATE SET
+                   is_active = true,
+                   group_name = EXCLUDED.group_name`,
+                [membershipId, memberUuid, group.id, group.name || 'Unknown Group']
+              );
+              totalMembersStored++;
+            } catch (memberError) {
+              // Log but don't fail - some members might have issues
+              // console.log(`Could not store member ${memberUuid}: ${memberError}`);
+            }
+          }
+        }
       }
 
-      console.log(`💾 Saved ${groups.length} groups to database (${adminCount} with admin rights)`);
+      console.log(`💾 Saved ${groups.length} groups to database (${adminCount} with admin rights, ${totalMembersStored} member records)`);
     } catch (error) {
       console.error('Error saving groups to database:', error);
       // Don't throw - this is not critical, just log the error
@@ -1137,44 +1297,57 @@ export class SignalBot extends EventEmitter {
             message: `📰 Processing, in the meantime here's the bypass link:\n\n${bypassLinks}`,
           });
 
-          // Scrape and summarize article (only if workerApi available)
-          let result: any = null;
-          if (this.workerApi && typeof this.workerApi.scrapeAndSummarize === 'function') {
-            result = await this.workerApi.scrapeAndSummarize({
+          // Post to Discourse (self-hosted mode with direct API)
+          const discourseConfig = getDiscourseConfig();
+          let discourseUrl: string | undefined;
+
+          if (discourseConfig) {
+            console.log('📝 Posting news article to Discourse...');
+            const discourseResult = await postNewsArticleToDiscourse({
               url,
-              sourceNumber: context.sourceNumber,
+              archiveUrl, // Pass the archive link
+              sourceNumber: context.sourceNumber || undefined,
               sourceName: context.sourceName,
               groupId: context.groupId,
-            });
-          } else {
-            console.log('🔵 [DEBUG] Skipping scrapeAndSummarize (self-hosted mode)');
-            // In self-hosted mode, just send the bypass links (already done above)
-            continue;
-          }
+            }, discourseConfig, this.dbClient); // Pass database client for duplicate detection
 
-          // Build comprehensive response message
-          if (result.summary) {
-            // Use the same archive link we fetched earlier
-            const bypassLinks = `📎 ${archiveUrl}`;
+            if (discourseResult.success && discourseResult.discourseUrl) {
+              discourseUrl = discourseResult.discourseUrl;
 
-            // Build complete message (plain text, no markdown)
-            let responseMessage = `📰 ${result.title || 'Article Summary'}`;
+              // Handle duplicate vs new post
+              if (discourseResult.isDuplicate && discourseResult.existingPost) {
+                console.log(`✅ Duplicate URL - returning existing post (shared ${discourseResult.existingPost.postCount} times)`);
 
-            // Add Discourse link right after title if available
-            if (result.discourseUrl) {
-              responseMessage += `\n📝 Forum Discussion:${result.discourseUrl}`;
+                // Format first posted date
+                const firstPosted = discourseResult.existingPost.firstPostedAt
+                  ? new Date(discourseResult.existingPost.firstPostedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                  : 'unknown';
+
+                // Send message about existing post
+                await this.sendMessage({
+                  recipient: context.groupId ? undefined : context.sourceNumber,
+                  groupId: context.groupId,
+                  message: `📋 Already shared (${discourseResult.existingPost.postCount}x since ${firstPosted})\n\n📝 Forum: ${discourseUrl}`,
+                });
+              } else {
+                console.log(`✅ Posted to Discourse: ${discourseUrl}`);
+
+                // Send follow-up message with Discourse link
+                await this.sendMessage({
+                  recipient: context.groupId ? undefined : context.sourceNumber,
+                  groupId: context.groupId,
+                  message: `📝 Posted to forum: ${discourseUrl}`,
+                });
+              }
+            } else {
+              console.error('❌ Failed to post to Discourse:', discourseResult.error);
             }
-
-            responseMessage += `\n\n${result.summary}\n\nBypass Links:\n${bypassLinks}`;
-
-            await this.sendMessage({
-              recipient: context.groupId ? undefined : context.sourceNumber,
-              groupId: context.groupId,
-              message: responseMessage,
-            });
-
-            console.log(`✅ Sent article summary for ${url}`);
+          } else {
+            console.log('⚠️  Discourse not configured, skipping forum post');
           }
+
+          // Skip full scraping in self-hosted mode (already sent archive link + Discourse post)
+          continue;
 
         } catch (error) {
           console.error(`❌ Error processing news URL ${url}:`, error);
@@ -1234,12 +1407,8 @@ export class SignalBot extends EventEmitter {
             continue;
           }
 
-          // Send initial acknowledgment (only for Instagram)
-          await this.sendMessage({
-            recipient: context.groupId ? undefined : context.sourceNumber,
-            groupId: context.groupId,
-            message: `${platform.icon} ${contentType} detected. Processing...`,
-          });
+          // No "Processing..." message - we'll send ONE consolidated response with the result
+          console.log(`📥 Processing ${platform.name} ${contentType}...`);
 
           // Check if yt-dlp is installed
           if (!(await isYtDlpInstalled())) {

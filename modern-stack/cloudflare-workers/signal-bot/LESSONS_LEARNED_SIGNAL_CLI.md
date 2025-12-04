@@ -25,6 +25,13 @@
 17. [Signal Mention Name Resolution](#signal-mention-name-resolution-2025-11-27)
 18. [Signal CLI Admin Detection Bug](#signal-cli-admin-detection-bug-2025-12-01)
 19. [Wiki Search Git Dependency](#wiki-search-git-dependency-2025-12-02)
+20. [CRITICAL: rsync --delete Data Loss](#critical-rsync-delete-data-loss-2025-12-03)
+21. [VPN/Gluetun Container Management](#vpngluetun-container-management-2025-12-03)
+22. [Docker Network IP Address Changes](#docker-network-ip-address-changes-2025-12-03)
+23. [Phone Number Privacy in Display Names](#phone-number-privacy-in-display-names-2025-12-04)
+24. [pCloud Download Links Are IP-Bound](#pcloud-download-links-are-ip-bound-2025-12-04)
+25. [Auto-Archive Documents After Virus Scan](#auto-archive-documents-after-virus-scan-2025-12-04)
+26. [Docker Volume Mount Permissions (rclone Config)](#docker-volume-mount-permissions-rclone-config-2025-12-04)
 
 ---
 
@@ -2595,6 +2602,903 @@ docker exec signal-bot-selfhosted git --version
 
 ---
 
+## Signal Attachment Handling for !tldr Command (2025-12-03)
+
+### Problem: Summarizing PDF Attachments from Quoted Messages
+
+**User Request**:
+Reply to a message containing a PDF attachment with `!tldr` to get a summary of the PDF content.
+
+**Challenge**:
+Signal attachments in quoted messages don't include the attachment file ID or storage path - only metadata like `contentType` and `filename`.
+
+### Discovery: Quote Attachments Have Limited Metadata
+
+**What signal-cli JSON-RPC Returns**:
+```json
+{
+  "dataMessage": {
+    "quote": {
+      "id": 1764733463840,
+      "author": "17b25619-f1ba-4c37-8a5a-50e139586191",
+      "text": "",
+      "attachments": [
+        {
+          "contentType": "application/pdf",
+          "filename": "Drone Dominance RFI.pdf"
+        }
+      ]
+    }
+  }
+}
+```
+
+**Missing Fields**:
+- ❌ `id` - The attachment storage ID
+- ❌ `storedFilename` - Where signal-cli saved the file
+- ❌ `size` - File size in bytes
+
+**Available Fields**:
+- ✅ `contentType` - MIME type (e.g., "application/pdf")
+- ✅ `filename` - Original filename
+
+### Where Signal-CLI Stores Attachments
+
+**Location**: `/app/signal-data/attachments/`
+
+**Filename Pattern**: Random alphanumeric ID + file extension
+
+**Example Files**:
+```bash
+docker exec signal-bot-selfhosted ls -lat /app/signal-data/attachments/ | grep pdf | head -5
+# akU08iutNUIMuhcRMSS2.pdf  (493 kB)
+# eJLasHFkNqmDUl_yLaYy.pdf  (1.3 MB)
+# rHUdjEmxJ_soi__Uz04J.pdf  (6.5 MB)
+```
+
+### Solution: Search for Recent PDFs
+
+Since quoted attachments don't include the file path, the solution is to search the attachments directory for recent PDF files:
+
+**Implementation** (`command-handler.ts`):
+```typescript
+// Check for PDF attachments in quoted message
+const pdfAttachment = context.quotedAttachments?.find(att =>
+  att.contentType === 'application/pdf' ||
+  att.filename?.toLowerCase().endsWith('.pdf')
+);
+
+if (pdfAttachment && (!remainingArgs || remainingArgs.length === 0)) {
+  const dataDir = this.config.dataDir || '/app/signal-data';
+  const attachmentsDir = `${dataDir}/attachments`;
+  const fs = await import('fs/promises');
+
+  let pdfPath: string | null = null;
+  let pdfResult: any = { success: false };
+
+  // If we have an attachment ID, try that first
+  const attachmentId = pdfAttachment.id || pdfAttachment.storedFilename;
+  if (attachmentId) {
+    // Try direct path with/without .pdf extension
+    for (const path of [`${attachmentsDir}/${attachmentId}`, `${attachmentsDir}/${attachmentId}.pdf`]) {
+      const result = await scrapePdfFromPath(path, pdfAttachment.filename);
+      if (result.success) {
+        pdfPath = path;
+        pdfResult = result;
+        break;
+      }
+    }
+  }
+
+  // If no ID or direct path failed, search for recent PDF files
+  if (!pdfResult.success) {
+    const files = await fs.readdir(attachmentsDir);
+    const pdfFiles = files.filter(f => f.toLowerCase().endsWith('.pdf'));
+
+    // Get file stats and sort by modification time (newest first)
+    const fileStats = await Promise.all(
+      pdfFiles.map(async (f) => {
+        const fullPath = `${attachmentsDir}/${f}`;
+        const stat = await fs.stat(fullPath);
+        return { name: f, path: fullPath, mtime: stat.mtime };
+      })
+    );
+
+    fileStats.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+
+    // Try the most recent PDF files (up to 5)
+    for (const file of fileStats.slice(0, 5)) {
+      const result = await scrapePdfFromPath(file.path, pdfAttachment.filename);
+      if (result.success) {
+        pdfPath = file.path;
+        pdfResult = result;
+        break;
+      }
+    }
+  }
+
+  // Summarize the PDF content...
+}
+```
+
+### Key Implementation Details
+
+**1. Add SignalAttachment Interface** (`command-handler.ts`):
+```typescript
+export interface SignalAttachment {
+  contentType?: string;
+  filename?: string;
+  id?: string;
+  storedFilename?: string;
+  size?: number;
+  width?: number;
+  height?: number;
+  caption?: string;
+}
+
+export interface CommandContext {
+  // ... existing fields
+  quotedAttachments?: SignalAttachment[]; // Attachments from quoted message
+}
+```
+
+**2. Pass Attachments from Bot** (`signal-bot-v2.ts`):
+```typescript
+// In handleMessage()
+const quotedAttachments = dataMessage?.quote?.attachments;
+
+// In handleCommand()
+await this.handleCommand(messageText, {
+  // ... other context
+  quotedAttachments,
+});
+```
+
+**3. Add Local PDF Scraper** (`pdf-scraper.ts`):
+```typescript
+export async function scrapePdfFromPath(
+  filePath: string,
+  originalFilename?: string
+): Promise<PDFScrapedContent> {
+  const buffer = await fs.readFile(filePath);
+  const data = await pdf(buffer);
+  // Extract text, apply smart extraction for large PDFs...
+}
+```
+
+### Testing & Verification
+
+**Test Scenario**:
+1. User posts a PDF file in Signal group
+2. Another user replies with `!tldr`
+3. Bot reads the PDF from attachments directory
+4. Bot summarizes with GPT-4o-mini
+5. Bot posts summary back to group
+
+**Log Output (Working)**:
+```
+📎 Found PDF attachment in quoted message: {"contentType":"application/pdf","filename":"Drone Dominance RFI.pdf"}
+📂 Searching attachments directory for recent PDFs...
+📂 Found 15 PDF files, checking most recent...
+📄 Trying recent PDF: akU08iutNUIMuhcRMSS2.pdf (modified: 2025-12-03T03:44:00.000Z)
+📄 Reading local PDF: /app/signal-data/attachments/akU08iutNUIMuhcRMSS2.pdf
+📄 PDF parsed: 6 pages, 12543 chars
+✅ PDF processed: 12543 chars (full extraction)
+```
+
+**Response Format**:
+```
+📄 **Drone Dominance RFI.pdf**
+6 pages • full extraction
+
+📝 **Summary:**
+The document outlines a Request for Information (RFI) regarding drone technology...
+```
+
+### Limitations
+
+1. **Recent Files Only**: Searches the 5 most recently modified PDFs, may not find older attachments
+2. **No Filename Matching**: Can't verify the PDF filename matches the quoted attachment
+3. **Quote Metadata Limited**: Signal doesn't provide attachment IDs in quotes
+
+### Potential Improvements
+
+**Option 1: Track Attachments in Database**
+```sql
+CREATE TABLE signal_attachments (
+  id TEXT PRIMARY KEY,           -- signal-cli generated ID
+  message_timestamp BIGINT,      -- Original message timestamp
+  filename TEXT,                 -- Original filename
+  content_type TEXT,             -- MIME type
+  file_path TEXT,                -- Local storage path
+  created_at TIMESTAMP
+);
+```
+
+When messages with attachments are received, store the mapping. Then lookup by quote timestamp.
+
+**Option 2: Use Quote ID to Find Original Message**
+The quote includes `id` (timestamp of original message). Could search database for message at that timestamp to find attachment info.
+
+### Lesson
+
+✅ **Quote attachments have limited metadata** - no file ID or path
+✅ **Signal-cli stores attachments by random ID** - not by original filename
+✅ **Searching recent files works** - most users quote recent messages
+✅ **PDF parsing with pdf-parse** - works well for text extraction
+✅ **Smart extraction for large PDFs** - TOC, chapters, conclusion
+✅ **Container rebuild required** - when adding new fs imports
+
+**Debugging Commands**:
+```bash
+# Check attachments directory
+docker exec signal-bot-selfhosted ls -lat /app/signal-data/attachments/ | head -20
+
+# Find recent PDFs
+docker exec signal-bot-selfhosted ls -lat /app/signal-data/attachments/ | grep pdf | head -10
+
+# Check if pdf-parse can read a file
+docker exec signal-bot-selfhosted node -e "
+  const pdf = require('pdf-parse');
+  const fs = require('fs');
+  const data = fs.readFileSync('/app/signal-data/attachments/akU08iutNUIMuhcRMSS2.pdf');
+  pdf(data).then(r => console.log('Pages:', r.numpages, 'Chars:', r.text.length));
+"
+```
+
+**Files**:
+- `container/src/bot/command-handler.ts:51-79` - SignalAttachment interface
+- `container/src/bot/command-handler.ts:1540-1665` - PDF attachment handling in handleSummarize
+- `container/src/bot/signal-bot-v2.ts:521-586` - quotedAttachments extraction and passing
+- `container/src/utils/pdf-scraper.ts:294-411` - scrapePdfFromPath function
+
+---
+
 **Document Status**: ✅ Complete
-**Review Date**: 2025-12-02
+**Review Date**: 2025-12-03
 **Next Review**: 2026-01-01
+
+---
+
+## CRITICAL: rsync --delete Data Loss (2025-12-03)
+
+### The Incident
+
+**What Happened:**
+A catastrophic data loss occurred when `rsync -avz --delete` was used with the WRONG destination path.
+
+**Command Used (WRONG):**
+```bash
+rsync -avz --delete container/ root@proxmox-main:/home/signal-bot-selfhosted/
+```
+
+**Correct Path Should Have Been:**
+```bash
+rsync -avz --delete container/ root@proxmox-main:/home/signal-bot-selfhosted/bot/
+```
+
+### Impact
+
+The `--delete` flag caused rsync to DELETE all files in the destination that weren't in the source:
+
+- ❌ `docker-compose.yml` - DELETED (production configuration)
+- ❌ `.env` - DELETED (credentials, API keys)
+- ❌ `data/signal-data/data/813876.d/account.db` - DELETED (Signal registration - CRITICAL)
+- ❌ All persistent data directories - DELETED
+
+**Result:** Signal CLI account was permanently lost. The account.db file contains Signal's device registration, encryption keys, and group memberships. Without it, the bot cannot authenticate with Signal servers.
+
+### Successful Recovery
+
+**Local Backup Found!**
+
+1. Found LOCAL backup at `/Users/sac/Git/chat-based-community-dashboard/modern-stack/signal-data/`
+2. Backup was from September 11, 2025 - complete and valid!
+3. Contained full account.db with all 45 tables (recipients, sessions, groups, etc.)
+4. **Successfully restored with rsync (without --delete):**
+   ```bash
+   rsync -avz /Users/sac/Git/chat-based-community-dashboard/modern-stack/signal-data/ \
+     root@proxmox-main:/home/signal-bot-selfhosted/data/signal-data/
+   ```
+5. Bot restarted and is working: 27 groups, 5427 membership records
+
+**Backup Locations (Priority Order):**
+1. **Local dev machine**: `modern-stack/signal-data/` (most likely to have recent data)
+2. **R2 Cloud**: Bot auto-syncs on startup/shutdown
+3. **Server backups**: `/home/signal-bot-selfhosted/data/backups/`
+
+### Root Cause
+
+The deploy script (`deploy-selfhosted.sh`) correctly specifies:
+```bash
+REMOTE_PATH="/home/signal-bot-selfhosted/bot"
+```
+
+But manual rsync commands without checking the script used the wrong path.
+
+### Prevention
+
+**ALWAYS:**
+
+1. **Use the deploy script** - It has the correct paths
+   ```bash
+   ./deploy-selfhosted.sh
+   ```
+
+2. **If you must rsync manually, ALWAYS use --dry-run first:**
+   ```bash
+   rsync -avz --dry-run --delete container/ root@proxmox-main:/home/signal-bot-selfhosted/bot/
+   ```
+
+3. **Check for "deleting" lines in --dry-run output** - If you see critical files like `docker-compose.yml` or `data/` being deleted, STOP
+
+4. **NEVER use --delete when syncing to a parent directory** that contains other important files
+
+5. **Backup critical data BEFORE any rsync --delete:**
+   ```bash
+   ssh root@proxmox-main "tar -czvf /tmp/signal-bot-backup-$(date +%Y%m%d).tar.gz /home/signal-bot-selfhosted/data/signal-data/"
+   ```
+
+### Lesson
+
+✅ **ALWAYS verify the destination path matches the deploy script**
+✅ **ALWAYS use --dry-run before --delete**
+✅ **NEVER assume the destination path - check first**
+✅ **Backup Signal data regularly - it's irreplaceable**
+✅ **Prefer deploy scripts over manual commands**
+
+**Files**: 
+- `deploy-selfhosted.sh` (lines 18-19 show correct path)
+- `CLAUDE.md` (updated with rsync warning)
+
+
+---
+
+## VPN/Gluetun Container Management (2025-12-03)
+
+### Problem
+
+The Signal bot uses `network_mode: "service:vpn"` to route all traffic through a Mullvad VPN container (gluetun). This provides IP privacy but introduces several failure modes:
+
+**Common Symptoms:**
+- `container for service "vpn" is unhealthy` during deploy
+- `Error: connect ECONNREFUSED` to database/redis
+- `curl: (6) Could not resolve host` - DNS resolution fails
+- `curl: (60) SSL certificate problem` - SSL verification fails through VPN
+- Signal CLI: `Connection terminated unexpectedly`
+
+**Root Causes:**
+1. VPN connection drops or tunnel fails
+2. Mullvad WireGuard server becomes unavailable
+3. DNS resolution through Mullvad DNS (10.64.0.1) fails
+4. Container IP addresses change after network recreation
+
+### Solution
+
+**Manual VPN Restart:**
+```bash
+# Check VPN status
+docker logs --tail 50 signal-bot-vpn
+
+# Restart VPN and wait for healthy
+docker compose restart vpn
+sleep 30
+
+# Verify connectivity
+docker exec signal-bot-selfhosted curl -s https://api.ipify.org
+# Should return VPN IP (e.g., 143.244.47.75)
+
+# Then restart the bot
+docker compose up -d signal-bot
+```
+
+**Automated VPN Health Check (in deploy script):**
+```bash
+# Check if VPN is healthy before deploying
+VPN_HEALTH=$(docker inspect signal-bot-vpn --format='{{.State.Health.Status}}' 2>/dev/null || echo "none")
+if [ "$VPN_HEALTH" != "healthy" ]; then
+    echo "⚠️  VPN unhealthy, restarting..."
+    docker compose restart vpn
+    sleep 30
+fi
+```
+
+**Docker Compose VPN Configuration:**
+```yaml
+vpn:
+  image: qmcgaw/gluetun:latest
+  cap_add:
+    - NET_ADMIN
+  devices:
+    - /dev/net/tun:/dev/net/tun
+  environment:
+    VPN_SERVICE_PROVIDER: mullvad
+    VPN_TYPE: wireguard
+    WIREGUARD_PRIVATE_KEY: <key>
+    # ... other WireGuard settings
+  healthcheck:
+    test: ["CMD", "ping", "-c", "1", "1.1.1.1"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 30s
+
+signal-bot:
+  network_mode: "service:vpn"  # Routes ALL traffic through VPN
+  depends_on:
+    vpn:
+      condition: service_healthy  # Won't start until VPN healthy
+```
+
+### Key Points
+
+1. **Bot uses VPN's network stack** - The signal-bot container has NO direct network access
+2. **DNS goes through Mullvad** - Uses 10.64.0.1 instead of system DNS
+3. **IP addresses are dynamic** - Container IPs change on network recreation
+4. **VPN must be healthy first** - Always ensure VPN is up before starting bot
+
+### Lesson
+
+✅ **Always check VPN health before deploying**
+✅ **Restart VPN if DNS or connectivity fails**
+✅ **Wait 30+ seconds after VPN restart for connection to stabilize**
+✅ **Use `depends_on: condition: service_healthy`** in docker-compose
+✅ **Monitor VPN logs for WireGuard timeout errors**
+
+**Files**: `docker-compose.yml`, `deploy-selfhosted.sh`
+
+---
+
+## Docker Network IP Address Changes (2025-12-03)
+
+### Problem
+
+After `docker compose down && docker compose up -d`, container IP addresses change. The signal-bot uses hardcoded IPs to reach postgres/redis (because `network_mode: service:vpn` prevents DNS resolution of container names).
+
+**Error Example:**
+```
+Error: connect ECONNREFUSED 172.24.0.2:5432
+```
+
+**What Happened:**
+- Before restart: postgres at 172.24.0.2
+- After restart: VPN got 172.24.0.2, postgres moved to 172.24.0.3
+
+### Solution
+
+**Check Current IPs:**
+```bash
+docker network inspect signal-bot-selfhosted_signal-bot-network | grep -E '(Name|IPv4)'
+```
+
+**Update docker-compose.yml with new IPs:**
+```bash
+# Current layout (as of 2025-12-03):
+# - VPN: 172.24.0.2
+# - Postgres: 172.24.0.3
+# - Redis: 172.24.0.4
+
+# Update the environment variables in docker-compose.yml:
+DB_HOST: 172.24.0.3     # Was 172.24.0.2
+REDIS_HOST: 172.24.0.4
+REDIS_URL: redis://172.24.0.4:6379
+```
+
+**Better Long-term Fix (TODO):**
+Use static IPs in docker-compose.yml:
+```yaml
+networks:
+  signal-bot-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.24.0.0/16
+
+services:
+  vpn:
+    networks:
+      signal-bot-network:
+        ipv4_address: 172.24.0.2
+  postgres:
+    networks:
+      signal-bot-network:
+        ipv4_address: 172.24.0.3
+  redis:
+    networks:
+      signal-bot-network:
+        ipv4_address: 172.24.0.4
+```
+
+### Lesson
+
+✅ **Check container IPs after any `docker compose down/up`**
+✅ **Update docker-compose.yml if IPs changed**
+✅ **Consider using static IP assignments for reliability**
+✅ **VPN container always gets first available IP**
+
+**Files**: `docker-compose.yml`
+
+---
+
+## Phone Number Privacy in Display Names (2025-12-04)
+
+### Problem
+
+The bot was exposing users' phone numbers in group chat messages when displaying their names. This happened because the code used phone numbers as fallback values when database lookups didn't return a proper display name.
+
+**Example of Leaked Phone Number:**
+```
+🔒 +12247253276 holds ❌ FADE 20 pts
+```
+
+**Root Cause:**
+Multiple places in `command-handler.ts` had fallback chains that included phone numbers:
+```typescript
+// WRONG - Phone number was in the fallback chain
+playerName = row.display_name || row.profile_name ||
+            (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name) ||
+            row.phone_number || playerName;  // <-- Privacy leak!
+```
+
+### Solution
+
+**Remove all phone number fallbacks from display name chains:**
+
+1. **Dice game player names** (line ~5100):
+```typescript
+// CORRECT - Never use phone_number as name
+playerName = row.display_name || row.profile_name ||
+            (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name) ||
+            playerName;
+```
+
+2. **!cast command** (lines ~3177, ~3217):
+   - Removed phone number from database lookup fallback
+   - Removed entire phone number formatting fallback block
+   - Falls back to `User-{shortUUID}` instead
+
+3. **!remove command** (line ~4173):
+   - Default to "a member" instead of raw identifier
+   - Only show actual display names if found
+
+**Privacy-Safe Fallback Hierarchy:**
+```
+1. display_name (from database)
+2. profile_name (from database)
+3. first_name + last_name (from database)
+4. "Player-{4 chars of UUID}" (safe anonymized fallback)
+5. "a member" (for public messages about users)
+```
+
+### Lesson
+
+✅ **NEVER use phone numbers in fallback chains for display names**
+✅ **Always use anonymized identifiers** (short UUID, "a member") as final fallback
+✅ **Phone numbers are okay for internal logging** (console.log) but never for group messages
+✅ **Review all user-facing messages** to ensure no identifiers can leak
+
+**Files**: `container/src/bot/command-handler.ts`
+
+---
+
+## pCloud Download Links Are IP-Bound (2025-12-04)
+
+### Problem
+
+**Symptom**: pCloud file search results returned links that led to "dead pages" or "HTTP 410 Gone" errors.
+
+**Initial Investigation**:
+```bash
+# Fresh API call from server - returns 200 OK
+curl -sI "https://def1.pcloud.com/[fresh-path]/file.pdf"
+# HTTP/1.1 200 OK
+
+# Same URL from user's browser - returns 410 Gone
+# HTTP/1.1 410 Gone
+```
+
+**Root Cause**: pCloud's `getpublinkdownload` API generates **temporary IP-bound download URLs** that:
+1. Are valid only for the IP that generated them
+2. Expire after ~4-6 hours
+3. Return `HTTP 410 Gone` when accessed from a different IP
+
+Since the Signal bot server generates the URL, but users click from their own IPs, the links never work.
+
+### Solution
+
+**Instead of generating direct download URLs, use pCloud web viewer URLs**:
+
+```typescript
+// WRONG - Temporary IP-bound URL (doesn't work for users!)
+export async function getDirectDownloadLink(relativePath: string) {
+  const response = await fetch(`https://api.pcloud.com/getpublinkdownload?code=${code}&fileid=${fileid}`);
+  const data = await response.json();
+  return `https://${data.hosts[0]}${data.path}`;  // IP-bound!
+}
+
+// CORRECT - Web viewer URL (works for everyone!)
+export async function getDirectDownloadLink(relativePath: string) {
+  const entry = pcloudIndex.files.get(relativePath);
+  // Format: https://u.pcloud.link/publink/show?code=XXX#folder=FOLDER_ID&file=FILE_ID
+  return `${PCLOUD_PUBLIC_URL}#folder=${entry.parentfolderid}&file=${entry.fileid}`;
+}
+```
+
+**How the web viewer URL works**:
+1. User clicks the link → pCloud web interface loads
+2. Web app interprets `#folder=X&file=Y` fragment
+3. Navigates directly to the file's parent folder
+4. User can view/download from there (generates their own IP-bound download)
+
+### Implementation Details
+
+**Updated pCloud file index** to track parent folder IDs:
+```typescript
+interface PCloudFileEntry {
+  fileid: number;
+  parentfolderid: number;  // NEW: Required for web viewer URL
+  name: string;
+  path: string;
+  size: number;
+}
+```
+
+**Recursive indexing** captures parent folder IDs:
+```typescript
+function indexPCloudContents(
+  contents: any[],
+  currentPath: string,
+  parentFolderId: number,  // Track parent
+  files: Map<string, PCloudFileEntry>
+): void {
+  for (const item of contents) {
+    if (item.isfolder) {
+      indexPCloudContents(item.contents, itemPath, item.folderid || parentFolderId, files);
+    } else if (item.fileid) {
+      files.set(itemPath.toLowerCase(), {
+        fileid: item.fileid,
+        parentfolderid: item.parentfolderid || parentFolderId,
+        name: item.name,
+        path: itemPath,
+        size: item.size || 0,
+      });
+    }
+  }
+}
+```
+
+### pCloud API Reference
+
+**Two data centers** (must match user's account location):
+- `api.pcloud.com` - United States
+- `eapi.pcloud.com` - Europe
+
+**Useful endpoints**:
+- `showpublink?code=XXX` - Get folder structure with fileids (recursive)
+- `getpublinkdownload?code=XXX&fileid=Y` - Get temporary download URL (IP-bound!)
+- `getfilepublink?fileid=Y&auth=TOKEN` - Create new public link (requires auth)
+
+### Lesson
+
+✅ **pCloud download URLs from `getpublinkdownload` are IP-bound** - don't use for sharing
+✅ **Use web viewer URLs** with `#folder=X&file=Y` fragment for shareable links
+✅ **Store `parentfolderid`** in file index for web viewer URL construction
+✅ **Match API host to account location** (US: api.pcloud.com, EU: eapi.pcloud.com)
+
+**Sources**:
+- [pCloud SDK PHP GitHub Issue #15](https://github.com/pCloud/pcloud-sdk-php/issues/15)
+- [Stack Overflow: Download files with pCloud API](https://stackoverflow.com/questions/73759126/download-files-with-the-pcloud-api)
+- [pCloud API Documentation](https://docs.pcloud.com/methods/public_links/)
+
+**Files**: `container/src/utils/file-search.ts`
+
+---
+
+## 25. Auto-Archive Documents After Virus Scan (2025-12-04)
+
+### Problem
+Users wanted documents (PDFs, PPTX, STL files, etc.) to be automatically archived to pCloud after the automatic virus scan, without needing to manually use `!archive`.
+
+### Solution
+Extended the `autoScanAttachments()` function in `signal-bot-v2.ts` to:
+1. Track clean files eligible for auto-archive
+2. After virus scan, automatically organize and upload safe file types
+3. Return pCloud viewer links in the scan results message
+
+### Implementation
+
+**Safe file types for auto-archive** (defined in `AUTO_ARCHIVE_EXTENSIONS`):
+- **Documents**: `.pdf`, `.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.odt`, `.ods`, `.odp`, `.rtf`, `.csv`
+- **Text/code**: `.md`, `.json`, `.yaml`, `.yml`, `.txt`
+- **Fabrication/3D**: `.stl`, `.gcode`, `.step`, `.stp`, `.iges`, `.igs`, `.scad`, `.obj`, `.3mf`, `.amf`, `.dxf`, `.dwg`
+
+**Flow**:
+1. Auto-scan runs ClamAV on attachment
+2. If clean AND extension is in `AUTO_ARCHIVE_EXTENSIONS`:
+   - Get group name from database for categorization
+   - Call `organizeFile()` from file-organizer.ts
+   - Upload to pCloud via rclone
+   - Get public link via `rclone link`
+3. Send combined message with scan results + archive links
+
+### Code Changes
+
+```typescript
+// signal-bot-v2.ts - New import
+import { organizeFile, getDirectoryForGroup, FileOrganizeResult } from '../utils/file-organizer.js';
+
+// Track clean files during scanning
+interface CleanFileInfo {
+  filename: string;
+  filePath: string;
+  ext: string;
+  fileSizeKB: number;
+}
+const cleanFiles: CleanFileInfo[] = [];
+
+// When virus scan passes
+if (stdout.includes('OK')) {
+  results.push(`✅ ${filename} (${fileSizeKB} KB) - Clean`);
+  if (AUTO_ARCHIVE_EXTENSIONS.has(ext)) {
+    cleanFiles.push({ filename, filePath: targetFile.path, ext, fileSizeKB });
+  }
+}
+
+// After all scans, archive clean files
+for (const cleanFile of cleanFiles) {
+  const result = await organizeFile(cleanFile.filePath, { groupName, scanVirus: false });
+  // Upload via rclone and get link...
+}
+```
+
+### Message Format
+
+When a user uploads a document, they now see:
+
+```
+🛡️ Auto-Scan Results
+
+✅ report.pdf (245 KB) - Clean
+
+✓ Files scanned with ClamAV
+
+📂 Auto-Archived to pCloud:
+
+📁 report.pdf → Research/Documents
+   ☁️ https://u.pcloud.link/publink/show?...
+```
+
+### Group-to-Directory Mapping
+
+Files are automatically categorized based on Signal group name using `file-organizer.ts`:
+- `ai/ml`, `machine learning` → `AI-ML/`
+- `drone`, `uav`, `fpv` → `UnmannedSystems/`
+- `cyber`, `infosec` → `Cybersecurity/`
+- `fabrication`, `3d print` → `Fabrication/`
+- Unknown groups → `UNSORTED/`
+
+### Lesson
+
+✅ **Auto-archive eliminates manual `!archive` step** for safe file types
+✅ **Virus scan happens first** - infected files are NOT archived
+✅ **Group-based categorization** routes files to appropriate directories
+✅ **pCloud links returned immediately** for easy sharing
+
+**Files**:
+- `container/src/bot/signal-bot-v2.ts` - Auto-scan with auto-archive logic
+- `container/src/utils/file-organizer.ts` - Group-to-directory mapping
+
+---
+
+## 26. Docker Volume Mount Permissions (rclone Config) (2025-12-04)
+
+### Problem
+
+**Symptom**: rclone commands failing with "permission denied" when accessing config file mounted from host.
+
+**Error Message**:
+```
+CRITICAL: Failed to load config file "/app/config/rclone.conf": permission denied
+```
+
+**Debug Investigation**:
+```bash
+# Inside container - check directory permissions
+docker exec signal-bot-selfhosted ls -la /app/config/
+# drwx------ 2 501 dialout 4096 Dec  4 03:16 .
+# -rw-r--r-- 1 501 dialout  275 Dec  4 03:16 rclone.conf
+
+# Check container user
+docker exec signal-bot-selfhosted whoami
+# node
+
+docker exec signal-bot-selfhosted id
+# uid=1000(node) gid=1000(node) groups=1000(node)
+```
+
+### Root Cause
+
+**UID/GID Mismatch Between Host and Container**:
+- Host directory created by macOS or original user with **UID 501** (default macOS user)
+- Container runs as `node` user with **UID 1000**
+- Directory permissions were `drwx------` (700) - only owner can access
+- Even though `rclone.conf` file inside was world-readable (`-rw-r--r--`), the **parent directory** blocked access
+
+**Key Insight**: It's not enough for the file to be readable - the container user must also have **execute permission on the directory** to list and access files within it.
+
+### Solution
+
+**On the host server**, fix permissions to allow container user access:
+
+```bash
+# Make directory traversable (755 = rwxr-xr-x)
+chmod 755 /home/signal-bot-selfhosted/config
+
+# Change ownership to match container user (UID 1000)
+chown -R 1000:1000 /home/signal-bot-selfhosted/config
+
+# Verify
+ls -la /home/signal-bot-selfhosted/config/
+# drwxr-xr-x 2 1000 1000 4096 Dec  4 03:16 .
+# -rw-r--r-- 1 1000 1000  275 Dec  4 03:16 rclone.conf
+```
+
+**Alternative**: If you can't change ownership, ensure directory is world-executable:
+```bash
+chmod 755 /home/signal-bot-selfhosted/config
+# This allows any user to traverse the directory
+```
+
+### Docker Compose Volume Mount Reference
+
+```yaml
+services:
+  signal-bot:
+    volumes:
+      # Config directory - must be readable by container user (UID 1000)
+      - ./config:/app/config:ro
+```
+
+### Prevention
+
+**When creating host directories for Docker volume mounts**:
+
+1. **Check what user the container runs as**:
+   ```bash
+   docker exec <container> id
+   ```
+
+2. **Set correct ownership before mounting**:
+   ```bash
+   mkdir -p /path/to/config
+   chown -R 1000:1000 /path/to/config
+   chmod 755 /path/to/config
+   ```
+
+3. **Or use explicit user mapping in docker-compose.yml**:
+   ```yaml
+   services:
+     app:
+       user: "${UID}:${GID}"  # Run as host user
+   ```
+
+### Common UID Values
+
+| Source | UID | Notes |
+|--------|-----|-------|
+| macOS default user | 501 | First user on macOS |
+| Linux default user | 1000 | First user on most Linux distros |
+| Docker `node` user | 1000 | Official Node.js images |
+| root | 0 | Never recommended |
+
+### Lesson
+
+✅ **Directory permissions matter, not just file permissions** - container needs execute (`x`) on parent directories
+✅ **Check UID/GID mismatch** when "permission denied" errors occur on mounted volumes
+✅ **Fix on host, not in Dockerfile** - volume mounts override container filesystem
+✅ **Use `chmod 755` for directories** that need to be traversable by any user
+✅ **Match UID 1000** for most Node.js containers (the `node` user)
+
+**Files**:
+- `docker-compose.yml` - Volume mount configuration
+- Host: `/home/signal-bot-selfhosted/config/` - rclone configuration directory

@@ -7,15 +7,48 @@
  * Requirements:
  * - yt-dlp must be installed in the container
  * - ffmpeg must be installed for video processing
+ *
+ * SECURITY: All shell commands use execFileAsync with argument arrays to prevent command injection.
  */
 
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { removeTrackers, getSocialMediaPlatform, getContentType } from './social-media-detector.js';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/**
+ * SECURITY: Validate URL to prevent command injection
+ */
+function validateUrl(url: string): string {
+  // Only allow http/https URLs
+  if (!url.match(/^https?:\/\//i)) {
+    throw new Error('Invalid URL: must start with http:// or https://');
+  }
+
+  // Check for dangerous patterns
+  const dangerousPatterns = [
+    /\$\(/,           // Command substitution $(...)
+    /\`/,             // Backtick command substitution
+    /\|\s*\w/,        // Pipe to command
+    /;\s*\w/,         // Command chaining
+    /&&\s*\w/,        // AND command chaining
+    />\s*\//,         // Redirect to path
+    /<\s*\//,         // Input redirect from path
+  ];
+
+  for (const pattern of dangerousPatterns) {
+    if (pattern.test(url)) {
+      console.warn(`⚠️ SECURITY: Blocked suspicious URL pattern`);
+      throw new Error('URL contains invalid characters');
+    }
+  }
+
+  return url;
+}
 
 export interface DownloadOptions {
   quality?: '1080p' | '720p' | '480p' | '360p' | 'best' | 'worst';
@@ -86,7 +119,7 @@ export async function downloadContent(
   const {
     quality = 'best',
     audioOnly = false,
-    outputDir = '/tmp',
+    outputDir = '/app/downloads',  // Container downloads directory (mounted volume)
     maxFileSizeMB = 95, // Signal's cross-platform limit
   } = options;
 
@@ -191,21 +224,13 @@ export async function downloadContent(
   console.log(`⚙️  Quality: ${quality}, Audio-only: ${audioOnly}`);
 
   try {
-    // Execute yt-dlp download
-    // Build command with proper quoting for shell execution
-    const quotedArgs = ytdlArgs.map(arg => {
-      // Quote arguments that contain spaces or special shell characters
-      // < and > are shell redirection operators and must be quoted
-      if (arg.includes(' ') || arg.includes('$') || arg.includes('(') || arg.includes(')') ||
-          arg.includes('<') || arg.includes('>') || arg.includes('[') || arg.includes(']')) {
-        return `'${arg.replace(/'/g, "'\\''")}'`;
-      }
-      return arg;
-    });
-    const command = `yt-dlp ${quotedArgs.join(' ')}`;
+    // SECURITY: Validate the URL before using it
+    validateUrl(cleanUrl);
+
+    // SECURITY: Execute yt-dlp using execFileAsync with argument array (prevents injection)
     console.log(`🔧 Running: yt-dlp [args omitted]`);
 
-    const { stdout, stderr } = await execAsync(command, {
+    const { stdout, stderr } = await execFileAsync('yt-dlp', ytdlArgs, {
       timeout: 120000, // 2 minute timeout
     });
 
@@ -213,9 +238,12 @@ export async function downloadContent(
       console.warn('⚠️  yt-dlp warnings:', stderr);
     }
 
-    // Get the downloaded filename
-    const getFilenameCommand = `yt-dlp --get-filename -o "%(title)s.%(ext)s" "${cleanUrl}"`;
-    const { stdout: filenameOutput } = await execAsync(getFilenameCommand);
+    // SECURITY: Get the downloaded filename using execFileAsync
+    const { stdout: filenameOutput } = await execFileAsync('yt-dlp', [
+      '--get-filename',
+      '-o', '%(title)s.%(ext)s',
+      cleanUrl,
+    ]);
     const rawFilename = filenameOutput.trim();
     const downloadedFile = path.join(outputDir, rawFilename);
 
@@ -307,6 +335,7 @@ export async function downloadContent(
 
 /**
  * Get video/post metadata without downloading
+ * SECURITY: Uses execFileAsync to prevent command injection
  */
 export async function getMetadata(url: string): Promise<{
   title?: string;
@@ -318,8 +347,15 @@ export async function getMetadata(url: string): Promise<{
   const cleanUrl = removeTrackers(url);
 
   try {
-    const command = `yt-dlp --dump-json "${cleanUrl}"`;
-    const { stdout } = await execAsync(command, { timeout: 30000 });
+    // SECURITY: Validate URL before using
+    validateUrl(cleanUrl);
+
+    // SECURITY: Use execFileAsync with argument array
+    const { stdout } = await execFileAsync('yt-dlp', [
+      '--dump-json',
+      cleanUrl,
+    ], { timeout: 30000 });
+
     const metadata = JSON.parse(stdout);
 
     return {

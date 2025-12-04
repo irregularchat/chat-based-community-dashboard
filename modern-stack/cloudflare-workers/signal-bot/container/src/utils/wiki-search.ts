@@ -4,14 +4,56 @@
  * Uses local git repo for fast, reliable search.
  * Falls back to HTTP if git repo not available.
  * Supports both keyword search and AI-enriched queries.
+ *
+ * SECURITY: All shell commands use execFileAsync with argument arrays to prevent command injection.
  */
 
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/**
+ * SECURITY: Sanitize search terms to prevent command injection in git grep
+ */
+function sanitizeSearchTerm(term: string): string {
+  // Remove shell metacharacters that could enable command injection
+  return term
+    .replace(/[\$\`\|\&\;\<\>\\\n\r]/g, '') // Remove dangerous chars
+    .replace(/\.\./g, '') // Prevent directory traversal
+    .replace(/['"]/g, '') // Remove quotes
+    .trim()
+    .substring(0, 100); // Limit length
+}
+
+/**
+ * SECURITY: Validate search input and reject suspicious patterns
+ */
+function validateSearchTerm(term: string): string {
+  // Detect obvious command injection attempts
+  const dangerousPatterns = [
+    /\$\(/,           // Command substitution $(...)
+    /\`/,             // Backtick command substitution
+    /\|\s*\w/,        // Pipe to command
+    /;\s*\w/,         // Command chaining
+    /&&\s*\w/,        // AND command chaining
+    />\s*\//,         // Redirect to path
+    /<\s*\//,         // Input redirect from path
+    /\/etc\//,        // System files
+    /\/proc\//,       // Proc filesystem
+  ];
+
+  for (const pattern of dangerousPatterns) {
+    if (pattern.test(term)) {
+      console.warn(`⚠️ SECURITY: Blocked suspicious wiki search pattern`);
+      throw new Error('Search term contains invalid characters');
+    }
+  }
+
+  return sanitizeSearchTerm(term);
+}
 
 const WIKI_BASE_URL = 'https://irregularpedia.org';
 const WIKI_REPO_PATH = '/app/wiki-repo';  // Mounted bare git repo
@@ -76,12 +118,13 @@ export interface WikiContent {
 
 /**
  * Check if local wiki repo is available
+ * SECURITY: Uses execFileAsync to prevent command injection
  */
 async function isRepoAvailable(): Promise<boolean> {
   try {
     await fs.access(WIKI_REPO_PATH);
-    // Test git command
-    await execAsync(`GIT_DIR="${WIKI_REPO_PATH}" git rev-parse HEAD`, { timeout: 5000 });
+    // Test git command using execFileAsync
+    await execFileAsync('git', ['--git-dir', WIKI_REPO_PATH, 'rev-parse', 'HEAD'], { timeout: 5000 });
     return true;
   } catch {
     return false;
@@ -90,18 +133,21 @@ async function isRepoAvailable(): Promise<boolean> {
 
 /**
  * Execute git command on wiki repo
+ * SECURITY: Uses execFileAsync with argument array to prevent injection
  */
-async function gitExec(args: string, timeout = 10000): Promise<string> {
-  const { stdout } = await execAsync(`GIT_DIR="${WIKI_REPO_PATH}" git ${args}`, { timeout });
+async function gitExec(argsArray: string[], timeout = 10000): Promise<string> {
+  const fullArgs = ['--git-dir', WIKI_REPO_PATH, ...argsArray];
+  const { stdout } = await execFileAsync('git', fullArgs, { timeout });
   return stdout.trim();
 }
 
 /**
  * Get list of all markdown files from local repo
+ * SECURITY: Uses array-based gitExec - no user input involved
  */
 async function getMarkdownFiles(): Promise<string[]> {
   try {
-    const output = await gitExec('ls-tree --name-only -r HEAD');
+    const output = await gitExec(['ls-tree', '--name-only', '-r', 'HEAD']);
     const files = output.split('\n')
       .filter(f => f.endsWith('.md') && f.startsWith('docs/'))
       .filter(f => !f.includes('node_modules'));
@@ -114,10 +160,16 @@ async function getMarkdownFiles(): Promise<string[]> {
 
 /**
  * Read file content from git repo
+ * SECURITY: filePath is validated before use
  */
 async function readFileFromRepo(filePath: string): Promise<string> {
   try {
-    const content = await gitExec(`show HEAD:"${filePath}"`, 30000);
+    // SECURITY: Validate file path is within expected structure
+    if (!filePath.startsWith('docs/') || filePath.includes('..')) {
+      console.warn(`⚠️ SECURITY: Rejected file path: ${filePath}`);
+      return '';
+    }
+    const content = await gitExec(['show', `HEAD:${filePath}`], 30000);
     return content;
   } catch (error) {
     console.error(`Error reading ${filePath}:`, error);
@@ -260,18 +312,24 @@ export async function searchWiki(query: string, limit = 10): Promise<WikiSearchR
   const results: Map<string, WikiSearchResult> = new Map();
 
   // Run git grep for each term in parallel
-  // Use -- ':docs/' pattern for recursive search in bare repo
+  // SECURITY: User input is validated before use
   const grepPromises = terms.map(async (term) => {
     try {
-      // Case-insensitive grep, recursive in docs/ folder
+      // SECURITY: Validate and sanitize the search term
+      const safeTerm = validateSearchTerm(term);
+
+      // SECURITY: Use array-based gitExec with sanitized term
       const output = await gitExec(
-        `grep -i -l --max-count=50 "${term}" HEAD -- docs/ 2>/dev/null || true`,
+        ['grep', '-i', '-l', '--max-count=50', '-e', safeTerm, 'HEAD', '--', 'docs/'],
         15000
       );
       const files = output.split('\n').filter(f => f.startsWith('HEAD:docs/') && f.endsWith('.md'));
       return { term, files };
-    } catch (err) {
-      console.error(`📚 Git grep error for "${term}":`, err);
+    } catch (err: any) {
+      // Ignore security errors (just return no results)
+      if (!err.message?.includes('invalid characters')) {
+        console.error(`📚 Git grep error for "${term}":`, err);
+      }
       return { term, files: [] };
     }
   });
@@ -382,13 +440,17 @@ export async function searchWiki(query: string, limit = 10): Promise<WikiSearchR
 
 /**
  * Advanced search with context lines from git grep
+ * SECURITY: User input is validated before use
  */
 async function searchWithContext(term: string, maxFiles = 20): Promise<Map<string, string[]>> {
   const results: Map<string, string[]> = new Map();
   try {
-    // Get matching files with context lines
+    // SECURITY: Validate and sanitize the search term
+    const safeTerm = validateSearchTerm(term);
+
+    // SECURITY: Use array-based gitExec
     const output = await gitExec(
-      `grep -i -n -C 1 --max-count=3 "${term}" HEAD -- docs/ 2>/dev/null || true`,
+      ['grep', '-i', '-n', '-C', '1', '--max-count=3', '-e', safeTerm, 'HEAD', '--', 'docs/'],
       20000
     );
 
@@ -407,8 +469,11 @@ async function searchWithContext(term: string, maxFiles = 20): Promise<Map<strin
         }
       }
     }
-  } catch (err) {
-    console.error(`📚 Context grep error for "${term}":`, err);
+  } catch (err: any) {
+    // Ignore security errors
+    if (!err.message?.includes('invalid characters')) {
+      console.error(`📚 Context grep error for "${term}":`, err);
+    }
   }
   return results;
 }
@@ -442,15 +507,24 @@ export async function parallelSearch(queries: string[], limit = 10): Promise<Wik
   const articleMap = new Map(articles.map(a => [a.filePath, a]));
 
   // Strategy 1: Git grep for each term in parallel
+  // SECURITY: User input is validated before use
   const grepPromises = terms.slice(0, 8).map(async (term) => {
     try {
+      // SECURITY: Validate and sanitize the search term
+      const safeTerm = validateSearchTerm(term);
+
+      // SECURITY: Use array-based gitExec with sanitized term
       const output = await gitExec(
-        `grep -i -l --max-count=50 "${term}" HEAD -- docs/ 2>/dev/null || true`,
+        ['grep', '-i', '-l', '--max-count=50', '-e', safeTerm, 'HEAD', '--', 'docs/'],
         15000
       );
       const files = output.split('\n').filter(f => f.startsWith('HEAD:docs/') && f.endsWith('.md'));
       return { term, files };
-    } catch {
+    } catch (err: any) {
+      // Ignore security errors (just return no results)
+      if (!err.message?.includes('invalid characters')) {
+        // Ignore normal "no match" errors from git grep
+      }
       return { term, files: [] };
     }
   });

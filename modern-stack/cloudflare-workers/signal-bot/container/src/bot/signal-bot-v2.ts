@@ -17,13 +17,16 @@ import { CommandHandler } from './command-handler.js';
 import { SignalJsonRpcClient } from './signal-jsonrpc-client.js';
 import { processMessageURLs } from '../utils/url-security.js';
 import { extractURLs } from '../utils/url-security.js';
-import { detectNewsUrls, extractDomain } from '../utils/news-detector.js';
+import { detectNewsUrls, detectProcessableUrls, extractDomain } from '../utils/news-detector.js';
 import { isSocialMediaUrl, getSocialMediaPlatform, removeTrackers, getContentType, formatUrlForDisplay } from '../utils/social-media-detector.js';
 import { downloadContent, isYtDlpInstalled } from '../utils/social-media-downloader.js';
 import { EmojiReactionHandler } from '../utils/emoji-reaction-handler.js';
 import { DebugLogger } from '../utils/debug-logger.js';
 import { PostgresClient } from '../db/postgres-client.js';
 import { postNewsArticleToDiscourse, getDiscourseConfig } from '../utils/discourse-poster.js';
+import { detectGitRepoUrls, fetchRepoMetadata, formatRepoForSignalWithSummary, ParsedRepoUrl, RepoMetadata } from '../utils/git-repo-detector.js';
+import { organizeFile, getDirectoryForGroup, FileOrganizeResult } from '../utils/file-organizer.js';
+import OpenAI from 'openai';
 
 /**
  * Get web.archive.org link - checks for existing archive, falls back to save link
@@ -96,6 +99,7 @@ export interface SignalMessage {
         id?: number;
         author?: string;
         text?: string;
+        attachments?: any[];
       };
     };
     editMessage?: {
@@ -113,6 +117,7 @@ export interface SignalMessage {
           id?: number;
           author?: string;
           text?: string;
+          attachments?: any[];
         };
       };
     };
@@ -175,6 +180,9 @@ export class SignalBot extends EventEmitter {
   // Debug logger (optional)
   private debugLogger?: DebugLogger;
 
+  // OpenAI client for AI features (README summaries, etc.)
+  private openai?: OpenAI;
+
   constructor(config: BotConfig, dbClient: PostgresClient) {
     super();
     this.config = config;
@@ -188,6 +196,12 @@ export class SignalBot extends EventEmitter {
     // Initialize debug logger
     this.debugLogger = new DebugLogger(dbClient, true, true);
     console.log('📊 Debug logging enabled (PostgreSQL)');
+
+    // Initialize OpenAI if API key available
+    if (config.openAiApiKey) {
+      this.openai = new OpenAI({ apiKey: config.openAiApiKey });
+      console.log('🤖 OpenAI client initialized for git repo summaries');
+    }
   }
 
   /**
@@ -517,12 +531,29 @@ export class SignalBot extends EventEmitter {
       const groupInfo = dataMessage?.groupInfo;
       const groupId = groupInfo?.groupId;
       const quotedText = dataMessage?.quote?.text;
+      const quotedAttachments = dataMessage?.quote?.attachments;
 
       console.log(`🔵 [DEBUG] Message text: "${messageText}", groupId: ${groupId}`);
 
-      // Skip if no message text
+      // Check for attachments in the message (for automatic virus scanning)
+      const attachments = dataMessage?.attachments;
+      const hasAttachments = attachments && attachments.length > 0;
+
+      if (hasAttachments) {
+        console.log(`📎 [ATTACHMENT] Message has ${attachments.length} attachment(s), will auto-scan`);
+        // Trigger automatic virus scan for attachments
+        await this.autoScanAttachments(attachments, {
+          sourceNumber: sourceNumber || '',
+          sourceUuid,
+          sourceName: sourceName || '',
+          groupId,
+          timestamp,
+        });
+      }
+
+      // Skip if no message text (but attachments were already processed above)
       if (!messageText) {
-        console.log('🔵 [DEBUG] No message text, returning');
+        console.log('🔵 [DEBUG] No message text, returning (attachments handled above)');
         return;
       }
 
@@ -569,8 +600,13 @@ export class SignalBot extends EventEmitter {
       }
 
       console.log('🔵 [DEBUG] Checking if message is a command...');
-      // Check if it's a command (starts with !)
-      if (messageText.startsWith('!')) {
+      // Check if it's a command (starts with !) or a special reply pattern (tldr, bare numbers)
+      const trimmedText = messageText.trim();
+      const isCommand = trimmedText.startsWith('!');
+      const isTldrReply = /^tldr\s+\d+$/i.test(trimmedText);
+      const isBareNumberReply = /^[\d,\s]+$/.test(trimmedText);
+
+      if (isCommand || isTldrReply || isBareNumberReply) {
         console.log('🔵 [DEBUG] Message is a command, handling...');
         try {
           await this.handleCommand(messageText, {
@@ -580,6 +616,7 @@ export class SignalBot extends EventEmitter {
             groupId,
             timestamp,
             quotedText,
+            quotedAttachments,
             mentions: dataMessage?.mentions,
           });
           console.log('🔵 [DEBUG] Command handling completed');
@@ -594,7 +631,7 @@ export class SignalBot extends EventEmitter {
       // Check for emoji reactions (after command handling)
       if (messageText && sourceNumber && timestamp) {
         const isOwnMessage = sourceNumber === this.config.phoneNumber;
-        const isCommand = messageText.startsWith('!');
+        // isCommand, isTldrReply, isBareNumberReply already computed above
 
         const matchingEmojis = this.emojiReactionHandler.findMatchingEmojis(
           messageText,
@@ -679,6 +716,17 @@ export class SignalBot extends EventEmitter {
         });
       }
 
+      // Check for git repository URLs (GitHub, GitLab, etc.)
+      if (sourceNumber) {
+        console.log('🔵 [DEBUG] Checking for git repo URLs...');
+        await this.checkForGitRepoUrls(messageText, {
+          sourceNumber,
+          sourceName: sourceName || sourceNumber,
+          groupId,
+          timestamp
+        });
+      }
+
       console.log('🔵 [DEBUG] Emitting message event...');
       this.emit('message', {
         sourceNumber,
@@ -707,6 +755,447 @@ export class SignalBot extends EventEmitter {
   }
 
   /**
+   * Automatically scan attachments for viruses using ClamAV
+   */
+  private async autoScanAttachments(
+    attachments: any[],
+    context: {
+      sourceNumber: string;
+      sourceUuid?: string;
+      sourceName: string;
+      groupId?: string;
+      timestamp: number;
+    }
+  ): Promise<void> {
+    const fs = await import('fs/promises');
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+
+    const attachmentsDir = '/app/signal-data/attachments';
+    const results: string[] = [];
+
+    // Wait a moment for attachments to be downloaded
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    // File types that should be scanned (documents, archives, executables)
+    const SCANNABLE_EXTENSIONS = new Set([
+      // Documents
+      '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+      '.odt', '.ods', '.odp', '.rtf', '.csv',
+      // Archives
+      '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.tgz',
+      // Executables and scripts
+      '.exe', '.msi', '.dll', '.bat', '.cmd', '.ps1', '.sh', '.py', '.js',
+      '.apk', '.dmg', '.pkg', '.deb', '.rpm',
+      // Other potentially dangerous
+      '.iso', '.img', '.vhd', '.vmdk',
+      '.html', '.htm', '.svg', '.xml',
+      // Non-threatening file types for auto-archive (also scan these)
+      '.md', '.json', '.yaml', '.yml', '.txt', '.stl', '.gcode', '.step', '.stp', '.iges', '.igs',
+      '.scad', '.obj', '.3mf', '.amf', '.dxf', '.dwg',
+    ]);
+
+    // File types safe for auto-archive after virus scan
+    const AUTO_ARCHIVE_EXTENSIONS = new Set([
+      // Documents (safe to archive)
+      '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+      '.odt', '.ods', '.odp', '.rtf', '.csv',
+      // Text/code files
+      '.md', '.json', '.yaml', '.yml', '.txt',
+      // Fabrication/3D files
+      '.stl', '.gcode', '.step', '.stp', '.iges', '.igs',
+      '.scad', '.obj', '.3mf', '.amf', '.dxf', '.dwg',
+    ]);
+
+    // Track clean files for auto-archiving
+    interface CleanFileInfo {
+      filename: string;
+      filePath: string;
+      ext: string;
+      fileSizeKB: number;
+    }
+    const cleanFiles: CleanFileInfo[] = [];
+
+    // Content types to skip (media files)
+    const SKIP_CONTENT_TYPES = [
+      'image/', 'video/', 'audio/',
+    ];
+
+    for (const attachment of attachments) {
+      const filename = attachment.filename || `attachment.${attachment.contentType?.split('/')[1] || 'unknown'}`;
+      const ext = filename.includes('.') ? filename.substring(filename.lastIndexOf('.')).toLowerCase() : '';
+      const contentType = attachment.contentType || '';
+
+      // Skip media files
+      if (SKIP_CONTENT_TYPES.some((type) => contentType.startsWith(type))) {
+        console.log(`⏭️ [AUTO-SCAN] Skipping media file: ${filename} (${contentType})`);
+        continue;
+      }
+
+      // Only scan specific file types
+      if (ext && !SCANNABLE_EXTENSIONS.has(ext)) {
+        console.log(`⏭️ [AUTO-SCAN] Skipping non-scannable extension: ${filename} (${ext})`);
+        continue;
+      }
+
+      console.log(`🔍 [AUTO-SCAN] Scanning attachment: ${filename} (type: ${contentType})`);
+
+      try {
+        // Find the attachment file (most recent matching file)
+        const files = await fs.readdir(attachmentsDir);
+        const matchingFiles = ext
+          ? files.filter((f) => f.toLowerCase().endsWith(ext.toLowerCase()))
+          : files;
+
+        if (matchingFiles.length === 0) {
+          console.log(`⚠️ [AUTO-SCAN] No files found matching extension: ${ext}`);
+          continue;
+        }
+
+        // Get file stats and find most recent
+        const fileStats = await Promise.all(
+          matchingFiles.map(async (f) => {
+            try {
+              const stat = await fs.stat(`${attachmentsDir}/${f}`);
+              return { name: f, path: `${attachmentsDir}/${f}`, mtime: stat.mtime, size: stat.size };
+            } catch {
+              return null;
+            }
+          })
+        );
+
+        const validFiles = fileStats.filter(Boolean) as { name: string; path: string; mtime: Date; size: number }[];
+        validFiles.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+
+        if (validFiles.length === 0) {
+          console.log(`⚠️ [AUTO-SCAN] Could not access files`);
+          continue;
+        }
+
+        const targetFile = validFiles[0];
+        const fileSizeKB = Math.round(targetFile.size / 1024);
+
+        console.log(`🔍 [AUTO-SCAN] Scanning: ${targetFile.path} (${fileSizeKB} KB)`);
+
+        // Run ClamAV scan
+        try {
+          const { stdout } = await execAsync(`clamscan --no-summary "${targetFile.path}"`, {
+            timeout: 60000,
+          });
+
+          if (stdout.includes('OK')) {
+            results.push(`✅ ${filename} (${fileSizeKB} KB) - Clean`);
+            // Track clean file for auto-archive if it's a safe extension
+            if (AUTO_ARCHIVE_EXTENSIONS.has(ext)) {
+              cleanFiles.push({ filename, filePath: targetFile.path, ext, fileSizeKB });
+            }
+          } else if (stdout.includes('FOUND')) {
+            const threatMatch = stdout.match(/: (.+) FOUND/);
+            const threatName = threatMatch ? threatMatch[1] : 'Unknown threat';
+            results.push(`🚨 ${filename} (${fileSizeKB} KB) - THREAT DETECTED: ${threatName}`);
+          }
+        } catch (scanError: any) {
+          // Exit code 1 means virus found
+          if (scanError.code === 1 && scanError.stdout?.includes('FOUND')) {
+            const threatMatch = scanError.stdout.match(/: (.+) FOUND/);
+            const threatName = threatMatch ? threatMatch[1] : 'Unknown threat';
+            results.push(`🚨 ${filename} (${fileSizeKB} KB) - THREAT DETECTED: ${threatName}`);
+          } else if (scanError.message?.includes('not found') || scanError.code === 127) {
+            console.log('⚠️ [AUTO-SCAN] ClamAV not installed, skipping scan');
+            return; // Don't send any message if ClamAV isn't available
+          } else {
+            console.error(`⚠️ [AUTO-SCAN] Scan error: ${scanError.message}`);
+          }
+        }
+      } catch (error) {
+        console.error(`❌ [AUTO-SCAN] Error processing ${filename}:`, error);
+      }
+    }
+
+    // Send scan results if we have any
+    if (results.length > 0) {
+      const hasThreats = results.some((r) => r.includes('THREAT DETECTED'));
+      const cleanResults = results.filter((r) => !r.includes('THREAT DETECTED'));
+      const threatResults = results.filter((r) => r.includes('THREAT DETECTED'));
+
+      // For clean files: auto-archive if eligible, then post results
+      if (cleanResults.length > 0) {
+        const archiveResults: string[] = [];
+
+        // Auto-archive clean files that have safe extensions
+        if (cleanFiles.length > 0) {
+          console.log(`📁 [AUTO-ARCHIVE] Processing ${cleanFiles.length} clean file(s) for auto-archive`);
+
+          // Get group name for categorization
+          let groupName = 'Unknown';
+          if (context.groupId) {
+            try {
+              const groupResult = await this.dbClient.query(
+                `SELECT name FROM signal_groups WHERE group_id = $1`,
+                [context.groupId]
+              );
+              if (groupResult.results.length > 0) {
+                groupName = groupResult.results[0].name;
+              }
+            } catch (err) {
+              console.error('Failed to get group name from DB:', err);
+            }
+          }
+
+          for (const cleanFile of cleanFiles) {
+            try {
+              console.log(`📁 [AUTO-ARCHIVE] Archiving: ${cleanFile.filename} from group "${groupName}"`);
+
+              // Process PDF files before archiving (compress, OCR, sanitize metadata)
+              let fileToArchive = cleanFile.filePath;
+              if (cleanFile.ext === '.pdf') {
+                console.log(`📄 [AUTO-ARCHIVE] Processing PDF before archive...`);
+                const pdfResult = await this.processPdfFile(cleanFile.filePath);
+                fileToArchive = pdfResult.processedPath;
+                if (pdfResult.wasProcessed) {
+                  console.log(`✅ [AUTO-ARCHIVE] PDF processed: compressed, OCR'd, metadata sanitized`);
+                }
+              }
+
+              // Organize the file using file-organizer (dryRun to get category without copying)
+              const result = await organizeFile(fileToArchive, {
+                groupName,
+                scanVirus: false, // Already scanned
+                dryRun: true, // Don't copy locally, just determine category
+              });
+
+              if (!result.success) {
+                console.error(`❌ [AUTO-ARCHIVE] Failed to organize ${cleanFile.filename}: ${result.error}`);
+                continue;
+              }
+
+              // Upload directly to pCloud using rclone (skip local organization)
+              let pcloudLink: string | null = null;
+              if (result.normalizedFilename) {
+                const pcloudRemote = process.env.RCLONE_PCLOUD_REMOTE || 'pcloud';
+                const pcloudBasePath = process.env.PCLOUD_BASE_PATH || 'IrregularChat/Topics';
+                const pcloudFolder = result.subcategory
+                  ? `${pcloudBasePath}/${result.category}/${result.subcategory}`
+                  : `${pcloudBasePath}/${result.category}`;
+                const pcloudPath = `${pcloudRemote}:${pcloudFolder}/${result.normalizedFilename}`;
+
+                console.log(`☁️ [AUTO-ARCHIVE] Uploading to pCloud: ${pcloudPath}`);
+
+                try {
+                  // Upload file directly from attachment path using rclone copyto (renamed)
+                  const uploadCmd = `rclone copyto "${fileToArchive}" "${pcloudPath}" --config /app/config/rclone.conf 2>&1`;
+                  await execAsync(uploadCmd, { timeout: 60000 });
+                  console.log(`✅ [AUTO-ARCHIVE] rclone upload successful`);
+
+                  // Get public link using rclone link
+                  const linkCmd = `rclone link "${pcloudPath}" --config /app/config/rclone.conf 2>&1`;
+                  const { stdout: linkOut } = await execAsync(linkCmd, { timeout: 30000 });
+                  const link = linkOut.trim();
+
+                  if (link && link.startsWith('http')) {
+                    pcloudLink = link;
+                    console.log(`☁️ [AUTO-ARCHIVE] pCloud link: ${pcloudLink}`);
+                  }
+                } catch (rcloneErr: any) {
+                  console.error('[AUTO-ARCHIVE] rclone error:', rcloneErr.message || rcloneErr);
+                  // Fallback to folder URL
+                  const pcloudBaseUrl = process.env.PCLOUD_PUBLIC_URL || 'https://u.pcloud.link/publink/show?code=kZKptL5ZWUI9x4hFrtQq523yqzdsUpMNDSD7';
+                  const relativePath = result.category + (result.subcategory ? '/' + result.subcategory : '');
+                  pcloudLink = `${pcloudBaseUrl}#folder=${encodeURIComponent(relativePath)}`;
+                }
+              }
+
+              // Build archive result
+              const category = result.category + (result.subcategory ? '/' + result.subcategory : '');
+              if (pcloudLink) {
+                archiveResults.push(`📁 ${cleanFile.filename} → ${category}\n   ☁️ ${pcloudLink}`);
+              } else {
+                archiveResults.push(`📁 ${cleanFile.filename} → ${category}`);
+              }
+
+            } catch (archiveError) {
+              console.error(`❌ [AUTO-ARCHIVE] Error archiving ${cleanFile.filename}:`, archiveError);
+            }
+          }
+        }
+
+        // Build combined message
+        const messageLines = [
+          '🛡️ Auto-Scan Results',
+          '',
+          ...cleanResults,
+          '',
+          '✓ Files scanned with ClamAV',
+        ];
+
+        if (archiveResults.length > 0) {
+          messageLines.push(
+            '',
+            '📂 Auto-Archived to pCloud:',
+            '',
+            ...archiveResults
+          );
+        }
+
+        const cleanMessage = messageLines.join('\n');
+
+        try {
+          await this.sendMessage({
+            recipient: context.groupId ? undefined : context.sourceNumber,
+            groupId: context.groupId,
+            message: cleanMessage,
+          });
+        } catch (sendError) {
+          console.error('❌ [AUTO-SCAN] Failed to send clean scan results:', sendError);
+        }
+      }
+
+      // For threats: DM the sender privately
+      if (hasThreats && context.sourceNumber) {
+        const threatMessage = `🚨 Virus Scan Alert - Private Notice
+
+A file you posted was flagged by our virus scanner:
+
+${threatResults.join('\n')}
+
+⚠️ Please remove this file from the group immediately.
+
+This could be a false positive, but please investigate:
+1. Scan the file with your own antivirus software
+2. Check the file source - was it from a trusted location?
+3. If you believe this is a false positive, contact an admin
+
+Your file has been flagged but NOT automatically deleted. Please take action.`;
+
+        try {
+          console.log(`📩 [AUTO-SCAN] Sending private threat notification to ${context.sourceNumber}`);
+          await this.sendMessage({
+            recipient: context.sourceNumber,
+            message: threatMessage,
+          });
+        } catch (sendError) {
+          console.error('❌ [AUTO-SCAN] Failed to send private threat notification:', sendError);
+          // Fallback: post to group if DM fails
+          try {
+            await this.sendMessage({
+              recipient: context.groupId ? undefined : context.sourceNumber,
+              groupId: context.groupId,
+              message: `🚨 A file was flagged by virus scan. The sender has been notified privately.`,
+            });
+          } catch (fallbackError) {
+            console.error('❌ [AUTO-SCAN] Failed to send fallback message:', fallbackError);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Process a PDF file with Ghostscript compression, OCR, and metadata sanitization
+   * Based on handle_pdf from dotfiles
+   */
+  private async processPdfFile(filePath: string): Promise<{ processedPath: string; wasProcessed: boolean; error?: string }> {
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const fs = await import('fs/promises');
+    const path = await import('path');
+    const execAsync = promisify(exec);
+
+    const originalSize = (await fs.stat(filePath)).size;
+    const basename = path.basename(filePath, '.pdf');
+    const dirname = path.dirname(filePath);
+    const tempDir = `/tmp/pdf-process-${Date.now()}`;
+
+    try {
+      // Create temp directory
+      await fs.mkdir(tempDir, { recursive: true });
+
+      const tempOutput = `${tempDir}/processed.pdf`;
+      let currentFile = filePath;
+
+      console.log(`📄 [PDF-PROCESS] Processing: ${filePath} (${Math.round(originalSize / 1024)} KB)`);
+
+      // Step 1: Compress with Ghostscript
+      try {
+        const gsCmd = `gs -q -dSAFER -dBATCH -dNOPAUSE -sDEVICE=pdfwrite -dPDFSETTINGS=/ebook -dCompatibilityLevel=1.4 -sOutputFile="${tempOutput}" "${currentFile}" 2>&1`;
+        await execAsync(gsCmd, { timeout: 120000 });
+
+        if (await this.fileExists(tempOutput)) {
+          const compressedSize = (await fs.stat(tempOutput)).size;
+          console.log(`🗜️ [PDF-PROCESS] Ghostscript compressed: ${Math.round(originalSize / 1024)} KB → ${Math.round(compressedSize / 1024)} KB`);
+          currentFile = tempOutput;
+        }
+      } catch (gsError: any) {
+        console.log(`⚠️ [PDF-PROCESS] Ghostscript compression skipped: ${gsError.message?.substring(0, 100) || 'Unknown error'}`);
+      }
+
+      // Step 2: OCR with ocrmypdf (skip if already has text)
+      const ocrOutput = `${tempDir}/ocr.pdf`;
+      try {
+        const ocrCmd = `ocrmypdf --skip-text --optimize 1 --quiet "${currentFile}" "${ocrOutput}" 2>&1`;
+        await execAsync(ocrCmd, { timeout: 180000 });
+
+        if (await this.fileExists(ocrOutput)) {
+          console.log(`🔍 [PDF-PROCESS] OCR applied successfully`);
+          currentFile = ocrOutput;
+        }
+      } catch (ocrError: any) {
+        // ocrmypdf exit code 6 means "already has text" - that's fine
+        if (!ocrError.message?.includes('exit code 6') && !ocrError.message?.includes('PriorOcrFoundError')) {
+          console.log(`⚠️ [PDF-PROCESS] OCR skipped: ${ocrError.message?.substring(0, 100) || 'Unknown error'}`);
+        } else {
+          console.log(`📝 [PDF-PROCESS] PDF already has text, OCR skipped`);
+        }
+      }
+
+      // Step 3: Sanitize metadata with exiftool
+      try {
+        const exifCmd = `exiftool -overwrite_original -all:all= -m -f "${currentFile}" 2>&1`;
+        await execAsync(exifCmd, { timeout: 30000 });
+        console.log(`🧹 [PDF-PROCESS] Metadata sanitized with exiftool`);
+      } catch (exifError: any) {
+        console.log(`⚠️ [PDF-PROCESS] Metadata sanitization skipped: ${exifError.message?.substring(0, 100) || 'Unknown error'}`);
+      }
+
+      // Copy processed file back to original location
+      if (currentFile !== filePath && await this.fileExists(currentFile)) {
+        await fs.copyFile(currentFile, filePath);
+        const finalSize = (await fs.stat(filePath)).size;
+        console.log(`✅ [PDF-PROCESS] Complete: ${Math.round(originalSize / 1024)} KB → ${Math.round(finalSize / 1024)} KB (${Math.round((1 - finalSize / originalSize) * 100)}% reduction)`);
+
+        // Cleanup temp directory
+        await fs.rm(tempDir, { recursive: true, force: true });
+        return { processedPath: filePath, wasProcessed: true };
+      }
+
+      // Cleanup temp directory
+      await fs.rm(tempDir, { recursive: true, force: true });
+      return { processedPath: filePath, wasProcessed: false };
+    } catch (error: any) {
+      console.error(`❌ [PDF-PROCESS] Error processing PDF: ${error.message}`);
+      // Cleanup temp directory on error
+      try {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      } catch {}
+      return { processedPath: filePath, wasProcessed: false, error: error.message };
+    }
+  }
+
+  /**
+   * Helper to check if file exists
+   */
+  private async fileExists(filePath: string): Promise<boolean> {
+    try {
+      const fs = await import('fs/promises');
+      await fs.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Handle bot command
    */
   private async handleCommand(
@@ -718,6 +1207,7 @@ export class SignalBot extends EventEmitter {
       groupId?: string;
       timestamp: number;
       quotedText?: string;
+      quotedAttachments?: any[];
       mentions?: any[];
     }
   ): Promise<void> {
@@ -731,11 +1221,21 @@ export class SignalBot extends EventEmitter {
       const response = await this.commandHandler.handle(command, contextWithMessage);
 
       if (response) {
-        await this.sendMessage({
-          recipient: context.groupId ? undefined : context.sourceNumber,
-          groupId: context.groupId,
-          message: response,
-        });
+        // Handle response with attachment (e.g., memes)
+        if (typeof response === 'object' && 'text' in response) {
+          await this.sendMessage({
+            recipient: context.groupId ? undefined : context.sourceNumber,
+            groupId: context.groupId,
+            message: response.text,
+            attachments: response.attachment ? [response.attachment] : undefined,
+          });
+        } else {
+          await this.sendMessage({
+            recipient: context.groupId ? undefined : context.sourceNumber,
+            groupId: context.groupId,
+            message: response,
+          });
+        }
       }
 
       this.stats.commandsProcessed++;
@@ -811,6 +1311,7 @@ export class SignalBot extends EventEmitter {
     groupId?: string;
     message: string;
     attachments?: string[];
+    mention?: string[];  // Signal CLI mention format: "start:length:uuid"
   }): Promise<void> {
     if (!this.isRunningFlag || !this.rpcClient) {
       throw new Error('Bot is not running');
@@ -823,10 +1324,12 @@ export class SignalBot extends EventEmitter {
         recipient: params.recipient ? [params.recipient] : undefined,
         groupId: params.groupId,
         attachment: params.attachments,
+        mention: params.mention,
       });
 
       this.stats.messagesSent++;
-      console.log(`✉️  Message sent to ${params.recipient || params.groupId}`);
+      const mentionInfo = params.mention?.length ? ` with ${params.mention.length} mentions` : '';
+      console.log(`✉️  Message sent to ${params.recipient || params.groupId}${mentionInfo}`);
     } catch (error) {
       console.error('Failed to send message via JSON-RPC:', error);
       throw error;
@@ -1271,7 +1774,8 @@ export class SignalBot extends EventEmitter {
   }
 
   /**
-   * Check message for news URLs and handle them
+   * Check message for processable URLs (news, articles, etc.) and handle them
+   * Uses exclusion-based detection: processes any URL that is NOT social media, community, or file hosting
    */
   private async checkForNewsUrls(messageText: string, context: {
     sourceNumber: string;
@@ -1288,31 +1792,33 @@ export class SignalBot extends EventEmitter {
         return;
       }
 
-      // Detect which URLs are from news domains
-      const newsUrls = detectNewsUrls(messageText, urls);
+      // Detect which URLs should be processed (exclusion-based)
+      // Skips: community domains, social media, file hosting
+      const processableUrls = detectProcessableUrls(messageText, urls);
 
-      if (newsUrls.length === 0) {
-        console.log('🔵 [DEBUG] No news URLs detected');
+      if (processableUrls.length === 0) {
+        console.log('🔵 [DEBUG] No processable URLs detected (all excluded)');
         return;
       }
 
-      console.log(`📰 Detected ${newsUrls.length} news URL(s)`);
+      console.log(`📰 Detected ${processableUrls.length} processable URL(s)`);
 
-      // Process each news URL
-      for (const url of newsUrls) {
+      // Process each URL
+      for (const url of processableUrls) {
         try {
           const domain = extractDomain(url);
-          console.log(`📰 Processing news URL: ${url} (${domain})`);
+          console.log(`📰 Processing URL: ${url} (${domain})`);
 
-          // Generate bypass link (check for existing archive first)
+          // Generate archive link (check for existing archive first)
           const archiveUrl = await getArchiveLink(url);
-          const bypassLinks = `📎 ${archiveUrl}`;
+          // Generate bypass link (12ft.io)
+          const bypassUrl = `https://12ft.io/${url}`;
 
-          // Send immediate acknowledgment with bypass link
+          // Send immediate acknowledgment with BOTH archive and bypass links
           await this.sendMessage({
             recipient: context.groupId ? undefined : context.sourceNumber,
             groupId: context.groupId,
-            message: `📰 Processing, in the meantime here's the bypass link:\n\n${bypassLinks}`,
+            message: `📰 Processing...\n\n📎 Archive: ${archiveUrl}\n🔓 Bypass: ${bypassUrl}`,
           });
 
           // Post to Discourse (self-hosted mode with direct API)
@@ -1320,7 +1826,7 @@ export class SignalBot extends EventEmitter {
           let discourseUrl: string | undefined;
 
           if (discourseConfig) {
-            console.log('📝 Posting news article to Discourse...');
+            console.log('📝 Posting article to Discourse...');
             const discourseResult = await postNewsArticleToDiscourse({
               url,
               archiveUrl, // Pass the archive link
@@ -1341,20 +1847,35 @@ export class SignalBot extends EventEmitter {
                   ? new Date(discourseResult.existingPost.firstPostedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
                   : 'unknown';
 
-                // Send message about existing post
+                // Get title from existing post
+                const title = discourseResult.existingPost.title || 'Article';
+
+                // Send message about existing post with title
                 await this.sendMessage({
                   recipient: context.groupId ? undefined : context.sourceNumber,
                   groupId: context.groupId,
-                  message: `📋 Already shared (${discourseResult.existingPost.postCount}x since ${firstPosted})\n\n📝 Forum: ${discourseUrl}`,
+                  message: `📋 "${title}"\nAlready shared (${discourseResult.existingPost.postCount}x since ${firstPosted})\n\n📝 Forum: ${discourseUrl}`,
                 });
               } else {
                 console.log(`✅ Posted to Discourse: ${discourseUrl}`);
 
-                // Send follow-up message with Discourse link
+                // Get title and summary from result
+                const title = discourseResult.title || 'Article';
+                const summary = discourseResult.summary || '';
+
+                // Send follow-up message with title, summary, and Discourse link
+                let forumMessage = `📝 "${title}"`;
+                if (summary && summary.length > 10) {
+                  // Truncate summary to ~200 chars for Signal
+                  const shortSummary = summary.length > 200 ? summary.substring(0, 197) + '...' : summary;
+                  forumMessage += `\n\n${shortSummary}`;
+                }
+                forumMessage += `\n\n📝 Forum: ${discourseUrl}`;
+
                 await this.sendMessage({
                   recipient: context.groupId ? undefined : context.sourceNumber,
                   groupId: context.groupId,
-                  message: `📝 Posted to forum: ${discourseUrl}`,
+                  message: forumMessage,
                 });
               }
             } else {
@@ -1368,8 +1889,8 @@ export class SignalBot extends EventEmitter {
           continue;
 
         } catch (error) {
-          console.error(`❌ Error processing news URL ${url}:`, error);
-          // Don't send error to user - silent failure for news processing
+          console.error(`❌ Error processing URL ${url}:`, error);
+          // Don't send error to user - silent failure for URL processing
         }
       }
 
@@ -1490,6 +2011,168 @@ export class SignalBot extends EventEmitter {
     } catch (error) {
       console.error('❌ Error in checkForSocialMediaUrls:', error);
       // Silent failure - don't interrupt normal message flow
+    }
+  }
+
+  /**
+   * Check message for git repository URLs and handle them
+   * Shows repo metadata and stores in database for !links -git queries
+   */
+  private async checkForGitRepoUrls(messageText: string, context: {
+    sourceNumber: string;
+    sourceName: string;
+    groupId?: string;
+    timestamp: number;
+  }): Promise<void> {
+    try {
+      // Extract all URLs from message
+      const urls = extractURLs(messageText);
+
+      if (urls.length === 0) {
+        return;
+      }
+
+      // Detect git repository URLs
+      const repoUrls = detectGitRepoUrls(urls);
+
+      if (repoUrls.length === 0) {
+        return;
+      }
+
+      console.log(`🐙 Detected ${repoUrls.length} git repository URL(s)`);
+
+      // Get GitHub token from environment (optional, for higher rate limits)
+      const githubToken = process.env.GITHUB_TOKEN;
+
+      // Process each git repo URL
+      for (const parsedUrl of repoUrls) {
+        try {
+          console.log(`🐙 Processing ${parsedUrl.platform.name} repo: ${parsedUrl.fullName}`);
+
+          // Fetch repository metadata
+          const metadata = await fetchRepoMetadata(parsedUrl, githubToken);
+
+          // Format and send response (with AI summary if OpenAI available)
+          const response = await formatRepoForSignalWithSummary(
+            parsedUrl,
+            metadata,
+            this.openai,
+            githubToken
+          );
+
+          await this.sendMessage({
+            recipient: context.groupId ? undefined : context.sourceNumber,
+            groupId: context.groupId,
+            message: response,
+          });
+
+          console.log(`✅ Sent ${parsedUrl.platform.name} repo info for ${parsedUrl.fullName}`);
+
+          // Save to database for !links -git queries
+          await this.saveRepoToDatabase(parsedUrl, metadata, context);
+
+        } catch (error) {
+          console.error(`❌ Error processing git repo URL ${parsedUrl.cleanUrl}:`, error);
+          // Silent failure for individual URLs
+        }
+      }
+
+    } catch (error) {
+      console.error('❌ Error in checkForGitRepoUrls:', error);
+      // Silent failure - don't interrupt normal message flow
+    }
+  }
+
+  /**
+   * Save repository info to database for !links -git queries
+   */
+  private async saveRepoToDatabase(
+    parsedUrl: ParsedRepoUrl,
+    metadata: RepoMetadata | null,
+    context: {
+      sourceNumber: string;
+      sourceName: string;
+      groupId?: string;
+      timestamp: number;
+    }
+  ): Promise<void> {
+    if (!this.dbClient || !context.groupId) {
+      return;
+    }
+
+    try {
+      const id = `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+      const now = new Date().toISOString();
+
+      // Check if repo already exists for this group
+      const existing = await this.dbClient.query(
+        'SELECT id, post_count FROM repository_links WHERE url = $1 AND group_id = $2',
+        [parsedUrl.cleanUrl, context.groupId]
+      );
+
+      if (existing.results && existing.results.length > 0) {
+        // Update existing record
+        await this.dbClient.query(
+          `UPDATE repository_links SET
+            post_count = post_count + 1,
+            last_posted_at = $1,
+            stars = COALESCE($2, stars),
+            forks = COALESCE($3, forks),
+            open_issues = COALESCE($4, open_issues),
+            last_updated = COALESCE($5, last_updated)
+          WHERE url = $6 AND group_id = $7`,
+          [
+            now,
+            metadata?.stars ?? null,
+            metadata?.forks ?? null,
+            metadata?.openIssues ?? null,
+            metadata?.updatedAt ?? null,
+            parsedUrl.cleanUrl,
+            context.groupId,
+          ]
+        );
+        console.log(`📊 Updated existing repo record: ${parsedUrl.fullName}`);
+      } else {
+        // Insert new record
+        await this.dbClient.query(
+          `INSERT INTO repository_links (
+            id, url, platform, repository_name, owner, name, description,
+            language, stars, forks, open_issues, license, topics,
+            is_private, is_fork, is_archived, last_updated,
+            group_id, posted_by, posted_by_name, post_count,
+            first_posted_at, last_posted_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+          [
+            id,
+            parsedUrl.cleanUrl,
+            parsedUrl.platform.name,
+            parsedUrl.fullName,
+            parsedUrl.owner,
+            parsedUrl.repo,
+            metadata?.description ?? null,
+            metadata?.language ?? null,
+            metadata?.stars ?? 0,
+            metadata?.forks ?? 0,
+            metadata?.openIssues ?? 0,
+            metadata?.license ?? null,
+            metadata?.topics ? JSON.stringify(metadata.topics) : null,
+            metadata?.isPrivate ?? false,
+            metadata?.isFork ?? false,
+            metadata?.isArchived ?? false,
+            metadata?.updatedAt ?? null,
+            context.groupId,
+            context.sourceNumber,
+            context.sourceName,
+            1,
+            now,
+            now,
+          ]
+        );
+        console.log(`💾 Saved new repo to database: ${parsedUrl.fullName}`);
+      }
+    } catch (error) {
+      console.error('Error saving repo to database:', error);
+      // Don't throw - database save failure shouldn't break the flow
     }
   }
 }

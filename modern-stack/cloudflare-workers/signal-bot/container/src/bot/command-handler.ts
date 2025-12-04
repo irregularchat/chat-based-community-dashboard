@@ -9,6 +9,7 @@ import { BotConfig } from './signal-bot-v2.js';
 import { PostgresClient } from '../db/postgres-client.js';
 import OpenAI from 'openai';
 import { scrapeUrl, extractUrls, containsUrl } from '../utils/url-scraper.js';
+import { scrapePdf, scrapePdfFromPath, isPdfUrl } from '../utils/pdf-scraper.js';
 import { getRateLimiter, formatRateLimitMessage } from '../utils/rate-limiter.js';
 import { AnnouncementHandler } from './announcement-handler.js';
 import { formatScheduledTime } from '../utils/time-parser.js';
@@ -19,6 +20,23 @@ import {
   generateSearchQueries,
   WikiSearchResult,
 } from '../utils/wiki-search.js';
+import {
+  organizeFile,
+  getDirectoryForGroup,
+  listCategories,
+  normalizeFilename,
+  suggestCategoryWithAI,
+  getBasePath,
+} from '../utils/file-organizer.js';
+import {
+  getRandomMeme,
+  getMemeById,
+  listMemes,
+  getMemeFilePath,
+  memeFileExists,
+  getMemeStats,
+  MemeDefinition,
+} from '../utils/meme-reactions.js';
 import {
   createGame,
   createGameInGroup,
@@ -46,12 +64,41 @@ import {
   getHoldsSummary,
   GameState,
 } from '../utils/dice-game.js';
+import {
+  searchByFilename,
+  searchDirectories,
+  smartSearch,
+  grepFiles,
+  listCategories as listFileCategories,
+  getFilesInCategory,
+  formatSearchResults,
+  getPCloudUrl,
+  getDirectDownloadLink,
+  getSearchSession,
+  getFileFromSession,
+  getLastSession,
+  FileInfo,
+  SearchResult,
+  GrepResult,
+  DirInfo,
+} from '../utils/file-search.js';
 
 export interface Mention {
   start: number;
   length: number;
   uuid?: string;
   number?: string;
+}
+
+export interface SignalAttachment {
+  contentType?: string;
+  filename?: string;
+  id?: string;
+  storedFilename?: string;
+  size?: number;
+  width?: number;
+  height?: number;
+  caption?: string;
 }
 
 export interface CommandContext {
@@ -61,9 +108,23 @@ export interface CommandContext {
   groupId?: string;
   timestamp: number;
   quotedText?: string;
+  quotedAttachments?: SignalAttachment[]; // Attachments from the quoted/replied message
   mentions?: Mention[];
   message?: string; // Full original message text for mention extraction
 }
+
+/**
+ * Command response can be:
+ * - string: Simple text response
+ * - object with text + attachment: Response with media attachment
+ * - null: No response (silent)
+ */
+export interface CommandResponseWithAttachment {
+  text: string;
+  attachment?: string; // Path to attachment file
+}
+
+export type CommandResponse = string | CommandResponseWithAttachment | null;
 
 export class CommandHandler {
   private config: BotConfig;
@@ -99,11 +160,15 @@ export class CommandHandler {
   /**
    * Check if user is admin
    *
-   * SECURITY: Admin phone numbers are now loaded from environment variable
+   * SECURITY: Admin identifiers are loaded from environment variables
    * to prevent hardcoded credential exposure (CVE-2025-001)
    *
-   * Supports both phone numbers and UUIDs. If UUID is provided, looks up
-   * the phone number from database before checking admin list.
+   * Supports both phone numbers and UUIDs:
+   * - ADMIN_PHONE_NUMBERS: comma-separated phone numbers (+12247253276) or UUIDs
+   * - ADMIN_UUIDS: comma-separated UUIDs (for explicit UUID matching)
+   *
+   * If a UUID is provided and not in the direct admin list, looks up
+   * the phone number from database before checking.
    *
    * @param identifier - Phone number (E.164) or Signal UUID (ACI)
    * @returns true if user is admin, false otherwise
@@ -115,23 +180,32 @@ export class CommandHandler {
 
     const admins = (process.env.ADMIN_PHONE_NUMBERS || '')
       .split(',')
-      .map(p => p.trim())
+      .map(p => p.trim().toLowerCase())
       .filter(p => p.length > 0);
 
-    if (admins.length === 0) {
-      console.error('⚠️  SECURITY WARNING: No admin phone numbers configured in ADMIN_PHONE_NUMBERS');
+    // Also check ADMIN_UUIDS env var for direct UUID matches
+    const adminUuids = (process.env.ADMIN_UUIDS || '')
+      .split(',')
+      .map(p => p.trim().toLowerCase())
+      .filter(p => p.length > 0);
+
+    if (admins.length === 0 && adminUuids.length === 0) {
+      console.error('⚠️  SECURITY WARNING: No admin identifiers configured in ADMIN_PHONE_NUMBERS or ADMIN_UUIDS');
       return false;
     }
 
-    // Direct phone number match
-    if (admins.includes(identifier)) {
-      console.log(`✅ Admin check passed for phone number: ${identifier}`);
+    // Direct match in admin list (phone number or UUID)
+    const identifierLower = identifier.toLowerCase();
+    if (admins.includes(identifierLower) || adminUuids.includes(identifierLower)) {
+      console.log(`✅ Admin check passed for direct match: ${identifier}`);
       return true;
     }
 
-    // UUID lookup - check if this UUID's phone number is in admin list
+    // If identifier looks like a UUID, also check for matching phone number
     // UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-    if (this.dbClient && identifier.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+    const isUuid = identifier.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+
+    if (isUuid && this.dbClient) {
       try {
         console.log(`🔍 Looking up phone number for UUID: ${identifier}`);
         const result = await this.dbClient.query(
@@ -143,7 +217,7 @@ export class CommandHandler {
           const phoneNumber = result.results[0].phone_number;
           console.log(`📱 Found phone number for UUID: ${phoneNumber}`);
 
-          if (admins.includes(phoneNumber)) {
+          if (admins.includes(phoneNumber.toLowerCase())) {
             console.log(`✅ Admin check passed for UUID → phone number: ${phoneNumber}`);
             return true;
           } else {
@@ -164,7 +238,39 @@ export class CommandHandler {
   /**
    * Handle a command
    */
-  async handle(command: string, context: CommandContext): Promise<string | null> {
+  async handle(command: string, context: CommandContext): Promise<CommandResponse> {
+    const trimmedCommand = command.trim();
+    const contextId = context.groupId || context.sourceNumber || context.sourceUuid;
+
+    // Check for "tldr <number>" pattern - summarize PDF from search session
+    const tldrMatch = trimmedCommand.match(/^tldr\s+(\d+)$/i);
+    if (tldrMatch && contextId) {
+      const lastSession = getLastSession(contextId);
+      if (lastSession) {
+        const fileNum = parseInt(tldrMatch[1], 10);
+        return this.handleTldrFromSession(lastSession.id, fileNum, context);
+      }
+    }
+
+    // Check for bare number replies (file selection from !files search)
+    // Pattern: just numbers and commas like "11" or "1,3,5"
+    if (/^[\d,\s]+$/.test(trimmedCommand) && !trimmedCommand.startsWith('!')) {
+      if (contextId) {
+        const lastSession = getLastSession(contextId);
+        if (lastSession) {
+          // Parse numbers from the reply
+          const numbers = trimmedCommand
+            .split(/[,\s]+/)
+            .map(s => parseInt(s.trim(), 10))
+            .filter(n => !isNaN(n) && n > 0);
+
+          if (numbers.length > 0) {
+            return await this.handleFileGetFromSession(lastSession.id, numbers);
+          }
+        }
+      }
+    }
+
     // Parse command
     const parts = command.trim().split(/\s+/);
     const cmd = parts[0].toLowerCase();
@@ -221,6 +327,23 @@ export class CommandHandler {
       case '!tldr':
         return this.handleSummarize(args, context);
 
+      case '!archive':
+      case '!save':
+        return this.handleArchive(args, context);
+
+      case '!scan':
+      case '!virus':
+      case '!clamav':
+        return this.handleVirusScan(args, context);
+
+      case '!files':
+      case '!search':
+      case '!find':
+        return this.handleFileSearch(args, context);
+
+      case '!get':
+        return this.handleFileGet(args, context);
+
       case '!lai':
         return this.handleLocalAI(args, context);
 
@@ -233,6 +356,10 @@ export class CommandHandler {
 
       case '!flip':
         return this.handleFlip();
+
+      case '!meme':
+      case '!gif':
+        return this.handleMeme(args, context);
 
       case '!joke':
         return this.handleJoke();
@@ -366,9 +493,9 @@ export class CommandHandler {
   }
 
   /**
-   * !help - Show available commands
+   * !help - Show available commands (with random meme)
    */
-  private async handleHelp(context: CommandContext): Promise<string> {
+  private async handleHelp(context: CommandContext): Promise<string | { text: string; attachment?: string }> {
     const isAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
 
     const lines = [
@@ -442,7 +569,22 @@ export class CommandHandler {
       lines.push('🔒 You have admin access to restricted commands');
     }
 
-    return this.formatForSignal(lines.join('\n'));
+    const helpText = this.formatForSignal(lines.join('\n'));
+
+    // Add a random meme to the help response
+    const meme = getRandomMeme();
+    const filePath = getMemeFilePath(meme);
+    const exists = await memeFileExists(meme);
+
+    if (exists) {
+      return {
+        text: helpText,
+        attachment: filePath,
+      };
+    }
+
+    // Fallback to just text if meme not available
+    return helpText;
   }
 
   /**
@@ -1404,11 +1546,12 @@ export class CommandHandler {
         }
       }
 
-      let response = `📱 Joining Groups\n\nResults:\n${results.join('\n')}`;
+      const userName = context.sourceName || 'Member';
+      let response = `📱 ${userName} - Joining Groups\n\nResults:\n${results.join('\n')}`;
       if (errors.length > 0) {
         response += `\n\nSkipped:\n${errors.join('\n')}`;
       }
-      response += `\n\n✨ Groups with ✅ have been joined.\nYou should receive invites shortly.`;
+      response += `\n\n✨ Groups with ✅ have been joined.\n${userName}, you should receive invites shortly.`;
 
       return this.formatForSignal(response);
 
@@ -1505,7 +1648,7 @@ export class CommandHandler {
           messages: [
             {
               role: 'system',
-              content: 'You are a helpful assistant that creates concise summaries of group conversations. Identify key topics, decisions, and action items. Keep summaries clear and structured.',
+              content: 'You are a helpful assistant that creates concise summaries of group conversations. Identify key topics, decisions, and action items. IMPORTANT: Format your response as plain text only - NO markdown, NO asterisks for bold, NO hashtags for headers. Use line breaks and dashes for lists.',
             },
             {
               role: 'user',
@@ -1525,13 +1668,138 @@ export class CommandHandler {
     }
 
     // Original behavior: summarize provided text/URL
+    // First check for PDF attachments in quoted message (highest priority)
+    const pdfAttachment = context.quotedAttachments?.find(att =>
+      att.contentType === 'application/pdf' ||
+      att.filename?.toLowerCase().endsWith('.pdf')
+    );
+
+    if (pdfAttachment && (!remainingArgs || remainingArgs.length === 0)) {
+      console.log('📎 Found PDF attachment in quoted message:', JSON.stringify(pdfAttachment));
+
+      // CVE-2025-005: Rate limit PDF summarization (20 calls/hour)
+      const rateLimiter = getRateLimiter();
+      const limit = await rateLimiter.checkLimit(`summarize:${context.sourceNumber}`, 20, 3600);
+
+      if (!limit.allowed) {
+        return formatRateLimitMessage('!summarize', limit.resetIn);
+      }
+
+      const dataDir = this.config.dataDir || '/app/signal-data';
+      const attachmentsDir = `${dataDir}/attachments`;
+      const fs = await import('fs/promises');
+
+      let pdfPath: string | null = null;
+      let pdfResult: any = { success: false };
+
+      // If we have an attachment ID, try that first
+      const attachmentId = pdfAttachment.id || pdfAttachment.storedFilename;
+      if (attachmentId) {
+        const directPaths = [
+          `${attachmentsDir}/${attachmentId}`,
+          `${attachmentsDir}/${attachmentId}.pdf`,
+        ];
+
+        for (const path of directPaths) {
+          console.log(`📄 Trying direct path: ${path}`);
+          const result = await scrapePdfFromPath(path, pdfAttachment.filename);
+          if (result.success) {
+            pdfPath = path;
+            pdfResult = result;
+            break;
+          }
+        }
+      }
+
+      // If no ID or direct path failed, search for recent PDF files
+      if (!pdfResult.success) {
+        console.log('📂 Searching attachments directory for recent PDFs...');
+        try {
+          const files = await fs.readdir(attachmentsDir);
+          const pdfFiles = files.filter(f => f.toLowerCase().endsWith('.pdf'));
+
+          // Get file stats and sort by modification time (newest first)
+          const fileStats = await Promise.all(
+            pdfFiles.map(async (f) => {
+              const fullPath = `${attachmentsDir}/${f}`;
+              try {
+                const stat = await fs.stat(fullPath);
+                return { name: f, path: fullPath, mtime: stat.mtime };
+              } catch {
+                return null;
+              }
+            })
+          );
+
+          const validFiles = fileStats.filter(Boolean) as { name: string; path: string; mtime: Date }[];
+          validFiles.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+
+          console.log(`📂 Found ${validFiles.length} PDF files, checking most recent...`);
+
+          // Try the most recent PDF files (up to 5)
+          for (const file of validFiles.slice(0, 5)) {
+            console.log(`📄 Trying recent PDF: ${file.name} (modified: ${file.mtime.toISOString()})`);
+            const result = await scrapePdfFromPath(file.path, pdfAttachment.filename);
+            if (result.success) {
+              pdfPath = file.path;
+              pdfResult = result;
+              console.log(`✅ Found valid PDF: ${file.path}`);
+              break;
+            }
+          }
+        } catch (err) {
+          console.error('Error searching attachments directory:', err);
+        }
+      }
+
+      if (!pdfResult.success) {
+        return `❌ Could not read PDF attachment: ${pdfResult.error || 'File not found'}\n\n💡 The PDF may not have been downloaded yet. Try saving the file and sharing it again.`;
+      }
+
+      // Build content for summarization
+      let contentToSummarize = '';
+      if (pdfResult.title) {
+        contentToSummarize += `Title: ${pdfResult.title}\n\n`;
+      }
+      contentToSummarize += `Document: ${pdfResult.pageCount} pages (${pdfResult.extractionMethod} extraction)\n\n`;
+      if (pdfResult.content) {
+        contentToSummarize += pdfResult.content;
+      }
+
+      // Use enhanced prompt for PDF documents - request PLAIN TEXT (no markdown)
+      const systemPrompt = pdfResult.isLargePdf
+        ? 'You are a helpful assistant that creates concise summaries of PDF documents. The content has been smart-extracted from a large document, including the table of contents, key sections, and conclusion. Focus on identifying the main purpose, key findings, and important recommendations. IMPORTANT: Format your response as plain text only - NO markdown, NO asterisks for bold, NO hashtags for headers. Use line breaks and dashes for lists.'
+        : 'You are a helpful assistant that creates concise summaries of PDF documents. Focus on the main points, key findings, and important recommendations. IMPORTANT: Format your response as plain text only - NO markdown, NO asterisks for bold, NO hashtags for headers. Use line breaks and dashes for lists.';
+
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: systemPrompt,
+          },
+          {
+            role: 'user',
+            content: `Summarize this PDF document:\n\n${contentToSummarize}`,
+          },
+        ],
+        max_tokens: 1000,
+        temperature: 0.5,
+      });
+
+      const summary = response.choices[0]?.message?.content || 'No summary available';
+      const filename = pdfAttachment.filename || 'PDF Document';
+
+      return this.formatForSignal(`📄 ${filename}\n${pdfResult.pageCount} pages • ${pdfResult.extractionMethod} extraction\n\n📝 Summary:\n${summary}`);
+    }
+
     if (!remainingArgs || remainingArgs.length === 0) {
       // Check if there's a URL in quoted/replied message
       if (context.quotedText && containsUrl(context.quotedText)) {
         remainingArgs = context.quotedText;
         console.log('📌 Using URL from quoted message');
       } else {
-        return '❌ Please provide content or URL to summarize, or use flags for conversation summary.\n\nUsage:\n  !summarize <text or URL>  (or !tldr <URL>)\n  !tldr  (reply to a message with URL)\n  !summarize -h 2       (summarize last 2 hours)\n  !summarize -n 20      (summarize last 20 messages)\n  !summarize -h 1 -n 50 (last 50 messages from past hour)';
+        return '❌ Please provide content or URL to summarize, or use flags for conversation summary.\n\nUsage:\n  !summarize <text or URL>  (or !tldr <URL>)\n  !tldr  (reply to a message with PDF)\n  !summarize -h 2       (summarize last 2 hours)\n  !summarize -n 20      (summarize last 20 messages)\n  !summarize -h 1 -n 50 (last 50 messages from past hour)';
       }
     }
 
@@ -1571,6 +1839,56 @@ export class CommandHandler {
           }
         }
 
+        // Check if URL is a PDF - handle differently
+        if (isPdfUrl(url)) {
+          console.log(`📄 PDF detected, using PDF scraper`);
+
+          const pdfResult = await scrapePdf(url);
+
+          if (!pdfResult.success) {
+            return `❌ Failed to process PDF: ${pdfResult.error || 'Unknown error'}\n\nTip: Some PDFs are image-only and cannot be text-extracted.`;
+          }
+
+          // Build content for summarization
+          let contentToSummarize = '';
+          if (pdfResult.title) {
+            contentToSummarize += `Title: ${pdfResult.title}\n\n`;
+          }
+          contentToSummarize += `Document: ${pdfResult.pageCount} pages (${pdfResult.extractionMethod} extraction)\n\n`;
+          if (pdfResult.content) {
+            contentToSummarize += pdfResult.content;
+          }
+
+          // Use enhanced prompt for PDF documents - request PLAIN TEXT (no markdown)
+          const systemPrompt = pdfResult.isLargePdf
+            ? 'You are a helpful assistant that creates concise summaries of PDF documents. The content has been smart-extracted from a large document, including the table of contents, key sections, and conclusion. Focus on identifying the main purpose, key findings, and important recommendations. IMPORTANT: Format your response as plain text only - NO markdown, NO asterisks for bold, NO hashtags for headers. Use line breaks and dashes for lists.'
+            : 'You are a helpful assistant that creates concise summaries of PDF documents. Focus on the main points, key findings, and important recommendations. IMPORTANT: Format your response as plain text only - NO markdown, NO asterisks for bold, NO hashtags for headers. Use line breaks and dashes for lists.';
+
+          const response = await this.openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            messages: [
+              {
+                role: 'system',
+                content: systemPrompt,
+              },
+              {
+                role: 'user',
+                content: `Summarize this PDF document:\n\n${contentToSummarize}`,
+              },
+            ],
+            max_tokens: 700, // Slightly more for PDFs
+            temperature: 0.5,
+          });
+
+          const summary = response.choices[0]?.message?.content || 'No summary available';
+          const pdfInfo = pdfResult.isLargePdf
+            ? `📄 PDF Summary (${pdfResult.pageCount} pages, smart extraction)`
+            : `📄 PDF Summary (${pdfResult.pageCount} pages)`;
+
+          return this.formatForSignal(`${pdfInfo}\n${pdfResult.title ? `📑 ${pdfResult.title}\n` : ''}\n${summary}`);
+        }
+
+        // Regular HTML/web page scraping
         const scraped = await scrapeUrl(url);
 
         if (!scraped.success) {
@@ -1598,7 +1916,7 @@ export class CommandHandler {
           messages: [
             {
               role: 'system',
-              content: 'You are a helpful assistant that creates concise summaries of web articles and content. Focus on the main points and key takeaways. Keep summaries brief and clear.',
+              content: 'You are a helpful assistant that creates concise summaries of web articles and content. Focus on the main points and key takeaways. IMPORTANT: Format your response as plain text only - NO markdown, NO asterisks for bold, NO hashtags for headers. Use line breaks and dashes for lists.',
             },
             {
               role: 'user',
@@ -1618,7 +1936,7 @@ export class CommandHandler {
           messages: [
             {
               role: 'system',
-              content: 'You are a helpful assistant that creates concise summaries. Keep summaries brief and clear.',
+              content: 'You are a helpful assistant that creates concise summaries. IMPORTANT: Format your response as plain text only - NO markdown, NO asterisks for bold, NO hashtags for headers. Use line breaks and dashes for lists.',
             },
             {
               role: 'user',
@@ -1636,6 +1954,729 @@ export class CommandHandler {
       console.error('Summarize error:', error);
       return `❌ Summarization failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
+  }
+
+  /**
+   * !archive / !save - Archive files to IrregularChat shared directory
+   *
+   * Archives attachments from quoted messages to the appropriate topic directory
+   * based on the Signal group. Files sync to pCloud via rclone.
+   *
+   * Usage:
+   *   !archive                    - Archive quoted attachment to auto-detected directory
+   *   !archive --category Tech    - Override the target category
+   *   !archive --scan             - Run virus scan before archiving
+   *   !archive --list             - List available categories
+   */
+  private async handleArchive(args: string, context: CommandContext): Promise<string> {
+    // Parse flags
+    const listFlag = args.includes('--list') || args.includes('-l');
+    const scanFlag = args.includes('--scan') || args.includes('-s');
+    const categoryMatch = args.match(/--category\s+(\S+)/i) || args.match(/-c\s+(\S+)/i);
+    const customCategory = categoryMatch ? categoryMatch[1] : undefined;
+
+    // List available categories
+    if (listFlag) {
+      const categories = listCategories();
+      const lines = [
+        '📁 Available Archive Categories:',
+        '',
+        ...categories.map(c => `  • ${c}`),
+        '',
+        'Files are auto-categorized based on group name.',
+        'Use --category <name> to override.',
+      ];
+      return lines.join('\n');
+    }
+
+    // Check for attachment in quoted message
+    const attachment = context.quotedAttachments?.find(att =>
+      att.filename || att.contentType
+    );
+
+    if (!attachment) {
+      return `❌ No attachment found. Reply to a message with a file and use !archive
+
+Usage:
+  !archive              - Archive to auto-detected category
+  !archive --scan       - Scan for viruses first
+  !archive --category X - Override category
+  !archive --list       - Show all categories
+
+The file will be organized into the IrregularChat shared drive based on this group's topic.`;
+    }
+
+    // Find the attachment file
+    const attachmentsDir = '/app/signal-data/attachments';
+    const filename = attachment.filename || 'unknown';
+    const ext = filename.includes('.') ? filename.substring(filename.lastIndexOf('.')) : '';
+
+    console.log(`📁 Archive request: ${filename} from group ${context.groupId || 'DM'}`);
+
+    // Get group name for categorization
+    let groupName = 'Unknown';
+    if (context.groupId) {
+      // Try database first
+      try {
+        const groupResult = await this.dbClient.query(
+          `SELECT name FROM signal_groups WHERE group_id = $1`,
+          [context.groupId]
+        );
+        if (groupResult.results.length > 0) {
+          groupName = groupResult.results[0].name;
+          console.log(`📁 Group name from DB: ${groupName}`);
+        }
+      } catch (err) {
+        console.error('Failed to get group name from DB:', err);
+      }
+
+      // If database lookup failed, try bot.getGroups() as fallback
+      if (groupName === 'Unknown' && this.bot) {
+        try {
+          const groups = await this.bot.getGroups();
+          const matchingGroup = groups.find((g: any) => g.id === context.groupId);
+          if (matchingGroup?.name) {
+            groupName = matchingGroup.name;
+            console.log(`📁 Group name from bot API: ${groupName}`);
+          }
+        } catch (err) {
+          console.error('Failed to get group name from bot:', err);
+        }
+      }
+    }
+    console.log(`📁 Final group name for categorization: ${groupName}`);
+
+    // Search for recent matching files in attachments directory
+    try {
+      const fs = await import('fs/promises');
+      const files = await fs.readdir(attachmentsDir);
+
+      // Filter files by extension if known
+      const matchingFiles = ext
+        ? files.filter(f => f.toLowerCase().endsWith(ext.toLowerCase()))
+        : files;
+
+      if (matchingFiles.length === 0) {
+        return '❌ Could not locate the attachment file. It may not have been downloaded yet.';
+      }
+
+      // Get file stats and sort by mtime
+      const fileStats = await Promise.all(
+        matchingFiles.map(async (f) => {
+          try {
+            const stat = await fs.stat(`${attachmentsDir}/${f}`);
+            return { name: f, path: `${attachmentsDir}/${f}`, mtime: stat.mtime };
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      const validFiles = fileStats.filter(Boolean) as { name: string; path: string; mtime: Date }[];
+      validFiles.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+
+      if (validFiles.length === 0) {
+        return '❌ Could not access attachment files.';
+      }
+
+      // Use the most recent matching file
+      const sourceFile = validFiles[0];
+      console.log(`📂 Found attachment: ${sourceFile.path}`);
+
+      // Organize the file
+      const result = await organizeFile(sourceFile.path, {
+        groupName,
+        scanVirus: scanFlag,
+        customSubdir: customCategory,
+      });
+
+      if (!result.success) {
+        if (result.scanResult === 'infected') {
+          return `🚨 VIRUS DETECTED - File not archived\n\nThe file "${filename}" was flagged as potentially malicious and was not saved.`;
+        }
+        return `❌ Archive failed: ${result.error}`;
+      }
+
+      // Build success response
+      const lines = [
+        `✅ File Archived Successfully`,
+        '',
+        `📄 File: ${filename}`,
+        `📁 Category: ${result.category}${result.subcategory ? '/' + result.subcategory : ''}`,
+        `💾 Saved as: ${result.normalizedFilename}`,
+      ];
+
+      if (scanFlag && result.scanResult === 'clean') {
+        lines.push('🛡️ Virus scan: Clean');
+      }
+
+      // Upload to pCloud using rclone and get direct file link
+      let pcloudFileLink: string | null = null;
+      try {
+        const { exec } = await import('child_process');
+        const { promisify } = await import('util');
+        const execAsync = promisify(exec);
+
+        if (result.destinationPath && result.normalizedFilename) {
+          // Build pCloud remote path (e.g., pcloud:IrregularChat/Tech/Documents/filename.pdf)
+          const pcloudRemote = process.env.RCLONE_PCLOUD_REMOTE || 'pcloud';
+          const pcloudBasePath = process.env.PCLOUD_BASE_PATH || 'IrregularChat';
+          const pcloudFolder = result.subcategory
+            ? `${pcloudBasePath}/${result.category}/${result.subcategory}`
+            : `${pcloudBasePath}/${result.category}`;
+          const pcloudPath = `${pcloudRemote}:${pcloudFolder}/${result.normalizedFilename}`;
+
+          console.log(`☁️ Uploading to pCloud: ${pcloudPath}`);
+
+          // Upload file using rclone copy
+          const uploadCmd = `rclone copy "${result.destinationPath}" "${pcloudRemote}:${pcloudFolder}/" --config /app/config/rclone.conf 2>&1`;
+          try {
+            await execAsync(uploadCmd, { timeout: 60000 });
+            console.log(`✅ rclone upload successful`);
+
+            // Get public link using rclone link
+            const linkCmd = `rclone link "${pcloudPath}" --config /app/config/rclone.conf 2>&1`;
+            const { stdout } = await execAsync(linkCmd, { timeout: 30000 });
+            const link = stdout.trim();
+
+            if (link && link.startsWith('http')) {
+              pcloudFileLink = link;
+              console.log(`☁️ pCloud direct link: ${pcloudFileLink}`);
+            }
+          } catch (rcloneErr: any) {
+            console.error('rclone error:', rcloneErr.message || rcloneErr);
+          }
+        }
+      } catch (uploadError) {
+        console.error('pCloud upload error:', uploadError);
+        // Continue without pCloud link - local save still worked
+      }
+
+      // Add pCloud link to response
+      if (pcloudFileLink) {
+        lines.push(
+          '',
+          '☁️ Uploaded to pCloud:',
+          '',
+          `📎 ${pcloudFileLink}`
+        );
+      } else {
+        // Fallback to folder link if rclone upload failed
+        const pcloudBaseUrl = process.env.PCLOUD_PUBLIC_URL || 'https://u.pcloud.link/publink/show?code=kZ8boiVZ2peBXyioGY8yJSqlMyacwHfa6RLV';
+        const relativePath = result.category + (result.subcategory ? '/' + result.subcategory : '');
+        const pcloudUrl = `${pcloudBaseUrl}#folder=${encodeURIComponent(relativePath)}`;
+        lines.push(
+          '',
+          '☁️ Syncing to pCloud...',
+          '',
+          `📂 View folder: ${pcloudUrl}`
+        );
+      }
+
+      return lines.join('\n');
+
+    } catch (error) {
+      console.error('Archive error:', error);
+      return `❌ Archive failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  /**
+   * !scan / !virus / !clamav - Scan file for viruses using ClamAV
+   *
+   * Scans attachments from quoted messages without archiving them.
+   *
+   * Usage:
+   *   !scan  - Reply to a message with an attachment to scan it
+   */
+  private async handleVirusScan(args: string, context: CommandContext): Promise<string> {
+    // Check for attachment in quoted message
+    const attachment = context.quotedAttachments?.find(att =>
+      att.filename || att.contentType
+    );
+
+    if (!attachment) {
+      return `❌ No attachment found. Reply to a message with a file and use !scan
+
+Usage: Reply to a file and type !scan to check it for viruses.
+
+The scan uses ClamAV antivirus to detect malware, trojans, and other threats.`;
+    }
+
+    const filename = attachment.filename || 'unknown file';
+    const ext = filename.includes('.') ? filename.substring(filename.lastIndexOf('.')) : '';
+    const attachmentsDir = '/app/signal-data/attachments';
+
+    console.log(`🔍 Virus scan requested: ${filename}`);
+
+    try {
+      const fs = await import('fs/promises');
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+
+      // Find the attachment file
+      const files = await fs.readdir(attachmentsDir);
+      const matchingFiles = ext
+        ? files.filter(f => f.toLowerCase().endsWith(ext.toLowerCase()))
+        : files;
+
+      if (matchingFiles.length === 0) {
+        return '❌ Could not locate the attachment file. It may not have been downloaded yet.';
+      }
+
+      // Get most recent matching file
+      const fileStats = await Promise.all(
+        matchingFiles.map(async (f) => {
+          try {
+            const stat = await fs.stat(`${attachmentsDir}/${f}`);
+            return { name: f, path: `${attachmentsDir}/${f}`, mtime: stat.mtime, size: stat.size };
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      const validFiles = fileStats.filter(Boolean) as { name: string; path: string; mtime: Date; size: number }[];
+      validFiles.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+
+      if (validFiles.length === 0) {
+        return '❌ Could not access attachment files.';
+      }
+
+      const targetFile = validFiles[0];
+      const fileSizeKB = Math.round(targetFile.size / 1024);
+
+      console.log(`🔍 Scanning: ${targetFile.path} (${fileSizeKB} KB)`);
+
+      // Run ClamAV scan
+      try {
+        const { stdout, stderr } = await execAsync(`clamscan --no-summary "${targetFile.path}"`, {
+          timeout: 60000, // 60 second timeout
+        });
+
+        if (stdout.includes('OK')) {
+          return `🛡️ ClamAV Scan Complete
+
+📄 File: ${filename}
+📦 Size: ${fileSizeKB} KB
+🔍 Result: No known threats detected
+
+Note: ClamAV checked against its virus signature database. No scanner catches 100% of threats - always exercise caution with files from unknown sources.`;
+        } else if (stdout.includes('FOUND')) {
+          // Extract threat name
+          const threatMatch = stdout.match(/: (.+) FOUND/);
+          const threatName = threatMatch ? threatMatch[1] : 'Unknown threat';
+
+          return `🚨 THREAT DETECTED!
+
+📄 File: ${filename}
+📦 Size: ${fileSizeKB} KB
+🛡️ Scanner: ClamAV
+⚠️ Threat: ${threatName}
+
+DO NOT open this file! It may contain malware.`;
+        }
+
+        // Ambiguous result
+        return `⚠️ Scan completed with warnings
+
+📄 File: ${filename}
+📦 Size: ${fileSizeKB} KB
+🛡️ Scanner: ClamAV
+📋 Output: ${stdout.substring(0, 200)}
+
+Exercise caution with this file.`;
+
+      } catch (scanError: any) {
+        // Exit code 1 means virus found
+        if (scanError.code === 1 && scanError.stdout?.includes('FOUND')) {
+          const threatMatch = scanError.stdout.match(/: (.+) FOUND/);
+          const threatName = threatMatch ? threatMatch[1] : 'Unknown threat';
+
+          return `🚨 THREAT DETECTED!
+
+📄 File: ${filename}
+📦 Size: ${fileSizeKB} KB
+🛡️ Scanner: ClamAV
+⚠️ Threat: ${threatName}
+
+DO NOT open this file! It may contain malware.`;
+        }
+
+        // ClamAV not installed or other error
+        if (scanError.message?.includes('not found') || scanError.code === 127) {
+          return `⚠️ ClamAV not available
+
+The virus scanner (ClamAV) is not installed on this system.
+Unable to scan: ${filename}
+
+Consider installing ClamAV for file scanning capabilities.`;
+        }
+
+        throw scanError;
+      }
+
+    } catch (error) {
+      console.error('Virus scan error:', error);
+      return `❌ Scan failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  /**
+   * !files / !search / !find - Search the IrregularChat file archive
+   *
+   * Searches files in the community shared archive directory.
+   * Supports filename search, content grep, and smart AI-powered search.
+   *
+   * Usage:
+   *   !files drone                - Search filenames for "drone"
+   *   !files -g keyword          - Grep file contents for keyword
+   *   !files -s query            - Smart search with AI keywords
+   *   !files --cat Tech          - List files in Tech category
+   *   !files --list              - List all categories
+   */
+  private async handleFileSearch(args: string, context: CommandContext): Promise<string> {
+    // Parse flags
+    const listFlag = args.includes('--list') || args.includes('-l');
+    const categoryMatch = args.match(/--cat(?:egory)?\s+(\S+)/i) || args.match(/-c\s+(\S+)/i);
+    const grepFlag = args.includes('-g') || args.includes('--grep');
+    const smartFlag = args.includes('-s') || args.includes('--smart');
+
+    // Remove flags from search query
+    let query = args
+      .replace(/--list|-l/gi, '')
+      .replace(/--cat(?:egory)?\s+\S+/gi, '')
+      .replace(/-c\s+\S+/gi, '')
+      .replace(/-g|--grep/gi, '')
+      .replace(/-s|--smart/gi, '')
+      .trim();
+
+    // List categories
+    if (listFlag) {
+      try {
+        const categories = await listFileCategories();
+        if (categories.length === 0) {
+          return '📁 No categories found in archive.';
+        }
+
+        const lines = [
+          '📁 Archive Categories:',
+          '',
+          ...categories.map(c => `  • ${c}`),
+          '',
+          'Use !files --cat <name> to browse a category',
+          'Use !files <query> to search all files',
+        ];
+        return lines.join('\n');
+      } catch (error) {
+        return `❌ Failed to list categories: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      }
+    }
+
+    // Browse category
+    if (categoryMatch) {
+      const category = categoryMatch[1];
+      try {
+        const files = await getFilesInCategory(category, 20);
+        if (files.length === 0) {
+          return `📁 No files found in "${category}"`;
+        }
+
+        const lines = [
+          `📁 Files in ${category}:`,
+          '',
+        ];
+
+        for (const file of files.slice(0, 10)) {
+          const size = this.formatFileSizeShort(file.size);
+          const date = file.modified.toISOString().split('T')[0];
+          lines.push(`  • ${file.name} (${size}, ${date})`);
+        }
+
+        if (files.length > 10) {
+          lines.push(`  ... and ${files.length - 10} more files`);
+        }
+
+        lines.push('', `📂 Browse: ${getPCloudUrl(category, true)}`);
+
+        return lines.join('\n');
+      } catch (error) {
+        return `❌ Failed to list category: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      }
+    }
+
+    // Need a search query for other operations
+    if (!query) {
+      return `🔍 File Search - Search the IrregularChat archive
+
+Usage:
+  !files <query>         - Search filenames
+  !files -g <keyword>    - Search file contents (grep)
+  !files -s <query>      - Smart AI-powered search
+  !files --cat <name>    - Browse a category
+  !files --list          - List all categories
+
+Examples:
+  !files drone           - Find files with "drone" in name
+  !files -g FPV manual   - Find content mentioning "FPV manual"
+  !files -s UAV tactics  - Smart search with AI synonyms`;
+    }
+
+    try {
+      // Get context ID for session tracking (group or sender)
+      const contextId = context.groupId || context.sourceNumber || context.sourceUuid;
+
+      // Smart search with AI keywords
+      if (smartFlag && this.openai) {
+        console.log(`🔍 Smart file search: "${query}"`);
+        const { filenameResults, contentResults, keywords } = await smartSearch(
+          this.openai,
+          query,
+          20
+        );
+
+        const result = formatSearchResults(filenameResults, contentResults, contextId);
+
+        const lines: string[] = [];
+        if (keywords.length > 0) {
+          lines.push(`🤖 Search expanded with: ${keywords.slice(0, 3).join(', ')}`);
+          lines.push('');
+        }
+        lines.push(result.message);
+
+        return lines.join('\n');
+      }
+
+      // Grep content search
+      if (grepFlag) {
+        console.log(`🔍 Grep file search: "${query}"`);
+        const grepResults = await grepFiles(query, {
+          maxMatches: 20,
+          caseInsensitive: true,
+        });
+
+        if (grepResults.matches.length === 0) {
+          return `🔍 No content matches found for "${query}"`;
+        }
+
+        // Use formatSearchResults for consistent formatting
+        const emptyFileResults: SearchResult = {
+          files: [],
+          totalCount: 0,
+          truncated: false,
+          query,
+          searchType: 'content',
+        };
+
+        const result = formatSearchResults(emptyFileResults, grepResults, contextId);
+        return result.message;
+      }
+
+      // Basic filename search + directory search
+      console.log(`🔍 Filename search: "${query}"`);
+      const [results, matchingDirs] = await Promise.all([
+        searchByFilename(query, 50),
+        searchDirectories(query, 5),
+      ]);
+
+      const result = formatSearchResults(results, undefined, contextId);
+
+      // Add matching directories to the output
+      if (matchingDirs.length > 0) {
+        const dirLines = [
+          '',
+          `📂 Matching folders:`,
+          ...matchingDirs.map(d => `  • ${d.relativePath} → ${getPCloudUrl(d.relativePath, true)}`),
+        ];
+        return result.message + dirLines.join('\n');
+      }
+
+      return result.message;
+
+    } catch (error) {
+      console.error('File search error:', error);
+      return `❌ Search failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  /**
+   * !get - Get file links from a search session
+   *
+   * Usage:
+   *   !get <sessionId> <numbers>  - Get links for files by number
+   *   !get abc123 1,3,5           - Get files 1, 3, 5 from session abc123
+   */
+  private async handleFileGet(args: string, context: CommandContext): Promise<string> {
+    const parts = args.trim().split(/\s+/);
+
+    if (parts.length < 2) {
+      return `❌ Usage: !get <sessionId> <number(s)>
+
+Example: !get abc123 1,3,5
+
+Reply to a !files search result with the session ID and file numbers.`;
+    }
+
+    const sessionId = parts[0];
+    const numbersPart = parts.slice(1).join(',');
+
+    // Parse numbers (support "1,2,3" or "1 2 3" or "1, 2, 3")
+    const numbers = numbersPart
+      .split(/[\s,]+/)
+      .map(n => parseInt(n.trim(), 10))
+      .filter(n => !isNaN(n) && n > 0);
+
+    if (numbers.length === 0) {
+      return '❌ Please provide valid file numbers (e.g., 1,3,5)';
+    }
+
+    const session = getSearchSession(sessionId);
+    if (!session) {
+      return `❌ Search session "${sessionId}" not found or expired.
+
+Sessions last 10 minutes. Run a new search with !files`;
+    }
+
+    const lines: string[] = [];
+    lines.push(`📁 Files from search "${session.query}":`);
+    lines.push('');
+
+    for (const num of numbers) {
+      const file = getFileFromSession(sessionId, num);
+      if (file) {
+        const url = getPCloudUrl(file.relativePath);
+        lines.push(`${num}. ${file.name}`);
+        lines.push(`   ${file.category} • ${this.formatFileSizeShort(file.size)}`);
+        lines.push(`   ${url}`);
+        lines.push('');
+      } else {
+        lines.push(`${num}. (not found - out of range)`);
+        lines.push('');
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Helper to get file links from a session (used by both !get and bare number replies)
+   * Now async to fetch direct download links from pCloud API
+   */
+  private async handleFileGetFromSession(sessionId: string, numbers: number[]): Promise<string> {
+    const session = getSearchSession(sessionId);
+    if (!session) {
+      return `❌ Search session expired. Run a new search with !files`;
+    }
+
+    const lines: string[] = [];
+    lines.push(`📁 Files from search "${session.query}":`);
+    lines.push('');
+
+    for (const num of numbers) {
+      const file = getFileFromSession(sessionId, num);
+      if (file) {
+        // Try to get a direct download link
+        const linkResult = await getDirectDownloadLink(file.relativePath);
+        const url = linkResult.success && linkResult.link
+          ? linkResult.link
+          : getPCloudUrl(file.relativePath); // Fallback to browse URL
+
+        lines.push(`${num}. ${file.name}`);
+        lines.push(`   ${file.category} • ${this.formatFileSizeShort(file.size)}`);
+        lines.push(`   ${url}`);
+        lines.push('');
+      } else {
+        lines.push(`${num}. (not found - max is ${session.files.length})`);
+        lines.push('');
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Handle "tldr <number>" - Summarize a PDF from search session
+   */
+  private async handleTldrFromSession(
+    sessionId: string,
+    fileNum: number,
+    context: CommandContext
+  ): Promise<string> {
+    const session = getSearchSession(sessionId);
+    if (!session) {
+      return `❌ Search session expired. Run a new search with !files`;
+    }
+
+    const file = getFileFromSession(sessionId, fileNum);
+    if (!file) {
+      return `❌ File #${fileNum} not found (max is ${session.files.length})`;
+    }
+
+    // Check if it's a PDF
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      return `❌ File #${fileNum} (${file.name}) is not a PDF. TLDR only works on PDFs.`;
+    }
+
+    if (!this.openai) {
+      return '❌ OpenAI not configured. Cannot summarize PDFs.';
+    }
+
+    try {
+      // Scrape and summarize the PDF
+      console.log(`📄 TLDR summarizing PDF: ${file.path}`);
+
+      const pdfResult = await scrapePdfFromPath(file.path, file.name);
+
+      if (!pdfResult.success || !pdfResult.content || pdfResult.content.length < 50) {
+        return `❌ Could not extract text from ${file.name}. PDF may be image-based or corrupted.`;
+      }
+
+      // Truncate if too long
+      const maxChars = 15000;
+      const truncatedContent = pdfResult.content.length > maxChars
+        ? pdfResult.content.substring(0, maxChars) + '\n[...truncated...]'
+        : pdfResult.content;
+
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a concise summarizer. Provide a clear TLDR summary of the document.
+Format:
+📄 **Title**: [document title if found]
+📋 **Summary**: 2-3 sentences capturing the key points
+🎯 **Key Points**: 3-5 bullet points with the most important information`,
+          },
+          {
+            role: 'user',
+            content: `Summarize this document:\n\n${truncatedContent}`,
+          },
+        ],
+        max_tokens: 500,
+        temperature: 0.3,
+      });
+
+      const summary = response.choices[0]?.message?.content || 'Unable to generate summary';
+      const url = getPCloudUrl(file.relativePath);
+
+      return `📄 TLDR: ${file.name}\n\n${summary}\n\n📂 Link: ${url}`;
+
+    } catch (error) {
+      console.error('TLDR error:', error);
+      return `❌ Failed to summarize: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  /**
+   * Format file size for compact display
+   */
+  private formatFileSizeShort(bytes: number): string {
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
   }
 
   /**
@@ -1723,6 +2764,71 @@ export class CommandHandler {
   private async handleFlip(): Promise<string> {
     const result = Math.random() > 0.5 ? 'Heads' : 'Tails';
     return `🪙 ${result}!`;
+  }
+
+  /**
+   * !meme / !gif - Post a random meme or specific meme
+   *
+   * Usage:
+   *   !meme       - Random meme
+   *   !meme list  - Show available memes
+   *   !meme potato - Post specific meme
+   *
+   * Returns: Object with text and attachment path for Signal to send
+   */
+  private async handleMeme(args: string, context: CommandContext): Promise<string | { text: string; attachment?: string }> {
+    const subCommand = args.trim().toLowerCase();
+
+    // List available memes
+    if (subCommand === 'list' || subCommand === 'help') {
+      const memes = listMemes();
+      const stats = getMemeStats();
+      const lines = [
+        '🎭 Available Memes:',
+        '',
+        ...memes.map(m => `  • ${m.id} - ${m.description}`),
+        '',
+        `Total: ${stats.total} | Available: ${stats.available}`,
+        '',
+        'Usage: !meme <name> or !meme for random',
+      ];
+      return lines.join('\n');
+    }
+
+    // Get specific or random meme
+    let meme: MemeDefinition | undefined;
+    if (subCommand) {
+      meme = getMemeById(subCommand);
+      if (!meme) {
+        // Try fuzzy match
+        const memes = listMemes();
+        meme = memes.find(m =>
+          m.id.includes(subCommand) ||
+          m.description.toLowerCase().includes(subCommand) ||
+          m.triggers.some(t => t.includes(subCommand))
+        );
+      }
+      if (!meme) {
+        return `❌ Meme "${subCommand}" not found. Use !meme list to see available memes.`;
+      }
+    } else {
+      meme = getRandomMeme();
+    }
+
+    // Check if file exists
+    const filePath = getMemeFilePath(meme);
+    const exists = await memeFileExists(meme);
+
+    if (!exists) {
+      console.error(`Meme file not found: ${filePath}`);
+      return `❌ Meme file not found. Please contact admin.`;
+    }
+
+    // Return with attachment only (no text caption)
+    return {
+      text: '',
+      attachment: filePath,
+    };
   }
 
   /**
@@ -2068,9 +3174,10 @@ export class CommandHandler {
         );
         if (senderInfo.results && senderInfo.results.length > 0) {
           const row = senderInfo.results[0];
+          // NEVER use phone_number as name - privacy concern
           senderName = row.display_name || row.profile_name ||
                       (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name) ||
-                      row.phone_number || senderName;
+                      senderName;
         }
       } catch (error) {
         console.log('Could not look up sender name:', error);
@@ -2107,9 +3214,10 @@ export class CommandHandler {
           );
           if (memberInfo.results && memberInfo.results.length > 0) {
             const row = memberInfo.results[0];
+            // NEVER use phone_number as name - privacy concern
             userName = row.display_name || row.profile_name ||
                       (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name) ||
-                      row.phone_number || userName;
+                      userName;
           }
         } catch (error) {
           // Database lookup failed, continue with fallbacks
@@ -2117,18 +3225,7 @@ export class CommandHandler {
         }
       }
 
-      // Fallback: Use phone number if available
-      if (userName === 'Unknown' && mention.number) {
-        // Format phone number nicely: +12345678901 -> +1-234-567-8901
-        const phone = mention.number;
-        if (phone.startsWith('+1') && phone.length === 12) {
-          userName = `${phone.substring(0, 2)}-${phone.substring(2, 5)}-${phone.substring(5, 8)}-${phone.substring(8)}`;
-        } else {
-          userName = phone;
-        }
-      }
-
-      // Final fallback: Shortened UUID
+      // Fallback: Shortened UUID (NEVER use phone number - privacy concern)
       if (userName === 'Unknown' && mention.uuid) {
         userName = `User-${mention.uuid.substring(0, 8)}`;
       }
@@ -2420,6 +3517,11 @@ WIKI CONTENT:${wikiContext}`,
       return this.getLinksHelp();
     }
 
+    // Route to git repos handler if -git flag is set
+    if (options.showGit) {
+      return this.handleLinksGit(options, context);
+    }
+
     try {
       // Build query with JOIN to get human-readable group names
       let sql = `
@@ -2580,6 +3682,7 @@ WIKI CONTENT:${wikiContext}`,
     showForum?: boolean;
     showArchive?: boolean;
     noStats?: boolean;
+    showGit?: boolean;
     help: boolean;
   } {
     const options: any = { help: false };
@@ -2596,6 +3699,12 @@ WIKI CONTENT:${wikiContext}`,
     }
 
     let remaining = args.trim();
+
+    // Parse -git (show git repositories instead of news)
+    if (remaining.match(/-git\b/i)) {
+      options.showGit = true;
+      remaining = remaining.replace(/-git\b/i, '');
+    }
 
     // Parse -c (current group only)
     if (remaining.match(/-c\b/i)) {
@@ -2666,6 +3775,167 @@ WIKI CONTENT:${wikiContext}`,
   }
 
   /**
+   * Handle !links -git - Browse shared git repositories
+   */
+  private async handleLinksGit(options: {
+    timePeriod?: string;
+    keyword?: string;
+    groupId?: string;
+    limit?: number;
+    currentGroupOnly?: boolean;
+    noStats?: boolean;
+  }, context: CommandContext): Promise<string> {
+    if (!this.dbClient) {
+      return this.formatForSignal('❌ Database not available');
+    }
+
+    try {
+      // Build query for repository_links
+      let sql = `
+        SELECT r.url, r.platform, r.repository_name, r.owner, r.name, r.description,
+               r.language, r.stars, r.forks, r.open_issues, r.license, r.topics,
+               r.is_archived, r.is_fork, r.last_updated, r.post_count,
+               r.first_posted_at, r.last_posted_at, r.posted_by_name,
+               r.group_id, COALESCE(g.name, 'Unknown Group') as group_display_name
+        FROM repository_links r
+        LEFT JOIN signal_groups g ON r.group_id = g.id
+        WHERE 1=1
+      `;
+      const params: any[] = [];
+      let paramIndex = 1;
+
+      // Filter by group if specified
+      if (options.groupId) {
+        sql += ` AND r.group_id = $${paramIndex++}`;
+        params.push(options.groupId);
+      }
+
+      // Current group only
+      if (options.currentGroupOnly && context.groupId) {
+        sql += ` AND r.group_id = $${paramIndex++}`;
+        params.push(context.groupId);
+      }
+
+      // Time period filter
+      if (options.timePeriod) {
+        const cutoff = this.calculateTimeCutoff(options.timePeriod);
+        if (cutoff) {
+          sql += ` AND r.first_posted_at >= $${paramIndex++}`;
+          params.push(cutoff.toISOString());
+        }
+      }
+
+      // Keyword search in repo name, owner, or description
+      if (options.keyword) {
+        sql += ` AND (r.repository_name ILIKE $${paramIndex++} OR r.owner ILIKE $${paramIndex++} OR r.description ILIKE $${paramIndex++})`;
+        params.push(`%${options.keyword}%`, `%${options.keyword}%`, `%${options.keyword}%`);
+      }
+
+      // Order by stars (most popular first), then by most recently posted
+      sql += ` ORDER BY r.stars DESC, r.last_posted_at DESC LIMIT $${paramIndex++}`;
+      const limit = Math.min(options.limit || 15, 30);
+      params.push(limit);
+
+      // Execute query
+      const result = await this.dbClient.query(sql, params);
+      const repos = result.results || [];
+
+      if (repos.length === 0) {
+        let noResultsMsg = '📭 No repositories found';
+        if (options.timePeriod) noResultsMsg += ` in last ${options.timePeriod}`;
+        if (options.keyword) noResultsMsg += ` matching "${options.keyword}"`;
+        return this.formatForSignal(noResultsMsg);
+      }
+
+      // Group repos by Signal group
+      const reposByGroup = new Map<string, any[]>();
+      const languageCounts = new Map<string, number>();
+      let totalStars = 0;
+
+      for (const repo of repos) {
+        const groupKey = repo.group_display_name || 'Unknown Group';
+        if (!reposByGroup.has(groupKey)) {
+          reposByGroup.set(groupKey, []);
+        }
+        reposByGroup.get(groupKey)!.push(repo);
+
+        // Track language statistics
+        const lang = repo.language || 'Unknown';
+        languageCounts.set(lang, (languageCounts.get(lang) || 0) + 1);
+        totalStars += repo.stars || 0;
+      }
+
+      // Build response
+      let response = `🐙 Git Repositories (${repos.length})\n\n`;
+
+      for (const [groupName, groupRepos] of reposByGroup) {
+        response += `📁 ${groupName}\n`;
+
+        for (const repo of groupRepos) {
+          try {
+            // Format date
+            const dateObj = repo.last_posted_at ? new Date(repo.last_posted_at) : null;
+            const date = dateObj && !isNaN(dateObj.getTime())
+              ? dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+              : '?';
+
+            // Repo name with stats
+            const name = repo.repository_name || `${repo.owner}/${repo.name}`;
+            const stars = repo.stars > 0 ? `⭐${this.formatCompactNumber(repo.stars)}` : '';
+            const shares = repo.post_count > 1 ? `(${repo.post_count}x)` : '';
+            const lang = repo.language ? `[${repo.language}]` : '';
+            const archived = repo.is_archived ? '🗄️' : '';
+            const fork = repo.is_fork ? '🍴' : '';
+
+            response += `• ${name} ${stars} ${lang}${archived}${fork}${shares}\n`;
+
+            // Description (truncated)
+            if (repo.description) {
+              response += `  ${this.truncate(repo.description, 60)}\n`;
+            }
+
+            response += `  ${date} • ${repo.url}\n\n`;
+          } catch (repoError) {
+            console.warn('Skipping malformed repo entry:', repoError);
+            continue;
+          }
+        }
+      }
+
+      // Language Statistics (compact)
+      if (languageCounts.size > 1 && !options.noStats) {
+        response += '💻 ';
+        const sortedLangs = Array.from(languageCounts.entries())
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 4);
+        response += sortedLangs.map(([l, c]) => `${l}(${c})`).join(' • ');
+        response += '\n';
+      }
+
+      // Footer
+      response += `\n⭐ Total: ${this.formatCompactNumber(totalStars)} stars`;
+
+      return this.formatForSignal(response);
+    } catch (error) {
+      console.error('Error in handleLinksGit:', error);
+      return this.formatForSignal('❌ Error searching repositories');
+    }
+  }
+
+  /**
+   * Format number compactly (1K, 1.5M, etc.)
+   */
+  private formatCompactNumber(num: number): string {
+    if (num >= 1000000) {
+      return (num / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+    }
+    if (num >= 1000) {
+      return (num / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+    }
+    return num.toString();
+  }
+
+  /**
    * Calculate time cutoff from period string
    */
   private calculateTimeCutoff(period: string): Date | null {
@@ -2704,24 +3974,26 @@ WIKI CONTENT:${wikiContext}`,
    */
   private getLinksHelp(): string {
     return this.formatForSignal(
-      '📰 !links - Browse Shared News Links\n\n' +
-      'Shows recent links with actual article URLs.\n\n' +
+      '📰 !links - Browse Shared Links\n\n' +
+      'Shows recent news articles or git repositories.\n\n' +
       'Usage: !links [options] [search]\n\n' +
-      'URL Options:\n' +
-      '  (default)   Show article URL\n' +
+      'Mode:\n' +
+      '  (default)   News articles\n' +
+      '  -git        Git repositories (GitHub/GitLab)\n\n' +
+      'URL Options (news only):\n' +
       '  -f          Show forum discussion URL\n' +
       '  -a          Show archive.org URL\n\n' +
       'Filters:\n' +
       '  -c          This group only\n' +
       '  -t <time>   Time period (24h, 7d, 1w)\n' +
-      '  -d <domain> Filter by domain\n' +
+      '  -d <domain> Filter by domain (news)\n' +
       '  -n <count>  Results (max 30)\n\n' +
       'Examples:\n' +
-      '  !links           Recent links\n' +
-      '  !links -f        With forum links\n' +
-      '  !links -a        With archive links\n' +
-      '  !links -t 7d     Last 7 days\n' +
-      '  !links ukraine   Search "ukraine"'
+      '  !links           Recent news\n' +
+      '  !links -git      Recent repos\n' +
+      '  !links -git rust Search repos\n' +
+      '  !links -t 7d     News last 7 days\n' +
+      '  !links ukraine   Search news'
     );
   }
 
@@ -2898,18 +4170,22 @@ WIKI CONTENT:${wikiContext}`,
       }
 
       // Try to get user's display name from database
-      let userDisplayName = userIdentifier;
+      // NEVER use phone numbers or raw identifiers in public messages - privacy concern
+      let userDisplayName = 'a member';  // Safe default that doesn't reveal identity
       if (this.dbClient) {
         try {
           const result = await this.dbClient.query(
-            'SELECT display_name, profile_name, first_name, last_name, phone_number FROM signal_members WHERE uuid = $1 OR phone_number = $1 LIMIT 1',
+            'SELECT display_name, profile_name, first_name, last_name FROM signal_members WHERE uuid = $1 OR phone_number = $1 LIMIT 1',
             [userIdentifier]
           );
           if (result.results && result.results.length > 0) {
             const row = result.results[0];
-            userDisplayName = row.display_name || row.profile_name ||
-                             (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name) ||
-                             row.phone_number || userIdentifier;
+            // NEVER use phone_number as name - privacy concern
+            const foundName = row.display_name || row.profile_name ||
+                             (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name);
+            if (foundName) {
+              userDisplayName = foundName;
+            }
           }
         } catch (error) {
           console.error('Error looking up user display name:', error);
@@ -3022,6 +4298,9 @@ WIKI CONTENT:${wikiContext}`,
   /**
    * Keyword-to-group mapping for intelligent recommendations
    * Maps interest keywords to group name patterns
+   *
+   * NOTE: Group pattern matching now uses word boundaries to avoid false positives
+   * (e.g., "ai" won't match "Hawaii"). See getGroupsMatchingKeywords().
    */
   private readonly GROUP_KEYWORD_MAP: Record<string, string[]> = {
     // UAS/Drone related
@@ -3035,8 +4314,12 @@ WIKI CONTENT:${wikiContext}`,
     'cyber': ['cyber', 'cybersecurity', 'infosec', 'netsec', 'hacking', 'security'],
 
     // Technology
-    'tech': ['tech', 'technology', 'software', 'programming', 'coding', 'dev', 'engineer'],
-    'ai': ['ai', 'artificial intelligence', 'machine learning', 'ml', 'gpt', 'llm'],
+    'tech': ['tech', 'technology', 'software', 'programming', 'coding', 'dev', 'engineer', 'fullstack', 'full stack', 'full-stack', 'frontend', 'backend'],
+    'ai': ['ai', 'artificial intelligence', 'machine learning', 'ml', 'gpt', 'llm', 'autonomy', 'autonomous'],
+
+    // Communications/RF
+    'dragon': ['dragon', 'rf', 'comms', 'communications', 'radio', 'rf-comms', 'dragon-rf'],
+    'comms': ['comms', 'communications', 'radio', 'satcom', 'tactical comms'],
 
     // Other interests
     'news': ['news', 'current events', 'politics', 'geopolitics'],
@@ -3066,9 +4349,23 @@ WIKI CONTENT:${wikiContext}`,
 
   /**
    * Get recommended groups based on keywords found in user intro
+   *
+   * Uses word boundary matching to avoid false positives like "ai" matching "Hawaii"
    */
   private getGroupsMatchingKeywords(allGroups: any[], keywords: Set<string>): Array<{ groupId: string; name: string }> {
     const matchedGroups: Array<{ groupId: string; name: string }> = [];
+
+    // Helper: Check if group name contains pattern as a whole word (not substring)
+    const matchesGroupPattern = (groupName: string, pattern: string): boolean => {
+      const name = groupName.toLowerCase();
+      const pat = pattern.toLowerCase();
+
+      // Use word boundary regex: pattern must be preceded/followed by non-word char or string boundary
+      // Escape special regex chars in pattern
+      const escapedPattern = pat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`(^|[^a-z])${escapedPattern}([^a-z]|$)`, 'i');
+      return regex.test(name);
+    };
 
     // For each keyword category, check if we have matching keywords
     for (const [groupPattern, keywordList] of Object.entries(this.GROUP_KEYWORD_MAP)) {
@@ -3076,9 +4373,9 @@ WIKI CONTENT:${wikiContext}`,
       const hasMatchingKeyword = keywordList.some(kw => keywords.has(kw));
 
       if (hasMatchingKeyword) {
-        // Find groups matching this pattern
+        // Find groups matching this pattern (using word boundary, not substring)
         const matchingGroups = allGroups.filter((g: any) =>
-          g.name?.toLowerCase().includes(groupPattern.toLowerCase())
+          g.name && matchesGroupPattern(g.name, groupPattern)
         );
 
         matchingGroups.forEach((g: any) => {
@@ -3708,10 +5005,10 @@ WIKI CONTENT:${wikiContext}`,
    * This creates a new Signal group for the game and invites players.
    * The game runs in the new group with street craps rules.
    */
-  private async handleDiceGame(args: string, context: CommandContext): Promise<string> {
+  private async handleDiceGame(args: string, context: CommandContext): Promise<string | { text: string; attachment?: string }> {
     // Check if we have mentions
     if (!context.mentions || context.mentions.length === 0) {
-      return this.formatForSignal(
+      const helpText = this.formatForSignal(
         '🎰 STREET CRAPS\n\n' +
         'Start a multiplayer dice game!\n\n' +
         'Usage:\n' +
@@ -3725,19 +5022,36 @@ WIKI CONTENT:${wikiContext}`,
         '  !points - Check your balance\n' +
         '  !leave - Leave the game'
       );
+
+      // Add a random meme to the dice help response
+      const meme = getRandomMeme();
+      const filePath = getMemeFilePath(meme);
+      const exists = await memeFileExists(meme);
+
+      if (exists) {
+        return {
+          text: helpText,
+          attachment: filePath,
+        };
+      }
+
+      return helpText;
     }
 
     if (context.mentions.length > 11) {
       return '❌ Maximum 11 other players allowed (12 total)';
     }
 
-    // Get sender's info
+    // Get sender's info - prefer sourceName from message envelope (most reliable)
     let creatorName = context.sourceName || 'Player';
-    if (this.dbClient && context.sourceNumber) {
+    const creatorIdentifier = context.sourceUuid || context.sourceNumber;
+
+    // Only do database lookup if sourceName wasn't available
+    if ((!creatorName || creatorName === 'Player') && this.dbClient && creatorIdentifier) {
       try {
         const senderInfo = await this.dbClient.query(
           'SELECT display_name, profile_name, first_name, last_name FROM signal_members WHERE phone_number = $1 OR uuid = $1 LIMIT 1',
-          [context.sourceNumber]
+          [creatorIdentifier]
         );
         if (senderInfo.results && senderInfo.results.length > 0) {
           const row = senderInfo.results[0];
@@ -3749,16 +5063,29 @@ WIKI CONTENT:${wikiContext}`,
         console.log('Could not look up creator name:', error);
       }
     }
+    console.log(`📛 Creator name: "${creatorName}" (from sourceName: ${context.sourceName})`)
 
-    // Build player list
+    // Build player list - extract names from the original message text using mention positions
     const players: Array<{uuid: string; name: string; phoneNumber?: string}> = [];
+    const originalMessage = context.message || '';
 
     for (const mention of context.mentions) {
       let playerName = 'Player';
       const playerUuid = mention.uuid || mention.number || '';
 
-      // Look up name in database
-      if (this.dbClient && playerUuid) {
+      // Extract name from message text using mention position
+      // The mention has start (position) and length in the message
+      if (originalMessage && typeof mention.start === 'number' && typeof mention.length === 'number') {
+        const extractedName = originalMessage.substring(mention.start, mention.start + mention.length);
+        // Remove the @ prefix if present
+        playerName = extractedName.startsWith('@') ? extractedName.substring(1).trim() : extractedName.trim();
+        // Also handle the unicode mention character (U+FFFC) that Signal uses
+        playerName = playerName.replace(/\uFFFC/g, '').trim();
+        console.log(`📛 Extracted player name from mention: "${playerName}" (start: ${mention.start}, length: ${mention.length})`);
+      }
+
+      // If we couldn't extract from message, try database lookup as fallback
+      if ((!playerName || playerName === 'Player' || playerName.length === 0) && this.dbClient && playerUuid) {
         try {
           const memberInfo = await this.dbClient.query(
             'SELECT display_name, profile_name, first_name, last_name, phone_number FROM signal_members WHERE uuid = $1 OR phone_number = $1 LIMIT 1',
@@ -3766,13 +5093,19 @@ WIKI CONTENT:${wikiContext}`,
           );
           if (memberInfo.results && memberInfo.results.length > 0) {
             const row = memberInfo.results[0];
+            // NEVER use phone_number as name - privacy concern
             playerName = row.display_name || row.profile_name ||
                         (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name) ||
-                        row.phone_number || playerName;
+                        playerName;
           }
         } catch (error) {
           console.log('Could not look up player name:', error);
         }
+      }
+
+      // Final fallback: use a shortened UUID
+      if (!playerName || playerName === 'Player' || playerName.length === 0) {
+        playerName = playerUuid ? `Player-${playerUuid.substring(0, 4)}` : 'Player';
       }
 
       players.push({
@@ -3822,23 +5155,55 @@ WIKI CONTENT:${wikiContext}`,
       if (result && result.groupId) {
         setGameGroupId(game.id, result.groupId);
 
-        // Build player list for the welcome message
-        const playerList = Array.from(game.players.values())
-          .map(p => `  • ${p.name}${p.isShooter ? ' 🎯 (shooter)' : ''}`)
-          .join('\n');
+        // Build player list for the welcome message WITH Signal mentions
+        // Signal CLI mention format: "start:length:uuid"
+        const mentions: string[] = [];
+        let playerListText = '';
+        const headerText = '🎰 STREET CRAPS GAME STARTED! 🎰\n\n👥 Players:\n';
+        let currentPosition = headerText.length;
 
-        // Send welcome message to the new group
-        const welcomeMessage = `🎰 STREET CRAPS GAME STARTED! 🎰\n\n` +
-          `👥 Players:\n${playerList}\n\n` +
+        const playersArray = Array.from(game.players.values());
+        for (let i = 0; i < playersArray.length; i++) {
+          const p = playersArray[i];
+          const prefix = '  • ';
+          currentPosition += prefix.length;
+
+          // Use a placeholder character for the mention (Signal replaces with display name)
+          const mentionPlaceholder = '\uFFFC'; // Object Replacement Character
+          const suffix = p.isShooter ? ' 🎯 (shooter)' : '';
+
+          // Add mention in format start:length:uuid
+          // Length is 1 for the placeholder character
+          mentions.push(`${currentPosition}:1:${p.uuid}`);
+
+          playerListText += `${prefix}${mentionPlaceholder}${suffix}\n`;
+          currentPosition += 1 + suffix.length + 1; // placeholder + suffix + newline
+        }
+
+        // Send welcome message to the new group with mentions
+        // startBetting now returns { message, mentions } so we need to handle both
+        const bettingResult = startBetting(game);
+        const welcomeHeader = `${headerText}${playerListText}\n` +
           `Each player starts with 100 points.\n\n` +
           getGameRules() + '\n\n' +
-          `━━━━━━━━━━━━━━━━━━━━━━\n` +
-          startBetting(game);
+          `━━━━━━━━━━━━━━━━━━━━━━\n`;
 
-        // Send the welcome message to the new group
+        // Adjust betting mentions positions based on welcome header length
+        const adjustedBettingMentions = (bettingResult.mentions || []).map(m => {
+          const [start, len, uuid] = m.split(':');
+          return `${parseInt(start) + welcomeHeader.length}:${len}:${uuid}`;
+        });
+
+        const welcomeMessage = welcomeHeader + bettingResult.message;
+        const allMentions = [...mentions, ...adjustedBettingMentions];
+
+        console.log(`📛 Sending welcome message with ${allMentions.length} mentions:`, allMentions);
+
+        // Send the welcome message to the new group with mentions
         await this.bot.sendMessage({
           groupId: result.groupId,
-          message: welcomeMessage
+          message: welcomeMessage,
+          mention: allMentions
         });
 
         // Reply to the original message
@@ -3849,6 +5214,17 @@ WIKI CONTENT:${wikiContext}`,
     } catch (error) {
       console.error('Error creating dice game room:', error);
       return `❌ Error creating game room: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  /**
+   * Helper: Update player's name from Signal envelope if available
+   * Signal sends the current display name with each message, so use it to keep names fresh
+   */
+  private updatePlayerNameFromContext(game: GameState, playerUuid: string, context: CommandContext): void {
+    const player = game.players.get(playerUuid);
+    if (player && context.sourceName && context.sourceName !== 'Player') {
+      player.name = context.sourceName;
     }
   }
 
@@ -3865,6 +5241,7 @@ WIKI CONTENT:${wikiContext}`,
     }
 
     const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    this.updatePlayerNameFromContext(game, playerUuid, context);
 
     // If a number was provided, set stake first
     const stakeMatch = args.trim().match(/^(\d+)/);
@@ -3888,7 +5265,8 @@ WIKI CONTENT:${wikiContext}`,
 
     // If new round, add betting prompt
     if (result.nextPhase === 'betting') {
-      return result.message + '\n\n' + startBetting(game);
+      const bettingResult = startBetting(game);
+      return result.message + '\n\n' + bettingResult.message;
     }
 
     return result.message;
@@ -3904,6 +5282,9 @@ WIKI CONTENT:${wikiContext}`,
       return '❌ No active dice game in this group!';
     }
 
+    const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    this.updatePlayerNameFromContext(game, playerUuid, context);
+
     // Parse bet amount
     let amount = 10;  // Default bet
     const amountMatch = args.trim().match(/^(\d+)/);
@@ -3911,7 +5292,6 @@ WIKI CONTENT:${wikiContext}`,
       amount = parseInt(amountMatch[1]);
     }
 
-    const playerUuid = context.sourceUuid || context.sourceNumber || '';
     const result = placeBet(game, playerUuid, betType, amount);
 
     return result.message;
@@ -3927,6 +5307,9 @@ WIKI CONTENT:${wikiContext}`,
       return '❌ No active dice game in this group!';
     }
 
+    const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    this.updatePlayerNameFromContext(game, playerUuid, context);
+
     // Parse stake amount
     let amount = 10;  // Default
     const amountMatch = args.trim().match(/^(\d+)/);
@@ -3934,7 +5317,6 @@ WIKI CONTENT:${wikiContext}`,
       amount = parseInt(amountMatch[1]);
     }
 
-    const playerUuid = context.sourceUuid || context.sourceNumber || '';
     const result = setShooterStake(game, playerUuid, amount);
 
     return result.message;
@@ -3951,6 +5333,7 @@ WIKI CONTENT:${wikiContext}`,
     }
 
     const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    this.updatePlayerNameFromContext(game, playerUuid, context);
     const result = playerSkipBetting(game, playerUuid);
 
     return result.message;
@@ -3967,6 +5350,7 @@ WIKI CONTENT:${wikiContext}`,
     }
 
     const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    this.updatePlayerNameFromContext(game, playerUuid, context);
     const result = shooterReadyToRoll(game, playerUuid);
 
     return result.message;
@@ -3987,6 +5371,7 @@ WIKI CONTENT:${wikiContext}`,
     }
 
     const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    this.updatePlayerNameFromContext(game, playerUuid, context);
 
     // Parse args: "pass 20", "fade 15", "off", or empty
     const parts = args.trim().toLowerCase().split(/\s+/);
@@ -4023,6 +5408,7 @@ WIKI CONTENT:${wikiContext}`,
     }
 
     const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    this.updatePlayerNameFromContext(game, playerUuid, context);
     return getPlayerPoints(game, playerUuid);
   }
 
@@ -4050,6 +5436,7 @@ WIKI CONTENT:${wikiContext}`,
     }
 
     const playerUuid = context.sourceUuid || context.sourceNumber || '';
+    this.updatePlayerNameFromContext(game, playerUuid, context);
     const result = removePlayer(game, playerUuid);
 
     // Check if game should end
@@ -4148,19 +5535,57 @@ WIKI CONTENT:${wikiContext}`,
     // Create new game in this group
     const game = createGameInGroup(context.groupId, creatorUuid, creatorName, otherPlayers);
 
-    // Build player list
-    const playerList = Array.from(game.players.values())
-      .map(p => `  • ${p.name}${p.isShooter ? ' 🎯 (shooter)' : ''}`)
-      .join('\n');
+    // Build player list WITH Signal mentions
+    const mentions: string[] = [];
+    const headerText = '🎰 REMATCH! 🎰\n\n👥 Players:\n';
+    let currentPosition = headerText.length;
+    let playerListText = '';
 
-    return `🎰 REMATCH! 🎰
+    const playersArray = Array.from(game.players.values());
+    for (let i = 0; i < playersArray.length; i++) {
+      const p = playersArray[i];
+      const prefix = '  • ';
+      currentPosition += prefix.length;
 
-👥 Players:
-${playerList}
+      // Use a placeholder character for the mention
+      const mentionPlaceholder = '\uFFFC';
+      const suffix = p.isShooter ? ' 🎯 (shooter)' : '';
 
-Each player starts with 100 points.
+      // Add mention in format start:length:uuid
+      mentions.push(`${currentPosition}:1:${p.uuid}`);
 
-${startBetting(game)}`;
+      playerListText += `${prefix}${mentionPlaceholder}${suffix}\n`;
+      currentPosition += 1 + suffix.length + 1; // placeholder + suffix + newline
+    }
+
+    const introText = '\nEach player starts with 100 points.\n\n';
+    currentPosition = headerText.length + playerListText.length + introText.length;
+
+    // Get betting result with mentions
+    const bettingResult = startBetting(game);
+
+    // Adjust betting mentions positions
+    const adjustedBettingMentions = (bettingResult.mentions || []).map(m => {
+      const [start, len, uuid] = m.split(':');
+      return `${parseInt(start) + currentPosition}:${len}:${uuid}`;
+    });
+
+    const allMentions = [...mentions, ...adjustedBettingMentions];
+    const fullMessage = `${headerText}${playerListText}${introText}${bettingResult.message}`;
+
+    // Return object to signal that this response needs mentions
+    // Since the standard return is a string, we need to send directly with mentions
+    if (this.bot && context.groupId) {
+      await this.bot.sendMessage({
+        groupId: context.groupId,
+        message: fullMessage,
+        mention: allMentions
+      });
+      return ''; // Empty string so no duplicate message is sent
+    }
+
+    // Fallback without mentions
+    return fullMessage;
   }
 
   /**
@@ -4189,11 +5614,24 @@ ${startBetting(game)}`;
   }
 
   /**
-   * Format text for Signal (line breaks, etc.)
+   * Format text for Signal (strip markdown, clean formatting)
+   * Signal doesn't render markdown, so we convert to plain text
    */
   private formatForSignal(text: string): string {
-    // Signal uses simple line breaks
-    // No special formatting needed for now
-    return text;
+    return text
+      // Remove headers (### Header -> HEADER)
+      .replace(/^#{1,6}\s+(.+)$/gm, (_, content) => content.toUpperCase())
+      // Remove bold/italic markers (**bold** or *italic* -> text)
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\*([^*]+)\*/g, '$1')
+      .replace(/__([^_]+)__/g, '$1')
+      .replace(/_([^_]+)_/g, '$1')
+      // Remove inline code (`code` -> code)
+      .replace(/`([^`]+)`/g, '$1')
+      // Remove links [text](url) -> text (url)
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+      // Clean up multiple blank lines
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
   }
 }

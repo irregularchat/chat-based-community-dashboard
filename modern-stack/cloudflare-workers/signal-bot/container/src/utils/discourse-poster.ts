@@ -189,6 +189,8 @@ export interface PostNewsArticleResult {
   topicId?: number;
   error?: string;
   isDuplicate?: boolean;
+  title?: string;    // Article title (for new posts)
+  summary?: string;  // AI-generated summary (for new posts)
   existingPost?: {
     title?: string;
     summary?: string;
@@ -402,6 +404,8 @@ export async function postNewsArticleToDiscourse(
         discourseUrl: topicUrl,
         topicId: responseData.topic_id,
         isDuplicate: false,
+        title: articleTitle,
+        summary: summary,
       };
     } else {
       console.warn('⚠️  Created post but couldn\'t get topic_id from response:', responseData);

@@ -55,10 +55,35 @@ export interface GameState {
 
 export interface GameResult {
   message: string;
+  mentions?: string[];  // Signal CLI mention format: "start:length:uuid"
   winners?: Player[];
   losers?: Player[];
   nextPhase?: GamePhase;
   gameOver?: boolean;
+}
+
+// Unicode placeholder for Signal mentions - Signal replaces this with the display name
+export const MENTION_PLACEHOLDER = '\uFFFC';
+
+/**
+ * Calculate the UTF-16 code unit length of a string
+ * This is needed because Signal CLI mentions use UTF-16 positions, not character positions
+ * Emojis and other characters outside BMP take 2 UTF-16 code units (surrogate pairs)
+ */
+export function utf16Length(str: string): number {
+  // JavaScript strings are UTF-16, so .length gives us UTF-16 code units directly
+  return str.length;
+}
+
+/**
+ * Helper to build a player mention placeholder and track mention position
+ * Returns { text, mention } where text includes the placeholder and mention is in Signal CLI format
+ */
+export function buildPlayerMention(uuid: string, currentPosition: number): { text: string; mention: string } {
+  return {
+    text: MENTION_PLACEHOLDER,
+    mention: `${currentPosition}:1:${uuid}`
+  };
 }
 
 // Game constants
@@ -286,9 +311,9 @@ export function setGameGroupId(gameId: string, groupId: string): void {
 }
 
 /**
- * Start betting phase with timer
+ * Start betting phase with timer (returns message with Signal mentions)
  */
-export function startBetting(game: GameState): string {
+export function startBetting(game: GameState): GameResult {
   game.phase = 'betting';
   game.lastActivity = Date.now();
   game.bettingStartTime = Date.now();
@@ -297,31 +322,47 @@ export function startBetting(game: GameState): string {
   const shooter = game.players.get(game.shooterUuid!);
 
   // Apply any held bets first
-  const holdResults = applyHeldBets(game);
-
-  // Generate leaderboard
-  const leaderboard = getLeaderboard(game);
+  const holdResults = applyHeldBetsWithMentions(game);
 
   const timeoutSecs = Math.floor(game.bettingTimeoutMs / 1000);
 
-  // Check ready status after applying holds
-  const readyStatus = checkAllPlayersReady(game);
-
-  let message = `━━━━━━━━━━━━━━━━━━━━━━
+  // Build header with shooter mention
+  const mentions: string[] = [];
+  let header = `━━━━━━━━━━━━━━━━━━━━━━
 🎲 ROUND ${game.roundNumber} - PLACE YOUR BETS!
 ━━━━━━━━━━━━━━━━━━━━━━
 
-🎯 SHOOTER: ${shooter?.name || 'Unknown'}
+🎯 SHOOTER: `;
+  let currentPosition = header.length;
+
+  // Add shooter mention
+  if (shooter) {
+    mentions.push(`${currentPosition}:1:${shooter.uuid}`);
+  }
+  header += `${MENTION_PLACEHOLDER}
 💎 STAKE: ${game.shooterStake} pts
 
-${leaderboard}`;
+`;
+  currentPosition = header.length;
+
+  // Generate leaderboard with mentions
+  const leaderboard = getLeaderboardWithMentions(game, currentPosition);
+  mentions.push(...leaderboard.mentions);
+  currentPosition = leaderboard.endPosition;
+
+  let message = header + leaderboard.text;
 
   // Add hold results if any
-  if (holdResults) {
-    message += `\n\n${holdResults}`;
+  if (holdResults.text) {
+    message += `\n\n${holdResults.text}`;
+    currentPosition = message.length;
+    mentions.push(...holdResults.mentions);
   }
 
-  message += `\n
+  // Check ready status after applying holds
+  const readyStatus = checkAllPlayersReadyWithMentions(game, message.length + 1);
+
+  message += `
 ━━━━━━━━━━━━━━━━━━━━━━
 💰 BETTING OPEN (${timeoutSecs}s)
 ━━━━━━━━━━━━━━━━━━━━━━
@@ -330,13 +371,56 @@ ${leaderboard}`;
 • !hold [pass/fade] [amt] - Auto-bet
 • !skip - Skip this round
 
-${readyStatus}`;
+${readyStatus.text}`;
 
-  return message;
+  mentions.push(...readyStatus.mentions);
+
+  return { message, mentions };
 }
 
 /**
- * Get leaderboard showing all players' points
+ * Get leaderboard showing all players' points with Signal mentions
+ * Returns text with mention placeholders and an array of mention strings
+ */
+function getLeaderboardWithMentions(game: GameState, startPosition: number): { text: string; mentions: string[]; endPosition: number } {
+  const sortedPlayers = Array.from(game.players.values())
+    .sort((a, b) => b.points - a.points);
+
+  const mentions: string[] = [];
+  let currentPosition = startPosition;
+
+  const header = '📊 STANDINGS:\n';
+  currentPosition += header.length;
+
+  const lines: string[] = [];
+  for (let i = 0; i < sortedPlayers.length; i++) {
+    const p = sortedPlayers[i];
+    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '  ';
+    const shooterMark = p.isShooter ? ' 🎯' : '';
+    const netChange = p.totalWon - p.totalLost;
+    const netStr = netChange >= 0 ? `+${netChange}` : `${netChange}`;
+
+    // Build line with mention placeholder
+    const prefix = `${medal} `;
+    currentPosition += prefix.length;
+
+    // Add mention for player
+    mentions.push(`${currentPosition}:1:${p.uuid}`);
+
+    const suffix = `: ${p.points} pts (${netStr})${shooterMark}\n`;
+    lines.push(`${prefix}${MENTION_PLACEHOLDER}${suffix}`);
+    currentPosition += 1 + suffix.length; // 1 for placeholder
+  }
+
+  return {
+    text: header + lines.join(''),
+    mentions,
+    endPosition: currentPosition
+  };
+}
+
+/**
+ * Get leaderboard showing all players' points (legacy string version for internal use)
  */
 function getLeaderboard(game: GameState): string {
   const sortedPlayers = Array.from(game.players.values())
@@ -506,6 +590,84 @@ export function checkAllPlayersReady(game: GameState): string {
 }
 
 /**
+ * Check if all non-shooter players have bet or skipped (with Signal mentions)
+ */
+function checkAllPlayersReadyWithMentions(game: GameState, startPosition: number): { text: string; mentions: string[] } {
+  const nonShooterPlayers = Array.from(game.players.entries())
+    .filter(([uuid]) => uuid !== game.shooterUuid);
+
+  const mentions: string[] = [];
+  const readyPlayerData: Array<{ uuid: string; suffix: string }> = [];
+  const waitingPlayerData: Array<{ uuid: string }> = [];
+
+  for (const [uuid, player] of nonShooterPlayers) {
+    if (player.bet && player.betAmount) {
+      readyPlayerData.push({ uuid, suffix: ` (${player.bet} ${player.betAmount})` });
+    } else if (game.playersSkipped.has(uuid)) {
+      readyPlayerData.push({ uuid, suffix: ' (skip)' });
+    } else {
+      waitingPlayerData.push({ uuid });
+    }
+  }
+
+  const allReady = waitingPlayerData.length === 0;
+  const shooter = game.players.get(game.shooterUuid!);
+
+  if (allReady && shooter) {
+    // All ready message with shooter mention
+    const prefix = '✅ All players ready!\n🎯 ';
+    let currentPos = startPosition + prefix.length;
+    mentions.push(`${currentPos}:1:${shooter.uuid}`);
+    return {
+      text: `${prefix}${MENTION_PLACEHOLDER}, type !roll to roll the dice!`,
+      mentions
+    };
+  }
+
+  // Calculate time remaining
+  const elapsed = game.bettingStartTime ? Date.now() - game.bettingStartTime : 0;
+  const remaining = Math.max(0, Math.ceil((game.bettingTimeoutMs - elapsed) / 1000));
+
+  // Build the waiting and ready lists with mentions
+  let text = '⏳ Waiting: ';
+  let currentPos = startPosition + text.length;
+
+  // Add waiting players
+  for (let i = 0; i < waitingPlayerData.length; i++) {
+    const p = waitingPlayerData[i];
+    mentions.push(`${currentPos}:1:${p.uuid}`);
+    text += MENTION_PLACEHOLDER;
+    currentPos += 1;
+    if (i < waitingPlayerData.length - 1) {
+      text += ', ';
+      currentPos += 2;
+    }
+  }
+
+  text += '\n✅ Ready: ';
+  currentPos = startPosition + text.length;
+
+  if (readyPlayerData.length === 0) {
+    text += 'none';
+  } else {
+    for (let i = 0; i < readyPlayerData.length; i++) {
+      const p = readyPlayerData[i];
+      mentions.push(`${currentPos}:1:${p.uuid}`);
+      text += `${MENTION_PLACEHOLDER}${p.suffix}`;
+      currentPos += 1 + p.suffix.length;
+      if (i < readyPlayerData.length - 1) {
+        text += ', ';
+        currentPos += 2;
+      }
+    }
+  }
+
+  text += `\n⏱️ ${remaining}s remaining (or shooter can !go when ready)`;
+
+  return { text, mentions };
+}
+
+/**
  * Check if all players are ready (have bet or skipped)
  */
 export function areAllPlayersReady(game: GameState): boolean {
@@ -654,6 +816,77 @@ export function applyHeldBets(game: GameState): string {
   }
 
   return result;
+}
+
+/**
+ * Apply all held bets with Signal mentions
+ */
+function applyHeldBetsWithMentions(game: GameState): { text: string; mentions: string[] } {
+  const mentions: string[] = [];
+  const appliedLines: Array<{ uuid: string; emoji: string; holdBet: string; holdAmount: number }> = [];
+  const skippedLines: Array<{ uuid: string; text: string }> = [];
+
+  for (const [uuid, player] of game.players) {
+    if (uuid === game.shooterUuid) continue;
+    if (!player.holdBet || !player.holdAmount) continue;
+
+    // Check if player has enough points
+    if (player.points < player.holdAmount) {
+      skippedLines.push({ uuid, text: ` (insufficient pts - hold cleared)` });
+      player.holdBet = undefined;
+      player.holdAmount = undefined;
+      continue;
+    }
+
+    // Apply the held bet
+    player.bet = player.holdBet;
+    player.betAmount = player.holdAmount;
+    player.lastActivity = Date.now();
+
+    const emoji = player.holdBet === 'pass' ? '✅' : '❌';
+    appliedLines.push({ uuid, emoji, holdBet: player.holdBet, holdAmount: player.holdAmount });
+  }
+
+  if (appliedLines.length === 0 && skippedLines.length === 0) {
+    return { text: '', mentions: [] };
+  }
+
+  let text = '';
+  let currentPos = 0;
+
+  if (appliedLines.length > 0) {
+    const header = '🔒 AUTO-BETS APPLIED:\n';
+    text += header;
+    currentPos = header.length;
+
+    for (const item of appliedLines) {
+      const prefix = `${item.emoji} `;
+      currentPos += prefix.length;
+      mentions.push(`${currentPos}:1:${item.uuid}`);
+      const suffix = `: ${item.holdBet} ${item.holdAmount}\n`;
+      text += `${prefix}${MENTION_PLACEHOLDER}${suffix}`;
+      currentPos += 1 + suffix.length;
+    }
+  }
+
+  if (skippedLines.length > 0) {
+    if (text) {
+      text += '\n';
+      currentPos = text.length;
+    }
+    const header = '⚠️ HOLDS CLEARED:\n';
+    text += header;
+    currentPos = text.length;
+
+    for (const item of skippedLines) {
+      mentions.push(`${currentPos}:1:${item.uuid}`);
+      const suffix = `${item.text}\n`;
+      text += `${MENTION_PLACEHOLDER}${suffix}`;
+      currentPos += 1 + suffix.length;
+    }
+  }
+
+  return { text: text.trimEnd(), mentions };
 }
 
 /**

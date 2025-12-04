@@ -103,6 +103,14 @@ rm -f /app/signal-data/data/.*.lock 2>/dev/null || true
 echo "✅ Lock files cleared"
 echo ""
 
+# Update ClamAV virus definitions at startup (may fail if not running as root)
+echo "🛡️ Updating ClamAV virus definitions..."
+# SECURITY: Running as non-root user, freshclam may not have permissions
+# The virus definitions are updated during docker build instead
+freshclam --quiet 2>/dev/null || echo "ℹ️  ClamAV using build-time definitions (non-root user)"
+echo "✅ ClamAV ready"
+echo ""
+
 # Start periodic backup in background (every 5 minutes)
 (
     while true; do
@@ -112,6 +120,17 @@ echo ""
     done
 ) &
 BACKUP_PID=$!
+
+# Start daily ClamAV updates in background (every 24 hours)
+# SECURITY: May fail when running as non-root, that's expected
+(
+    while true; do
+        sleep 86400  # 24 hours
+        echo "🛡️ Daily ClamAV virus definition update..."
+        freshclam --quiet 2>/dev/null || echo "ℹ️  ClamAV update skipped (non-root)"
+    done
+) &
+CLAMAV_PID=$!
 
 echo "🚀 Starting Signal Bot..."
 echo "📝 Entry point: $ENTRY_POINT"
@@ -124,8 +143,9 @@ APP_PID=$!
 # Wait for the application to exit
 wait $APP_PID
 
-# Clean up background backup process
+# Clean up background processes
 kill $BACKUP_PID 2>/dev/null || true
+kill $CLAMAV_PID 2>/dev/null || true
 
 # Final backup before exit
 echo "📤 Final backup to R2..."

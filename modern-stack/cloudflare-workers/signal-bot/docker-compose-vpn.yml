@@ -36,7 +36,7 @@ services:
 
       # Firewall Configuration (Kill Switch)
       FIREWALL_VPN_INPUT_PORTS: 51820
-      FIREWALL_OUTBOUND_SUBNETS: 172.18.0.0/16  # Allow internal docker network
+      FIREWALL_OUTBOUND_SUBNETS: 172.24.0.0/16  # Allow internal docker network
 
       # Timezone
       TZ: America/New_York
@@ -100,7 +100,7 @@ services:
   signal-bot:
     build:
       context: /home/signal-bot-selfhosted/bot
-      dockerfile: Dockerfile.selfhosted
+      dockerfile: Dockerfile
     container_name: signal-bot-selfhosted
     restart: unless-stopped
     # CRITICAL: Use VPN container's network stack
@@ -114,22 +114,29 @@ services:
       redis:
         condition: service_healthy
     environment:
-      # Database configuration
+      # Database configuration (using container IP since signal-bot uses VPN network)
+      # NOTE: IPs may change after docker compose down/up - verify with:
+      #   docker network inspect signal-bot-selfhosted_signal-bot-network | grep -E '(Name|IPv4)'
       DB_TYPE: postgres
-      DB_HOST: postgres
+      DB_HOST: 172.24.0.3
       DB_PORT: 5432
       DB_NAME: signal_bot
       DB_USER: signal_bot
       DB_PASSWORD: ${DB_PASSWORD:-changeme123}
 
-      # Redis configuration
-      REDIS_HOST: redis
+      # Redis configuration (using container IP since signal-bot uses VPN network)
+      REDIS_HOST: 172.24.0.4
       REDIS_PORT: 6379
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://172.24.0.4:6379
 
       # Signal configuration
       SIGNAL_PHONE_NUMBER: ${SIGNAL_PHONE:-+19108471202}
       SIGNAL_CLI_CONFIG_DIR: /app/signal-data
+      AUTO_START: true
+      ADMIN_PHONE_NUMBERS: ${ADMIN_PHONE_NUMBERS:-+12247253276}
+      # Direct UUID admin list (more reliable since Signal often doesn't send phone numbers)
+      # Multiple UUIDs can be comma-separated. Include both old and new UUIDs for admin users.
+      ADMIN_UUIDS: ${ADMIN_UUIDS:-770b19f5-389e-444e-8976-551a52136cf6,ac67735d-beaf-48a7-8398-98d0be4dcb55}
 
       # OpenAI configuration (optional)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -148,6 +155,9 @@ services:
     volumes:
       - /home/signal-bot-selfhosted/data/signal-data:/app/signal-data
       - /home/signal-bot-selfhosted/data/downloads:/tmp
+      - /home/forgejo/data/git/repositories/irregulars/irregularchatwiki.git:/app/wiki-repo:ro
+      - /home/signal-bot-selfhosted/config:/app/config:ro
+      - /datadrive/IrregularChat:/app/irregularchat:rw
     # NOTE: Ports are exposed via the VPN container since we're using network_mode: "service:vpn"
     # The bot's port 8080 is accessible via the VPN container's network
     healthcheck:

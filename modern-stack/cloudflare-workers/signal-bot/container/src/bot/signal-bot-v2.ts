@@ -174,6 +174,10 @@ export class SignalBot extends EventEmitter {
   private readonly GROUPS_CACHE_TTL = 3600000; // 1 hour in milliseconds
   private groupRefreshInterval: NodeJS.Timeout | null = null;
 
+  // Verification request timeout checking (every 30 minutes)
+  private verificationCheckInterval: NodeJS.Timeout | null = null;
+  private readonly VERIFICATION_CHECK_INTERVAL = 1800000; // 30 minutes in milliseconds
+
   // Emoji reactions handler
   private emojiReactionHandler: EmojiReactionHandler;
 
@@ -239,6 +243,14 @@ export class SignalBot extends EventEmitter {
       });
     }, this.GROUPS_CACHE_TTL);
 
+    // Set up periodic verification timeout check (every 30 minutes)
+    this.verificationCheckInterval = setInterval(() => {
+      this.commandHandler.processExpiredVerifications().catch(err => {
+        console.error('Error processing expired verifications:', err);
+      });
+    }, this.VERIFICATION_CHECK_INTERVAL);
+    console.log('📋 Verification timeout check interval started (every 30 minutes)');
+
     this.isRunningFlag = true;
     this.startTime = Date.now();
 
@@ -266,6 +278,12 @@ export class SignalBot extends EventEmitter {
     if (this.groupRefreshInterval) {
       clearInterval(this.groupRefreshInterval);
       this.groupRefreshInterval = null;
+    }
+
+    // Clear verification check interval
+    if (this.verificationCheckInterval) {
+      clearInterval(this.verificationCheckInterval);
+      this.verificationCheckInterval = null;
     }
 
     // Disconnect RPC client
@@ -532,6 +550,7 @@ export class SignalBot extends EventEmitter {
       const groupId = groupInfo?.groupId;
       const quotedText = dataMessage?.quote?.text;
       const quotedAttachments = dataMessage?.quote?.attachments;
+      const quotedAuthor = dataMessage?.quote?.author; // UUID of the person who wrote the quoted message
 
       console.log(`🔵 [DEBUG] Message text: "${messageText}", groupId: ${groupId}`);
 
@@ -595,6 +614,11 @@ export class SignalBot extends EventEmitter {
 
         await this.dbClient.saveMessage(messageData);
         console.log('🔵 [DEBUG] PostgreSQL save completed successfully');
+
+        // Update member profile name from incoming message for better display names
+        if (sourceUuid && sourceName && sourceName !== sourceNumber) {
+          await this.dbClient.updateMemberProfileName(sourceUuid, sourceName, sourceNumber);
+        }
       } catch (error) {
         console.error('🔵 [DEBUG] Failed to save message:', error);
       }
@@ -617,6 +641,7 @@ export class SignalBot extends EventEmitter {
             timestamp,
             quotedText,
             quotedAttachments,
+            quotedAuthor, // UUID of the user who wrote the quoted message
             mentions: dataMessage?.mentions,
           });
           console.log('🔵 [DEBUG] Command handling completed');
@@ -626,6 +651,75 @@ export class SignalBot extends EventEmitter {
         }
       } else {
         console.log('🔵 [DEBUG] Message is NOT a command');
+
+        // Check if this is a reply to an AI response (for conversation continuation)
+        if (quotedText && quotedText.includes('🤖 AI Response:')) {
+          console.log('🤖 Detected reply to AI response, continuing conversation...');
+          try {
+            const aiReplyResponse = await this.commandHandler.handleAIReply(
+              messageText,
+              quotedText,
+              {
+                sourceNumber: sourceNumber || '',
+                sourceUuid,
+                sourceName: sourceName || '',
+                groupId,
+                timestamp,
+                quotedText,
+                quotedAttachments,
+                quotedAuthor,
+                mentions: dataMessage?.mentions,
+                message: messageText,
+              }
+            );
+
+            if (aiReplyResponse) {
+              if (groupId) {
+                await this.sendMessage({
+                  groupId,
+                  message: aiReplyResponse,
+                });
+              } else if (sourceNumber) {
+                await this.sendMessage({
+                  recipient: sourceNumber,
+                  message: aiReplyResponse,
+                });
+              }
+              console.log('🤖 AI reply continuation sent');
+            }
+          } catch (error) {
+            console.error('Error handling AI reply:', error);
+          }
+        }
+
+        // Check for verification flow messages (intro with mention, vouch response)
+        if (groupId && sourceUuid) {
+          try {
+            const verificationResponse = await this.commandHandler.handleVerificationMessage(
+              messageText,
+              {
+                sourceNumber: sourceNumber || '',
+                sourceUuid,
+                sourceName: sourceName || '',
+                groupId,
+                timestamp,
+                mentions: dataMessage?.mentions,
+                message: messageText,
+              }
+            );
+
+            // If verification handler returned a response, send it to the group
+            if (verificationResponse) {
+              await this.sendMessage({
+                groupId,
+                message: verificationResponse,
+              });
+              console.log('📋 Verification flow response sent');
+            }
+          } catch (error) {
+            console.error('Error handling verification message:', error);
+          }
+        }
       }
 
       // Check for emoji reactions (after command handling)
@@ -1208,6 +1302,7 @@ Your file has been flagged but NOT automatically deleted. Please take action.`;
       timestamp: number;
       quotedText?: string;
       quotedAttachments?: any[];
+      quotedAuthor?: string; // UUID of the user who wrote the quoted message
       mentions?: any[];
     }
   ): Promise<void> {
@@ -1432,6 +1527,225 @@ Your file has been flagged but NOT automatically deleted. Please take action.`;
     console.log('🔄 Refreshing groups from signal-cli...');
     await this.refreshGroupCache();
     return this.cachedGroups;
+  }
+
+  /**
+   * Get a specific group directly from signal-cli (may trigger server sync)
+   * This bypasses the cache and can provide fresher data
+   */
+  async getGroupDirect(groupId: string): Promise<any> {
+    if (!this.rpcClient) {
+      throw new Error('JSON-RPC client not connected');
+    }
+
+    try {
+      console.log(`📋 Fetching group directly from signal-cli: ${groupId}`);
+      const group = await this.rpcClient.getGroup(groupId);
+      return group;
+    } catch (error) {
+      console.error('Error fetching group directly:', error);
+      // Fall back to cached data
+      const cachedGroup = this.cachedGroups.find(g => g.id === groupId);
+      return cachedGroup || null;
+    }
+  }
+
+  /**
+   * Get Signal contacts with profile names
+   * Returns a Map of UUID -> profile name
+   */
+  async getContactNames(): Promise<Map<string, string>> {
+    if (!this.rpcClient) {
+      return new Map();
+    }
+
+    const nameMap = new Map<string, string>();
+
+    try {
+      // Try to get contacts
+      const contacts = await this.rpcClient.listContacts();
+      for (const contact of contacts) {
+        if (contact.uuid && (contact.name || contact.profileName)) {
+          const name = contact.name || contact.profileName;
+          nameMap.set(contact.uuid, name);
+        }
+      }
+      console.log(`📇 Loaded ${nameMap.size} contact names from signal-cli`);
+    } catch (error) {
+      console.error('Error fetching contacts:', error);
+    }
+
+    return nameMap;
+  }
+
+  /**
+   * Get Signal identities with profile names
+   * Identities are users who have exchanged messages with this account
+   * Returns a Map of UUID -> profile name
+   */
+  async getIdentityNames(): Promise<Map<string, string>> {
+    if (!this.rpcClient) {
+      return new Map();
+    }
+
+    const nameMap = new Map<string, string>();
+
+    try {
+      const identities = await this.rpcClient.listIdentities();
+      for (const identity of identities) {
+        // Signal-cli identities include uuid and may have profileName
+        if (identity.uuid && identity.name) {
+          nameMap.set(identity.uuid, identity.name);
+        }
+      }
+      console.log(`🪪 Loaded ${nameMap.size} identity names from signal-cli`);
+    } catch (error) {
+      console.error('Error fetching identities:', error);
+    }
+
+    return nameMap;
+  }
+
+  /**
+   * Get member profile names from cached Signal groups
+   * This extracts profile names from the memberDetails in cached group data
+   * Returns a Map of UUID -> profile name
+   */
+  async getMemberNamesFromGroups(): Promise<Map<string, string>> {
+    const nameMap = new Map<string, string>();
+
+    try {
+      // Get all groups (uses cache)
+      const groups = await this.getGroups();
+
+      for (const group of groups) {
+        // Check if group has memberDetails (detailed member info)
+        if (group.memberDetails && Array.isArray(group.memberDetails)) {
+          for (const member of group.memberDetails) {
+            if (member.uuid && member.profileName && !this.looksLikeUuid(member.profileName)) {
+              nameMap.set(member.uuid, member.profileName);
+            }
+          }
+        }
+        // Also check members array for inline profile names
+        if (group.members && Array.isArray(group.members)) {
+          for (const member of group.members) {
+            if (typeof member === 'object' && member.uuid && member.profileName) {
+              if (!this.looksLikeUuid(member.profileName)) {
+                nameMap.set(member.uuid, member.profileName);
+              }
+            }
+          }
+        }
+      }
+      console.log(`👥 Loaded ${nameMap.size} member names from cached groups`);
+    } catch (error) {
+      console.error('Error extracting member names from groups:', error);
+    }
+
+    return nameMap;
+  }
+
+  /**
+   * Check if a string looks like a UUID or truncated UUID fallback
+   * These patterns should NOT be used as display names
+   */
+  private looksLikeUuid(str: string): boolean {
+    if (!str) return false;
+    // Match full UUID format
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)) return true;
+    // Match truncated UUID format (8 hex chars + ...)
+    if (/^[0-9a-f]{6,8}\.\.\.?$/i.test(str)) return true;
+    // Match bracketed UUID prefix [abc123]
+    if (/^\[[0-9a-f]{6,8}\]$/i.test(str)) return true;
+    return false;
+  }
+
+  /**
+   * Get profile names directly from Signal CLI's internal SQLite database (account.db)
+   * This is the most reliable source for profile names (2160+ entries vs ~123 in PostgreSQL)
+   * Uses child_process to exec sqlite3 command
+   */
+  async getProfileNamesFromSignalDb(): Promise<Map<string, string>> {
+    const nameMap = new Map<string, string>();
+
+    try {
+      const { execSync } = await import('child_process');
+      const configDir = process.env.SIGNAL_CLI_CONFIG_DIR || '/app/signal-data';
+
+      // Find account database - it's in a numbered subdirectory
+      const fs = await import('fs');
+      const dataDir = `${configDir}/data`;
+
+      if (!fs.existsSync(dataDir)) {
+        console.log('📁 Signal data directory not found');
+        return nameMap;
+      }
+
+      // Find the account directory (e.g., 813876.d)
+      const entries = fs.readdirSync(dataDir);
+      const accountDir = entries.find(e => e.endsWith('.d'));
+
+      if (!accountDir) {
+        console.log('📁 No account directory found in Signal data');
+        return nameMap;
+      }
+
+      const dbPath = `${dataDir}/${accountDir}/account.db`;
+
+      if (!fs.existsSync(dbPath)) {
+        console.log(`📁 account.db not found at ${dbPath}`);
+        return nameMap;
+      }
+
+      // Query the recipient table for profile names
+      // Format: aci|profile_given_name|profile_family_name (pipe-separated)
+      const query = `SELECT aci, profile_given_name, profile_family_name FROM recipient WHERE aci IS NOT NULL AND profile_given_name IS NOT NULL`;
+      const result = execSync(`sqlite3 -separator '|' "${dbPath}" "${query}"`, {
+        encoding: 'utf-8',
+        timeout: 5000,
+      });
+
+      // Parse the results
+      const lines = result.trim().split('\n');
+      for (const line of lines) {
+        if (!line) continue;
+        const [aci, givenName, familyName] = line.split('|');
+        if (aci && givenName) {
+          // Combine given and family name
+          const fullName = familyName ? `${givenName} ${familyName}`.trim() : givenName.trim();
+          if (fullName && !this.looksLikeUuid(fullName)) {
+            nameMap.set(aci, fullName);
+          }
+        }
+      }
+
+      console.log(`📋 Loaded ${nameMap.size} profile names from Signal CLI database`);
+    } catch (error) {
+      console.error('Error querying Signal CLI database:', error);
+    }
+
+    return nameMap;
+  }
+
+  /**
+   * Sync with Signal servers by processing any pending messages
+   * This can update group membership info from recent events
+   */
+  async syncWithServer(timeout: number = 1): Promise<void> {
+    if (!this.rpcClient) {
+      return;
+    }
+
+    try {
+      console.log('🔄 Syncing with Signal servers...');
+      await this.rpcClient.receive(timeout);
+      // Invalidate group cache after sync
+      this.groupsCacheTimestamp = 0;
+      console.log('✅ Sync complete, cache invalidated');
+    } catch (error) {
+      console.error('Error syncing with server:', error);
+    }
   }
 
   /**
@@ -1809,21 +2123,13 @@ Your file has been flagged but NOT automatically deleted. Please take action.`;
           const domain = extractDomain(url);
           console.log(`📰 Processing URL: ${url} (${domain})`);
 
-          // Generate archive link (check for existing archive first)
-          const archiveUrl = await getArchiveLink(url);
           // Generate bypass link (12ft.io)
           const bypassUrl = `https://12ft.io/${url}`;
 
-          // Send immediate acknowledgment with BOTH archive and bypass links
-          await this.sendMessage({
-            recipient: context.groupId ? undefined : context.sourceNumber,
-            groupId: context.groupId,
-            message: `📰 Processing...\n\n📎 Archive: ${archiveUrl}\n🔓 Bypass: ${bypassUrl}`,
-          });
-
           // Post to Discourse (self-hosted mode with direct API)
+          // Generate archive link in parallel with Discourse posting
           const discourseConfig = getDiscourseConfig();
-          let discourseUrl: string | undefined;
+          const archiveUrl = await getArchiveLink(url);
 
           if (discourseConfig) {
             console.log('📝 Posting article to Discourse...');
@@ -1836,9 +2142,9 @@ Your file has been flagged but NOT automatically deleted. Please take action.`;
             }, discourseConfig, this.dbClient); // Pass database client for duplicate detection
 
             if (discourseResult.success && discourseResult.discourseUrl) {
-              discourseUrl = discourseResult.discourseUrl;
+              const discourseUrl = discourseResult.discourseUrl;
 
-              // Handle duplicate vs new post
+              // Handle duplicate vs new post - send ONE consolidated message
               if (discourseResult.isDuplicate && discourseResult.existingPost) {
                 console.log(`✅ Duplicate URL - returning existing post (shared ${discourseResult.existingPost.postCount} times)`);
 
@@ -1850,11 +2156,11 @@ Your file has been flagged but NOT automatically deleted. Please take action.`;
                 // Get title from existing post
                 const title = discourseResult.existingPost.title || 'Article';
 
-                // Send message about existing post with title
+                // Send ONE consolidated message for duplicate
                 await this.sendMessage({
                   recipient: context.groupId ? undefined : context.sourceNumber,
                   groupId: context.groupId,
-                  message: `📋 "${title}"\nAlready shared (${discourseResult.existingPost.postCount}x since ${firstPosted})\n\n📝 Forum: ${discourseUrl}`,
+                  message: `📋 "${title}"\nAlready shared (${discourseResult.existingPost.postCount}x since ${firstPosted})\n\n📝 Forum: ${discourseUrl}\n🔓 Bypass: ${bypassUrl}`,
                 });
               } else {
                 console.log(`✅ Posted to Discourse: ${discourseUrl}`);
@@ -1863,26 +2169,39 @@ Your file has been flagged but NOT automatically deleted. Please take action.`;
                 const title = discourseResult.title || 'Article';
                 const summary = discourseResult.summary || '';
 
-                // Send follow-up message with title, summary, and Discourse link
-                let forumMessage = `📝 "${title}"`;
+                // Build ONE consolidated message: title, summary, forum link, bypass link
+                let message = `📝 "${title}"`;
                 if (summary && summary.length > 10) {
                   // Truncate summary to ~200 chars for Signal
                   const shortSummary = summary.length > 200 ? summary.substring(0, 197) + '...' : summary;
-                  forumMessage += `\n\n${shortSummary}`;
+                  message += `\n\n${shortSummary}`;
                 }
-                forumMessage += `\n\n📝 Forum: ${discourseUrl}`;
+                message += `\n\n📝 Forum: ${discourseUrl}`;
+                message += `\n🔓 Bypass: ${bypassUrl}`;
 
                 await this.sendMessage({
                   recipient: context.groupId ? undefined : context.sourceNumber,
                   groupId: context.groupId,
-                  message: forumMessage,
+                  message,
                 });
               }
             } else {
               console.error('❌ Failed to post to Discourse:', discourseResult.error);
+              // If Discourse fails, still send bypass link
+              await this.sendMessage({
+                recipient: context.groupId ? undefined : context.sourceNumber,
+                groupId: context.groupId,
+                message: `🔓 Bypass: ${bypassUrl}`,
+              });
             }
           } else {
             console.log('⚠️  Discourse not configured, skipping forum post');
+            // No Discourse, just send bypass link
+            await this.sendMessage({
+              recipient: context.groupId ? undefined : context.sourceNumber,
+              groupId: context.groupId,
+              message: `🔓 Bypass: ${bypassUrl}`,
+            });
           }
 
           // Skip full scraping in self-hosted mode (already sent archive link + Discourse post)

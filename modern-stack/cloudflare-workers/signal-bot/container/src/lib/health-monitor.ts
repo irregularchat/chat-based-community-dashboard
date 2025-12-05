@@ -50,9 +50,13 @@ export class HealthMonitor {
       status = 'unhealthy';
     }
 
-    if (memPercentage > 90) {
-      status = 'degraded';
-    }
+    // Note: heapUsed/heapTotal can normally be >90% right before GC runs
+    // This is not a memory problem. Only flag if RSS exceeds a high threshold.
+    // For now, disable heap percentage check as it causes false positives.
+    // TODO: Consider using rss against a configured limit instead
+    // if (memPercentage > 95) {
+    //   status = 'degraded';
+    // }
 
     return {
       status,

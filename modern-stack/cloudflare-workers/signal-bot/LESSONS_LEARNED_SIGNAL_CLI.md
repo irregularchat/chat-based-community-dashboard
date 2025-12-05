@@ -32,6 +32,8 @@
 24. [pCloud Download Links Are IP-Bound](#pcloud-download-links-are-ip-bound-2025-12-04)
 25. [Auto-Archive Documents After Virus Scan](#auto-archive-documents-after-virus-scan-2025-12-04)
 26. [Docker Volume Mount Permissions (rclone Config)](#docker-volume-mount-permissions-rclone-config-2025-12-04)
+27. [Authentik SSO Integration (!createuser Command)](#authentik-sso-integration-createuser-command-2025-12-04)
+28. [CRITICAL: !clearroom Admin Protection Incident](#critical-clearroom-admin-protection-incident-2025-12-04)
 
 ---
 
@@ -3502,3 +3504,437 @@ services:
 **Files**:
 - `docker-compose.yml` - Volume mount configuration
 - Host: `/home/signal-bot-selfhosted/config/` - rclone configuration directory
+
+---
+
+## Authentik SSO Integration (!createuser Command) (2025-12-04)
+
+### Overview
+
+The Signal bot can now create SSO accounts in Authentik directly from Signal chat using the `!createuser` command. This mirrors the functionality available in the community dashboard.
+
+### Command Syntax
+
+```
+# With @mention (uses Signal profile name):
+!createuser @user email@example.com
+
+# Without @mention (specify name):
+!createuser email@example.com FirstName
+!createuser email@example.com First Last
+```
+
+### Features
+
+1. **Admin-only command** - Uses existing `isAdmin()` check
+2. **@mention support** - Extracts first name from Signal profile database
+3. **Auto-generate username** - Format: `firstnameword42` (e.g., `johnswift42`)
+4. **Generate secure passphrase** - Format: `WordWordWord42!` (3 words + number + special char)
+5. **Password security** - NEVER shown in group chat response
+6. **DM credentials**:
+   - If @mention: DM sent to the mentioned user
+   - If no @mention: DM sent to admin who ran command (for manual forwarding)
+
+### Environment Variables
+
+Add to `.env` on the server:
+
+```bash
+# Authentik SSO Integration
+AUTHENTIK_BASE_URL=https://sso.irregularchat.com
+AUTHENTIK_API_TOKEN=your-api-token-here
+MAIN_GROUP_ID=  # Optional: default group UUID for new users
+```
+
+Add to `docker-compose.yml` in the signal-bot service environment:
+
+```yaml
+environment:
+  # Authentik SSO configuration (optional - for !createuser command)
+  AUTHENTIK_BASE_URL: ${AUTHENTIK_BASE_URL:-}
+  AUTHENTIK_API_TOKEN: ${AUTHENTIK_API_TOKEN:-}
+  MAIN_GROUP_ID: ${MAIN_GROUP_ID:-}
+```
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `container/src/utils/authentik-client.ts` | Authentik API client |
+| `container/src/bot/command-handler.ts` | `handleCreateUser()` method |
+| `.env.selfhosted.template` | Environment variable template |
+| `docker-compose-vpn.yml` | Container environment configuration |
+
+### Authentik API Client (`authentik-client.ts`)
+
+Key functions:
+
+```typescript
+// Check if Authentik is configured
+authentikClient.isConfigured(): boolean
+
+// Generate unique username: "firstnameword42"
+authentikClient.generateUsername(firstName: string): Promise<string>
+
+// Generate passphrase: "WordWordWord42!"
+authentikClient.generateSecurePassphrase(): Promise<string>
+
+// Check if username exists
+authentikClient.checkUsernameExists(username: string): Promise<boolean>
+
+// Create user in Authentik
+authentikClient.createUser(payload: CreateUserPayload): Promise<CreateUserResponse>
+```
+
+### CRITICAL: Password Must Be Set Separately
+
+**Problem Discovered (2025-12-04):**
+Authentik's user creation API (`POST /api/v3/core/users/`) does NOT reliably apply the `password` field during user creation. Users are created but cannot log in because the password was never set.
+
+**Solution:**
+Password MUST be set via a separate API call after user creation:
+
+```typescript
+// Step 1: Create user WITHOUT password
+const response = await fetch(`${apiUrl}/core/users/`, {
+  method: 'POST',
+  body: JSON.stringify({
+    username: 'johndoe42',
+    name: 'John Doe',
+    email: 'john@example.com',
+    is_active: true,
+    // NOTE: Do NOT include password here - it won't work!
+  })
+});
+
+// Step 2: Set password SEPARATELY using dedicated endpoint
+await fetch(`${apiUrl}/core/users/${userId}/set_password/`, {
+  method: 'POST',
+  body: JSON.stringify({ password: 'SecurePass123!' })
+});
+```
+
+**API Endpoint:**
+```
+POST /api/v3/core/users/{user_id}/set_password/
+Body: { "password": "the-password" }
+```
+
+**Symptoms of the Bug:**
+- User appears in Authentik admin with "Active: Yes"
+- Event log shows "Model created" success
+- User cannot log in - always shows "Failed login" in event log
+- Password field during creation is silently ignored
+
+**Verification in Logs:**
+When working correctly, you'll see:
+```
+🔐 Creating user in Authentik...
+✅ User created in Authentik: 1234
+🔑 Setting password for user 1234...
+✅ Password set successfully for user 1234
+```
+
+### Welcome Message Template
+
+The welcome message sent via DM matches the dashboard format:
+
+```
+🌟 Your First Step Into the IrregularChat! 🌟
+You've just joined a community focused on breaking down silos, fostering innovation, and supporting service members and veterans.
+---
+Use This Username and Temporary Password ⬇️
+Username: johnswift42
+Temporary Password: CorrectHorseBattery42!
+Exactly as shown above 👆🏼
+
+1️⃣ Step 1:
+- Use the username and temporary password to log in to https://sso.irregularchat.com
+
+2️⃣ Step 2:
+- Update your email, important to be able to recover your account
+- Save your Login Username and New Password to a Password Manager
+- Visit the welcome page while logged in https://forum.irregularchat.com/t/84
+
+Please take a moment to learn about the community before you jump in.
+Welcome aboard!
+```
+
+### Security Considerations
+
+1. **Password never in group chat** - Only sent via DM
+2. **Admin verification** - Uses `isAdmin()` check (UUID + phone number)
+3. **API token security** - Stored in environment variable, never logged
+4. **Rate limiting** - Consider adding rate limit for production
+
+### Example Usage
+
+**In a Signal group (as admin):**
+
+```
+Admin: !createuser @JohnDoe john.doe@example.com
+Bot: ✅ SSO Account Created
+
+📧 Email: john.doe@example.com
+👤 Username: johnswift42
+📛 Name: John Doe
+
+📨 Credentials sent to user via DM
+```
+
+**Without @mention:**
+
+```
+Admin: !createuser jane.smith@example.com Jane Smith
+Bot: ✅ SSO Account Created
+
+📧 Email: jane.smith@example.com
+👤 Username: janeocean87
+📛 Name: Jane Smith
+
+📨 Credentials sent to you via DM (forward to user)
+```
+
+### Error Handling
+
+| Scenario | Response |
+|----------|----------|
+| Non-admin user | `❌ Admin-only command` |
+| Authentik not configured | `❌ SSO service not configured` |
+| Missing email | `❌ Email required` |
+| Invalid email | `❌ Invalid email address` |
+| API error | `❌ Failed to create user: <error>` |
+| DM failed, sent to admin | `📨 Credentials sent to admin (forward to user manually)` |
+| DM failed completely | `⚠️ Could not send DM - contact user manually` |
+
+### Troubleshooting
+
+**"SSO service not configured"**
+- Verify `AUTHENTIK_BASE_URL` and `AUTHENTIK_API_TOKEN` are set in `.env`
+- Verify docker-compose passes the environment variables
+- Restart container after .env changes
+
+**User created but login fails (password not working)**
+- Check logs for `🔑 Setting password for user` and `✅ Password set successfully`
+- If missing, the old code (without separate set_password call) is deployed
+- Solution: Rebuild with the fixed `authentik-client.ts` that uses `set_password` endpoint
+- See "CRITICAL: Password Must Be Set Separately" section above
+
+**Check environment variables in container:**
+```bash
+docker exec signal-bot-selfhosted printenv | grep AUTHENTIK
+```
+
+**Expected output:**
+```
+AUTHENTIK_BASE_URL=https://sso.irregularchat.com
+AUTHENTIK_API_TOKEN=your-token-here
+```
+
+### Lesson
+
+✅ **Reuse existing patterns** - Ported dashboard's Authentik service, maintaining consistency
+✅ **Security first** - Never expose passwords in group chat
+✅ **Progressive DM delivery** - Send to target user if mentioned, else to admin
+✅ **Same username algorithm** - Dashboard and bot create compatible usernames
+✅ **Same passphrase format** - Consistent user experience across tools
+✅ **CRITICAL: Use separate set_password endpoint** - Authentik's user creation API ignores the password field; must use `POST /core/users/{id}/set_password/` after creation
+✅ **Admin fallback for DM failures** - If DM to user fails, send credentials to admin (+12247253276) for manual forwarding
+
+---
+
+## DM Fallback to Admin Account
+
+### Problem: DM to new users fails when they haven't messaged bot
+
+**Symptom**:
+```
+✅ SSO Account Created
+⚠️ Could not send DM - contact user manually
+```
+
+User created successfully but credentials not delivered.
+
+### Solution: Admin Fallback
+
+When DM to target user fails, automatically send credentials to admin account for manual forwarding.
+
+**Implementation** (`command-handler.ts:4593-4619`):
+```typescript
+const ADMIN_FALLBACK_NUMBER = '+12247253276'; // sac's admin account
+
+if (dmRecipient && this.bot) {
+  try {
+    await this.bot.sendMessage({ recipient: dmRecipient, message: welcomeMessage });
+    dmSent = true;
+  } catch (dmError) {
+    // Fallback: send to admin account
+    try {
+      const fallbackMessage = `📨 FORWARDING CREDENTIALS (DM to user failed)\n\nUser: ${firstName} ${lastName}\nEmail: ${email}\n\n${welcomeMessage}`;
+      await this.bot.sendMessage({ recipient: ADMIN_FALLBACK_NUMBER, message: fallbackMessage });
+      dmSentToFallback = true;
+    } catch (fallbackError) {
+      console.error('Failed to send to admin fallback:', fallbackError);
+    }
+  }
+}
+```
+
+### Response Messages
+
+| State | Response |
+|-------|----------|
+| DM to user succeeded | `📨 Credentials sent to user via DM` |
+| DM to admin (caller) succeeded | `📨 Credentials sent to you via DM (forward to user)` |
+| DM failed, fallback succeeded | `📨 Credentials sent to admin (forward to user manually)` |
+| Both failed | `⚠️ Could not send DM - contact user manually` |
+
+### Lesson
+
+✅ **Always have fallback delivery mechanism** - Users who haven't messaged the bot can't receive DMs
+✅ **Include context in fallback** - Add user info header so admin knows who to forward to
+
+---
+
+## Deployment Path for Signal Bot
+
+### Problem: Syncing to wrong path doesn't update container
+
+**Symptom**: Code changes not reflected after deployment
+
+### Solution: Correct Build Context Path
+
+The docker-compose.yml specifies:
+```yaml
+signal-bot:
+  build:
+    context: /home/signal-bot-selfhosted/bot
+    dockerfile: Dockerfile
+```
+
+**Correct deployment commands**:
+```bash
+# Build locally
+npm run build
+
+# Sync to CORRECT path (bot/dist, not container/dist)
+rsync -avz --delete dist/ root@proxmox-main:/home/signal-bot-selfhosted/bot/dist/
+
+# Rebuild and restart (from project root)
+ssh root@proxmox-main "cd /home/signal-bot-selfhosted && docker compose build signal-bot && docker compose up -d signal-bot"
+```
+
+**Common mistake**:
+```bash
+# WRONG - syncs to wrong location
+rsync -avz dist/ root@proxmox-main:/home/signal-bot-selfhosted/container/dist/
+```
+
+### Lesson
+
+✅ **Check docker-compose build context** - The `context:` path determines where Dockerfile runs
+✅ **Rebuild after sync** - Container must be rebuilt to pick up new dist files
+✅ **Run docker compose from project root** - To pick up .env file correctly
+
+---
+
+## CRITICAL: !clearroom Admin Protection Incident (2025-12-04)
+
+### Incident Summary
+
+The `!clearroom` command inadvertently removed community admins from the Entry/INDOC room because the protection logic only checked for Signal group admins, not bot admins or Admin group members.
+
+### What Happened
+
+1. Admin ran `!clearroom confirm` in Entry room
+2. Command removed ALL non-Signal-admin members
+3. **49 community admins were removed** because they weren't Signal admins in that specific group
+4. Required manual restoration via signal-cli commands
+
+### Root Cause
+
+Original protection logic:
+```typescript
+// WRONG - Only protected Signal group admins
+const protectedSet = new Set(signalAdmins);
+const nonAdminMembers = members.filter((m: string) => !protectedSet.has(m));
+```
+
+This failed because:
+- Signal group admins ≠ Community admins
+- Bot admins (from `ADMIN_UUIDS` env var) weren't protected
+- Admin group members weren't protected
+
+### Solution: Three-Layer Protection
+
+Updated protection logic (`command-handler.ts:4555-4573`):
+```typescript
+// 1. Signal group admins (explicit admins of THIS group)
+const protectedSet = new Set(signalAdmins);
+
+// 2. Bot admins from ADMIN_UUIDS environment variable
+const botAdminUuids = process.env.ADMIN_UUIDS?.split(',').map(u => u.trim()).filter(Boolean) || [];
+for (const uuid of botAdminUuids) {
+  protectedSet.add(uuid);
+}
+
+// 3. CRITICAL: All members of the Admin group (by name pattern "**Admin**")
+const adminGroup = allGroups.find((g: any) =>
+  g.name && g.name.toLowerCase().includes('admin') && g.name.includes('**')
+);
+const adminGroupMembers: string[] = adminGroup?.members || [];
+for (const uuid of adminGroupMembers) {
+  protectedSet.add(uuid);
+}
+```
+
+### Additional Safeguard: Preview Before Confirm
+
+New behavior:
+- `!clearroom` → Shows preview of who will be removed (with display names from DB)
+- `!clearroom confirm` → Actually executes removal
+
+Preview message shows:
+- Number of members to be removed
+- List of member names (up to 20, with "...and N more")
+- Number of protected members and breakdown by source
+
+### Recovery Process
+
+To restore removed admin members:
+```bash
+# 1. Get Admin group members from Signal
+docker exec signal-bot-selfhosted signal-cli -a +19108471202 \
+  --config /app/signal-data listGroups -d -g 'ADMIN_GROUP_ID' \
+  -o json | jq -r '.[0].members[].uuid'
+
+# 2. Add them back to Entry group as members
+docker exec signal-bot-selfhosted signal-cli -a +19108471202 \
+  --config /app/signal-data updateGroup -g 'ENTRY_GROUP_ID' \
+  -m UUID1 UUID2 UUID3 ...
+
+# 3. Promote them to admins
+docker exec signal-bot-selfhosted signal-cli -a +19108471202 \
+  --config /app/signal-data updateGroup -g 'ENTRY_GROUP_ID' \
+  --admin UUID1 UUID2 UUID3 ...
+```
+
+### Key IDs Reference
+
+| Group | ID |
+|-------|-----|
+| Admin Group | `+By7SYBOPGExcE2PuBeAGdujLLaYTxG9yseTVA/d4dI=` |
+| Entry/INDOC | `PjJCT6d4nrF0/BZOs39ECX/lZkcHPbi65JU8B6kgw6s=` |
+
+### Lessons Learned
+
+✅ **NEVER trust single-source protection** - Use multiple overlapping protection layers
+✅ **Preview destructive actions** - Show what will be affected before confirming
+✅ **Dynamic protection, not hardcoded** - Query Admin group live, don't hardcode UUIDs
+✅ **Include display names** - Users can't verify UUIDs, need human-readable names
+✅ **Log protection breakdown** - Console log shows `(Signal admins: X, Bot admins: Y, Admin group: Z)`
+
+### Files Modified
+
+- `container/src/bot/command-handler.ts` - Updated `handleClearRoom` function (lines 4518-4680)
+- `container/src/db/postgres-client.ts` - Added `getMemberDisplayNamesByUuids` method (lines 800-818)

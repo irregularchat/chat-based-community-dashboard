@@ -82,6 +82,9 @@ import {
   GrepResult,
   DirInfo,
 } from '../utils/file-search.js';
+import { authentikClient, generateWelcomeMessage } from '../utils/authentik-client.js';
+import { parseIntroduction, isIntroMessage, formatIntroSummary, extractEmailFromText } from '../utils/intro-parser.js';
+import { getNextDicho, getDichosCount, formatDicho } from '../utils/dichos.js';
 
 export interface Mention {
   start: number;
@@ -109,6 +112,7 @@ export interface CommandContext {
   timestamp: number;
   quotedText?: string;
   quotedAttachments?: SignalAttachment[]; // Attachments from the quoted/replied message
+  quotedAuthor?: string; // UUID of the user who wrote the quoted message
   mentions?: Mention[];
   message?: string; // Full original message text for mention extraction
 }
@@ -125,6 +129,24 @@ export interface CommandResponseWithAttachment {
 }
 
 export type CommandResponse = string | CommandResponseWithAttachment | null;
+
+/**
+ * Check if a string looks like a UUID or truncated UUID fallback
+ * These patterns should NOT be used as display names
+ */
+function looksLikeUuid(str: string): boolean {
+  if (!str) return false;
+  // Match full UUID format
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)) return true;
+  // Match truncated UUID format (6-8 hex chars + ...)
+  if (/^[0-9a-f]{6,8}\.\.\.?$/i.test(str)) return true;
+  // Match bracketed UUID prefix [abc123] or [abc123...]
+  if (/^\[[0-9a-f]{6,8}\]$/i.test(str)) return true;
+  if (/^\[[0-9a-f]{6,8}\.\.\.?\]$/i.test(str)) return true;
+  // Match pure hex strings 6-8 chars (likely truncated UUIDs stored as names)
+  if (/^[0-9a-f]{6,8}$/i.test(str)) return true;
+  return false;
+}
 
 export class CommandHandler {
   private config: BotConfig;
@@ -367,6 +389,10 @@ export class CommandHandler {
       case '!quote':
         return this.handleQuote();
 
+      case '!dichos':
+      case '!dicho':
+        return this.handleDichos();
+
       case '!fact':
         return this.handleFact();
 
@@ -458,6 +484,16 @@ export class CommandHandler {
       case '!remove':
         return this.handleRemove(args, context);
 
+      case '!clearroom':
+        return this.handleClearRoom(args, context);
+
+      case '!createuser':
+        return this.handleCreateUser(args, context);
+
+      case '!accountinvite':
+      case '!invite':
+        return this.handleAccountInvite(args, context);
+
       // Announcement Commands (Admin)
       case '!announce':
         return this.handleAnnounce(args, context);
@@ -471,7 +507,7 @@ export class CommandHandler {
       // Request/Onboarding
       case '!req':
       case '!request':
-        return this.handleRequest();
+        return this.handleRequest(args, context);
 
       // Discourse/Forum Commands
       case '!fpost':
@@ -554,6 +590,9 @@ export class CommandHandler {
         '  !gtg @user - Approve user (Good To Go)',
         '  !pending - Show pending users',
         '  !remove @user - Remove from all groups (safety number)',
+        '  !clearroom confirm - Remove all non-admins from current group',
+        '  !createuser @user email - Create SSO account for mentioned user',
+        '  !createuser email name - Create SSO account with name',
         '',
         '📢 Announcements:',
         '  !announce [-t time] [-g groups] [-dm] message',
@@ -596,8 +635,11 @@ export class CommandHandler {
 
   /**
    * !ai - Ask AI a question
+   * @param question - The user's question
+   * @param context - Command context
+   * @param previousAIResponse - Optional previous AI response for conversation context
    */
-  private async handleAI(question: string, context: CommandContext): Promise<string> {
+  private async handleAI(question: string, context: CommandContext, previousAIResponse?: string): Promise<string> {
     if (!this.openai) {
       return this.formatForSignal(
         '❌ AI Features Not Configured\n\n' +
@@ -620,20 +662,35 @@ export class CommandHandler {
     }
 
     try {
-      console.log(`🤖 AI request from ${context.sourceName}: ${question}`);
+      // Build messages array - include previous context if this is a reply
+      const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+        {
+          role: 'system',
+          content: 'You are a helpful assistant in a Signal group chat. Keep responses concise and friendly.',
+        },
+      ];
+
+      // If there's a previous AI response, include it for context
+      if (previousAIResponse) {
+        console.log(`🤖 AI reply continuation from ${context.sourceName}`);
+        // Extract the actual response content (remove the "🤖 AI Response:\n\n" prefix)
+        const previousContent = previousAIResponse.replace(/^🤖 AI Response:\n\n/, '').trim();
+        messages.push({
+          role: 'assistant',
+          content: previousContent,
+        });
+      } else {
+        console.log(`🤖 AI request from ${context.sourceName}: ${question}`);
+      }
+
+      messages.push({
+        role: 'user',
+        content: question,
+      });
 
       const response = await this.openai.chat.completions.create({
         model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a helpful assistant in a Signal group chat. Keep responses concise and friendly.',
-          },
-          {
-            role: 'user',
-            content: question,
-          },
-        ],
+        messages,
         max_tokens: 500,
         temperature: 0.7,
       });
@@ -645,6 +702,19 @@ export class CommandHandler {
       console.error('AI error:', error);
       return `❌ AI error: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
+  }
+
+  /**
+   * Handle AI reply - when user replies to an AI response without using !ai prefix
+   * This continues the conversation with context from the previous response
+   */
+  public async handleAIReply(userMessage: string, previousAIResponse: string, context: CommandContext): Promise<string | null> {
+    // Only handle if the quoted message contains our AI response signature
+    if (!previousAIResponse.includes('🤖 AI Response:')) {
+      return null;
+    }
+
+    return this.handleAI(userMessage, context, previousAIResponse);
   }
 
   /**
@@ -1648,19 +1718,33 @@ export class CommandHandler {
           messages: [
             {
               role: 'system',
-              content: 'You are a helpful assistant that creates concise summaries of group conversations. Identify key topics, decisions, and action items. IMPORTANT: Format your response as plain text only - NO markdown, NO asterisks for bold, NO hashtags for headers. Use line breaks and dashes for lists.',
+              content: `You are a helpful assistant that creates concise, topic-focused summaries of group conversations.
+
+IMPORTANT RULES:
+1. Focus on TOPICS, IDEAS, and INFORMATION discussed - NOT who said what
+2. DO NOT include people's names in the summary unless absolutely essential (e.g., someone volunteering for a task)
+3. Group related topics together
+4. Highlight key insights, decisions, resources/links shared, and action items
+5. Format as plain text only - NO markdown, NO asterisks, NO hashtags
+6. Use line breaks and dashes for lists
+
+Structure your summary as:
+- Topics Discussed: (main themes/subjects)
+- Key Information: (important facts, insights, resources)
+- Decisions/Outcomes: (if any were made)
+- Action Items: (tasks to be done, can include who if someone volunteered)`,
             },
             {
               role: 'user',
-              content: `Summarize this conversation${timeDesc}:\n\n${conversationText}`,
+              content: `Summarize this conversation${timeDesc}, focusing on the topics and information rather than attributing to individuals:\n\n${conversationText}`,
             },
           ],
-          max_tokens: 500,
+          max_tokens: 2000,  // Allow longer summaries for large conversations
           temperature: 0.5,
         });
 
         const summary = response.choices[0]?.message?.content || 'No summary available';
-        return this.formatForSignal(`📝 Conversation Summary${timeDesc}${countDesc}:\n\n${summary}`);
+        return this.formatForSignal(`📝 Summary${countDesc}:\n\n${summary}`);
       } catch (error) {
         console.error('Conversation summarization error:', error);
         return `❌ Summarization failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
@@ -2904,6 +2988,16 @@ Format:
   }
 
   /**
+   * !dichos - Spanish proverbs (dichos)
+   * Cycles through traditional Spanish sayings from Refranero Mexicano
+   */
+  private async handleDichos(): Promise<string> {
+    const dicho = getNextDicho();
+    const total = getDichosCount();
+    return this.formatForSignal(formatDicho(dicho));
+  }
+
+  /**
    * !fact - Random fact
    */
   private async handleFact(): Promise<string> {
@@ -4040,61 +4134,180 @@ WIKI CONTENT:${wikiContext}`,
       return '❌ Admin-only command';
     }
 
-    if (!context.mentions || context.mentions.length === 0) {
-      return '❌ Please mention a user\n\nUsage: !gtg @user';
+    // Determine user identifier: either from mention OR from quoted message author
+    let userPhone: string | undefined;
+
+    // Priority 1: Use mention if provided
+    if (context.mentions && context.mentions.length > 0) {
+      const mention = context.mentions[0];
+      userPhone = mention.uuid || mention.number;
+      console.log(`📋 GTG: User identified via mention: ${userPhone}`);
+    }
+    // Priority 2: If replying to a message, use the quoted message's author
+    else if (context.quotedAuthor) {
+      userPhone = context.quotedAuthor;
+      console.log(`📋 GTG: User identified via quoted message author: ${userPhone}`);
     }
 
-    // Extract user identifier from first mention
-    const mention = context.mentions[0];
-    const userPhone = mention.number || mention.uuid;
-
     if (!userPhone) {
-      return '❌ Could not resolve mentioned user\n\nPlease ensure the user has a registered Signal account.';
+      return '❌ Please either:\n• Reply to user\'s intro message with !gtg\n• Or mention the user: !gtg @user';
     }
 
     try {
-      // Fetch user's recent messages to extract their intro
-      let userIntro = '';
-      if (context.groupId) {
+      // ========================================
+      // STEP 1: Parse intro from quoted message or user's recent messages
+      // ========================================
+      let introText = '';
+      let parsedIntro: ReturnType<typeof parseIntroduction> | null = null;
+
+      // Priority 1: Check if admin replied to an intro message (quotedText)
+      if (context.quotedText && context.quotedText.trim().length > 0) {
+        introText = context.quotedText;
+        console.log(`📋 Found quoted message (${introText.length} chars) - checking if it's an intro`);
+
+        if (isIntroMessage(introText)) {
+          parsedIntro = parseIntroduction(introText);
+          console.log(`📋 Parsed intro from quoted message: ${formatIntroSummary(parsedIntro)}`);
+        }
+      }
+
+      // Priority 2: If no quoted intro, try to find intro from user's recent messages
+      if (!parsedIntro?.isValidIntro && context.groupId) {
         try {
           const recentMessages = await this.dbClient.getRecentMessages(context.groupId, 50);
           const userMessages = recentMessages
             .filter((msg: any) => msg.source_number === userPhone || msg.source_uuid === userPhone)
-            .slice(0, 5); // Get up to 5 recent messages from user
+            .slice(0, 10); // Get up to 10 recent messages from user
 
-          if (userMessages.length > 0) {
-            userIntro = userMessages
+          // Look for a message that looks like an intro
+          for (const msg of userMessages) {
+            const msgText = msg.message || '';
+            if (isIntroMessage(msgText)) {
+              introText = msgText;
+              parsedIntro = parseIntroduction(msgText);
+              console.log(`📋 Found intro in user's message history: ${formatIntroSummary(parsedIntro)}`);
+              break;
+            }
+          }
+
+          // If no intro found, use combined text for group recommendations
+          if (!parsedIntro?.isValidIntro) {
+            introText = userMessages
               .map((msg: any) => msg.message || '')
               .filter((m: string) => m.trim().length > 0)
               .join(' ');
-            console.log(`📋 Fetched user intro (${userIntro.length} chars) for keyword analysis`);
+            console.log(`📋 No intro format found, using ${introText.length} chars for keyword analysis`);
           }
         } catch (error) {
           console.error('Error fetching user messages:', error);
-          // Continue without user intro - will use core groups only
         }
       }
 
-      // Send GTG message directly to user
-      const gtgMessage =
-        'Good to go. Thanks for verifying. This is how we keep the community safe.\n' +
-        '1. Please leave this chat\n' +
-        '2. You\'ll receive a direct message with your IrregularChat Login and a Link to all the chats.\n' +
-        '3. Join all the Chats that interest you when you get your login\n' +
-        '4. Until then, Learn about the community https://forum.irregularchat.com/t/irregularchat-forum-start-here-faqs/84\n' +
-        'See you out there!';
+      // ========================================
+      // STEP 1.5: Fallback email extraction from raw text
+      // ========================================
+      // If parseIntroduction didn't find an email but we have intro text,
+      // try to extract the first email directly from the text
+      if (!parsedIntro?.email && introText) {
+        const fallbackEmail = extractEmailFromText(introText);
+        if (fallbackEmail) {
+          console.log(`📋 Fallback email extraction found: ${fallbackEmail}`);
+          // Create or update parsedIntro with the extracted email
+          if (!parsedIntro) {
+            parsedIntro = { isValidIntro: false };
+          }
+          parsedIntro.email = fallbackEmail;
+          // Try to extract first name from the text if we don't have one
+          if (!parsedIntro.firstName) {
+            // Look for a name pattern at the start of a numbered line
+            const nameMatch = introText.match(/(?:^|\n)\s*1[\.\-\)\:]\s*([A-Za-z]+(?:\s+[A-Za-z]+)?)/);
+            if (nameMatch) {
+              const nameParts = nameMatch[1].split(' ');
+              parsedIntro.firstName = nameParts[0];
+              parsedIntro.lastName = nameParts.slice(1).join(' ');
+              parsedIntro.fullName = nameMatch[1];
+              console.log(`📋 Extracted name from text: ${parsedIntro.fullName}`);
+            }
+          }
+          // Mark as valid for SSO creation if we have email
+          parsedIntro.isValidIntro = true;
+        }
+      }
 
-      // Send message via bot's sendMessage method
-      if (this.bot) {
+      // ========================================
+      // STEP 2: Create SSO account if intro has valid email
+      // ========================================
+      let ssoAccountCreated = false;
+      let ssoUsername = '';
+      let ssoError = '';
+
+      if (parsedIntro?.isValidIntro && parsedIntro.email && authentikClient.isConfigured()) {
+        console.log(`🔐 Creating SSO account for ${parsedIntro.firstName} (${parsedIntro.email})`);
+
+        try {
+          // Generate unique username
+          const username = await authentikClient.generateUsername(parsedIntro.firstName || 'user');
+
+          // Create user in Authentik
+          const result = await authentikClient.createUser({
+            username,
+            email: parsedIntro.email,
+            firstName: parsedIntro.firstName || '',
+            lastName: parsedIntro.lastName || '',
+          });
+
+          if (result.success && result.temp_password) {
+            ssoAccountCreated = true;
+            ssoUsername = result.username || username;
+
+            // Send credentials DM to the user
+            const credentialsMessage = generateWelcomeMessage(ssoUsername, result.temp_password);
+
+            if (this.bot) {
+              await this.bot.sendMessage({
+                recipient: userPhone,
+                message: credentialsMessage,
+              });
+              console.log(`📨 SSO credentials sent to user: ${userPhone}`);
+            }
+          } else {
+            ssoError = result.error || 'Unknown error';
+            console.error(`❌ Failed to create SSO account: ${ssoError}`);
+          }
+        } catch (error) {
+          ssoError = error instanceof Error ? error.message : 'Unknown error';
+          console.error('❌ Error creating SSO account:', error);
+        }
+      } else if (parsedIntro?.isValidIntro && !parsedIntro.email) {
+        console.log('📋 Valid intro but no email found - skipping SSO account creation');
+      } else if (!authentikClient.isConfigured()) {
+        console.log('📋 Authentik not configured - skipping SSO account creation');
+      }
+
+      // ========================================
+      // STEP 3: Send GTG welcome message (if SSO not sent)
+      // ========================================
+      // Only send generic GTG message if SSO credentials weren't sent
+      // (SSO welcome message already includes instructions)
+      if (!ssoAccountCreated && this.bot) {
+        const gtgMessage =
+          'Good to go. Thanks for verifying. This is how we keep the community safe.\n' +
+          '1. Please leave this chat\n' +
+          '2. You\'ll receive a direct message with your IrregularChat Login and a Link to all the chats.\n' +
+          '3. Join all the Chats that interest you when you get your login\n' +
+          '4. Until then, Learn about the community https://forum.irregularchat.com/t/irregularchat-forum-start-here-faqs/84\n' +
+          'See you out there!';
+
         await this.bot.sendMessage({
           recipient: userPhone,
           message: gtgMessage,
         });
       }
 
-      // Get list of recommended groups to add user to
-      // Pass user intro for keyword-based recommendations
-      const recommendedGroups = await this.getRecommendedGroups(userIntro);
+      // ========================================
+      // STEP 4: Add user to recommended groups
+      // ========================================
+      const recommendedGroups = await this.getRecommendedGroups(introText);
 
       let addedGroups: string[] = [];
       let failedGroups: string[] = [];
@@ -4109,14 +4322,35 @@ WIKI CONTENT:${wikiContext}`,
         }
       }
 
-      const response = [
-        '✅ User Approved (GTG)',
-        '',
-        `User: ${userPhone}`,
-        '📨 Sent welcome message with instructions',
-        '',
-        '📱 Group Additions:',
-      ];
+      // ========================================
+      // STEP 5: Build response
+      // ========================================
+      const response = ['✅ User Approved (GTG)', ''];
+
+      // Include parsed intro info if available
+      if (parsedIntro?.isValidIntro) {
+        response.push(`👤 ${parsedIntro.fullName || parsedIntro.firstName}`);
+        if (parsedIntro.email) response.push(`📧 ${parsedIntro.email}`);
+        if (parsedIntro.organization) response.push(`🏢 ${parsedIntro.organization}`);
+        response.push('');
+      }
+
+      // SSO account status
+      if (ssoAccountCreated) {
+        response.push(`🔐 SSO Account Created: ${ssoUsername}`);
+        response.push('📨 Credentials sent to user via DM');
+      } else if (parsedIntro?.email && ssoError) {
+        response.push(`⚠️ SSO creation failed: ${ssoError}`);
+        response.push('📨 Sent generic welcome message');
+      } else if (!parsedIntro?.email) {
+        response.push('ℹ️ No email in intro - manual SSO setup needed');
+        response.push('📨 Sent generic welcome message');
+      } else {
+        response.push('📨 Sent welcome message');
+      }
+
+      response.push('');
+      response.push('📱 Group Additions:');
 
       if (addedGroups.length > 0) {
         response.push(`✅ Added to ${addedGroups.length} group(s):`);
@@ -4127,6 +4361,31 @@ WIKI CONTENT:${wikiContext}`,
         response.push('');
         response.push(`⚠️  Failed to add to ${failedGroups.length} group(s):`);
         failedGroups.forEach(g => response.push(`   • ${g}`));
+      }
+
+      // ========================================
+      // STEP 6: Remove user from entry room
+      // ========================================
+      // If the command was issued in a group (entry room), remove the user from it
+      let removedFromEntry = false;
+      if (context.groupId && this.bot) {
+        try {
+          console.log(`🚪 Removing user ${userPhone} from entry room ${context.groupId}`);
+          await this.bot.updateGroup({
+            groupId: context.groupId,
+            removeMember: [userPhone],
+          });
+          removedFromEntry = true;
+          console.log(`✅ User removed from entry room`);
+        } catch (error) {
+          console.error('Failed to remove user from entry room:', error);
+          // Don't fail the whole operation - this is a nice-to-have
+        }
+      }
+
+      if (removedFromEntry) {
+        response.push('');
+        response.push('🚪 Removed from entry room');
       }
 
       return this.formatForSignal(response.join('\n'));
@@ -4292,6 +4551,617 @@ WIKI CONTENT:${wikiContext}`,
       '📝 Removal notices were posted to each group before removal.',
     ];
 
+    return this.formatForSignal(response.join('\n'));
+  }
+
+  /**
+   * !clearroom - Remove all non-admin members from the current group (admin only)
+   *
+   * Designed for Entry/INDOC room cleanup. Protected users (from Admin group, bot admins,
+   * and Signal group admins) are NEVER removed.
+   *
+   * Usage:
+   *   !clearroom         - Show preview of who will be removed
+   *   !clearroom confirm - Actually remove members after reviewing preview
+   */
+  private async handleClearRoom(args: string, context: CommandContext): Promise<string> {
+    // 1. Admin check
+    const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
+    if (!isUserAdmin) {
+      return '❌ Admin-only command';
+    }
+
+    // 2. Must be in a group
+    if (!context.groupId) {
+      return '❌ This command must be used in a group chat';
+    }
+
+    const isConfirmed = args.trim().toLowerCase() === 'confirm';
+
+    try {
+      // 3. Sync with server and get fresh group data
+      console.log('🔄 Syncing with Signal servers before clearroom...');
+      await this.bot?.syncWithServer(1);
+
+      // 4. Get the current group directly (bypasses cache for fresher data)
+      let currentGroup = await this.bot?.getGroupDirect(context.groupId);
+
+      // Fall back to cached groups if direct fetch fails
+      if (!currentGroup) {
+        console.log('⚠️ Direct fetch failed, using cached groups');
+        const allGroups = await this.bot?.getGroups(true) || [];
+        currentGroup = allGroups.find((g: any) => g.id === context.groupId);
+      }
+
+      if (!currentGroup) {
+        return '❌ Could not find current group information';
+      }
+
+      // Also get all groups for admin group lookup
+      const allGroups = await this.bot?.getGroups() || [];
+
+      // 4. Check if bot is admin in this group
+      const isBotAdmin = await this.isBotAdminAsync(currentGroup);
+      if (!isBotAdmin) {
+        return '❌ Bot is not an admin in this group and cannot remove members';
+      }
+
+      // 5. Get members and admins
+      const members: string[] = currentGroup.members || [];
+      const signalAdmins: string[] = currentGroup.admins || [];
+
+      if (members.length === 0) {
+        return '❌ No members found in this group';
+      }
+
+      // 6. Build protected set: Signal group admins + Bot admins (ADMIN_UUIDS) + Admin group members
+      //    This is DYNAMIC - queries the Admin group from Signal, not hardcoded!
+      const protectedSet = new Set(signalAdmins);
+
+      // Also protect bot admins from ADMIN_UUIDS environment variable
+      const botAdminUuids = process.env.ADMIN_UUIDS?.split(',').map(u => u.trim()).filter(Boolean) || [];
+      for (const uuid of botAdminUuids) {
+        protectedSet.add(uuid);
+      }
+
+      // CRITICAL: Protect all members of the Admin group (by name pattern "**Admin**")
+      // This queries the live Signal group - NOT hardcoded UUIDs
+      const adminGroup = allGroups.find((g: any) =>
+        g.name && g.name.toLowerCase().includes('admin') && g.name.includes('**')
+      );
+      const adminGroupMembers: string[] = adminGroup?.members || [];
+      for (const uuid of adminGroupMembers) {
+        protectedSet.add(uuid);
+      }
+
+      // Find non-protected members to remove
+      const nonAdminMembers = members.filter((m: string) => !protectedSet.has(m));
+
+      // Count how many protected members are ACTUALLY in this room (for accurate reporting)
+      const protectedInRoom = members.filter((m: string) => protectedSet.has(m));
+      const signalAdminsInRoom = members.filter((m: string) => signalAdmins.includes(m)).length;
+      const botAdminsInRoom = members.filter((m: string) => botAdminUuids.includes(m)).length;
+      const adminGroupInRoom = members.filter((m: string) => adminGroupMembers.includes(m)).length;
+
+      console.log(`🛡️ Protected members in room: ${protectedInRoom.length} (Signal admins: ${signalAdminsInRoom}, Bot admins: ${botAdminsInRoom}, Admin group: ${adminGroupInRoom})`);
+      console.log(`   Total room members: ${members.length}, To remove: ${nonAdminMembers.length}`);
+
+      if (nonAdminMembers.length === 0) {
+        return '✅ No non-admin members to remove. All members are already protected.';
+      }
+
+      // 7. Get display names from multiple sources
+      // Priority order: Signal CLI database (2160+) > PostgreSQL > contacts > identities
+      let displayNames = new Map<string, string>();
+      let signalDbNames = new Map<string, string>();
+      let contactNames = new Map<string, string>();
+      let identityNames = new Map<string, string>();
+
+      try {
+        // PRIMARY SOURCE: Signal CLI's internal SQLite database (account.db)
+        // This has 2160+ profile names vs ~123 in our PostgreSQL database
+        signalDbNames = await this.bot?.getProfileNamesFromSignalDb() || new Map();
+        console.log(`📋 Found ${signalDbNames.size} names from Signal CLI database (primary source)`);
+      } catch (error) {
+        console.error('Error fetching names from Signal CLI database:', error);
+      }
+
+      try {
+        // SECONDARY SOURCE: PostgreSQL database (backup for any not in Signal CLI db)
+        const rawDbNames = await this.dbClient.getMemberDisplayNamesByUuids(nonAdminMembers);
+        // Filter out UUID-style names that were stored as fallbacks
+        for (const [uuid, name] of rawDbNames) {
+          if (name && !looksLikeUuid(name)) {
+            displayNames.set(uuid, name);
+          }
+        }
+        console.log(`📝 Found ${displayNames.size} actual names from PostgreSQL (filtered from ${rawDbNames.size})`);
+      } catch (error) {
+        console.error('Error fetching display names from database:', error);
+      }
+
+      try {
+        // Also get names from Signal contacts
+        contactNames = await this.bot?.getContactNames() || new Map();
+        console.log(`📇 Found ${contactNames.size} names from Signal contacts`);
+      } catch (error) {
+        console.error('Error fetching contact names:', error);
+      }
+
+      try {
+        // Also get names from Signal identities (users who have sent messages)
+        identityNames = await this.bot?.getIdentityNames() || new Map();
+        console.log(`🪪 Found ${identityNames.size} names from Signal identities`);
+      } catch (error) {
+        console.error('Error fetching identity names:', error);
+      }
+
+      // Start with Signal CLI database as the PRIMARY source (highest priority)
+      for (const [uuid, name] of signalDbNames) {
+        if (name && !looksLikeUuid(name)) {
+          displayNames.set(uuid, name);
+        }
+      }
+
+      // Merge contact names (fill in gaps not in Signal CLI db)
+      for (const [uuid, name] of contactNames) {
+        if (name && !looksLikeUuid(name) && !displayNames.has(uuid)) {
+          displayNames.set(uuid, name);
+        }
+      }
+
+      // Merge identity names (lowest priority)
+      for (const [uuid, name] of identityNames) {
+        if (name && !looksLikeUuid(name) && !displayNames.has(uuid)) {
+          displayNames.set(uuid, name);
+        }
+      }
+      console.log(`📋 Total display names available: ${displayNames.size}`);
+
+      // 8. If not confirmed, show preview of who will be removed
+      if (!isConfirmed) {
+        let namesFound = 0;
+        const memberList = nonAdminMembers.map(member => {
+          // Handle both string UUIDs and member objects
+          const uuid = typeof member === 'string' ? member : (member as any).uuid || String(member);
+          const name = displayNames.get(uuid);
+          if (name) {
+            namesFound++;
+            return `• ${name}`;
+          } else {
+            // Show shorter UUID prefix for unknown members
+            return `• [${typeof uuid === 'string' ? uuid.substring(0, 6) : String(uuid).substring(0, 6)}]`;
+          }
+        });
+
+        // Limit preview to first 20 members to avoid message being too long
+        const MAX_PREVIEW = 20;
+        const hasMore = memberList.length > MAX_PREVIEW;
+        const displayList = memberList.slice(0, MAX_PREVIEW);
+        if (hasMore) {
+          displayList.push(`... and ${memberList.length - MAX_PREVIEW} more`);
+        }
+
+        // Sanity check: remove + protected should equal total
+        const sanityCheck = nonAdminMembers.length + protectedInRoom.length;
+
+        const response = [
+          '⚠️ Clear Room - Preview',
+          '',
+          `📊 Members in local cache: ${members.length}`,
+          `   (${namesFound}/${nonAdminMembers.length} names identified)`,
+          `   ⚠️ Count may differ from actual - some may have already left`,
+        ];
+
+        response.push(
+          '',
+          `📋 ${nonAdminMembers.length} member${nonAdminMembers.length !== 1 ? 's' : ''} will be REMOVED:`,
+          displayList.join('\n'),
+          '',
+          `🛡️ ${protectedInRoom.length} protected member${protectedInRoom.length !== 1 ? 's' : ''} will be KEPT`,
+          `   (Signal admins: ${signalAdminsInRoom}, Bot admins: ${botAdminsInRoom}, Admin group: ${adminGroupInRoom})`,
+          '',
+          '⚠️ This action cannot be undone!',
+          '',
+          'To proceed, type: !clearroom confirm',
+        );
+
+        return this.formatForSignal(response.join('\n'));
+      }
+
+      // 9. CONFIRMED - Remove non-admin members in batches
+      console.log(`🧹 Clearing room: Removing ${nonAdminMembers.length} non-admin members`);
+      console.log(`   Total members: ${members.length}, Protected: ${protectedSet.size}`);
+
+      const BATCH_SIZE = 10;
+      let removedCount = 0;
+      let failedCount = 0;
+      const removedNames: string[] = [];
+      const failedRemovals: string[] = [];
+
+      for (let i = 0; i < nonAdminMembers.length; i += BATCH_SIZE) {
+        const batch = nonAdminMembers.slice(i, i + BATCH_SIZE);
+
+        for (const memberUuid of batch) {
+          try {
+            if (this.bot) {
+              await this.bot.updateGroup({
+                groupId: context.groupId,
+                removeMember: [memberUuid],
+              });
+              removedCount++;
+              const name = displayNames.get(memberUuid) || `[${memberUuid.substring(0, 6)}]`;
+              removedNames.push(name);
+              console.log(`✅ Removed member ${removedCount}/${nonAdminMembers.length}: ${name}`);
+            }
+          } catch (error) {
+            failedCount++;
+            const name = displayNames.get(memberUuid) || `[${memberUuid.substring(0, 6)}]`;
+            failedRemovals.push(name);
+            console.error(`Failed to remove member ${name}:`, error);
+          }
+
+          // Small delay between removals to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+      }
+
+      // 10. Build response
+      const response = [
+        '🧹 Room Cleared',
+        '',
+        `✅ Actually removed: ${removedCount} member${removedCount !== 1 ? 's' : ''}`,
+        `🛡️ Protected: ${protectedInRoom.length} member${protectedInRoom.length !== 1 ? 's' : ''}`,
+      ];
+
+      if (failedCount > 0) {
+        response.push(`📤 Already gone: ${failedCount} (stale cache entries)`);
+      }
+
+      return this.formatForSignal(response.join('\n'));
+
+    } catch (error) {
+      console.error('Error in clearroom:', error);
+      return `❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  /**
+   * !createuser - Create SSO user in Authentik (admin only)
+   *
+   * Supports two formats:
+   * 1. !createuser @user email@example.com - Uses mentioned user's Signal profile name
+   * 2. !createuser email@example.com FirstName [LastName] - Manual name entry
+   *
+   * After creation:
+   * - If @mention: DM with credentials sent to the mentioned user
+   * - If no @mention: DM with credentials sent to the admin who ran the command
+   *
+   * SECURITY: Password is NEVER shown in group chat response
+   */
+  private async handleCreateUser(args: string, context: CommandContext): Promise<string> {
+    // 1. Admin check
+    const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
+    if (!isUserAdmin) {
+      return '❌ Admin-only command';
+    }
+
+    // 2. Check if Authentik is configured
+    if (!authentikClient.isConfigured()) {
+      return '❌ SSO service not configured\n\nRequired environment variables:\n• AUTHENTIK_BASE_URL\n• AUTHENTIK_API_TOKEN';
+    }
+
+    // 3. Parse arguments - supports multiple modes
+    let email: string = '';
+    let firstName: string = '';
+    let lastName: string = '';
+    let targetUserUuid: string | undefined;
+    let organization: string | undefined;
+    let parsedFromIntro = false;
+
+    // MODE 1: Reply to intro message (parse intro for email/name, use quotedAuthor for target)
+    if (context.quotedText && context.quotedAuthor && isIntroMessage(context.quotedText)) {
+      const parsedIntro = parseIntroduction(context.quotedText);
+      console.log(`📋 CreateUser: Parsing intro from quoted message: ${formatIntroSummary(parsedIntro)}`);
+
+      if (parsedIntro.isValidIntro && parsedIntro.email) {
+        email = parsedIntro.email;
+        firstName = parsedIntro.firstName || 'User';
+        lastName = parsedIntro.lastName || '';
+        organization = parsedIntro.organization;
+        targetUserUuid = context.quotedAuthor;
+        parsedFromIntro = true;
+        console.log(`📋 CreateUser: User identified via quoted message author: ${targetUserUuid}`);
+      } else {
+        return '❌ Could not parse intro message - no valid email found\n\nExpected format:\n1. Full Name\n2. Organization\n3. Who invited you\n4. Email';
+      }
+    }
+    // MODE 2: @mention with email
+    else if (context.mentions && context.mentions.length > 0) {
+      // Format: !createuser @user email@example.com
+      const mention = context.mentions[0];
+      targetUserUuid = mention.uuid;
+
+      // Get name from database
+      if (targetUserUuid && this.dbClient) {
+        try {
+          const result = await this.dbClient.query(
+            'SELECT display_name, profile_name, first_name, last_name FROM signal_members WHERE uuid = $1 LIMIT 1',
+            [targetUserUuid]
+          );
+          if (result.results && result.results.length > 0) {
+            const row = result.results[0];
+            // Try to get first name from various fields
+            firstName = row.first_name ||
+              (row.profile_name ? row.profile_name.split(' ')[0] : '') ||
+              (row.display_name ? row.display_name.split(' ')[0] : '') ||
+              'User';
+            lastName = row.last_name ||
+              (row.profile_name ? row.profile_name.split(' ').slice(1).join(' ') : '') ||
+              '';
+          }
+        } catch (error) {
+          console.error('Error fetching user profile:', error);
+        }
+      }
+
+      // Extract email from remaining args (remove mention text)
+      const emailMatch = args.match(/[\w.-]+@[\w.-]+\.\w+/);
+      if (!emailMatch) {
+        return '❌ Email required\n\nUsage: !createuser @user email@example.com [FirstName LastName]';
+      }
+      email = emailMatch[0];
+
+      // If no name from database, try to extract from args after the email
+      // Format: !createuser @mention email@example.com FirstName LastName
+      if (!firstName || firstName === 'User') {
+        // Get text after the email
+        const emailIndex = args.indexOf(email);
+        if (emailIndex >= 0) {
+          const afterEmail = args.substring(emailIndex + email.length).trim();
+          if (afterEmail) {
+            const nameParts = afterEmail.split(/\s+/).filter(p => p.length > 0);
+            if (nameParts.length > 0) {
+              firstName = nameParts[0];
+              lastName = nameParts.slice(1).join(' ');
+              console.log(`📋 CreateUser: Extracted name from args: ${firstName} ${lastName}`);
+            }
+          }
+        }
+      }
+
+      // Final fallback
+      if (!firstName) {
+        firstName = 'User';
+      }
+
+    }
+    // MODE 3: Manual entry: !createuser email FirstName [LastName]
+    else if (args.trim()) {
+      // Format: !createuser email@example.com FirstName [LastName]
+      const parts = args.trim().split(/\s+/);
+      if (parts.length < 2) {
+        return '❌ Missing arguments\n\nUsage:\n• Reply to intro: !createuser (reply to user\'s intro message)\n• With mention: !createuser @user email@example.com\n• Manual: !createuser email@example.com FirstName [LastName]';
+      }
+
+      // First part should be email
+      const emailMatch = parts[0].match(/[\w.-]+@[\w.-]+\.\w+/);
+      if (emailMatch) {
+        email = parts[0];
+        firstName = parts[1] || 'User';
+        lastName = parts.slice(2).join(' ');
+      } else {
+        // Email might be second - try to find it
+        email = parts.find(p => p.includes('@')) || '';
+        const nonEmailParts = parts.filter(p => !p.includes('@'));
+        firstName = nonEmailParts[0] || 'User';
+        lastName = nonEmailParts.slice(1).join(' ');
+      }
+
+      if (!email || !email.includes('@')) {
+        return '❌ Invalid email address\n\nUsage: !createuser email@example.com FirstName [LastName]';
+      }
+    }
+    // No valid input
+    else {
+      return '❌ Usage:\n1️⃣ Reply to intro message with !createuser\n2️⃣ !createuser @user email@example.com\n3️⃣ !createuser email@example.com FirstName';
+    }
+
+    try {
+      // 4. Generate unique username
+      let username = await authentikClient.generateUsername(firstName);
+      let attempts = 0;
+      while (await authentikClient.checkUsernameExists(username) && attempts < 10) {
+        username = await authentikClient.generateUsername(firstName);
+        attempts++;
+      }
+
+      if (attempts >= 10) {
+        return '❌ Failed to generate unique username. Please try again.';
+      }
+
+      console.log(`🔐 Creating SSO account: ${username} (${email}) for ${firstName} ${lastName}`);
+
+      // 5. Create user in Authentik
+      const result = await authentikClient.createUser({
+        username,
+        email,
+        firstName,
+        lastName,
+        attributes: {
+          created_by: 'signal_bot',
+          created_via: 'signal_createuser_command',
+          signal_uuid: targetUserUuid || null,
+        },
+      });
+
+      if (!result.success) {
+        return `❌ Failed to create user: ${result.error}`;
+      }
+
+      // 6. Generate welcome message with credentials
+      const welcomeMessage = generateWelcomeMessage(username, result.temp_password || 'Check with admin');
+
+      // 7. Send DM with credentials
+      // If @mention: send to target user
+      // If no @mention: send to admin who ran command (for manual forwarding)
+      const dmRecipient = targetUserUuid || context.sourceUuid || context.sourceNumber;
+      let dmSent = false;
+      let dmTarget = targetUserUuid ? 'user' : 'admin';
+      let dmSentToFallback = false;
+      const ADMIN_FALLBACK_NUMBER = '+12247253276'; // sac's admin account for fallback
+
+      if (dmRecipient && this.bot) {
+        try {
+          await this.bot.sendMessage({
+            recipient: dmRecipient,
+            message: welcomeMessage,
+          });
+          dmSent = true;
+          console.log(`📨 Credentials DM sent to ${dmTarget}: ${dmRecipient}`);
+        } catch (dmError) {
+          console.error('Failed to send DM to target:', dmError);
+
+          // Fallback: send to admin account if DM to target fails
+          try {
+            const fallbackMessage = `📨 FORWARDING CREDENTIALS (DM to user failed)\n\nUser: ${firstName} ${lastName}\nEmail: ${email}\n\n${welcomeMessage}`;
+            await this.bot.sendMessage({
+              recipient: ADMIN_FALLBACK_NUMBER,
+              message: fallbackMessage,
+            });
+            dmSentToFallback = true;
+            console.log(`📨 Credentials sent to admin fallback: ${ADMIN_FALLBACK_NUMBER}`);
+          } catch (fallbackError) {
+            console.error('Failed to send to admin fallback:', fallbackError);
+          }
+        }
+      }
+
+      // 8. Return success (NO PASSWORD in group response!)
+      const response = [
+        '✅ SSO Account Created',
+        '',
+        `📧 Email: ${email}`,
+        `👤 Username: ${username}`,
+        `📛 Name: ${firstName} ${lastName}`.trim(),
+      ];
+
+      if (dmSent) {
+        if (targetUserUuid) {
+          response.push('', '📨 Credentials sent to user via DM');
+        } else {
+          response.push('', '📨 Credentials sent to you via DM (forward to user)');
+        }
+      } else if (dmSentToFallback) {
+        response.push('', '📨 Credentials sent to admin (forward to user manually)');
+      } else {
+        response.push('', '⚠️ Could not send DM - contact user manually');
+      }
+
+      return this.formatForSignal(response.join('\n'));
+
+    } catch (error) {
+      console.error('Error in handleCreateUser:', error);
+      return `❌ Failed to create user: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  /**
+   * !accountinvite - Generate SSO invite link (admin only)
+   *
+   * Creates an invite URL for Authentik SSO registration.
+   * Default: 4 hours, unlimited uses.
+   *
+   * Usage:
+   * - !accountinvite - Creates 4-hour unlimited-use invite
+   * - !accountinvite 24 - Creates 24-hour unlimited-use invite
+   * - !accountinvite -c 1 - Creates 4-hour single-use invite
+   * - !accountinvite 24 -c 1 - Creates 24-hour single-use invite
+   */
+  private async handleAccountInvite(args: string, context: CommandContext): Promise<string | null> {
+    // Admin check
+    const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
+    if (!isUserAdmin) {
+      return '❌ Admin-only command';
+    }
+
+    // Check if Authentik is configured
+    if (!authentikClient.isConfigured()) {
+      // Send error as DM to admin, not to group
+      if (this.bot && (context.sourceUuid || context.sourceNumber)) {
+        await this.bot.sendMessage({
+          recipient: context.sourceUuid || context.sourceNumber,
+          message: '❌ SSO service not configured',
+        });
+      }
+      return null;
+    }
+
+    // Parse args - supports: "24", "-c 1", "24 -c 1", etc.
+    let expiresInHours = 4;
+    let singleUse = false; // Default: unlimited uses
+    const argLower = args.trim().toLowerCase();
+
+    // Check for -c option (single use)
+    if (argLower.includes('-c 1') || argLower.includes('-c1')) {
+      singleUse = true;
+    }
+
+    // Extract hours (first number that's not after -c)
+    const hoursMatch = argLower.replace(/-c\s*\d+/g, '').match(/(\d+)/);
+    if (hoursMatch) {
+      const hours = parseInt(hoursMatch[1], 10);
+      if (!isNaN(hours) && hours > 0 && hours <= 168) { // Max 1 week
+        expiresInHours = hours;
+      }
+    }
+
+    // Create label with requester info
+    const requesterName = (context.sourceName || 'admin').replace(/[^a-z0-9]/gi, '').substring(0, 20);
+    const label = `signal_${requesterName}_${Date.now()}`;
+
+    console.log(`🎟️ Creating invite: ${expiresInHours}h, singleUse=${singleUse}, by ${context.sourceName}`);
+
+    const result = await authentikClient.createInvite(label, expiresInHours, singleUse);
+
+    if (!result.success) {
+      // Send error as DM to admin, not to group
+      if (this.bot && (context.sourceUuid || context.sourceNumber)) {
+        await this.bot.sendMessage({
+          recipient: context.sourceUuid || context.sourceNumber,
+          message: `❌ Failed to create invite: ${result.error}`,
+        });
+      }
+      return null; // No group message for errors
+    }
+
+    const expiryTime = new Date(result.expiresAt!);
+    // Format time in Eastern timezone
+    const easternTime = expiryTime.toLocaleString('en-US', {
+      timeZone: 'America/New_York',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+    const response = [
+      '🎟️ IrregularChat Account Invite',
+      '',
+      'Create your account to access community services:',
+      '• forum.irregularchat.com',
+      '• cryptpad.irregularchat.com',
+      '• git.irregularchat.com',
+      '• videos.irregularchat.com',
+      '• and more self-hosted tools',
+      '',
+      `🔗 ${result.inviteUrl}`,
+      '',
+      `⏰ Expires: ${easternTime} ET (${expiresInHours}h)`,
+      `🔄 Uses: ${singleUse ? 'Single use' : 'Unlimited'}`,
+    ];
+
+    // Success - post invite to the group chat
     return this.formatForSignal(response.join('\n'));
   }
 
@@ -4540,24 +5410,357 @@ WIKI CONTENT:${wikiContext}`,
   }
 
   /**
-   * !req / !request - Community join request template
+   * !req / !request - Community join request and verification tracking
+   *
+   * Usage:
+   * - !req (no args): Show help/request template
+   * - !req @user: Admin initiates verification for mentioned user (creates tracking)
    */
-  private async handleRequest(): Promise<string> {
-    return this.formatForSignal(
-      '📝 IrregularChat Community Join Request\n\n' +
-      'You\'ve requested to join the IrregularChat Community!\n\n' +
-      '🔑 Bonafides Required:\n' +
-      'Everyone in the chat has been invited by an IrregularChat member. ' +
-      'To add you to the right groups, we need to know:\n\n' +
-      '1️⃣ NAME\n' +
-      '2️⃣ YOUR_ORGANIZATION\n' +
-      '3️⃣ Who invited you (Add & mention them in this chat)\n' +
-      '4️⃣ EMAIL_OR_EMAIL_ALIAS\n' +
-      '5️⃣ YOUR_INTERESTS\n' +
-      '6️⃣ Link to your LinkedIn profile (if you want others to endorse your skills)\n\n' +
-      '📮 Please reply with your information above!\n\n' +
-      '💡 Tip: An admin will review and add you to appropriate groups.'
+  private async handleRequest(args: string, context: CommandContext): Promise<string> {
+    // If no mention, show the standard request template
+    if (!context.mentions || context.mentions.length === 0) {
+      return this.formatForSignal(
+        '📝 IrregularChat Community Join Request\n\n' +
+        'You\'ve requested to join the IrregularChat Community!\n\n' +
+        '🔑 Bonafides Required:\n' +
+        'Everyone in the chat has been invited by an IrregularChat member. ' +
+        'To add you to the right groups, we need to know:\n\n' +
+        '1️⃣ NAME\n' +
+        '2️⃣ YOUR_ORGANIZATION\n' +
+        '3️⃣ Who invited you (Add & mention them in this chat)\n' +
+        '4️⃣ EMAIL_OR_EMAIL_ALIAS\n' +
+        '5️⃣ YOUR_INTERESTS\n' +
+        '6️⃣ Link to your LinkedIn profile (if you want others to endorse your skills)\n\n' +
+        '📮 Please reply with your information above!\n\n' +
+        '💡 Tip: An admin will review and add you to appropriate groups.'
+      );
+    }
+
+    // Admin-only: create verification request for mentioned user
+    const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
+    if (!isUserAdmin) {
+      return '❌ Admin-only command. Use !req without mentions to see the request template.';
+    }
+
+    if (!context.groupId) {
+      return '❌ This command must be used in a group chat (Entry/INDOC chat).';
+    }
+
+    const mention = context.mentions[0];
+    const userUuid = mention.uuid || mention.number;
+
+    if (!userUuid) {
+      return '❌ Could not identify the mentioned user.';
+    }
+
+    // Check for existing active verification request
+    const existingRequest = await this.dbClient.hasActiveVerificationRequest(userUuid, context.groupId);
+    if (existingRequest) {
+      return '⚠️ This user already has an active verification request. Please wait for them to complete it or for the 24-hour timeout.';
+    }
+
+    // Get user's display name from database
+    let userDisplayName = 'New User';
+    try {
+      const result = await this.dbClient.query(
+        'SELECT display_name, profile_name, first_name FROM signal_members WHERE uuid = $1 OR phone_number = $1 LIMIT 1',
+        [userUuid]
+      );
+      if (result.results && result.results.length > 0) {
+        const row = result.results[0];
+        userDisplayName = row.display_name || row.profile_name || row.first_name || 'New User';
+      }
+    } catch (error) {
+      console.error('Error looking up user display name:', error);
+    }
+
+    try {
+      // Create verification request in database
+      const verificationResult = await this.dbClient.createVerificationRequest({
+        userUuid,
+        userName: userDisplayName,
+        entryGroupId: context.groupId,
+        requestedByUuid: context.sourceUuid || context.sourceNumber,
+        requestedByName: context.sourceName,
+        expiresInHours: 24,
+      });
+
+      const expiryTime = new Date(verificationResult.expiresAt);
+      const expiryFormatted = expiryTime.toLocaleString('en-US', {
+        timeZone: 'America/New_York',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+
+      console.log(`📋 Verification request created for ${userDisplayName} (${userUuid}), expires: ${expiryFormatted} ET`);
+
+      // Build welcome message for the new user
+      const welcomeMessage = this.formatForSignal(
+        `📝 Welcome to IrregularChat Entry!\n\n` +
+        `${userDisplayName}, you've been invited to join the community.\n\n` +
+        `To complete verification:\n` +
+        `1. Introduce yourself (name, org, interests)\n` +
+        `2. @mention the person who invited you to vouch for you\n\n` +
+        `Example: "Hi, I'm John from ABC Corp, interested in cyber. @JaneDoe invited me"\n\n` +
+        `⏰ You have 24 hours to complete verification.\n` +
+        `Expires: ${expiryFormatted} ET`
+      );
+
+      return welcomeMessage;
+    } catch (error) {
+      console.error('Error creating verification request:', error);
+      return `❌ Failed to create verification request: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  /**
+   * Handle non-command messages for verification flow detection
+   * Called from signal-bot-v2.ts message handler
+   */
+  async handleVerificationMessage(
+    message: string,
+    context: CommandContext
+  ): Promise<string | null> {
+    if (!context.groupId || !context.sourceUuid) {
+      return null;
+    }
+
+    // Check if sender has an active verification request (pending_intro)
+    const activeRequest = await this.dbClient.getActiveVerificationRequest(
+      context.sourceUuid,
+      context.groupId
     );
+
+    if (activeRequest && activeRequest.status === 'pending_intro') {
+      // Check if message contains a mention (voucher)
+      if (context.mentions && context.mentions.length > 0) {
+        const voucherMention = context.mentions[0];
+        const voucherUuid = voucherMention.uuid || voucherMention.number;
+
+        if (!voucherUuid) {
+          return null;
+        }
+
+        // Verify voucher is an existing community member (not just in entry chat)
+        // For now, we'll trust the mention since they're in the group
+
+        // Get voucher's display name
+        let voucherDisplayName = 'Community Member';
+        try {
+          const result = await this.dbClient.query(
+            'SELECT display_name, profile_name, first_name FROM signal_members WHERE uuid = $1 OR phone_number = $1 LIMIT 1',
+            [voucherUuid]
+          );
+          if (result.results && result.results.length > 0) {
+            const row = result.results[0];
+            voucherDisplayName = row.display_name || row.profile_name || row.first_name || 'Community Member';
+          }
+        } catch (error) {
+          console.error('Error looking up voucher display name:', error);
+        }
+
+        // Get user's display name
+        let userDisplayName = activeRequest.user_name || 'New User';
+
+        // Update verification request to pending_vouch
+        await this.dbClient.updateVerificationStatus(activeRequest.id, 'pending_vouch', {
+          voucherUuid,
+          voucherName: voucherDisplayName,
+          introText: message,
+          voucherAskedAt: new Date(),
+        });
+
+        console.log(`📋 Verification: ${userDisplayName} mentioned ${voucherDisplayName} as voucher`);
+
+        // Send vouch request message
+        return this.formatForSignal(
+          `🤝 Verification Request\n\n` +
+          `${voucherDisplayName}, ${userDisplayName} is requesting to join IrregularChat and mentioned you as their connection.\n\n` +
+          `Do you trust and vouch for ${userDisplayName} to join the IrregularChat community?\n\n` +
+          `Reply with:\n` +
+          `• "yes" or "1" to approve\n` +
+          `• "no" or "2" to deny\n\n` +
+          `ℹ️ By vouching, you confirm they understand the community rules at forum.irregularchat.com`
+        );
+      }
+    }
+
+    // Check if sender is a voucher for any pending requests
+    const pendingVouchRequests = await this.dbClient.getPendingVouchRequests(context.sourceUuid);
+
+    if (pendingVouchRequests.length > 0) {
+      const lowerMessage = message.toLowerCase().trim();
+
+      // Check for yes/no response
+      const isYes = ['yes', 'y', '1', 'approve', 'approved', 'vouch', 'vouched'].includes(lowerMessage);
+      const isNo = ['no', 'n', '2', 'deny', 'denied', 'reject', 'rejected'].includes(lowerMessage);
+
+      if (isYes || isNo) {
+        // Process the most recent pending vouch request
+        const request = pendingVouchRequests[0];
+        const userDisplayName = request.user_name || 'New User';
+
+        if (isYes) {
+          // Mark as approved
+          await this.dbClient.updateVerificationStatus(request.id, 'approved', {
+            completedAt: new Date(),
+          });
+
+          console.log(`✅ Verification approved: ${userDisplayName} vouched by ${context.sourceName}`);
+
+          // Process GTG flow - create a synthetic context for GTG
+          const gtgContext: CommandContext = {
+            sourceNumber: context.sourceNumber,
+            sourceUuid: context.sourceUuid,
+            sourceName: context.sourceName,
+            groupId: context.groupId,
+            timestamp: Date.now(),
+            mentions: [{ start: 0, length: 0, uuid: request.user_uuid }],
+          };
+
+          // Run GTG flow in background (don't await - let it process)
+          this.processVerifiedUser(request.user_uuid, userDisplayName, context.groupId, gtgContext)
+            .catch(error => console.error('Error processing verified user:', error));
+
+          return this.formatForSignal(
+            `✅ Good to go! ${userDisplayName} has been verified.\n\n` +
+            `Thanks for keeping the community safe.\n\n` +
+            `${userDisplayName} - you'll receive:\n` +
+            `1. A DM with your IrregularChat login\n` +
+            `2. Group invites based on your interests\n\n` +
+            `Learn about the community: https://forum.irregularchat.com/t/irregularchat-forum-start-here-faqs/84\n\n` +
+            `See you out there!`
+          );
+        } else {
+          // Mark as denied
+          await this.dbClient.updateVerificationStatus(request.id, 'denied', {
+            completedAt: new Date(),
+          });
+
+          console.log(`❌ Verification denied: ${userDisplayName} by ${context.sourceName}`);
+
+          // Remove user from entry chat
+          await this.removeUserFromEntryChat(request.user_uuid, request.entry_group_id, 'denied');
+
+          return this.formatForSignal(
+            `❌ Verification Denied\n\n` +
+            `${userDisplayName} was not vouched for and has been removed from the Entry chat.\n\n` +
+            `They can try again by having a community member add them directly to this chat.`
+          );
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Process a verified user (called after vouch approval)
+   */
+  private async processVerifiedUser(
+    userUuid: string,
+    userName: string,
+    entryGroupId: string,
+    context: CommandContext
+  ): Promise<void> {
+    try {
+      // Run GTG flow to create account and add to groups
+      const gtgResult = await this.handleGtg('', context);
+      console.log(`GTG result for ${userName}:`, gtgResult);
+
+      // Remove user from entry chat after processing
+      await this.removeUserFromEntryChat(userUuid, entryGroupId, 'verified');
+    } catch (error) {
+      console.error(`Error processing verified user ${userName}:`, error);
+    }
+  }
+
+  /**
+   * Remove user from entry chat with appropriate message
+   */
+  private async removeUserFromEntryChat(
+    userUuid: string,
+    groupId: string,
+    reason: 'verified' | 'denied' | 'expired'
+  ): Promise<void> {
+    if (!this.bot) return;
+
+    try {
+      // Get user display name for logging
+      let userDisplayName = 'User';
+      try {
+        const result = await this.dbClient.query(
+          'SELECT display_name, profile_name, first_name FROM signal_members WHERE uuid = $1 LIMIT 1',
+          [userUuid]
+        );
+        if (result.results && result.results.length > 0) {
+          const row = result.results[0];
+          userDisplayName = row.display_name || row.profile_name || row.first_name || 'User';
+        }
+      } catch (error) {
+        console.error('Error looking up user display name:', error);
+      }
+
+      // Small delay before removal
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Remove user from group
+      await this.bot.updateGroup({
+        groupId,
+        removeMember: [userUuid],
+      });
+
+      console.log(`🚪 Removed ${userDisplayName} from entry chat (reason: ${reason})`);
+    } catch (error) {
+      console.error(`Failed to remove user from entry chat:`, error);
+    }
+  }
+
+  /**
+   * Process expired verification requests
+   * Called periodically from signal-bot-v2.ts
+   */
+  async processExpiredVerifications(): Promise<void> {
+    try {
+      const expiredRequests = await this.dbClient.getExpiredVerificationRequests();
+
+      for (const request of expiredRequests) {
+        const userDisplayName = request.user_name || 'User';
+
+        console.log(`⏰ Verification expired for ${userDisplayName}`);
+
+        // Update status to expired
+        await this.dbClient.updateVerificationStatus(request.id, 'expired', {
+          completedAt: new Date(),
+        });
+
+        // Send timeout message to entry chat
+        if (this.bot) {
+          const timeoutMessage = this.formatForSignal(
+            `⏰ Verification Timeout\n\n` +
+            `${userDisplayName} failed to complete verification within 24 hours and has been removed.\n\n` +
+            `They can try again by having a community member add them directly to this chat.`
+          );
+
+          await this.bot.sendMessage({
+            groupId: request.entry_group_id,
+            message: timeoutMessage,
+          });
+        }
+
+        // Remove user from entry chat
+        await this.removeUserFromEntryChat(request.user_uuid, request.entry_group_id, 'expired');
+      }
+
+      if (expiredRequests.length > 0) {
+        console.log(`⏰ Processed ${expiredRequests.length} expired verification request(s)`);
+      }
+    } catch (error) {
+      console.error('Error processing expired verifications:', error);
+    }
   }
 
   /**

@@ -23,7 +23,7 @@ RUN wget https://github.com/AsamK/signal-cli/releases/download/v${SIGNAL_CLI_VER
 # Stage 2: Final runtime image
 FROM node:20-slim
 
-# Install Java 21 from Adoptium, ClamAV, rclone, and other dependencies
+# Install base dependencies first (curl needed for Adoptium)
 RUN apt-get update && apt-get install -y \
     curl \
     wget \
@@ -37,15 +37,24 @@ RUN apt-get update && apt-get install -y \
     clamav \
     clamav-daemon \
     unzip \
-    && mkdir -p /etc/apt/keyrings \
-    && wget -O - https://packages.adoptium.net/artifactory/api/gpg/key/public | tee /etc/apt/keyrings/adoptium.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/adoptium.asc] https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" | tee /etc/apt/sources.list.d/adoptium.list \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Adoptium Java 21 (signal-cli 0.13.22 requires Java 21)
+RUN mkdir -p /etc/apt/keyrings \
+    && wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor > /etc/apt/keyrings/adoptium.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb bookworm main" > /etc/apt/sources.list.d/adoptium.list \
     && apt-get update \
     && apt-get install -y temurin-21-jre \
-    && pip3 install --no-cache-dir --break-system-packages yt-dlp \
-    && freshclam || true \
-    && curl https://rclone.org/install.sh | bash \
     && rm -rf /var/lib/apt/lists/*
+
+# Install yt-dlp and rclone
+RUN pip3 install --no-cache-dir --break-system-packages yt-dlp \
+    && freshclam || true \
+    && curl https://rclone.org/install.sh | bash
+
+# Set Java environment variables
+ENV JAVA_HOME=/usr/lib/jvm/temurin-21-jre-amd64
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 # SECURITY: Create non-root user for running the application
 # node:20-slim already has UID/GID 1000 (user 'node'), so we use that user

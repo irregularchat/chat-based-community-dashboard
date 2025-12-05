@@ -148,6 +148,11 @@ services:
       DISCOURSE_USERNAME: ${DISCOURSE_USERNAME:-}
       DISCOURSE_QA_CATEGORY: ${DISCOURSE_QA_CATEGORY:-5}
 
+      # Authentik SSO configuration (optional - for !createuser command)
+      AUTHENTIK_BASE_URL: ${AUTHENTIK_BASE_URL:-}
+      AUTHENTIK_API_TOKEN: ${AUTHENTIK_API_TOKEN:-}
+      MAIN_GROUP_ID: ${MAIN_GROUP_ID:-}
+
       # Application configuration
       NODE_ENV: production
       PORT: 8080

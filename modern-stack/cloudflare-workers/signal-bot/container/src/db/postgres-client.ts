@@ -58,6 +58,7 @@ export class PostgresClient {
     'bot_errors',
     'scheduled_announcements',
     'announcement_deliveries',
+    'verification_requests',
   ]);
 
   constructor(config: DatabaseConfig) {
@@ -544,6 +545,10 @@ export class PostgresClient {
 
   /**
    * Save a message to the database
+   *
+   * Handles foreign key constraint gracefully - if quoted_message_id references
+   * a message not in our database, we save without the foreign key reference
+   * but preserve the quoted_text for context.
    */
   async saveMessage(message: {
     id: string;
@@ -568,21 +573,46 @@ export class PostgresClient {
       ON CONFLICT (id) DO NOTHING
     `;
 
-    await this.pool.query(sql, [
-      message.id,
-      message.groupId || null,
-      message.groupName || null,
-      message.sourceNumber || null,
-      message.sourceName || null,
-      message.sourceUuid || null,
-      message.message,
-      message.timestamp,
-      message.attachments ? JSON.stringify(message.attachments) : null,
-      message.mentions ? JSON.stringify(message.mentions) : null,
-      message.isReply || false,
-      message.quotedMessageId || null,
-      message.quotedText || null
-    ]);
+    try {
+      await this.pool.query(sql, [
+        message.id,
+        message.groupId || null,
+        message.groupName || null,
+        message.sourceNumber || null,
+        message.sourceName || null,
+        message.sourceUuid || null,
+        message.message,
+        message.timestamp,
+        message.attachments ? JSON.stringify(message.attachments) : null,
+        message.mentions ? JSON.stringify(message.mentions) : null,
+        message.isReply || false,
+        message.quotedMessageId || null,
+        message.quotedText || null
+      ]);
+    } catch (error: any) {
+      // Handle foreign key constraint violation for quoted_message_id
+      // This happens when quoting messages not in our database (older messages)
+      if (error?.code === '23503' && error?.constraint?.includes('quoted_message')) {
+        // Retry without the foreign key reference, but preserve quoted_text
+        await this.pool.query(sql, [
+          message.id,
+          message.groupId || null,
+          message.groupName || null,
+          message.sourceNumber || null,
+          message.sourceName || null,
+          message.sourceUuid || null,
+          message.message,
+          message.timestamp,
+          message.attachments ? JSON.stringify(message.attachments) : null,
+          message.mentions ? JSON.stringify(message.mentions) : null,
+          message.isReply || false,
+          null, // Set quoted_message_id to NULL
+          message.quotedText || null // Keep quoted_text for context
+        ]);
+      } else {
+        throw error;
+      }
+    }
   }
 
   /**
@@ -764,6 +794,68 @@ export class PostgresClient {
   }
 
   /**
+   * Get display names for a list of member UUIDs
+   * Returns a map of uuid -> display_name
+   */
+  async getMemberDisplayNamesByUuids(uuids: string[]): Promise<Map<string, string>> {
+    if (uuids.length === 0) {
+      return new Map();
+    }
+
+    // Only return actual names (display_name, profile_name, or phone_number)
+    // Do NOT return UUID fallbacks - let the caller handle unknown users
+    const result = await this.pool.query(`
+      SELECT
+        uuid,
+        COALESCE(display_name, profile_name, phone_number) as display_name
+      FROM signal_members
+      WHERE uuid = ANY($1)
+        AND (display_name IS NOT NULL OR profile_name IS NOT NULL OR phone_number IS NOT NULL)
+    `, [uuids]);
+
+    const displayNames = new Map<string, string>();
+    for (const row of result.rows) {
+      if (row.display_name) {
+        displayNames.set(row.uuid, row.display_name);
+      }
+    }
+    return displayNames;
+  }
+
+  /**
+   * Update member profile name from incoming message
+   * This captures the Signal profile name (sourceName) when users send messages
+   * Only updates if the member exists and doesn't already have a profile_name set
+   */
+  async updateMemberProfileName(uuid: string, profileName: string, phoneNumber?: string): Promise<void> {
+    if (!uuid || !profileName) return;
+
+    // Skip if profileName looks like a phone number (fallback value)
+    if (profileName.startsWith('+') || /^\d+$/.test(profileName)) return;
+
+    try {
+      // Update profile_name if member exists and profile_name is null or different
+      const result = await this.pool.query(`
+        UPDATE signal_members
+        SET
+          profile_name = COALESCE(profile_name, $2),
+          phone_number = COALESCE(phone_number, $3),
+          updated_at = NOW()
+        WHERE uuid = $1
+          AND (profile_name IS NULL OR profile_name != $2)
+        RETURNING uuid
+      `, [uuid, profileName, phoneNumber || null]);
+
+      if (result.rowCount && result.rowCount > 0) {
+        console.log(`📝 Updated profile name for ${uuid}: ${profileName}`);
+      }
+    } catch (error) {
+      // Silently fail - this is a best-effort update
+      console.error('Failed to update member profile name:', error);
+    }
+  }
+
+  /**
    * Get pending scheduled announcements that are due
    */
   async getPendingAnnouncements(): Promise<any[]> {
@@ -835,6 +927,168 @@ export class PostgresClient {
     `, [id, userId]);
 
     return result.rowCount !== null && result.rowCount > 0;
+  }
+
+  // ============================================================================
+  // VERIFICATION REQUEST METHODS
+  // ============================================================================
+
+  /**
+   * Create a new verification request
+   */
+  async createVerificationRequest(data: {
+    userUuid: string;
+    userName?: string;
+    userPhone?: string;
+    entryGroupId: string;
+    requestedByUuid?: string;
+    requestedByName?: string;
+    expiresInHours?: number;
+  }): Promise<{ id: number; expiresAt: Date }> {
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + (data.expiresInHours || 24));
+
+    const result = await this.pool.query(`
+      INSERT INTO verification_requests (
+        user_uuid, user_name, user_phone, entry_group_id,
+        requested_by_uuid, requested_by_name, status, expires_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, 'pending_intro', $7)
+      RETURNING id, expires_at
+    `, [
+      data.userUuid,
+      data.userName || null,
+      data.userPhone || null,
+      data.entryGroupId,
+      data.requestedByUuid || null,
+      data.requestedByName || null,
+      expiresAt
+    ]);
+
+    return {
+      id: result.rows[0].id,
+      expiresAt: result.rows[0].expires_at
+    };
+  }
+
+  /**
+   * Get active verification request for a user in a group
+   */
+  async getActiveVerificationRequest(userUuid: string, groupId?: string): Promise<any | null> {
+    let sql = `
+      SELECT * FROM verification_requests
+      WHERE user_uuid = $1
+        AND status IN ('pending_intro', 'pending_vouch')
+    `;
+    const params: any[] = [userUuid];
+
+    if (groupId) {
+      sql += ' AND entry_group_id = $2';
+      params.push(groupId);
+    }
+
+    sql += ' ORDER BY created_at DESC LIMIT 1';
+
+    const result = await this.pool.query(sql, params);
+    return result.rows[0] || null;
+  }
+
+  /**
+   * Get pending vouch requests where user is the voucher
+   */
+  async getPendingVouchRequests(voucherUuid: string): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM verification_requests
+      WHERE voucher_uuid = $1
+        AND status = 'pending_vouch'
+      ORDER BY voucher_asked_at ASC
+    `, [voucherUuid]);
+
+    return result.rows;
+  }
+
+  /**
+   * Update verification request status
+   */
+  async updateVerificationStatus(
+    requestId: number,
+    status: string,
+    additionalData?: {
+      voucherUuid?: string;
+      voucherName?: string;
+      introText?: string;
+      voucherAskedAt?: Date;
+      completedAt?: Date;
+    }
+  ): Promise<void> {
+    let sql = 'UPDATE verification_requests SET status = $1';
+    const params: any[] = [status];
+    let paramIndex = 2;
+
+    if (additionalData?.voucherUuid) {
+      sql += `, voucher_uuid = $${paramIndex++}`;
+      params.push(additionalData.voucherUuid);
+    }
+    if (additionalData?.voucherName) {
+      sql += `, voucher_name = $${paramIndex++}`;
+      params.push(additionalData.voucherName);
+    }
+    if (additionalData?.introText) {
+      sql += `, intro_text = $${paramIndex++}`;
+      params.push(additionalData.introText);
+    }
+    if (additionalData?.voucherAskedAt) {
+      sql += `, voucher_asked_at = $${paramIndex++}`;
+      params.push(additionalData.voucherAskedAt);
+    }
+    if (additionalData?.completedAt) {
+      sql += `, completed_at = $${paramIndex++}`;
+      params.push(additionalData.completedAt);
+    }
+
+    sql += ` WHERE id = $${paramIndex}`;
+    params.push(requestId);
+
+    await this.pool.query(sql, params);
+  }
+
+  /**
+   * Get expired verification requests that need to be processed
+   */
+  async getExpiredVerificationRequests(): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM verification_requests
+      WHERE status IN ('pending_intro', 'pending_vouch')
+        AND expires_at <= NOW()
+      ORDER BY expires_at ASC
+    `);
+
+    return result.rows;
+  }
+
+  /**
+   * Check if user has any active verification request (prevents duplicates)
+   */
+  async hasActiveVerificationRequest(userUuid: string, groupId: string): Promise<boolean> {
+    const result = await this.pool.query(`
+      SELECT 1 FROM verification_requests
+      WHERE user_uuid = $1
+        AND entry_group_id = $2
+        AND status IN ('pending_intro', 'pending_vouch')
+      LIMIT 1
+    `, [userUuid, groupId]);
+
+    return result.rows.length > 0;
+  }
+
+  /**
+   * Get verification request by ID
+   */
+  async getVerificationRequestById(id: number): Promise<any | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM verification_requests WHERE id = $1',
+      [id]
+    );
+    return result.rows[0] || null;
   }
 
   /**

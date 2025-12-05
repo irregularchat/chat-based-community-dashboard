@@ -482,6 +482,30 @@ export class SignalJsonRpcClient extends EventEmitter {
   }
 
   /**
+   * List all contacts with profile information
+   */
+  async listContacts(): Promise<any[]> {
+    const result = await this.request('listContacts');
+    return result || [];
+  }
+
+  /**
+   * List identities (known Signal users with their profile names)
+   */
+  async listIdentities(): Promise<any[]> {
+    const result = await this.request('listIdentities');
+    return result || [];
+  }
+
+  /**
+   * Get a specific group's info (may trigger server sync)
+   */
+  async getGroup(groupId: string): Promise<any> {
+    const result = await this.request('getGroup', { groupId });
+    return result;
+  }
+
+  /**
    * Check if connected
    */
   isConnected(): boolean {

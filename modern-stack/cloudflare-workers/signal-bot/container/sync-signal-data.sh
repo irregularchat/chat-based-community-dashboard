@@ -70,26 +70,21 @@ upload_to_r2() {
         "$(basename ${SIGNAL_DATA_DIR})"
     echo "ℹ️  Excluded account.db* from backup (will regenerate from SQL dump)"
 
-    # Encode to base64
-    BASE64_CONTENT=$(base64 -i /tmp/signal-data-backup.tar.gz | tr -d '\n')
+    # Encode to base64 and write directly to file (avoids "Argument list too long" error)
+    # Use a temp file to build the JSON payload instead of shell variable
+    echo -n '{"key":"'"${R2_BACKUP_KEY}"'","content":"' > /tmp/json-payload.json
+    base64 -i /tmp/signal-data-backup.tar.gz | tr -d '\n' >> /tmp/json-payload.json
+    echo -n '","contentType":"application/gzip","encoding":"base64"}' >> /tmp/json-payload.json
 
-    # Create JSON payload
-    JSON_PAYLOAD=$(cat <<EOF
-{
-  "key": "${R2_BACKUP_KEY}",
-  "content": "${BASE64_CONTENT}",
-  "contentType": "application/gzip",
-  "encoding": "base64"
-}
-EOF
-)
-
-    # Upload to R2 via Worker API
+    # Upload to R2 via Worker API using file-based payload
     HTTP_CODE=$(curl -s -w "%{http_code}" -o /tmp/upload-response.json -X POST \
         -H "Authorization: Bearer ${WORKER_API_TOKEN}" \
         -H "Content-Type: application/json" \
-        -d "${JSON_PAYLOAD}" \
+        -d @/tmp/json-payload.json \
         "${WORKER_API_URL}/api/r2/upload")
+
+    # Clean up payload file
+    rm -f /tmp/json-payload.json
 
     # Clean up
     rm /tmp/signal-data-backup.tar.gz

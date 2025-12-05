@@ -498,8 +498,10 @@ export class CommandHandler {
         return this.handleCreateUser(args, context);
 
       case '!accountinvite':
-      case '!invite':
         return this.handleAccountInvite(args, context);
+
+      case '!invitebreakout': // New command for inviting to breakout rooms
+        return this.handleInvite(args, context);
 
       // Announcement Commands (Admin)
       case '!announce':
@@ -7013,31 +7015,72 @@ The invitees have been added to a new Signal group for this discussion.`;
     // Check if this is a breakout room
     const isBreakout = await this.breakoutManager.isBreakoutRoom(context.groupId);
 
+    // If in a breakout room, show its status
     if (isBreakout) {
-      // Get the breakout info
       const breakout = await this.breakoutManager.getActiveBreakout(context.groupId);
       if (breakout) {
         const expiresAt = new Date(breakout.expires_at);
         const minutesLeft = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 60000));
+        const typeIcon = ROOM_TYPES[breakout.room_type as RoomType]?.icon || '💬';
 
-        return `🚀 **This is a Breakout Room**
+        // Get members for detailed list
+        const members = await this.dbClient.getBreakoutMembers(breakout.id);
+        const participantNames = members
+          .filter((m: any) => m.message_count > 0)
+          .sort((a: any, b: any) => b.message_count - a.message_count)
+          .map((m: any) => {
+            const role = m.role === 'creator' ? '👑' : m.role === 'facilitator' ? '🤝' : '';
+            return `${m.member_name || 'Anonymous'}${role} (${m.message_count} msg)`;
+          })
+          .join(', ');
 
-**Topic:** ${breakout.topic}
-**Time remaining:** ${minutesLeft} minutes
-**Messages:** ${breakout.total_messages || 0}
-**Participants:** ${breakout.unique_participants || 0}
+        return `${typeIcon} CURRENT BREAKOUT ROOM
 
-**Commands:**
-• \`!decision <text>\` - Record a decision
-• \`!action <text>\` - Record an action item
-• \`!park <text>\` - Park a topic
-• \`!extend 15m\` - Request extension
-• \`!endbreakout\` - End session`;
+Topic: ${breakout.topic}
+Type: ${ROOM_TYPES[breakout.room_type as RoomType]?.name || 'General'}
+Time remaining: ${minutesLeft} minutes
+Messages: ${breakout.total_messages || 0}
+Participants: ${breakout.unique_participants || 0}
+
+Active Participants: ${participantNames || 'None'}
+
+Commands:
+• !decision <text> - Record a decision
+• !action <text> - Record an action item
+• !park <text> - Park a topic
+• !extend 15m - Request extension
+• !endbreakout - End session`;
       }
     }
 
-    // List active breakouts from this parent group
-    return await this.breakoutManager.getActiveBreakouts(context.groupId);
+    // If not in a breakout room, list active breakouts from this parent group
+    const detailedBreakouts = await this.breakoutManager.getDetailedActiveBreakouts(context.groupId);
+
+    if (detailedBreakouts.length === 0) {
+      return 'No active breakout rooms in this group.';
+    }
+
+    let response = 'ACTIVE BREAKOUT ROOMS:\n\n';
+    for (const room of detailedBreakouts) {
+      const expiresAt = new Date(room.expires_at);
+      const minutesLeft = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 60000));
+      const typeIcon = ROOM_TYPES[room.room_type as RoomType]?.icon || '💬';
+
+      response += `${typeIcon} ${room.topic}\n`;
+      response += `   Type: ${ROOM_TYPES[room.room_type as RoomType]?.name || 'General'}\n`;
+      response += `   Time remaining: ${minutesLeft}m\n`;
+      response += `   Messages: ${room.total_messages || 0}\n`;
+
+      const participantNames = room.members
+        .filter((m: any) => m.message_count > 0)
+        .sort((a: any, b: any) => b.message_count - a.message_count)
+        .map((m: any) => m.member_name || 'Anonymous')
+        .join(', ');
+      
+      response += `   Active Participants: ${participantNames || 'None'}\n\n`;
+    }
+
+    return response;
   }
 
   /**

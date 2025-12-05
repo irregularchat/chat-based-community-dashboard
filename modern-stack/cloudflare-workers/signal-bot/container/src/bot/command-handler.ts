@@ -875,6 +875,15 @@ export class CommandHandler {
 
       const answerId = await this.dbClient.saveAnswer(answerData);
 
+      // If question is linked to a breakout annotation, update it
+      if (questionData.question.breakout_id && questionData.question.annotation_id) {
+        await this.dbClient.updateBreakoutAnnotationAnswered(
+          questionData.question.annotation_id,
+          context.sourceUuid || context.sourceNumber,
+          context.sourceName
+        );
+      }
+
       const answerCount = questionData.answers.length + 1;
 
       return this.formatForSignal(

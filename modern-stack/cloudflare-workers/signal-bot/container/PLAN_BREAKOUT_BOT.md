@@ -766,13 +766,24 @@ export async function runBreakoutScheduler(
 
 ## Implementation Roadmap
 
-### MVP (Phase 1-2)
+### MVP (Phase 1) - ✅ COMPLETE (tag: `breakout-phase1`)
 
-- [ ] Database migration `005_breakout_rooms.sql`
-- [ ] Update `postgres-client.ts` ALLOWED_TABLES
-- [ ] Basic `!breakout` command (create room, add members)
-- [ ] Message recording in breakout rooms
-- [ ] Basic `!endbreakout` command (simple summary)
+- [x] Database migration `005_breakout_rooms.sql`
+- [x] Update `postgres-client.ts` ALLOWED_TABLES
+- [x] PostgresClient breakout methods (CRUD operations)
+- [x] Create `breakout-manager.ts` utility class
+- [x] Basic `!breakout` command (parse topic, duration, mentions)
+- [x] Message recording in breakout rooms (signal-bot-v2 interception)
+- [x] Time warnings infrastructure (15min, 5min, 1min)
+- [x] Basic `!endbreakout` command framework
+- [x] `!extend` command support
+- [x] `!status` command for room status
+
+### Phase 2 - Signal Group Creation & Discourse
+
+- [ ] Signal group creation via signal-cli (`createGroup`)
+- [ ] Invite members to breakout Signal group
+- [ ] Basic `!endbreakout` summary generation
 - [ ] Notification to parent group on end
 
 ### Core Features (Phase 3-4)

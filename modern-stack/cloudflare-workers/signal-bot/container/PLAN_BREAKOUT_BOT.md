@@ -779,12 +779,14 @@ export async function runBreakoutScheduler(
 - [x] `!extend` command support
 - [x] `!status` command for room status
 
-### Phase 2 - Signal Group Creation & Discourse
+### Phase 2 - Signal Group Creation & Discourse - ✅ COMPLETE (tag: `breakout-phase2`)
 
-- [ ] Signal group creation via signal-cli (`createGroup`)
-- [ ] Invite members to breakout Signal group
-- [ ] Basic `!endbreakout` summary generation
-- [ ] Notification to parent group on end
+- [x] Signal group creation via `bot.createGroup()` (breakout-manager.ts:171-183)
+- [x] Invite members to breakout Signal group (via createGroup members array)
+- [x] Basic `!endbreakout` summary generation (breakout-manager.ts:405-448)
+- [x] Notification to parent group on end (breakout-manager.ts:431-443)
+- [x] Full Discourse posting with rich report (postgres-client.ts:1622-1760)
+- [x] All command handlers wired up (!breakout, !endbreakout, !extend, !status, etc.)
 
 ### Core Features (Phase 3-4)
 

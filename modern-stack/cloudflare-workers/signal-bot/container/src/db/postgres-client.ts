@@ -15,16 +15,25 @@ function sanitizeForDiscourse(input: string): string {
   if (!input) return '';
 
   return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;')
-    .replace(/\[/g, '\\[')
-    .replace(/\]/g, '\\]')
-    .replace(/`/g, '\\`')
-    .replace(/\*/g, '\\*')
-    .replace(/_/g, '\\_');
+    .replace(/&/g, '&amp;')   // Escape & first
+    .replace(/</g, '&lt;')    // Escape <
+    .replace(/>/g, '&gt;')    // Escape >
+    .replace(/"/g, '&quot;')  // Escape "
+    .replace(/'/g, '&#x27;')  // Escape '
+    // Markdown specific escapes (only if they are not part of HTML tags)
+    // For simplicity, just escaping commonly problematic markdown chars for general text.
+    // Discourse handles most markdown parsing internally, so aggressive escaping is often not needed,
+    // but preventing syntax errors in this function is the priority.
+    .replace(/_/g, '\\_')     // Escape _
+    .replace(/\*/g, '\\*')    // Escape *
+    .replace(/`/g, '\\`')     // Escape `
+    .replace(/\[/g, '\\[')    // Escape [
+    .replace(/\]/g, '\\]')    // Escape ]
+    .replace(/#/g, '\\#')     // Escape #
+    .replace(/\+/g, '\\+')    // Escape +
+    .replace(/-/g, '\\-')     // Escape - (for lists)
+    .replace(/=/g, '\\=')     // Escape = (for headers)
+    .replace(/\|/g, '\\|');   // Escape | (for tables)
 }
 
 export interface DatabaseConfig {
@@ -126,17 +135,17 @@ export class PostgresClient {
   }
 
   /**
-   * Insert record into table
+   * Insert record into table, handling both whitelisted and non-whitelisted tables
    */
   async insert(table: string, data: Record<string, any>): Promise<void> {
-    const validatedTable = this.validateTableName(table);
     const validatedData = this.validateInput(data);
+    const tableName = this.validateTableName(table);
 
     const keys = Object.keys(validatedData);
     const values = Object.values(validatedData);
     const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
 
-    const sql = `INSERT INTO ${validatedTable} (${keys.join(', ')}) VALUES (${placeholders})`;
+    const sql = `INSERT INTO ${tableName} (${keys.join(', ')}) VALUES (${placeholders})`;
 
     await this.pool.query(sql, values);
   }
@@ -230,9 +239,9 @@ export class PostgresClient {
     return result.rows;
   }
 
-  // ============================================================================
+  // ============================================================================ 
   // Q&A SPECIFIC METHODS
-  // ============================================================================
+  // ============================================================================ 
 
   /**
    * Get next question ID for a group (sequential per group)
@@ -256,6 +265,8 @@ export class PostgresClient {
     askerPhone: string;
     groupId: string;
     groupName?: string;
+    breakoutId?: number;
+    annotationId?: number;
   }): Promise<void> {
     await this.insert('q_and_a_questions', {
       id: this.generateId(),
@@ -270,6 +281,8 @@ export class PostgresClient {
       answer_count: 0,
       solution_count: 0,
       timestamp: Date.now(),
+      breakout_id: question.breakoutId,
+      annotation_id: question.annotationId,
     });
   }
 
@@ -513,9 +526,9 @@ export class PostgresClient {
     }
   }
 
-  // ============================================================================
+  // ============================================================================ 
   // MESSAGE RETRIEVAL METHODS
-  // ============================================================================
+  // ============================================================================ 
 
   /**
    * Get recent messages from a group by count
@@ -721,9 +734,9 @@ export class PostgresClient {
     ]);
   }
 
-  // ============================================================================
+  // ============================================================================ 
   // UTILITY METHODS
-  // ============================================================================
+  // ============================================================================ 
 
   /**
    * Generate unique ID (UUID-like)
@@ -770,9 +783,9 @@ export class PostgresClient {
     };
   }
 
-  // ============================================================================
+  // ============================================================================ 
   // ANNOUNCEMENT SPECIFIC METHODS
-  // ============================================================================
+  // ============================================================================ 
 
   /**
    * Get members of a specific group
@@ -934,9 +947,9 @@ export class PostgresClient {
     return result.rowCount !== null && result.rowCount > 0;
   }
 
-  // ============================================================================
+  // ============================================================================ 
   // VERIFICATION REQUEST METHODS
-  // ============================================================================
+  // ============================================================================ 
 
   /**
    * Create a new verification request
@@ -1096,9 +1109,9 @@ export class PostgresClient {
     return result.rows[0] || null;
   }
 
-  // ============================================================================
+  // ============================================================================ 
   // BREAKOUT ROOM METHODS
-  // ============================================================================
+  // ============================================================================ 
 
   /**
    * Create a new breakout room
@@ -1783,7 +1796,7 @@ export class PostgresClient {
     }
 
     // Open Questions
-    const questions = annotations.filter(a => a.annotation_type === 'question');
+    const questions = annotations.filter(a => a.annotation_type === 'question' && a.status !== 'answered');
     const questionsJson = room.open_questions_json ? JSON.parse(room.open_questions_json) : [];
     if (questions.length > 0 || questionsJson.length > 0) {
       post += `## Open Questions\n\n`;
@@ -1792,6 +1805,19 @@ export class PostgresClient {
       }
       for (const q of questionsJson) {
         post += `- ❓ ${sanitizeForDiscourse(q.question)}\n`;
+      }
+      post += `\n`;
+    }
+
+    // Answered Questions
+    const answeredQuestions = annotations.filter(a => a.annotation_type === 'question' && a.status === 'answered');
+    if (answeredQuestions.length > 0) {
+      post += `## Answered Questions\n\n`;
+      for (const q of answeredQuestions) {
+        post += `- ✅ ${sanitizeForDiscourse(q.content)}\n`;
+        if (q.answered_by_name) {
+          post += `  - Answered by ${sanitizeForDiscourse(q.answered_by_name)}\n`;
+        }
       }
       post += `\n`;
     }
@@ -1834,6 +1860,25 @@ export class PostgresClient {
     }
 
     return post;
+  }
+
+  /**
+   * Update breakout annotation as answered
+   */
+  async updateBreakoutAnnotationAnswered(
+    annotationId: number,
+    answererUuid: string,
+    answererName?: string
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE breakout_annotations
+       SET status = 'answered',
+           answered_at = NOW(),
+           answered_by_uuid = $2,
+           answered_by_name = $3
+       WHERE id = $1`,
+      [annotationId, answererUuid, answererName]
+    );
   }
 
   /**

@@ -354,7 +354,7 @@ Warnings will be sent at 15min, 5min, and 1min before end.`;
 
     return {
       success: true,
-      message: `${icons[annotationType]} ${labels[annotationType]}: "${content}"`,
+      message: `${icons[annotationType]} ${labels[annotationType]}: "${content}"`, 
     };
   }
 
@@ -583,31 +583,140 @@ Warnings will be sent at 15min, 5min, and 1min before end.`;
   }
 
   /**
+   * Get detailed list of active breakouts from a parent group
+   */
+  async getDetailedActiveBreakouts(parentGroupId: string): Promise<any[]> {
+    const breakouts = await this.db.getActiveBreakoutsFromParent(parentGroupId);
+
+    // For each breakout, get the members
+    for (const breakout of breakouts) {
+      breakout.members = await this.db.getBreakoutMembers(breakout.id);
+    }
+
+    return breakouts;
+  }
+
+  /**
    * Get recent breakouts history from a parent group
    */
-  async getBreakoutsHistory(parentGroupId: string, limit: number = 5): Promise<string> {
-    const breakouts = await this.db.getBreakoutsFromParent(parentGroupId, limit);
-
-    if (breakouts.length === 0) {
-      return 'No breakout history.';
-    }
-
-    let message = '**Recent Breakout Sessions:**\n\n';
-    for (const room of breakouts) {
-      const createdAt = new Date(room.created_at);
-      const typeIcon = ROOM_TYPES[room.room_type as RoomType]?.icon || '💬';
-      const statusIcon = room.status === 'active' ? '🟢' : room.status === 'ended' ? '✅' : '⚪';
-
-      message += `${statusIcon} ${typeIcon} **${room.topic}**\n`;
-      message += `   ${createdAt.toLocaleDateString()} - ${room.actual_duration_minutes || room.duration_minutes}m\n`;
-      message += `   ${room.unique_participants || 0} participants, ${room.total_messages || 0} messages\n`;
-
-      if (room.discourse_topic_url) {
-        message += `   📋 ${room.discourse_topic_url}\n`;
+    async getBreakoutsHistory(parentGroupId: string, limit: number = 5): Promise<string> {
+      const breakouts = await this.db.getBreakoutsFromParent(parentGroupId, limit);
+  
+      if (breakouts.length === 0) {
+        return 'No breakout history.';
       }
-      message += '\n';
+  
+      let message = '**Recent Breakout Sessions:**\n\n';
+      for (const room of breakouts) {
+        const createdAt = new Date(room.created_at);
+        const typeIcon = ROOM_TYPES[room.room_type as RoomType]?.icon || '💬';
+        const statusIcon = room.status === 'active' ? '🟢' : room.status === 'ended' ? '✅' : '⚪';
+  
+        message += `${statusIcon} ${typeIcon} **${room.topic}**\n`;
+        message += `   ${createdAt.toLocaleDateString()} - ${room.actual_duration_minutes || room.duration_minutes}m\n`;
+        message += `   ${room.unique_participants || 0} participants, ${room.total_messages || 0} messages\n`;
+  
+        if (room.discourse_topic_url) {
+          message += `   📋 ${room.discourse_topic_url}\n`;
+        }
+        message += '\n';
+      }
+  
+      return message;
     }
-
-    return message;
+  
+    async inviteToBreakout(
+      groupId: string,
+      inviterUuid: string,
+      memberUuids: string[],
+      memberNames: Map<string, string>
+    ): Promise<{ success: boolean; error?: string }> {
+      const room = await this.db.getActiveBreakoutByGroupId(groupId);
+      if (!room) {
+        return { success: false, error: 'This is not an active breakout room.' };
+      }
+  
+      try {
+        // Add members to the Signal group
+        await this.bot.updateGroup({
+          groupId,
+          member: memberUuids,
+        });
+  
+        // Add members to the database
+        for (const memberUuid of memberUuids) {
+          await this.db.addBreakoutMember({
+            breakoutId: room.id,
+            memberUuid,
+            memberName: memberNames.get(memberUuid),
+            role: 'participant',
+            wasInvited: true,
+          });
+        }
+  
+        return { success: true };
+      } catch (error) {
+        console.error('Failed to invite to breakout room:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        };
+      }
+    }
+  
+    async generateMidSessionSummary(groupId: string): Promise<string | null> {
+      const room = await this.db.getActiveBreakoutByGroupId(groupId);
+      if (!room) {
+        return null;
+      }
+  
+      const messages = await this.db.getBreakoutMessages(room.id);
+      if (messages.length < 5) {
+        return null;
+      }
+  
+      const conversationText = messages
+        .map((msg: any) => `${msg.sender_name || msg.sender_uuid}: ${msg.message_text}`)
+        .join('\n');
+  
+          if (!this.bot || !this.bot.openai) {
+            return null;
+          }
+      
+          try {
+            const response = await this.bot.openai.chat.completions.create({          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: `You are a helpful assistant that creates concise, topic-focused summaries of group conversations.
+  IMPORTANT RULES:
+  1. Focus on TOPICS, IDEAS, and INFORMATION discussed - NOT who said what
+  2. DO NOT include people's names in the summary unless absolutely essential
+  3. Group related topics together
+  4. Highlight key insights, decisions, resources/links shared, and action items
+  5. Format as plain text only - NO markdown, NO asterisks, NO hashtags
+  6. Use line breaks and dashes for lists
+  
+  Structure your summary as:
+  - Topics Discussed: (main themes/subjects)
+  - Key Information: (important facts, insights, resources)
+  - Decisions/Outcomes: (if any were made)
+  - Action Items: (tasks to be done, can include who if someone volunteered)`,
+            },
+            {
+              role: 'user',
+              content: `Summarize this conversation so far, focusing on the topics and information rather than attributing to individuals:\n\n${conversationText}`,
+            },
+          ],
+          max_tokens: 1000,
+          temperature: 0.5,
+        });
+  
+        return response.choices[0]?.message?.content || null;
+      } catch (error) {
+        console.error('AI summary generation failed:', error);
+        return null;
+      }
+    }
   }
-}
+  

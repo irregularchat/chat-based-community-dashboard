@@ -185,7 +185,7 @@ export class SignalBot extends EventEmitter {
   private debugLogger?: DebugLogger;
 
   // OpenAI client for AI features (README summaries, etc.)
-  private openai?: OpenAI;
+  public openai?: OpenAI;
 
   constructor(config: BotConfig, dbClient: PostgresClient) {
     super();
@@ -242,14 +242,6 @@ export class SignalBot extends EventEmitter {
         console.error('Error refreshing group cache:', err);
       });
     }, this.GROUPS_CACHE_TTL);
-
-    // Set up periodic verification timeout check (every 30 minutes)
-    this.verificationCheckInterval = setInterval(() => {
-      this.commandHandler.processExpiredVerifications().catch(err => {
-        console.error('Error processing expired verifications:', err);
-      });
-    }, this.VERIFICATION_CHECK_INTERVAL);
-    console.log('📋 Verification timeout check interval started (every 30 minutes)');
 
     this.isRunningFlag = true;
     this.startTime = Date.now();
@@ -627,26 +619,7 @@ export class SignalBot extends EventEmitter {
       // Record messages in breakout rooms for summarization
       if (groupId && sourceUuid && messageText) {
         try {
-          const breakoutManager = this.commandHandler.getBreakoutManager();
-          if (breakoutManager) {
-            const isBreakout = await breakoutManager.isBreakoutRoom(groupId);
-            if (isBreakout) {
-              console.log(`🏠 [BREAKOUT] Recording message in breakout room: ${groupId}`);
-              const recorded = await breakoutManager.recordMessage(
-                groupId,
-                this.generateMessageId(),
-                sourceUuid,
-                sourceName || undefined,
-                messageText,
-                timestamp,
-                !!dataMessage?.quote,
-                quotedText || undefined
-              );
-              if (recorded) {
-                console.log('✅ [BREAKOUT] Message recorded for summarization');
-              }
-            }
-          }
+          // The command handler will internally handle breakout room messages
         } catch (error) {
           console.error('⚠️ [BREAKOUT] Failed to record breakout message:', error);
           // Non-critical - continue processing
@@ -663,7 +636,7 @@ export class SignalBot extends EventEmitter {
       if (isCommand || isTldrReply || isBareNumberReply) {
         console.log('🔵 [DEBUG] Message is a command, handling...');
         try {
-          await this.handleCommand(messageText, {
+          await this.commandHandler.handle(messageText, {
             sourceNumber: sourceNumber || '',
             sourceUuid: sourceUuid,
             sourceName: sourceName || '',
@@ -673,6 +646,7 @@ export class SignalBot extends EventEmitter {
             quotedAttachments,
             quotedAuthor, // UUID of the user who wrote the quoted message
             mentions: dataMessage?.mentions,
+            message: messageText,
           });
           console.log('🔵 [DEBUG] Command handling completed');
         } catch (error) {
@@ -681,75 +655,18 @@ export class SignalBot extends EventEmitter {
         }
       } else {
         console.log('🔵 [DEBUG] Message is NOT a command');
-
-        // Check if this is a reply to an AI response (for conversation continuation)
-        if (quotedText && quotedText.includes('🤖 AI Response:')) {
-          console.log('🤖 Detected reply to AI response, continuing conversation...');
-          try {
-            const aiReplyResponse = await this.commandHandler.handleAIReply(
-              messageText,
-              quotedText,
-              {
-                sourceNumber: sourceNumber || '',
-                sourceUuid,
-                sourceName: sourceName || '',
-                groupId,
-                timestamp,
-                quotedText,
-                quotedAttachments,
-                quotedAuthor,
-                mentions: dataMessage?.mentions,
-                message: messageText,
-              }
-            );
-
-            if (aiReplyResponse) {
-              if (groupId) {
-                await this.sendMessage({
-                  groupId,
-                  message: aiReplyResponse,
-                });
-              } else if (sourceNumber) {
-                await this.sendMessage({
-                  recipient: sourceNumber,
-                  message: aiReplyResponse,
-                });
-              }
-              console.log('🤖 AI reply continuation sent');
-            }
-          } catch (error) {
-            console.error('Error handling AI reply:', error);
-          }
-        }
-
-        // Check for verification flow messages (intro with mention, vouch response)
-        if (groupId && sourceUuid) {
-          try {
-            const verificationResponse = await this.commandHandler.handleVerificationMessage(
-              messageText,
-              {
-                sourceNumber: sourceNumber || '',
-                sourceUuid,
-                sourceName: sourceName || '',
-                groupId,
-                timestamp,
-                mentions: dataMessage?.mentions,
-                message: messageText,
-              }
-            );
-
-            // If verification handler returned a response, send it to the group
-            if (verificationResponse) {
-              await this.sendMessage({
-                groupId,
-                message: verificationResponse,
-              });
-              console.log('📋 Verification flow response sent');
-            }
-          } catch (error) {
-            console.error('Error handling verification message:', error);
-          }
-        }
+        await this.commandHandler.handleMessage(messageText, {
+            sourceNumber: sourceNumber || '',
+            sourceUuid,
+            sourceName: sourceName || '',
+            groupId,
+            timestamp,
+            quotedText,
+            quotedAttachments,
+            quotedAuthor,
+            mentions: dataMessage?.mentions,
+            message: messageText,
+        });
       }
 
       // Check for emoji reactions (after command handling)

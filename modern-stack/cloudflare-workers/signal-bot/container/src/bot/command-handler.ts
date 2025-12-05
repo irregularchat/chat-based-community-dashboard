@@ -85,6 +85,7 @@ import {
 import { authentikClient, generateWelcomeMessage } from '../utils/authentik-client.js';
 import { parseIntroduction, isIntroMessage, formatIntroSummary, extractEmailFromText } from '../utils/intro-parser.js';
 import { getNextDicho, getDichosCount, formatDicho } from '../utils/dichos.js';
+import { BreakoutManager, ROOM_TYPES, PRIVACY_MODES, RoomType, PrivacyMode } from '../utils/breakout-manager.js';
 
 export interface Mention {
   start: number;
@@ -155,6 +156,7 @@ export class CommandHandler {
   private questionCounter = 0;
   private bot: any | null = null; // SignalBot instance for accessing bot methods
   private announcementHandler: AnnouncementHandler | null = null;
+  private breakoutManager: BreakoutManager | null = null;
 
   constructor(config: BotConfig, dbClient: PostgresClient) {
     this.config = config;
@@ -177,6 +179,11 @@ export class CommandHandler {
     // Initialize announcement handler
     this.announcementHandler = new AnnouncementHandler(this.dbClient, bot);
     console.log('📢 Announcement handler initialized');
+
+    // Initialize breakout manager
+    this.breakoutManager = new BreakoutManager(this.dbClient, bot);
+    this.breakoutManager.startTimerLoop(60000); // Check every minute
+    console.log('🚀 Breakout room manager initialized');
   }
 
   /**
@@ -521,6 +528,29 @@ export class CommandHandler {
 
       case '!categories':
         return this.handleForumCategories();
+
+      // Breakout Room Commands
+      case '!breakout':
+        return this.handleBreakout(args, context);
+
+      case '!endbreakout':
+      case '!end':
+        return this.handleEndBreakout(context);
+
+      case '!breakouts':
+        return this.handleBreakouts(context);
+
+      case '!decision':
+        return this.handleBreakoutAnnotation('decision', args, context);
+
+      case '!action':
+        return this.handleBreakoutAnnotation('action', args, context);
+
+      case '!park':
+        return this.handleBreakoutAnnotation('park', args, context);
+
+      case '!extend':
+        return this.handleBreakoutExtend(args, context);
 
       default:
         // Unknown command
@@ -6836,5 +6866,267 @@ WIKI CONTENT:${wikiContext}`,
       // Clean up multiple blank lines
       .replace(/\n{3,}/g, '\n\n')
       .trim();
+  }
+
+  // ============================================================================
+  // BREAKOUT ROOM HANDLERS
+  // ============================================================================
+
+  /**
+   * !breakout - Create a new breakout room
+   * Usage: !breakout <topic> @person1 @person2 [30m|1h|2h] [type:brainstorm] [privacy:public]
+   */
+  private async handleBreakout(args: string, context: CommandContext): Promise<string> {
+    if (!this.breakoutManager) {
+      return '❌ Breakout rooms are not available. Bot not fully initialized.';
+    }
+
+    if (!context.groupId) {
+      return '❌ Breakout rooms can only be created from within a group.';
+    }
+
+    if (!args.trim()) {
+      return `🚀 **Breakout Rooms**
+
+Create a temporary focused discussion group.
+
+**Usage:** \`!breakout <topic> @person1 @person2 [duration] [type:...] [privacy:...]\`
+
+**Examples:**
+• \`!breakout API Design @alice @bob 30m\`
+• \`!breakout Sprint Planning @team 1h type:planning\`
+• \`!breakout Bug Triage @devs 45m type:problem privacy:private\`
+
+**Duration:** 15m, 30m, 45m, 1h, 2h (default: 1h)
+
+**Types:** general, brainstorm, decision, planning, retro, problem, review, sync
+
+**Privacy:** public, private, summary_only (default), internal
+
+Type \`!breakouts\` to see active breakout rooms.`;
+    }
+
+    // Parse the command - filter mentions to only those with valid UUIDs
+    const validMentions = (context.mentions || [])
+      .filter((m): m is { uuid: string; start: number; length: number } => !!m.uuid);
+    const parsed = this.breakoutManager.parseBreakoutCommand(args, validMentions);
+
+    // Check if we have any members to invite
+    if (parsed.mentionedUuids.length === 0) {
+      return '❌ Please @mention at least one person to invite to the breakout room.\n\nExample: `!breakout API Design @alice @bob 30m`';
+    }
+
+    // Get member names from database for display
+    const memberNames = await this.dbClient.getMemberDisplayNamesByUuids(parsed.mentionedUuids);
+
+    // Get parent group name
+    let parentGroupName: string | undefined;
+    if (this.bot) {
+      try {
+        const groups = this.bot.getGroups();
+        const parentGroup = groups.find((g: any) => g.id === context.groupId);
+        parentGroupName = parentGroup?.name;
+      } catch (err) {
+        // Ignore errors getting group name
+      }
+    }
+
+    // Create the breakout
+    const result = await this.breakoutManager.createBreakout(
+      context.groupId,
+      parentGroupName,
+      context.sourceUuid || context.sourceNumber,
+      context.sourceName,
+      {
+        topic: parsed.topic,
+        members: parsed.mentionedUuids,
+        memberNames,
+        roomType: parsed.roomType,
+        durationMinutes: parsed.durationMinutes,
+        privacyMode: parsed.privacyMode,
+      }
+    );
+
+    if (!result.success) {
+      return `❌ Failed to create breakout room: ${result.error}`;
+    }
+
+    const typeInfo = ROOM_TYPES[parsed.roomType];
+    const hours = Math.floor(parsed.durationMinutes / 60);
+    const mins = parsed.durationMinutes % 60;
+    const durationStr = hours > 0
+      ? (mins > 0 ? `${hours}h ${mins}m` : `${hours}h`)
+      : `${mins}m`;
+
+    const invitedNames = parsed.mentionedUuids
+      .map(uuid => memberNames.get(uuid) || uuid.substring(0, 8) + '...')
+      .join(', ');
+
+    return `${typeInfo.icon} **Breakout Room Created!**
+
+**Topic:** ${parsed.topic}
+**Type:** ${typeInfo.name}
+**Duration:** ${durationStr}
+**Privacy:** ${PRIVACY_MODES[parsed.privacyMode]}
+**Invited:** ${invitedNames}
+
+The invitees have been added to a new Signal group for this discussion.`;
+  }
+
+  /**
+   * !endbreakout - End the current breakout room
+   */
+  private async handleEndBreakout(context: CommandContext): Promise<string> {
+    if (!this.breakoutManager) {
+      return '❌ Breakout rooms are not available.';
+    }
+
+    if (!context.groupId) {
+      return '❌ This command must be used within a group.';
+    }
+
+    const result = await this.breakoutManager.endBreakout(
+      context.groupId,
+      context.sourceUuid || context.sourceNumber,
+      context.sourceName
+    );
+
+    if (!result.success) {
+      return result.message;
+    }
+
+    return result.message;
+  }
+
+  /**
+   * !breakouts - List active breakout rooms from parent group
+   */
+  private async handleBreakouts(context: CommandContext): Promise<string> {
+    if (!this.breakoutManager) {
+      return '❌ Breakout rooms are not available.';
+    }
+
+    if (!context.groupId) {
+      return '❌ This command must be used within a group.';
+    }
+
+    // Check if this is a breakout room
+    const isBreakout = await this.breakoutManager.isBreakoutRoom(context.groupId);
+
+    if (isBreakout) {
+      // Get the breakout info
+      const breakout = await this.breakoutManager.getActiveBreakout(context.groupId);
+      if (breakout) {
+        const expiresAt = new Date(breakout.expires_at);
+        const minutesLeft = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 60000));
+
+        return `🚀 **This is a Breakout Room**
+
+**Topic:** ${breakout.topic}
+**Time remaining:** ${minutesLeft} minutes
+**Messages:** ${breakout.total_messages || 0}
+**Participants:** ${breakout.unique_participants || 0}
+
+**Commands:**
+• \`!decision <text>\` - Record a decision
+• \`!action <text>\` - Record an action item
+• \`!park <text>\` - Park a topic
+• \`!extend 15m\` - Request extension
+• \`!endbreakout\` - End session`;
+      }
+    }
+
+    // List active breakouts from this parent group
+    return await this.breakoutManager.getActiveBreakouts(context.groupId);
+  }
+
+  /**
+   * !decision, !action, !park - Add annotation to breakout room
+   */
+  private async handleBreakoutAnnotation(
+    type: 'decision' | 'action' | 'park',
+    args: string,
+    context: CommandContext
+  ): Promise<string> {
+    if (!this.breakoutManager) {
+      return '❌ Breakout rooms are not available.';
+    }
+
+    if (!context.groupId) {
+      return '❌ This command must be used within a group.';
+    }
+
+    if (!args.trim()) {
+      const examples = {
+        decision: '`!decision We will use TypeScript for the new project`',
+        action: '`!action @alice Review the PR by Friday`',
+        park: '`!park Discuss budget allocation in next meeting`',
+      };
+      return `❌ Please provide content for the ${type}.\n\nExample: ${examples[type]}`;
+    }
+
+    // Extract assignee for action items
+    let assignedToUuid: string | undefined;
+    let assignedToName: string | undefined;
+    if (type === 'action' && context.mentions && context.mentions.length > 0) {
+      const firstMention = context.mentions[0];
+      if (firstMention.uuid) {
+        assignedToUuid = firstMention.uuid;
+        const names = await this.dbClient.getMemberDisplayNamesByUuids([assignedToUuid]);
+        assignedToName = names.get(assignedToUuid);
+      }
+    }
+
+    const result = await this.breakoutManager.handleAnnotation(
+      context.groupId,
+      type,
+      args.trim(),
+      context.sourceUuid || context.sourceNumber,
+      context.sourceName,
+      assignedToUuid,
+      assignedToName
+    );
+
+    return result.message;
+  }
+
+  /**
+   * !extend - Extend breakout room duration
+   */
+  private async handleBreakoutExtend(args: string, context: CommandContext): Promise<string> {
+    if (!this.breakoutManager) {
+      return '❌ Breakout rooms are not available.';
+    }
+
+    if (!context.groupId) {
+      return '❌ This command must be used within a group.';
+    }
+
+    // Parse extension time (default 15 minutes)
+    let additionalMinutes = 15;
+    const match = args.match(/(\d+)(m|h)?/i);
+    if (match) {
+      const value = parseInt(match[1]);
+      const unit = (match[2] || 'm').toLowerCase();
+      additionalMinutes = unit === 'h' ? value * 60 : value;
+      // Clamp to reasonable values
+      additionalMinutes = Math.min(60, Math.max(5, additionalMinutes));
+    }
+
+    const result = await this.breakoutManager.extendDuration(
+      context.groupId,
+      additionalMinutes,
+      context.sourceUuid || context.sourceNumber,
+      context.sourceName
+    );
+
+    return result.message;
+  }
+
+  /**
+   * Get the breakout manager instance (for message interception)
+   */
+  getBreakoutManager(): BreakoutManager | null {
+    return this.breakoutManager;
   }
 }

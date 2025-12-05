@@ -59,6 +59,11 @@ export class PostgresClient {
     'scheduled_announcements',
     'announcement_deliveries',
     'verification_requests',
+    // Breakout room tables
+    'breakout_rooms',
+    'breakout_room_members',
+    'breakout_room_messages',
+    'breakout_annotations',
   ]);
 
   constructor(config: DatabaseConfig) {
@@ -1089,6 +1094,746 @@ export class PostgresClient {
       [id]
     );
     return result.rows[0] || null;
+  }
+
+  // ============================================================================
+  // BREAKOUT ROOM METHODS
+  // ============================================================================
+
+  /**
+   * Create a new breakout room
+   */
+  async createBreakoutRoom(data: {
+    signalGroupId?: string;
+    parentGroupId: string;
+    parentGroupName?: string;
+    topic: string;
+    roomName?: string;
+    roomType?: string;
+    creatorUuid: string;
+    creatorName?: string;
+    facilitatorUuid?: string;
+    facilitatorName?: string;
+    durationMinutes?: number;
+    privacyMode?: string;
+    autoPostToDiscourse?: boolean;
+    notifyParentOnEnd?: boolean;
+    allowLateJoin?: boolean;
+    recordMessages?: boolean;
+  }): Promise<{ id: number; expiresAt: Date }> {
+    const durationMinutes = data.durationMinutes || 60;
+    const expiresAt = new Date();
+    expiresAt.setMinutes(expiresAt.getMinutes() + durationMinutes);
+
+    const result = await this.pool.query(`
+      INSERT INTO breakout_rooms (
+        signal_group_id, parent_group_id, parent_group_name, topic, room_name, room_type,
+        creator_uuid, creator_name, facilitator_uuid, facilitator_name,
+        status, duration_minutes, expires_at, privacy_mode,
+        auto_post_to_discourse, notify_parent_on_end, allow_late_join, record_messages
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', $11, $12, $13, $14, $15, $16, $17)
+      RETURNING id, expires_at
+    `, [
+      data.signalGroupId || null,
+      data.parentGroupId,
+      data.parentGroupName || null,
+      data.topic,
+      data.roomName || null,
+      data.roomType || 'general',
+      data.creatorUuid,
+      data.creatorName || null,
+      data.facilitatorUuid || data.creatorUuid,
+      data.facilitatorName || data.creatorName || null,
+      durationMinutes,
+      expiresAt,
+      data.privacyMode || 'summary_only',
+      data.autoPostToDiscourse !== false,
+      data.notifyParentOnEnd !== false,
+      data.allowLateJoin !== false,
+      data.recordMessages !== false
+    ]);
+
+    return {
+      id: result.rows[0].id,
+      expiresAt: result.rows[0].expires_at
+    };
+  }
+
+  /**
+   * Update breakout room with Signal group ID after creation
+   */
+  async updateBreakoutSignalGroupId(breakoutId: number, signalGroupId: string): Promise<void> {
+    await this.pool.query(
+      'UPDATE breakout_rooms SET signal_group_id = $1 WHERE id = $2',
+      [signalGroupId, breakoutId]
+    );
+  }
+
+  /**
+   * Get active breakout room by Signal group ID
+   */
+  async getActiveBreakoutByGroupId(signalGroupId: string): Promise<any | null> {
+    const result = await this.pool.query(`
+      SELECT * FROM breakout_rooms
+      WHERE signal_group_id = $1
+        AND status IN ('active', 'ending')
+      LIMIT 1
+    `, [signalGroupId]);
+
+    return result.rows[0] || null;
+  }
+
+  /**
+   * Get breakout room by ID
+   */
+  async getBreakoutRoomById(breakoutId: number): Promise<any | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM breakout_rooms WHERE id = $1',
+      [breakoutId]
+    );
+    return result.rows[0] || null;
+  }
+
+  /**
+   * Get active breakouts from a parent group
+   */
+  async getActiveBreakoutsFromParent(parentGroupId: string): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM breakout_rooms
+      WHERE parent_group_id = $1
+        AND status IN ('active', 'ending')
+      ORDER BY created_at DESC
+    `, [parentGroupId]);
+
+    return result.rows;
+  }
+
+  /**
+   * Get all breakouts from a parent group (including ended)
+   */
+  async getBreakoutsFromParent(parentGroupId: string, limit: number = 10): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM breakout_rooms
+      WHERE parent_group_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2
+    `, [parentGroupId, limit]);
+
+    return result.rows;
+  }
+
+  /**
+   * Add member to breakout room
+   */
+  async addBreakoutMember(data: {
+    breakoutId: number;
+    memberUuid: string;
+    memberName?: string;
+    role?: string;
+    wasInvited?: boolean;
+  }): Promise<void> {
+    await this.pool.query(`
+      INSERT INTO breakout_room_members (
+        breakout_id, member_uuid, member_name, role, was_invited
+      ) VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (breakout_id, member_uuid) DO UPDATE SET
+        member_name = COALESCE(EXCLUDED.member_name, breakout_room_members.member_name),
+        role = COALESCE(EXCLUDED.role, breakout_room_members.role)
+    `, [
+      data.breakoutId,
+      data.memberUuid,
+      data.memberName || null,
+      data.role || 'participant',
+      data.wasInvited !== false
+    ]);
+  }
+
+  /**
+   * Get breakout room members
+   */
+  async getBreakoutMembers(breakoutId: number): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM breakout_room_members
+      WHERE breakout_id = $1
+      ORDER BY message_count DESC, joined_at ASC
+    `, [breakoutId]);
+
+    return result.rows;
+  }
+
+  /**
+   * Record a message in breakout room
+   */
+  async recordBreakoutMessage(data: {
+    breakoutId: number;
+    signalMessageId?: string;
+    senderUuid: string;
+    senderName?: string;
+    messageText: string;
+    messageType?: string;
+    timestamp: number;
+    isReply?: boolean;
+    replyToMessageId?: string;
+    quotedText?: string;
+  }): Promise<number> {
+    const result = await this.pool.query(`
+      INSERT INTO breakout_room_messages (
+        breakout_id, signal_message_id, sender_uuid, sender_name, message_text,
+        message_type, timestamp, is_reply, reply_to_message_id, quoted_text
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING id
+    `, [
+      data.breakoutId,
+      data.signalMessageId || null,
+      data.senderUuid,
+      data.senderName || null,
+      data.messageText,
+      data.messageType || 'chat',
+      data.timestamp,
+      data.isReply || false,
+      data.replyToMessageId || null,
+      data.quotedText || null
+    ]);
+
+    // Update member engagement
+    await this.updateBreakoutMemberEngagement(data.breakoutId, data.senderUuid, data.timestamp);
+
+    // Update room metrics
+    await this.pool.query(`
+      UPDATE breakout_rooms
+      SET total_messages = total_messages + 1
+      WHERE id = $1
+    `, [data.breakoutId]);
+
+    return result.rows[0].id;
+  }
+
+  /**
+   * Update member engagement metrics
+   */
+  async updateBreakoutMemberEngagement(breakoutId: number, memberUuid: string, timestamp: number): Promise<void> {
+    await this.pool.query(`
+      UPDATE breakout_room_members
+      SET
+        message_count = message_count + 1,
+        first_message_at = COALESCE(first_message_at, to_timestamp($3 / 1000.0)),
+        last_message_at = to_timestamp($3 / 1000.0)
+      WHERE breakout_id = $1 AND member_uuid = $2
+    `, [breakoutId, memberUuid, timestamp]);
+
+    // Update unique participants count
+    await this.pool.query(`
+      UPDATE breakout_rooms
+      SET unique_participants = (
+        SELECT COUNT(DISTINCT member_uuid)
+        FROM breakout_room_members
+        WHERE breakout_id = $1 AND message_count > 0
+      )
+      WHERE id = $1
+    `, [breakoutId]);
+  }
+
+  /**
+   * Get messages from breakout room for summarization
+   */
+  async getBreakoutMessages(breakoutId: number): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM breakout_room_messages
+      WHERE breakout_id = $1
+      ORDER BY timestamp ASC
+    `, [breakoutId]);
+
+    return result.rows;
+  }
+
+  /**
+   * Update breakout room status
+   */
+  async updateBreakoutStatus(breakoutId: number, status: string): Promise<void> {
+    let sql = 'UPDATE breakout_rooms SET status = $1';
+    const params: any[] = [status];
+
+    if (status === 'ended' || status === 'expired' || status === 'archived') {
+      sql += ', ended_at = NOW()';
+      sql += ', actual_duration_minutes = EXTRACT(EPOCH FROM (NOW() - created_at)) / 60';
+    }
+
+    sql += ' WHERE id = $2';
+    params.push(breakoutId);
+
+    await this.pool.query(sql, params);
+  }
+
+  /**
+   * Update warning flags
+   */
+  async updateBreakoutWarningFlag(breakoutId: number, warningType: '15min' | '5min' | '1min'): Promise<void> {
+    const column = `warning_${warningType}_sent`;
+    await this.pool.query(`
+      UPDATE breakout_rooms
+      SET ${column} = true
+      WHERE id = $1
+    `, [breakoutId]);
+  }
+
+  /**
+   * Get breakouts that need warning notifications
+   */
+  async getBreakoutsNeedingWarnings(): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM breakout_rooms
+      WHERE status = 'active'
+        AND (
+          (expires_at - INTERVAL '15 minutes' <= NOW() AND NOT warning_15min_sent)
+          OR (expires_at - INTERVAL '5 minutes' <= NOW() AND NOT warning_5min_sent)
+          OR (expires_at - INTERVAL '1 minute' <= NOW() AND NOT warning_1min_sent)
+        )
+      ORDER BY expires_at ASC
+    `);
+
+    return result.rows;
+  }
+
+  /**
+   * Get expired breakouts that need to be closed
+   */
+  async getExpiredBreakouts(): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM breakout_rooms
+      WHERE status = 'active'
+        AND expires_at <= NOW()
+      ORDER BY expires_at ASC
+    `);
+
+    return result.rows;
+  }
+
+  /**
+   * Extend breakout room duration
+   */
+  async extendBreakoutDuration(breakoutId: number, additionalMinutes: number): Promise<{ success: boolean; newExpiresAt?: Date; error?: string }> {
+    // Check if extension is allowed
+    const room = await this.getBreakoutRoomById(breakoutId);
+    if (!room) {
+      return { success: false, error: 'Breakout room not found' };
+    }
+
+    if (room.extension_count >= room.max_extensions) {
+      return { success: false, error: `Maximum extensions (${room.max_extensions}) reached` };
+    }
+
+    const result = await this.pool.query(`
+      UPDATE breakout_rooms
+      SET
+        expires_at = expires_at + ($2 || ' minutes')::interval,
+        duration_minutes = duration_minutes + $2,
+        extension_count = extension_count + 1,
+        warning_15min_sent = false,
+        warning_5min_sent = false,
+        warning_1min_sent = false
+      WHERE id = $1
+      RETURNING expires_at
+    `, [breakoutId, additionalMinutes]);
+
+    return {
+      success: true,
+      newExpiresAt: result.rows[0].expires_at
+    };
+  }
+
+  /**
+   * Create manual annotation (!decision, !action, !park)
+   */
+  async createBreakoutAnnotation(data: {
+    breakoutId: number;
+    annotationType: string;
+    content: string;
+    createdByUuid?: string;
+    createdByName?: string;
+    assignedToUuid?: string;
+    assignedToName?: string;
+    dueDate?: Date;
+  }): Promise<number> {
+    const result = await this.pool.query(`
+      INSERT INTO breakout_annotations (
+        breakout_id, annotation_type, content, created_by_uuid, created_by_name,
+        assigned_to_uuid, assigned_to_name, due_date, status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open')
+      RETURNING id
+    `, [
+      data.breakoutId,
+      data.annotationType,
+      data.content,
+      data.createdByUuid || null,
+      data.createdByName || null,
+      data.assignedToUuid || null,
+      data.assignedToName || null,
+      data.dueDate || null
+    ]);
+
+    return result.rows[0].id;
+  }
+
+  /**
+   * Get annotations for a breakout room
+   */
+  async getBreakoutAnnotations(breakoutId: number, type?: string): Promise<any[]> {
+    let sql = 'SELECT * FROM breakout_annotations WHERE breakout_id = $1';
+    const params: any[] = [breakoutId];
+
+    if (type) {
+      sql += ' AND annotation_type = $2';
+      params.push(type);
+    }
+
+    sql += ' ORDER BY created_at ASC';
+
+    const result = await this.pool.query(sql, params);
+    return result.rows;
+  }
+
+  /**
+   * End breakout room with summary data
+   */
+  async endBreakoutRoom(breakoutId: number, summaryData?: {
+    executiveSummary?: string;
+    detailedSummary?: string;
+    summaryConfidenceScore?: number;
+    decisionsJson?: any[];
+    actionItemsJson?: any[];
+    openQuestionsJson?: any[];
+    parkingLotJson?: any[];
+    keyInsightsJson?: any[];
+    resourcesSharedJson?: any[];
+  }): Promise<void> {
+    let sql = `
+      UPDATE breakout_rooms
+      SET
+        status = 'ended',
+        ended_at = NOW(),
+        actual_duration_minutes = EXTRACT(EPOCH FROM (NOW() - created_at)) / 60
+    `;
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (summaryData) {
+      if (summaryData.executiveSummary) {
+        sql += `, executive_summary = $${paramIndex++}`;
+        params.push(summaryData.executiveSummary);
+      }
+      if (summaryData.detailedSummary) {
+        sql += `, detailed_summary = $${paramIndex++}`;
+        params.push(summaryData.detailedSummary);
+      }
+      if (summaryData.summaryConfidenceScore !== undefined) {
+        sql += `, summary_confidence_score = $${paramIndex++}`;
+        params.push(summaryData.summaryConfidenceScore);
+      }
+      if (summaryData.decisionsJson) {
+        sql += `, decisions_json = $${paramIndex++}`;
+        params.push(JSON.stringify(summaryData.decisionsJson));
+      }
+      if (summaryData.actionItemsJson) {
+        sql += `, action_items_json = $${paramIndex++}`;
+        params.push(JSON.stringify(summaryData.actionItemsJson));
+      }
+      if (summaryData.openQuestionsJson) {
+        sql += `, open_questions_json = $${paramIndex++}`;
+        params.push(JSON.stringify(summaryData.openQuestionsJson));
+      }
+      if (summaryData.parkingLotJson) {
+        sql += `, parking_lot_json = $${paramIndex++}`;
+        params.push(JSON.stringify(summaryData.parkingLotJson));
+      }
+      if (summaryData.keyInsightsJson) {
+        sql += `, key_insights_json = $${paramIndex++}`;
+        params.push(JSON.stringify(summaryData.keyInsightsJson));
+      }
+      if (summaryData.resourcesSharedJson) {
+        sql += `, resources_shared_json = $${paramIndex++}`;
+        params.push(JSON.stringify(summaryData.resourcesSharedJson));
+      }
+      sql += `, summary_generated_at = NOW()`;
+    }
+
+    sql += ` WHERE id = $${paramIndex}`;
+    params.push(breakoutId);
+
+    await this.pool.query(sql, params);
+  }
+
+  /**
+   * Update Discourse integration info
+   */
+  async updateBreakoutDiscourse(breakoutId: number, data: {
+    discourseTopicId: number;
+    discourseTopicUrl: string;
+  }): Promise<void> {
+    await this.pool.query(`
+      UPDATE breakout_rooms
+      SET
+        discourse_topic_id = $1,
+        discourse_topic_url = $2,
+        posted_to_discourse_at = NOW()
+      WHERE id = $3
+    `, [data.discourseTopicId, data.discourseTopicUrl, breakoutId]);
+  }
+
+  /**
+   * Update Discourse post (e.g., when summary is added)
+   */
+  async markBreakoutDiscourseUpdated(breakoutId: number): Promise<void> {
+    await this.pool.query(`
+      UPDATE breakout_rooms
+      SET discourse_post_updated_at = NOW()
+      WHERE id = $1
+    `, [breakoutId]);
+  }
+
+  /**
+   * Update AI analysis on messages
+   */
+  async updateBreakoutMessageAnalysis(messageId: number, analysis: {
+    isDecision?: boolean;
+    isActionItem?: boolean;
+    isQuestion?: boolean;
+    extractedEntities?: any;
+  }): Promise<void> {
+    await this.pool.query(`
+      UPDATE breakout_room_messages
+      SET
+        is_decision = COALESCE($2, is_decision),
+        is_action_item = COALESCE($3, is_action_item),
+        is_question = COALESCE($4, is_question),
+        extracted_entities = COALESCE($5, extracted_entities)
+      WHERE id = $1
+    `, [
+      messageId,
+      analysis.isDecision || null,
+      analysis.isActionItem || null,
+      analysis.isQuestion || null,
+      analysis.extractedEntities ? JSON.stringify(analysis.extractedEntities) : null
+    ]);
+  }
+
+  /**
+   * Post breakout summary to Discourse
+   */
+  async postBreakoutToDiscourse(breakoutId: number): Promise<{
+    success: boolean;
+    topicId?: number;
+    topicUrl?: string;
+    error?: string;
+  }> {
+    try {
+      // Get breakout room with all data
+      const room = await this.getBreakoutRoomById(breakoutId);
+      if (!room) {
+        return { success: false, error: 'Breakout room not found' };
+      }
+
+      // Get members
+      const members = await this.getBreakoutMembers(breakoutId);
+
+      // Get annotations
+      const annotations = await this.getBreakoutAnnotations(breakoutId);
+
+      // Check Discourse configuration
+      const discourseUrl = process.env.DISCOURSE_URL || process.env.DISCOURSE_API_URL;
+      const discourseApiKey = process.env.DISCOURSE_API_KEY;
+      const discourseUsername = process.env.DISCOURSE_USERNAME || process.env.DISCOURSE_API_USERNAME;
+      const discourseCategory = process.env.DISCOURSE_BREAKOUT_CATEGORY || process.env.DISCOURSE_QA_CATEGORY || '1';
+
+      if (!discourseUrl || !discourseApiKey || !discourseUsername) {
+        return { success: false, error: 'Discourse not configured' };
+      }
+
+      // Build the Discourse post
+      const title = `Breakout: ${sanitizeForDiscourse(room.topic)}`;
+      let postBody = this.buildBreakoutDiscoursePost(room, members, annotations);
+
+      // Post to Discourse
+      const createTopicUrl = `${discourseUrl.replace(/\/$/, '')}/posts.json`;
+
+      const response = await fetch(createTopicUrl, {
+        method: 'POST',
+        headers: {
+          'Api-Key': discourseApiKey,
+          'Api-Username': discourseUsername,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          title,
+          raw: postBody,
+          category: parseInt(discourseCategory),
+          tags: ['breakout', room.room_type || 'general', room.status],
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Discourse API error:', response.status, errorText);
+        return { success: false, error: `Discourse API error: ${response.status}` };
+      }
+
+      const result = await response.json() as any;
+      const topicId = result.topic_id;
+      const topicUrl = topicId ? `${discourseUrl.replace(/\/$/, '')}/t/${topicId}` : undefined;
+
+      // Update breakout with Discourse info
+      if (topicId) {
+        await this.updateBreakoutDiscourse(breakoutId, {
+          discourseTopicId: topicId,
+          discourseTopicUrl: topicUrl!,
+        });
+      }
+
+      return { success: true, topicId, topicUrl };
+
+    } catch (error) {
+      console.error('Error posting breakout to Discourse:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Build Discourse post content for breakout room
+   */
+  private buildBreakoutDiscoursePost(room: any, members: any[], annotations: any[]): string {
+    const formatDate = (d: any) => d ? new Date(d).toLocaleString() : 'N/A';
+
+    let post = `# ${sanitizeForDiscourse(room.topic)}\n\n`;
+
+    // Meeting metadata
+    post += `## Meeting Details\n\n`;
+    post += `| Field | Value |\n`;
+    post += `|-------|-------|\n`;
+    post += `| **Type** | ${sanitizeForDiscourse(room.room_type || 'general')} |\n`;
+    post += `| **Parent Group** | ${sanitizeForDiscourse(room.parent_group_name || room.parent_group_id)} |\n`;
+    post += `| **Created By** | ${sanitizeForDiscourse(room.creator_name || 'Unknown')} |\n`;
+    post += `| **Started** | ${formatDate(room.created_at)} |\n`;
+    post += `| **Ended** | ${formatDate(room.ended_at)} |\n`;
+    post += `| **Duration** | ${room.actual_duration_minutes || room.duration_minutes} minutes |\n`;
+    post += `| **Messages** | ${room.total_messages || 0} |\n`;
+    post += `| **Participants** | ${room.unique_participants || members.length} |\n\n`;
+
+    // Executive Summary
+    if (room.executive_summary) {
+      post += `## Executive Summary\n\n`;
+      post += `${sanitizeForDiscourse(room.executive_summary)}\n\n`;
+    }
+
+    // Participants
+    if (members.length > 0) {
+      post += `## Participants\n\n`;
+      const activeMembers = members.filter(m => m.message_count > 0);
+      const observers = members.filter(m => m.message_count === 0);
+
+      if (activeMembers.length > 0) {
+        post += `**Active Contributors:**\n`;
+        for (const m of activeMembers) {
+          const role = m.role !== 'participant' ? ` (${m.role})` : '';
+          post += `- ${sanitizeForDiscourse(m.member_name || 'Unknown')}${role} - ${m.message_count} messages\n`;
+        }
+        post += `\n`;
+      }
+
+      if (observers.length > 0) {
+        post += `**Observers:** ${observers.map(m => sanitizeForDiscourse(m.member_name || 'Unknown')).join(', ')}\n\n`;
+      }
+    }
+
+    // Decisions
+    const decisions = annotations.filter(a => a.annotation_type === 'decision');
+    const decisionsJson = room.decisions_json ? JSON.parse(room.decisions_json) : [];
+    if (decisions.length > 0 || decisionsJson.length > 0) {
+      post += `## Decisions Made\n\n`;
+      for (const d of decisions) {
+        post += `- ✅ ${sanitizeForDiscourse(d.content)}`;
+        if (d.created_by_name) post += ` *(by ${sanitizeForDiscourse(d.created_by_name)})*`;
+        post += `\n`;
+      }
+      for (const d of decisionsJson) {
+        post += `- ✅ ${sanitizeForDiscourse(d.decision)}`;
+        if (d.confidence) post += ` [${Math.round(d.confidence * 100)}% confidence]`;
+        post += `\n`;
+      }
+      post += `\n`;
+    }
+
+    // Action Items
+    const actions = annotations.filter(a => a.annotation_type === 'action');
+    const actionsJson = room.action_items_json ? JSON.parse(room.action_items_json) : [];
+    if (actions.length > 0 || actionsJson.length > 0) {
+      post += `## Action Items\n\n`;
+      for (const a of actions) {
+        const assignee = a.assigned_to_name ? ` → ${sanitizeForDiscourse(a.assigned_to_name)}` : '';
+        const due = a.due_date ? ` (due: ${new Date(a.due_date).toLocaleDateString()})` : '';
+        post += `- [ ] ${sanitizeForDiscourse(a.content)}${assignee}${due}\n`;
+      }
+      for (const a of actionsJson) {
+        const assignee = a.owner_name ? ` → ${sanitizeForDiscourse(a.owner_name)}` : '';
+        const due = a.due_date ? ` (due: ${a.due_date})` : '';
+        post += `- [ ] ${sanitizeForDiscourse(a.task)}${assignee}${due}\n`;
+      }
+      post += `\n`;
+    }
+
+    // Open Questions
+    const questions = annotations.filter(a => a.annotation_type === 'question');
+    const questionsJson = room.open_questions_json ? JSON.parse(room.open_questions_json) : [];
+    if (questions.length > 0 || questionsJson.length > 0) {
+      post += `## Open Questions\n\n`;
+      for (const q of questions) {
+        post += `- ❓ ${sanitizeForDiscourse(q.content)}\n`;
+      }
+      for (const q of questionsJson) {
+        post += `- ❓ ${sanitizeForDiscourse(q.question)}\n`;
+      }
+      post += `\n`;
+    }
+
+    // Parking Lot
+    const parked = annotations.filter(a => a.annotation_type === 'park');
+    const parkedJson = room.parking_lot_json ? JSON.parse(room.parking_lot_json) : [];
+    if (parked.length > 0 || parkedJson.length > 0) {
+      post += `## Parking Lot\n\n`;
+      for (const p of parked) {
+        post += `- 🅿️ ${sanitizeForDiscourse(p.content)}\n`;
+      }
+      for (const p of parkedJson) {
+        post += `- 🅿️ ${sanitizeForDiscourse(p.item)}\n`;
+      }
+      post += `\n`;
+    }
+
+    // Key Insights
+    const insightsJson = room.key_insights_json ? JSON.parse(room.key_insights_json) : [];
+    if (insightsJson.length > 0) {
+      post += `## Key Insights\n\n`;
+      for (const i of insightsJson) {
+        post += `- 💡 ${sanitizeForDiscourse(i.insight)}\n`;
+      }
+      post += `\n`;
+    }
+
+    // Detailed Summary
+    if (room.detailed_summary) {
+      post += `## Detailed Summary\n\n`;
+      post += `${sanitizeForDiscourse(room.detailed_summary)}\n\n`;
+    }
+
+    // Footer
+    post += `---\n\n`;
+    post += `*This breakout session report was auto-generated from Signal.*\n`;
+    if (room.summary_confidence_score) {
+      post += `*Summary confidence: ${Math.round(room.summary_confidence_score * 100)}%*\n`;
+    }
+
+    return post;
   }
 
   /**

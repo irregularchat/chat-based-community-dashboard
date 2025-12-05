@@ -623,6 +623,36 @@ export class SignalBot extends EventEmitter {
         console.error('🔵 [DEBUG] Failed to save message:', error);
       }
 
+      // BREAKOUT ROOM MESSAGE INTERCEPTION
+      // Record messages in breakout rooms for summarization
+      if (groupId && sourceUuid && messageText) {
+        try {
+          const breakoutManager = this.commandHandler.getBreakoutManager();
+          if (breakoutManager) {
+            const isBreakout = await breakoutManager.isBreakoutRoom(groupId);
+            if (isBreakout) {
+              console.log(`🏠 [BREAKOUT] Recording message in breakout room: ${groupId}`);
+              const recorded = await breakoutManager.recordMessage(
+                groupId,
+                this.generateMessageId(),
+                sourceUuid,
+                sourceName || undefined,
+                messageText,
+                timestamp,
+                !!dataMessage?.quote,
+                quotedText || undefined
+              );
+              if (recorded) {
+                console.log('✅ [BREAKOUT] Message recorded for summarization');
+              }
+            }
+          }
+        } catch (error) {
+          console.error('⚠️ [BREAKOUT] Failed to record breakout message:', error);
+          // Non-critical - continue processing
+        }
+      }
+
       console.log('🔵 [DEBUG] Checking if message is a command...');
       // Check if it's a command (starts with !) or a special reply pattern (tldr, bare numbers)
       const trimmedText = messageText.trim();

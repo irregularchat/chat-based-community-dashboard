@@ -17,15 +17,22 @@ const execFileAsync = promisify(execFile);
 
 /**
  * SECURITY: Sanitize search terms to prevent command injection in git grep
+ * Also escapes regex metacharacters for safe use with git grep
  */
 function sanitizeSearchTerm(term: string): string {
   // Remove shell metacharacters that could enable command injection
-  return term
+  let sanitized = term
     .replace(/[\$\`\|\&\;\<\>\\\n\r]/g, '') // Remove dangerous chars
     .replace(/\.\./g, '') // Prevent directory traversal
     .replace(/['"]/g, '') // Remove quotes
     .trim()
     .substring(0, 100); // Limit length
+
+  // Escape regex metacharacters for git grep (which uses regex by default)
+  // These characters have special meaning in regex: . * + ? ^ $ { } [ ] ( ) | \
+  sanitized = sanitized.replace(/[.*+?^${}()[\]|\\]/g, '\\$&');
+
+  return sanitized;
 }
 
 /**
@@ -652,18 +659,19 @@ export async function fetchArticleContent(url: string): Promise<WikiContent | nu
     // Strip frontmatter
     let cleanContent = content.replace(/^---[\s\S]*?---\n*/m, '');
 
-    // Convert markdown to plain text (simple)
+    // Keep markdown structure for better AI context (headers help with understanding)
     cleanContent = cleanContent
-      .replace(/```[\s\S]*?```/g, ' [code block] ')  // Code blocks
-      .replace(/`[^`]+`/g, ' ')  // Inline code
-      .replace(/!\[[^\]]*\]\([^)]+\)/g, ' ')  // Images
-      .replace(/\[[^\]]+\]\([^)]+\)/g, (m) => m.match(/\[([^\]]+)\]/)?.[1] || '')  // Links -> text
-      .replace(/#{1,6}\s+/g, '\n')  // Headers
-      .replace(/[*_]{1,2}([^*_]+)[*_]{1,2}/g, '$1')  // Bold/italic
+      .replace(/```[\s\S]*?```/g, '\n[code example]\n')  // Code blocks - note they exist
+      .replace(/`[^`]+`/g, (m) => m.slice(1, -1))  // Inline code - keep text
+      .replace(/!\[[^\]]*\]\([^)]+\)/g, '')  // Remove images
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // Links -> just text
+      .replace(/[*_]{2}([^*_]+)[*_]{2}/g, '$1')  // Bold
+      .replace(/[*_]([^*_]+)[*_]/g, '$1')  // Italic
       .replace(/\n{3,}/g, '\n\n')
       .trim();
 
-    const excerpt = cleanContent.substring(0, 800) + (cleanContent.length > 800 ? '...' : '');
+    // Increased excerpt size for better context (was 800, now 1500)
+    const excerpt = cleanContent.substring(0, 1500) + (cleanContent.length > 1500 ? '...' : '');
 
     return {
       title: article.title,
@@ -777,6 +785,29 @@ const INTENT_TO_TOPICS: Record<string, string[]> = {
   'radio': ['rf', 'sdr', 'ham', 'communications', 'antenna'],
   'ham': ['radio', 'amateur', 'license', 'communications'],
   'sdr': ['radio', 'software defined', 'rf', 'scanner'],
+
+  // Evaluations & Reviews
+  'eval': ['evaluation', 'performance', 'review', 'assessment', 'oer', 'ncoer', 'military'],
+  'evaluation': ['eval', 'performance', 'review', 'assessment', 'oer', 'ncoer'],
+  'oer': ['evaluation', 'officer', 'performance', 'military', 'review', 'army'],
+  'ncoer': ['evaluation', 'nco', 'performance', 'military', 'review', 'army'],
+  'review': ['evaluation', 'performance', 'assessment', 'feedback'],
+  'performance': ['evaluation', 'review', 'assessment', 'metrics'],
+  'assessment': ['evaluation', 'performance', 'review', 'test'],
+  'feedback': ['review', 'performance', 'evaluation', 'coaching'],
+
+  // Career & Professional Development
+  'career': ['professional', 'development', 'job', 'promotion', 'mentoring'],
+  'promotion': ['career', 'advancement', 'board', 'military', 'rank'],
+  'resume': ['cv', 'job', 'career', 'application', 'linkedin'],
+  'interview': ['job', 'career', 'hiring', 'questions'],
+  'mentoring': ['career', 'coaching', 'development', 'leadership'],
+  'leadership': ['management', 'team', 'mentoring', 'development'],
+
+  // Writing & Documentation
+  'writing': ['documentation', 'guide', 'howto', 'template', 'report'],
+  'template': ['writing', 'document', 'format', 'example'],
+  'bullet': ['writing', 'evaluation', 'oer', 'ncoer', 'points'],
 };
 
 /**
@@ -819,6 +850,17 @@ const QUESTION_PATTERNS: Array<{ pattern: RegExp; topics: string[] }> = [
   // Drones
   { pattern: /\b(drone|uas|part\s*107)\s+.*(certif|license|test)/i, topics: ['drone', 'uas', 'part107', 'certification'] },
   { pattern: /\b(fly|flying)\s+.*(drone|uas)/i, topics: ['drone', 'uas', 'regulations', 'airspace'] },
+
+  // Evaluations & Performance Reviews
+  { pattern: /\b(eval|evaluation|oer|ncoer)\b/i, topics: ['evaluation', 'performance', 'review', 'oer', 'ncoer', 'military'] },
+  { pattern: /\bperformance\s+(review|evaluation|report)/i, topics: ['evaluation', 'performance', 'review', 'feedback'] },
+  { pattern: /\b(write|writing)\s+.*(eval|bullet|oer|ncoer)/i, topics: ['evaluation', 'writing', 'bullet', 'oer', 'ncoer'] },
+  { pattern: /\b(ai|gpt|chatgpt)\s+.*(eval|evaluation|bullet|oer|review)/i, topics: ['ai', 'evaluation', 'writing', 'bullet', 'performance'] },
+  { pattern: /\bfor\s+(my|an?)\s+(eval|evaluation|oer|ncoer|review)/i, topics: ['evaluation', 'writing', 'performance', 'ai'] },
+
+  // Career & Professional
+  { pattern: /\b(career|professional)\s+(development|advice|growth)/i, topics: ['career', 'development', 'mentoring', 'professional'] },
+  { pattern: /\b(resume|cv)\s+(help|tips|writing|review)/i, topics: ['resume', 'career', 'writing', 'job'] },
 ];
 
 /**
@@ -867,4 +909,23 @@ export function generateSearchQueries(question: string): string[] {
   console.log(`📚 Generated ${uniqueQueries.length} search queries from: "${question.substring(0, 50)}..."`);
 
   return uniqueQueries.slice(0, 15);
+}
+
+/**
+ * Get keyword search results in format suitable for hybrid search
+ * Returns file paths with relevance scores
+ */
+export async function getKeywordResultsForHybrid(
+  query: string,
+  limit: number = 10
+): Promise<Array<{ filePath: string; score: number }>> {
+  const queries = generateSearchQueries(query);
+  const results = await parallelSearch(queries, limit);
+
+  return results
+    .filter(r => r.article.filePath)
+    .map(r => ({
+      filePath: r.article.filePath!,
+      score: r.relevance,
+    }));
 }

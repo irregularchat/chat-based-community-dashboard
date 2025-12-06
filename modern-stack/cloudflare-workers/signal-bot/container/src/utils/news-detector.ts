@@ -253,7 +253,44 @@ export function isFileHostingDomain(url: string): boolean {
  * - Social media (handled separately)
  * - File hosting/CDN
  */
+/**
+ * Check if a URL is from a bypass/archive service (to avoid looping)
+ */
+function isBypassOrArchiveDomain(url: string): boolean {
+  try {
+    const urlObj = new URL(url);
+    const hostname = urlObj.hostname.toLowerCase();
+
+    // Bypass and archive domains to skip
+    const bypassDomains = [
+      '12ft.io',
+      '12footer.com',
+      'archive.org',
+      'web.archive.org',
+      'archive.is',
+      'archive.ph',
+      'archive.today',
+      'archive.li',
+      'archive.vn',
+      'archive.md',
+      'webcache.googleusercontent.com',
+      'outline.com',
+      'printfriendly.com',
+    ];
+
+    return bypassDomains.some(domain => hostname === domain || hostname.endsWith('.' + domain));
+  } catch {
+    return false;
+  }
+}
+
 export function shouldProcessUrl(url: string): boolean {
+  // Skip bypass/archive URLs (avoid looping on our own links)
+  if (isBypassOrArchiveDomain(url)) {
+    console.log(`⏭️  Skipping bypass/archive URL: ${url}`);
+    return false;
+  }
+
   // Skip community domains
   if (isCommunityDomain(url)) {
     console.log(`⏭️  Skipping community domain: ${url}`);

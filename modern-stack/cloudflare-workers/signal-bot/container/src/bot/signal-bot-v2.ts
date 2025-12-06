@@ -101,6 +101,14 @@ export interface SignalMessage {
         text?: string;
         attachments?: any[];
       };
+      reaction?: {
+        emoji?: string;
+        targetAuthor?: string;
+        targetAuthorNumber?: string;
+        targetAuthorUuid?: string;
+        targetSentTimestamp?: number;
+        isRemove?: boolean;
+      };
     };
     editMessage?: {
       targetSentTimestamp?: number;
@@ -523,6 +531,37 @@ export class SignalBot extends EventEmitter {
         return;
       }
 
+      // Handle emoji reactions for breakout room joining
+      const reaction = envelope.dataMessage?.reaction;
+      if (reaction && !reaction.isRemove && envelope.dataMessage?.groupInfo?.groupId) {
+        const reactorUuid = envelope.sourceUuid;
+        const reactorName = envelope.sourceName;
+        const groupId = envelope.dataMessage.groupInfo.groupId;
+        const emoji = reaction.emoji;
+
+        if (reactorUuid && emoji) {
+          // Check if there's a breakout manager and handle the reaction
+          const breakoutManager = this.commandHandler?.getBreakoutManager?.();
+          if (breakoutManager) {
+            try {
+              const result = await breakoutManager.handleReactionJoin(
+                groupId,
+                reactorUuid,
+                reactorName,
+                emoji
+              );
+
+              if (result.success && !result.alreadyMember && result.breakout) {
+                console.log(`🎉 ${reactorName || reactorUuid} joined breakout "${result.breakout.topic}" via ${emoji}`);
+              }
+            } catch (err) {
+              console.error('Error handling reaction join:', err);
+            }
+          }
+        }
+        // Don't return - reactions can also have other purposes
+      }
+
       console.log('🔍 [ENVELOPE] envelope keys:', Object.keys(envelope));
 
       // Handle both regular messages and edited messages
@@ -650,6 +689,67 @@ export class SignalBot extends EventEmitter {
         } catch (error) {
           console.error('⚠️ [BREAKOUT] Failed to record breakout message:', error);
           // Non-critical - continue processing
+        }
+      }
+
+      // TASK/ACTION DM REPLY FORWARDING
+      // When someone replies to a task notification DM, forward their message to the task creator
+      const isTaskReply = !groupId && quotedText && (
+        quotedText.includes('📋 New Task Assigned') ||
+        quotedText.includes('📋 New Action Item Assigned')
+      );
+
+      if (isTaskReply) {
+        try {
+          // Parse task details from the quoted text
+          // Format: "📋 New Task Assigned\n\nFrom: CreatorName\nGroup: GroupName OR Breakout: TopicName\n\nTask: TaskContent"
+          const fromMatch = quotedText.match(/From:\s*(.+)/);
+          const taskMatch = quotedText.match(/Task:\s*(.+)/);
+          const breakoutMatch = quotedText.match(/Breakout:\s*(.+)/);
+          const groupMatch = quotedText.match(/Group:\s*(.+)/);
+
+          if (fromMatch && taskMatch) {
+            const creatorName = fromMatch[1].trim();
+            const taskContent = taskMatch[1].trim();
+            const contextInfo = breakoutMatch
+              ? `Breakout: ${breakoutMatch[1].trim()}`
+              : groupMatch
+                ? `Group: ${groupMatch[1].trim()}`
+                : '';
+
+            // Find the creator's UUID by looking up their name in the database
+            const creatorInfo = await this.dbClient.findMemberByName(creatorName);
+
+            if (creatorInfo && creatorInfo.uuid) {
+              const responderName = sourceName || 'Someone';
+
+              const forwardMessage = `💬 Reply about task
+
+From: ${responderName}
+Regarding: ${taskContent}${contextInfo ? `\n${contextInfo}` : ''}
+
+Message: ${messageText}
+
+Reply to this DM to continue the conversation.`;
+
+              await this.sendMessage({
+                recipient: creatorInfo.uuid,
+                message: forwardMessage,
+              });
+
+              // Confirm to the responder
+              await this.sendMessage({
+                recipient: sourceUuid || sourceNumber || '',
+                message: `✅ Your message has been forwarded to ${creatorName}.`,
+              });
+
+              console.log(`📬 Forwarded task reply from ${responderName} to ${creatorName}`);
+            } else {
+              console.log(`⚠️ Could not find creator "${creatorName}" to forward task reply`);
+            }
+          }
+        } catch (forwardError) {
+          console.error('Failed to forward task DM reply:', forwardError);
         }
       }
 
@@ -1494,6 +1594,29 @@ Your file has been flagged but NOT automatically deleted. Please take action.`;
       console.error('Failed to update group via JSON-RPC:', error);
       throw error;
     }
+  }
+
+  /**
+   * Add a member to a group
+   * Convenience wrapper around updateGroup
+   */
+  async addGroupMember(groupId: string, memberUuid: string): Promise<void> {
+    await this.updateGroup({
+      groupId,
+      member: [memberUuid],
+    });
+  }
+
+  /**
+   * Remove member(s) from a group
+   */
+  async removeGroupMembers(groupId: string, memberUuids: string[]): Promise<void> {
+    if (memberUuids.length === 0) return;
+
+    await this.updateGroup({
+      groupId,
+      removeMember: memberUuids,
+    });
   }
 
   /**

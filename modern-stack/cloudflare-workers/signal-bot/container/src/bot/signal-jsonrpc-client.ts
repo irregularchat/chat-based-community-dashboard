@@ -285,17 +285,20 @@ export class SignalJsonRpcClient extends EventEmitter {
         }
       });
 
-      // Timeout after 30 seconds
+      // Timeout - use longer timeout for group operations which can be slow
+      const isGroupOperation = ['updateGroup', 'createGroup', 'quitGroup', 'joinGroup'].includes(method);
+      const timeoutMs = isGroupOperation ? 90000 : 30000; // 90s for group ops, 30s for others
+
       setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
 
           // Debug logging for timeout
-          this.debugLogger?.logRpcTimeout(method, 30000, id);
+          this.debugLogger?.logRpcTimeout(method, timeoutMs, id);
 
           reject(new Error(`Request timeout for method: ${method}`));
         }
-      }, 30000);
+      }, timeoutMs);
     });
   }
 

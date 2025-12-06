@@ -51,8 +51,19 @@ export class AnnouncementHandler {
   /**
    * Parse !announce command arguments
    *
-   * Syntax: !announce [-t time] [-g groups] [-dm] message
-   * Flags can be in any order
+   * Syntax (new, simplified):
+   *   !announce <groups> <message>          # Specific groups
+   *   !announce <message>                   # ALL groups (default)
+   *   !announce -t time <groups> <message>  # Scheduled
+   *   !announce -dm <groups> <message>      # DM to members
+   *
+   * Groups can be:
+   *   - Numbers: 13 or 1,5,13
+   *   - Keywords: tech or tech,cyber
+   *   - Mixed: 1,tech,5,cyber
+   *   - "all" for all groups (default)
+   *
+   * Also supports legacy -g flag syntax for backwards compatibility
    */
   parseCommand(args: string): AnnouncementFlags {
     const result: AnnouncementFlags = {
@@ -82,7 +93,7 @@ export class AnnouncementHandler {
         continue;
       }
 
-      // Parse -g flag (groups)
+      // Parse -g flag (groups) - legacy syntax
       const groupMatch = remaining.match(/^-g\s+(\S+)\s*/);
       if (groupMatch) {
         const groupSpec = groupMatch[1];
@@ -106,6 +117,24 @@ export class AnnouncementHandler {
       }
     }
 
+    // If no groups specified yet via -g flag, check if first word looks like a group selector
+    if (result.groups.length === 0 && remaining.length > 0) {
+      const parts = remaining.split(/\s+/);
+      const firstPart = parts[0];
+
+      // Check if first part looks like a group selector (numbers, keywords, or mixed)
+      // Group selectors: "13", "1,5,13", "tech", "tech,cyber", "1,tech,5"
+      // NOT group selectors: Normal message words, URLs, sentences
+      if (this.looksLikeGroupSelector(firstPart)) {
+        if (firstPart.toLowerCase() === 'all') {
+          result.groups = ['all'];
+        } else {
+          result.groups = firstPart.split(',').map(g => g.trim()).filter(g => g.length > 0);
+        }
+        remaining = parts.slice(1).join(' ').trim();
+      }
+    }
+
     // Rest is the message
     result.message = remaining.trim();
 
@@ -113,14 +142,46 @@ export class AnnouncementHandler {
   }
 
   /**
-   * Resolve group numbers to actual group IDs
+   * Check if a string looks like a group selector (number, keyword, or comma-separated)
+   * Returns false for things that look like message content
+   */
+  private looksLikeGroupSelector(str: string): boolean {
+    if (!str || str.length === 0) return false;
+
+    // "all" is a valid selector
+    if (str.toLowerCase() === 'all') return true;
+
+    // If it contains commas, check each part
+    const parts = str.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    if (parts.length === 0) return false;
+
+    for (const part of parts) {
+      // Numbers are valid (group numbers)
+      if (/^\d+$/.test(part)) continue;
+
+      // Short alphanumeric strings without spaces (keywords)
+      // Keywords should be at least 3 chars and contain only alphanumeric
+      if (/^[a-zA-Z][a-zA-Z0-9_-]{2,}$/.test(part)) continue;
+
+      // Single word "all"
+      if (part.toLowerCase() === 'all') continue;
+
+      // Doesn't look like a valid selector part
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Resolve group selectors (numbers or keywords) to actual group IDs
    *
-   * @param groupNumbers - Array of group numbers from !groups list (e.g., ["1", "5"]) or ["all"]
+   * @param groupSelectors - Array of group numbers or keywords (e.g., ["1", "5", "tech", "cyber"]) or ["all"]
    * @param currentGroupId - Current group ID if no groups specified
    * @param forceRefresh - Force refresh from signal-cli (needed for DM to get actual member UUIDs)
-   * @returns Array of GroupInfo objects
+   * @returns Array of GroupInfo objects with matched info
    */
-  async resolveGroups(groupNumbers: string[], currentGroupId?: string, forceRefresh: boolean = false): Promise<GroupInfo[]> {
+  async resolveGroups(groupSelectors: string[], currentGroupId?: string, forceRefresh: boolean = false): Promise<GroupInfo[]> {
     // Get all groups from bot
     // forceRefresh=true bypasses database cache which only stores member counts, not actual UUIDs
     const allGroups = await this.bot.getGroups(forceRefresh);
@@ -133,7 +194,7 @@ export class AnnouncementHandler {
     allGroups.sort((a: any, b: any) => (b.members?.length || 0) - (a.members?.length || 0));
 
     // If "all" specified OR no groups specified, return all groups (default behavior)
-    if (groupNumbers.length === 0 || (groupNumbers.length === 1 && groupNumbers[0].toLowerCase() === 'all')) {
+    if (groupSelectors.length === 0 || (groupSelectors.length === 1 && groupSelectors[0].toLowerCase() === 'all')) {
       return allGroups.map((g: any) => ({
         id: g.id,
         name: g.name,
@@ -142,23 +203,41 @@ export class AnnouncementHandler {
       }));
     }
 
-    // Resolve specific group numbers
-    const resolved: GroupInfo[] = [];
-    for (const numStr of groupNumbers) {
-      const num = parseInt(numStr, 10);
-      if (isNaN(num) || num < 1 || num > allGroups.length) {
-        continue;
+    // Resolve specific group numbers and keywords (deduplicated by group ID)
+    const resolvedMap: Map<string, GroupInfo> = new Map();
+
+    for (const selector of groupSelectors) {
+      const selectorLower = selector.toLowerCase().trim();
+
+      // Check if it's a number
+      const num = parseInt(selector, 10);
+      if (!isNaN(num) && num > 0 && num <= allGroups.length) {
+        const group = allGroups[num - 1]; // 1-indexed
+        if (!resolvedMap.has(group.id)) {
+          resolvedMap.set(group.id, {
+            id: group.id,
+            name: group.name,
+            memberCount: group.members?.length || 0,
+            members: group.members,
+          });
+        }
+      } else if (selectorLower.length >= 3) {
+        // It's a keyword - search group names (minimum 3 chars)
+        for (const group of allGroups) {
+          const groupName = (group.name || '').toLowerCase();
+          if (groupName.includes(selectorLower) && !resolvedMap.has(group.id)) {
+            resolvedMap.set(group.id, {
+              id: group.id,
+              name: group.name,
+              memberCount: group.members?.length || 0,
+              members: group.members,
+            });
+          }
+        }
       }
-      const group = allGroups[num - 1]; // 1-indexed
-      resolved.push({
-        id: group.id,
-        name: group.name,
-        memberCount: group.members?.length || 0,
-        members: group.members,
-      });
     }
 
-    return resolved;
+    return Array.from(resolvedMap.values());
   }
 
   /**
@@ -431,20 +510,26 @@ export class AnnouncementHandler {
     return [
       '📢 Announcement Command (Admin Only)',
       '',
-      'Usage: !announce [-t time] [-g groups] [-dm] message',
+      'Usage: !announce [groups] [flags] message',
+      '',
+      'Groups (optional, default=ALL):',
+      '  13           Single group by number',
+      '  1,5,13       Multiple groups by number',
+      '  tech         Groups matching keyword',
+      '  tech,cyber   Multiple keywords',
+      '  1,tech,5     Mixed numbers and keywords',
+      '  all          All groups (default)',
       '',
       'Flags:',
-      '  -t <time>    Schedule for later (optional)',
-      '  -g <groups>  Target: 1,5,12 for specific groups (default: ALL)',
-      '  -dm          Send as DM to each member (optional)',
-      '',
-      'Default: Broadcasts to ALL groups if -g not specified',
+      '  -t <time>    Schedule for later',
+      '  -dm          Send as DM to each member',
       '',
       'Examples:',
+      '  !announce 13 Check out this CVE!       # Group 13 only',
+      '  !announce tech,cyber Security alert!   # Groups with "tech" or "cyber"',
       '  !announce Hello everyone!              # ALL groups',
-      '  !announce -g 1,5 Maintenance tonight   # Groups 1 & 5 only',
-      '  !announce -t 24h Meeting reminder      # Scheduled, ALL groups',
-      '  !announce -dm -g 5 Check your email    # DM members of group 5',
+      '  !announce -t 24h Reminder tomorrow     # Scheduled, ALL groups',
+      '  !announce -dm 5 Check your email       # DM members of group 5',
       '',
       getTimeFormatHelp(),
       '',

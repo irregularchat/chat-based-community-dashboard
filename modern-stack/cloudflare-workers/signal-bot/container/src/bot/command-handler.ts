@@ -8136,10 +8136,84 @@ Reply to this message if you have questions.`;
    *
    * Usage:
    * - !tasks - Show open tasks in current group
+   * - !tasks @user1 @user2 - Show tasks for mentioned users
    * - !mytasks - Show your assigned tasks
    */
   private async handleListTasks(args: string, context: CommandContext): Promise<string> {
     const userUuid = context.sourceUuid || context.sourceNumber;
+
+    // Check if users are mentioned - show tasks for those users
+    if (context.mentions && context.mentions.length > 0) {
+      const mentionedUuids = context.mentions
+        .filter(m => m.uuid)
+        .map(m => m.uuid as string);
+
+      if (mentionedUuids.length === 0) {
+        return '❌ Could not identify mentioned users.';
+      }
+
+      // Get display names for mentioned users
+      const names = await this.dbClient.getMemberDisplayNamesByUuids(mentionedUuids);
+
+      // Get tasks for all mentioned users
+      const allTasks: any[] = [];
+      for (const uuid of mentionedUuids) {
+        const tasks = await this.dbClient.getOpenTasksByAssignee(uuid);
+        allTasks.push(...tasks);
+      }
+
+      if (allTasks.length === 0) {
+        const userNames = mentionedUuids
+          .map(uuid => names.get(uuid) || 'Unknown')
+          .join(', ');
+        return `✅ No open tasks for ${userNames}.`;
+      }
+
+      // Build header with user names
+      const userNames = mentionedUuids
+        .map(uuid => names.get(uuid) || 'Unknown')
+        .join(', ');
+
+      let msg = `📋 Open tasks for ${userNames} (${allTasks.length}):\n\n`;
+
+      // Group tasks by assignee if multiple users
+      if (mentionedUuids.length > 1) {
+        for (const uuid of mentionedUuids) {
+          const userTasks = allTasks.filter(t => t.assigned_to_uuid === uuid);
+          if (userTasks.length === 0) continue;
+
+          const userName = names.get(uuid) || 'Unknown';
+          msg += `👤 ${userName}:\n`;
+
+          for (let i = 0; i < Math.min(userTasks.length, 5); i++) {
+            const t = userTasks[i];
+            const priority = t.priority !== 'normal' ? ` [${t.priority.toUpperCase()}]` : '';
+            msg += `  ${i + 1}. [#${t.id}]${priority} ${t.content}\n`;
+          }
+          if (userTasks.length > 5) {
+            msg += `  ... and ${userTasks.length - 5} more\n`;
+          }
+          msg += '\n';
+        }
+      } else {
+        // Single user - show detailed view
+        for (let i = 0; i < Math.min(allTasks.length, 10); i++) {
+          const t = allTasks[i];
+          const priority = t.priority !== 'normal' ? ` [${t.priority.toUpperCase()}]` : '';
+          msg += `${i + 1}. [#${t.id}]${priority} ${t.content}`;
+          if (t.group_name) msg += `\n   📍 ${t.group_name}`;
+          if (t.breakout_topic) msg += ` → ${t.breakout_topic}`;
+          if (t.created_by_name) msg += `\n   👤 From: ${t.created_by_name}`;
+          msg += '\n\n';
+        }
+        if (allTasks.length > 10) {
+          msg += `... and ${allTasks.length - 10} more tasks.`;
+        }
+      }
+
+      msg += '\nUse !complete #ID to mark tasks done.';
+      return msg;
+    }
 
     // Check if looking for personal tasks or group tasks
     const isPersonal = args.toLowerCase().includes('my') || args.toLowerCase().includes('mine');

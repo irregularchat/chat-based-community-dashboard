@@ -7885,17 +7885,23 @@ Reply to this message if you have questions.`;
     let rawContent = content;
     let usedAI = false;
 
-    // Extract assignee from mentions
-    let assignedToUuid: string | undefined;
-    let assignedToName: string | undefined;
+    // Extract ALL assignees from mentions (support multiple!)
+    const assignees: Array<{ uuid: string; name?: string }> = [];
     if (context.mentions && context.mentions.length > 0) {
-      const firstMention = context.mentions[0];
-      if (firstMention.uuid) {
-        assignedToUuid = firstMention.uuid;
-        const names = await this.dbClient.getMemberDisplayNamesByUuids([assignedToUuid]);
-        assignedToName = names.get(assignedToUuid);
+      const mentionUuids = context.mentions
+        .filter(m => m.uuid)
+        .map(m => m.uuid as string);
+
+      if (mentionUuids.length > 0) {
+        const names = await this.dbClient.getMemberDisplayNamesByUuids(mentionUuids);
+        for (const uuid of mentionUuids) {
+          assignees.push({ uuid, name: names.get(uuid) });
+        }
       }
     }
+
+    // For AI extraction, use first assignee name as context
+    const firstAssigneeName = assignees.length > 0 ? assignees[0].name : undefined;
 
     // If replying to a message, use quoted text as context
     if (quotedContent) {
@@ -7903,12 +7909,12 @@ Reply to this message if you have questions.`;
         // User provided additional context: "!task @person <extra instructions>"
         const combinedText = `${quotedContent}\n\nAdditional instructions: ${content}`;
         rawContent = combinedText;
-        content = await this.extractTaskWithAI(combinedText, assignedToName);
+        content = await this.extractTaskWithAI(combinedText, firstAssigneeName);
         usedAI = true;
       } else {
         // Just the quoted message - use AI to extract clean task
         rawContent = quotedContent;
-        content = await this.extractTaskWithAI(quotedContent, assignedToName);
+        content = await this.extractTaskWithAI(quotedContent, firstAssigneeName);
         usedAI = true;
       }
     }
@@ -7918,7 +7924,7 @@ Reply to this message if you have questions.`;
 
 Usage:
 • !task @person Do the thing
-• !action @person Review the PR by Friday
+• !action @user1 @user2 Review the PR - assigns to multiple people
 • Reply to a message with !task @person to convert it to a task`;
     }
 
@@ -7940,46 +7946,68 @@ Usage:
       groupName = group?.name;
     }
 
-    // Create the task in the database
+    // Create task(s) - one for each assignee if multiple, or one unassigned if none
     try {
-      const task = await this.dbClient.createTask({
-        content,
-        rawContent: usedAI ? rawContent : undefined,
-        breakoutId,
-        groupId: context.groupId,
-        groupName,
-        createdByUuid: context.sourceUuid || context.sourceNumber,
-        createdByName: context.sourceName,
-        assignedToUuid,
-        assignedToName,
-        aiExtracted: usedAI,
-        sourceMessageTimestamp: context.timestamp,
-      });
+      const createdTasks: Array<{ id: number; assigneeName?: string }> = [];
+      const dmsSent: string[] = [];
+      const dmsFailed: string[] = [];
 
-      // Also create breakout annotation if in a breakout
-      if (breakoutId && this.breakoutManager) {
-        await this.breakoutManager.handleAnnotation(
-          context.groupId!,
-          'action',
+      // If no assignees, create single unassigned task
+      if (assignees.length === 0) {
+        const task = await this.dbClient.createTask({
           content,
-          context.sourceUuid || context.sourceNumber,
-          context.sourceName,
-          assignedToUuid,
-          assignedToName
-        );
-      }
+          rawContent: usedAI ? rawContent : undefined,
+          breakoutId,
+          groupId: context.groupId,
+          groupName,
+          createdByUuid: context.sourceUuid || context.sourceNumber,
+          createdByName: context.sourceName,
+          aiExtracted: usedAI,
+          sourceMessageTimestamp: context.timestamp,
+        });
+        createdTasks.push({ id: task.id });
+      } else {
+        // Create a task for EACH assignee
+        for (const assignee of assignees) {
+          const task = await this.dbClient.createTask({
+            content,
+            rawContent: usedAI ? rawContent : undefined,
+            breakoutId,
+            groupId: context.groupId,
+            groupName,
+            createdByUuid: context.sourceUuid || context.sourceNumber,
+            createdByName: context.sourceName,
+            assignedToUuid: assignee.uuid,
+            assignedToName: assignee.name,
+            aiExtracted: usedAI,
+            sourceMessageTimestamp: context.timestamp,
+          });
+          createdTasks.push({ id: task.id, assigneeName: assignee.name });
 
-      // Send DM to assignee
-      if (assignedToUuid && this.bot) {
-        try {
-          const assignerName = context.sourceName || 'Someone';
-          const contextInfo = breakoutTopic
-            ? `Breakout: ${breakoutTopic}`
-            : groupName
-              ? `Group: ${groupName}`
-              : 'Direct Message';
+          // Also create breakout annotation if in a breakout
+          if (breakoutId && this.breakoutManager) {
+            await this.breakoutManager.handleAnnotation(
+              context.groupId!,
+              'action',
+              content,
+              context.sourceUuid || context.sourceNumber,
+              context.sourceName,
+              assignee.uuid,
+              assignee.name
+            );
+          }
 
-          const dmMessage = `📋 New Task Assigned
+          // Send DM to assignee
+          if (this.bot) {
+            try {
+              const assignerName = context.sourceName || 'Someone';
+              const contextInfo = breakoutTopic
+                ? `Breakout: ${breakoutTopic}`
+                : groupName
+                  ? `Group: ${groupName}`
+                  : 'Direct Message';
+
+              const dmMessage = `📋 New Task Assigned
 
 From: ${assignerName}
 ${contextInfo}
@@ -7988,30 +8016,51 @@ Task: ${content}
 
 Reply to this message if you have questions.`;
 
-          await this.bot.sendMessage({
-            recipient: assignedToUuid,
-            message: dmMessage,
-          });
-          await this.dbClient.markTaskDmSent(task.id);
-          console.log(`✅ Sent task DM to ${assignedToName || assignedToUuid}`);
-        } catch (dmError) {
-          console.error('Failed to send task DM:', dmError);
+              await this.bot.sendMessage({
+                recipient: assignee.uuid,
+                message: dmMessage,
+              });
+              await this.dbClient.markTaskDmSent(task.id);
+              dmsSent.push(assignee.name || assignee.uuid);
+              console.log(`✅ Sent task DM to ${assignee.name || assignee.uuid}`);
+            } catch (dmError) {
+              console.error('Failed to send task DM:', dmError);
+              dmsFailed.push(assignee.name || assignee.uuid);
+            }
+          }
         }
       }
 
       // Build response
-      let response = `✅ Task #${task.id} created`;
-      if (assignedToName) {
-        response += ` and assigned to ${assignedToName}`;
+      let response: string;
+
+      if (createdTasks.length === 1 && !createdTasks[0].assigneeName) {
+        // Single unassigned task
+        response = `✅ Task #${createdTasks[0].id} created\n\n📋 ${content}`;
+      } else if (createdTasks.length === 1) {
+        // Single assigned task
+        response = `✅ Task #${createdTasks[0].id} created and assigned to ${createdTasks[0].assigneeName}\n\n📋 ${content}`;
+      } else {
+        // Multiple tasks created
+        const taskIds = createdTasks.map(t => `#${t.id}`).join(', ');
+        const assigneeNames = createdTasks.map(t => t.assigneeName).filter(Boolean).join(', ');
+        response = `✅ ${createdTasks.length} tasks created (${taskIds})\n\n📋 ${content}\n\n👥 Assigned to: ${assigneeNames}`;
       }
-      response += `\n\n📋 ${content}`;
 
       if (usedAI) {
         response += '\n\n🤖 Task extracted by AI';
       }
 
-      if (assignedToUuid) {
-        response += `\n\n📬 ${assignedToName || 'Assignee'} has been notified via DM.`;
+      if (dmsSent.length > 0) {
+        if (dmsSent.length === 1) {
+          response += `\n\n📬 ${dmsSent[0]} has been notified via DM.`;
+        } else {
+          response += `\n\n📬 ${dmsSent.length} people notified via DM.`;
+        }
+      }
+
+      if (dmsFailed.length > 0) {
+        response += `\n\n⚠️ Failed to DM: ${dmsFailed.join(', ')}`;
       }
 
       return response;

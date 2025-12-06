@@ -4,7 +4,7 @@
 
 CREATE TABLE IF NOT EXISTS wiki_embeddings (
     id SERIAL PRIMARY KEY,
-    file_path TEXT UNIQUE NOT NULL,           -- docs/security/hardening.md
+    file_path TEXT NOT NULL,                  -- docs/security/hardening.md
     title TEXT NOT NULL,
     url TEXT NOT NULL,
     content_hash TEXT NOT NULL,               -- MD5 of content to detect changes
@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS wiki_embeddings (
     chunk_text TEXT,                          -- The actual chunk text
     metadata JSONB DEFAULT '{}',              -- tags, category, etc.
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(file_path, chunk_index)            -- Each chunk is unique per file
 );
 
 -- Index for fast lookup by file path

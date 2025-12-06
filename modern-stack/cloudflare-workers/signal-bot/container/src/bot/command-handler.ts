@@ -180,10 +180,14 @@ export class CommandHandler {
     this.announcementHandler = new AnnouncementHandler(this.dbClient, bot);
     console.log('📢 Announcement handler initialized');
 
-    // Initialize breakout manager
-    this.breakoutManager = new BreakoutManager(this.dbClient, bot);
+    // Initialize breakout manager with OpenAI for AI summaries
+    this.breakoutManager = new BreakoutManager(this.dbClient, bot, this.config.openAiApiKey);
     this.breakoutManager.startTimerLoop(60000); // Check every minute
-    console.log('🚀 Breakout room manager initialized');
+    if (this.config.openAiApiKey) {
+      console.log('🚀 Breakout room manager initialized (with AI summaries)');
+    } else {
+      console.log('🚀 Breakout room manager initialized (no AI - missing OPENAI_API_KEY)');
+    }
   }
 
   /**
@@ -544,13 +548,61 @@ export class CommandHandler {
         return this.handleBreakoutAnnotation('decision', args, context);
 
       case '!action':
-        return this.handleBreakoutAnnotation('action', args, context);
+      case '!task':
+        return this.handleGlobalTask(args, context);
 
       case '!park':
+      case '!parkinglot':
+      case '!parking':
+      case '!pl':
         return this.handleBreakoutAnnotation('park', args, context);
+
+      case '!parked':
+      case '!listparked':
+      case '!parkinglist':
+        return this.handleListParked(context);
+
+      case '!unpark':
+        return this.handleUnpark(args, context);
+
+      case '!complete':
+      case '!done':
+        return this.handleCompleteTask(args, context);
+
+      case '!tasks':
+      case '!mytasks':
+        return this.handleListTasks(args, context);
+
+      case '!cancel':
+        return this.handleTaskStatusChange('cancelled', args, context);
+
+      case '!start':
+        return this.handleTaskStatusChange('in_progress', args, context);
+
+      case '!block':
+        return this.handleTaskStatusChange('blocked', args, context);
+
+      case '!reopen':
+        return this.handleTaskStatusChange('open', args, context);
+
+      case '!priority':
+        return this.handleTaskPriority(args, context);
+
+      case '!assign':
+        return this.handleTaskAssign(args, context);
 
       case '!extend':
         return this.handleBreakoutExtend(args, context);
+
+      // Today I Learned
+      case '!til':
+      case '!todayilearned':
+      case '!learned':
+        return this.handleTil(args, context);
+
+      case '!tils':
+      case '!listtil':
+        return this.handleListTils(args, context);
 
       default:
         // Unknown command
@@ -611,6 +663,13 @@ export class CommandHandler {
       '',
       '👤 User:',
       '  !req, !request - Join community request',
+      '',
+      '🚀 Breakout Rooms:',
+      '  !breakout <topic> - Create focused discussion group',
+      '  !breakouts - List active breakout rooms',
+      '  !action @person <task> - Assign action item',
+      '  !complete - Mark action as done (reply to action)',
+      '  !endbreakout - End your breakout room',
       ''
     );
 
@@ -625,7 +684,7 @@ export class CommandHandler {
         '  !createuser email name - Create SSO account with name',
         '',
         '📢 Announcements:',
-        '  !announce [-t time] [-g groups] [-dm] message',
+        '  !announce [groups] [-t time] [-dm] message',
         '  !announcements - List pending',
         '  !cancelannounce <id> - Cancel scheduled',
         ''
@@ -749,6 +808,7 @@ export class CommandHandler {
 
   /**
    * !ask - Ask a question (Q&A system)
+   * If asked inside a breakout room, links the question to the breakout
    */
   private async handleAsk(question: string, context: CommandContext): Promise<string> {
     if (!question || question.trim().length === 0) {
@@ -767,6 +827,27 @@ export class CommandHandler {
       const sentences = question.split(/[.!?]/);
       const title = sentences[0]?.trim().substring(0, 100) || question.substring(0, 100);
 
+      // Check if we're inside a breakout room
+      let breakoutId: number | undefined;
+      let annotationId: number | undefined;
+      let breakoutInfo = '';
+
+      const breakout = await this.dbClient.getActiveBreakoutByGroupId(context.groupId);
+      if (breakout) {
+        breakoutId = breakout.id;
+
+        // Create a breakout annotation for this question
+        annotationId = await this.dbClient.createBreakoutAnnotation({
+          breakoutId: breakout.id,
+          annotationType: 'question',
+          content: question,
+          createdByUuid: context.sourceUuid,
+          createdByName: context.sourceName,
+        });
+
+        breakoutInfo = '\n\n📋 This question is linked to the current breakout room.';
+      }
+
       const questionData = {
         questionId,
         question,
@@ -774,6 +855,8 @@ export class CommandHandler {
         asker: context.sourceName,
         askerPhone: context.sourceNumber,
         groupId: context.groupId,
+        breakoutId,
+        annotationId,
       };
 
       await this.dbClient.saveQuestion(questionData);
@@ -783,7 +866,8 @@ export class CommandHandler {
         `Question: ${question}\n\n` +
         `📝 Others can answer with: !answer ${questionId} <answer>\n` +
         `   Or reply to this message with: !a <answer>\n\n` +
-        `✔️  Mark answer(s) as solved: !solved ${questionId} <answer_ids>`
+        `✔️  Mark answer(s) as solved: !solved ${questionId} <answer_ids>` +
+        breakoutInfo
       );
     } catch (error) {
       console.error('Error saving question:', error);
@@ -836,22 +920,50 @@ export class CommandHandler {
 
     const parts = args.trim().split(/\s+/);
 
-    // Support both "!answer <id> <answer>" and "!a <answer>" (reply to question message)
-    let questionId: number;
+    // Support multiple formats:
+    // 1. "!answer <id> <answer>" - explicit ID
+    // 2. "!answer <answer>" - defaults to most recent unanswered question
+    // 3. Reply to question message with "!answer <answer>"
+    let questionId: number | undefined;
     let answer: string;
 
     if (parts.length >= 2 && !isNaN(parseInt(parts[0]))) {
       // Format: !answer 123 <answer>
       questionId = parseInt(parts[0]);
       answer = parts.slice(1).join(' ');
+    } else if (args.trim().length > 0) {
+      // Format: !answer <answer> - default to most recent unanswered question
+      answer = args.trim();
+
+      // Check if replying to a question - use quoted text context
+      if (context.quotedText) {
+        // Try to extract question ID from quoted text like "❓ Question #123:"
+        const quotedMatch = context.quotedText.match(/Question #(\d+)/);
+        if (quotedMatch) {
+          questionId = parseInt(quotedMatch[1]);
+        }
+      }
+
+      // If still no ID, get most recent unanswered question in this group
+      if (!questionId) {
+        const recentQuestion = await this.dbClient.getMostRecentUnansweredQuestion(context.groupId);
+        if (recentQuestion) {
+          questionId = recentQuestion.question_id;
+        } else {
+          return '❌ No unanswered questions found in this group.\n\nUse !question to ask a new question.';
+        }
+      }
     } else {
-      // TODO: Support replying to a question message with just "!a <answer>"
-      // This requires tracking which message corresponds to which question
-      return '❌ Please provide a question ID and answer.\n\nUsage: !answer <id> <answer>\n   or: !a <id> <answer>';
+      return '❌ Please provide an answer.\n\nUsage: !answer <answer> (answers most recent question)\n   or: !answer <id> <answer> (answers specific question)';
     }
 
     if (!answer || answer.trim().length === 0) {
       return '❌ Please provide an answer.\n\nUsage: !answer <id> <answer>';
+    }
+
+    // Ensure questionId is defined at this point
+    if (questionId === undefined) {
+      return '❌ Could not determine which question to answer.';
     }
 
     try {
@@ -873,6 +985,21 @@ export class CommandHandler {
 
       const answerId = await this.dbClient.saveAnswer(answerData);
 
+      // If this question is linked to a breakout room, update the annotation as answered
+      let breakoutInfo = '';
+      if (questionData.question.annotation_id) {
+        try {
+          await this.dbClient.updateBreakoutAnnotationAnswered(
+            questionData.question.annotation_id,
+            context.sourceUuid || context.sourceNumber,
+            context.sourceName
+          );
+          breakoutInfo = '\n\n📋 Breakout annotation marked as answered.';
+        } catch (e) {
+          console.error('Failed to update breakout annotation:', e);
+        }
+      }
+
       const answerCount = questionData.answers.length + 1;
 
       return this.formatForSignal(
@@ -880,7 +1007,8 @@ export class CommandHandler {
         `❓ Question: ${questionData.question.question}\n\n` +
         `💬 Your answer: ${answer}\n\n` +
         `📊 Total answers: ${answerCount}\n\n` +
-        `To mark this as the solution: !solved ${questionId} ${answerId}`
+        `To mark this as the solution: !solved ${questionId} ${answerId}` +
+        breakoutInfo
       );
     } catch (error) {
       console.error('Error adding answer:', error);
@@ -4430,9 +4558,11 @@ WIKI CONTENT:${wikiContext}`,
    *
    * Used when a user fails to verify their safety number after it changed.
    * Posts a notification to each group before removing them.
-   * Supports multiple users: !remove @user1 @user2 @user3
+   * Requires confirmation to prevent accidental removals.
    *
-   * Usage: !remove @user [@user2 @user3 ...]
+   * Usage:
+   *   !remove @user           - Preview which groups they'll be removed from
+   *   !remove @user confirm   - Actually remove them after reviewing preview
    */
   private async handleRemove(args: string, context: CommandContext): Promise<string> {
     const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
@@ -4441,14 +4571,18 @@ WIKI CONTENT:${wikiContext}`,
     }
 
     if (!context.mentions || context.mentions.length === 0) {
-      return '❌ Please mention one or more users\n\nUsage: !remove @user [@user2 @user3 ...]';
+      return '❌ Please mention a user\n\nUsage:\n  !remove @user         - Preview groups\n  !remove @user confirm - Execute removal';
     }
+
+    // Check if confirmation was provided
+    const hasConfirm = args.toLowerCase().includes('confirm');
 
     // Get all groups the bot is in (fetch once for all users)
     const allGroups = await this.bot?.getGroups() || [];
 
     // Process each mentioned user
     const allResults: string[] = [];
+    const allPreviews: string[] = [];
 
     for (const mention of context.mentions) {
       const userIdentifier = mention.uuid || mention.number;
@@ -4483,7 +4617,7 @@ WIKI CONTENT:${wikiContext}`,
 
       try {
         // Find all groups where this user is a member
-        const userGroups: Array<{ groupId: string; name: string }> = [];
+        const userGroups: Array<{ groupId: string; name: string; botIsAdmin: boolean }> = [];
 
         for (const group of allGroups) {
           if (!group.members || !Array.isArray(group.members)) continue;
@@ -4494,19 +4628,48 @@ WIKI CONTENT:${wikiContext}`,
           });
 
           if (isMember && group.id) {
+            const isBotAdmin = await this.isBotAdminAsync(group);
             userGroups.push({
               groupId: group.id,
-              name: group.name || 'Unknown Group'
+              name: group.name || 'Unknown Group',
+              botIsAdmin: isBotAdmin,
             });
           }
         }
 
         if (userGroups.length === 0) {
           allResults.push(`⚠️ ${userDisplayName}: Not found in any groups`);
+          allPreviews.push(`⚠️ ${userDisplayName}: Not found in any groups`);
           continue;
         }
 
-        // The removal notification message
+        // PREVIEW MODE - Show which groups they'll be removed from
+        if (!hasConfirm) {
+          const canRemove = userGroups.filter(g => g.botIsAdmin);
+          const cantRemove = userGroups.filter(g => !g.botIsAdmin);
+
+          allPreviews.push(`👤 ${userDisplayName} is in ${userGroups.length} group(s):`);
+          allPreviews.push('');
+
+          if (canRemove.length > 0) {
+            allPreviews.push(`✅ Will be removed from (${canRemove.length}):`);
+            canRemove.forEach((g, i) => {
+              allPreviews.push(`   ${i + 1}. ${g.name}`);
+            });
+          }
+
+          if (cantRemove.length > 0) {
+            allPreviews.push('');
+            allPreviews.push(`⚠️ Cannot remove from (bot not admin):`);
+            cantRemove.forEach((g, i) => {
+              allPreviews.push(`   ${i + 1}. ${g.name}`);
+            });
+          }
+
+          continue;
+        }
+
+        // EXECUTE MODE - Actually remove the user
         const removalMessage =
           `⚠️ ${userDisplayName} is being removed for not verifying themselves after their safety number changed.\n\n` +
           `This is done to maintain the integrity of the community. This could mean the number was assigned to a different person or their SIM was put into a different device.\n\n` +
@@ -4518,11 +4681,7 @@ WIKI CONTENT:${wikiContext}`,
         // Process each group for this user
         for (const group of userGroups) {
           try {
-            // Check if bot is admin in this group before trying to remove
-            const groupData = allGroups.find((g: any) => g.id === group.groupId);
-            const isBotAdmin = await this.isBotAdminAsync(groupData);
-
-            if (!isBotAdmin) {
+            if (!group.botIsAdmin) {
               failedRemovals.push(`${group.name} (bot not admin)`);
               continue;
             }
@@ -4568,7 +4727,23 @@ WIKI CONTENT:${wikiContext}`,
       }
     }
 
-    // Build final response
+    // PREVIEW RESPONSE
+    if (!hasConfirm) {
+      const response = [
+        '⚠️ REMOVAL PREVIEW',
+        '',
+        ...allPreviews,
+        '',
+        '────────────────',
+        '⚠️ This is a DESTRUCTIVE action!',
+        '',
+        'To confirm removal, run:',
+        '  !remove @user confirm',
+      ];
+      return this.formatForSignal(response.join('\n'));
+    }
+
+    // EXECUTION RESPONSE
     const response = [
       '🚫 User Removal Complete',
       '',
@@ -5527,14 +5702,26 @@ WIKI CONTENT:${wikiContext}`,
 
       console.log(`📋 Verification request created for ${userDisplayName} (${userUuid}), expires: ${expiryFormatted} ET`);
 
-      // Build welcome message for the new user
+      // Build welcome message for the new user with structured format
       const welcomeMessage = this.formatForSignal(
         `📝 Welcome to IrregularChat Entry!\n\n` +
-        `${userDisplayName}, you've been invited to join the community.\n\n` +
-        `To complete verification:\n` +
-        `1. Introduce yourself (name, org, interests)\n` +
-        `2. @mention the person who invited you to vouch for you\n\n` +
-        `Example: "Hi, I'm John from ABC Corp, interested in cyber. @JaneDoe invited me"\n\n` +
+        `${userDisplayName}, you've requested to join the IrregularChat Community.\n\n` +
+        `🔑 Bonafides: Everyone in the chat has been invited by an IrregularChat member. ` +
+        `So that we can add you to the right groups, we need to know:\n\n` +
+        `1. NAME\n` +
+        `2. YOUR_ORGANIZATION\n` +
+        `3. Who invited you (Add & @mention them in this chat)\n` +
+        `4. EMAIL_OR_EMAIL_ALIAS\n` +
+        `5. YOUR_INTERESTS\n` +
+        `6. LinkedIn profile link (optional - helps others endorse your skills)\n\n` +
+        `📮 Please reply with your info in numbered format!\n\n` +
+        `Example:\n` +
+        `1. John Smith\n` +
+        `2. ABC Corp\n` +
+        `3. @JaneDoe invited me\n` +
+        `4. john@example.com\n` +
+        `5. Cyber, OSINT, AI\n` +
+        `6. linkedin.com/in/johnsmith (or "skip")\n\n` +
         `⏰ You have 24 hours to complete verification.\n` +
         `Expires: ${expiryFormatted} ET`
       );
@@ -6009,7 +6196,8 @@ WIKI CONTENT:${wikiContext}`,
   /**
    * !announce - Send announcement to groups
    *
-   * Usage: !announce [-t time] [-g groups] [-dm] message
+   * Usage: !announce [groups] [-t time] [-dm] message
+   * Groups can be numbers (13), keywords (tech), or mixed (13,tech,cyber)
    */
   private async handleAnnounce(args: string, context: CommandContext): Promise<string> {
     // Check admin
@@ -6886,24 +7074,28 @@ WIKI CONTENT:${wikiContext}`,
     }
 
     if (!args.trim()) {
-      return `🚀 **Breakout Rooms**
+      return `🚀 Breakout Rooms
 
 Create a temporary focused discussion group.
 
-**Usage:** \`!breakout <topic> @person1 @person2 [duration] [type:...] [privacy:...]\`
+Usage: !breakout <topic> [@mentions] [duration] [type:...] [privacy:...]
 
-**Examples:**
-• \`!breakout API Design @alice @bob 30m\`
-• \`!breakout Sprint Planning @team 1h type:planning\`
-• \`!breakout Bug Triage @devs 45m type:problem privacy:private\`
+Examples:
+  !breakout API Design 30m
+  !breakout Sprint Planning @alice @bob 1h type:planning
+  !breakout Bug Triage 45m type:problem privacy:private
 
-**Duration:** 15m, 30m, 45m, 1h, 2h (default: 1h)
+Duration: 15m, 30m, 45m, 1h, 2h (default: 1h)
 
-**Types:** general, brainstorm, decision, planning, retro, problem, review, sync
+Types: general, brainstorm, decision, planning, retro, problem, review, sync
 
-**Privacy:** public, private, summary_only (default), internal
+Privacy: public, private, summary_only (default), internal
 
-Type \`!breakouts\` to see active breakout rooms.`;
+Joining: @mentions are optional - react with any emoji to the room announcement to join!
+
+Commands:
+  !breakouts - List active rooms
+  !endbreakout - End your room (AI summary generated)`;
     }
 
     // Parse the command - filter mentions to only those with valid UUIDs
@@ -6911,13 +7103,11 @@ Type \`!breakouts\` to see active breakout rooms.`;
       .filter((m): m is { uuid: string; start: number; length: number } => !!m.uuid);
     const parsed = this.breakoutManager.parseBreakoutCommand(args, validMentions);
 
-    // Check if we have any members to invite
-    if (parsed.mentionedUuids.length === 0) {
-      return '❌ Please @mention at least one person to invite to the breakout room.\n\nExample: `!breakout API Design @alice @bob 30m`';
-    }
-
-    // Get member names from database for display
-    const memberNames = await this.dbClient.getMemberDisplayNamesByUuids(parsed.mentionedUuids);
+    // Mentions are optional - room starts with creator, others can join via emoji reaction
+    // Get member names from database for display (if any mentioned)
+    const memberNames = parsed.mentionedUuids.length > 0
+      ? await this.dbClient.getMemberDisplayNamesByUuids(parsed.mentionedUuids)
+      : new Map<string, string>();
 
     // Get parent group name
     let parentGroupName: string | undefined;
@@ -6962,15 +7152,17 @@ Type \`!breakouts\` to see active breakout rooms.`;
       .map(uuid => memberNames.get(uuid) || uuid.substring(0, 8) + '...')
       .join(', ');
 
-    return `${typeInfo.icon} **Breakout Room Created!**
+    const invitedText = invitedNames ? `\nInvited: ${invitedNames}` : '';
 
-**Topic:** ${parsed.topic}
-**Type:** ${typeInfo.name}
-**Duration:** ${durationStr}
-**Privacy:** ${PRIVACY_MODES[parsed.privacyMode]}
-**Invited:** ${invitedNames}
+    return `${typeInfo.icon} Breakout Room Created!
 
-The invitees have been added to a new Signal group for this discussion.`;
+Topic: ${parsed.topic}
+Type: ${typeInfo.name}
+Duration: ${durationStr}
+Privacy: ${PRIVACY_MODES[parsed.privacyMode]}${invitedText}
+
+React with any emoji to join this breakout!
+The invitees have been added to a new Signal group for the discussion.`;
   }
 
   /**
@@ -7020,19 +7212,25 @@ The invitees have been added to a new Signal group for this discussion.`;
         const expiresAt = new Date(breakout.expires_at);
         const minutesLeft = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 60000));
 
-        return `🚀 **This is a Breakout Room**
+        // Format time remaining in multiple timezones
+        const etTime = expiresAt.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true });
+        const ctTime = expiresAt.toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit', hour12: true });
+        const ptTime = expiresAt.toLocaleTimeString('en-US', { timeZone: 'America/Los_Angeles', hour: 'numeric', minute: '2-digit', hour12: true });
 
-**Topic:** ${breakout.topic}
-**Time remaining:** ${minutesLeft} minutes
-**Messages:** ${breakout.total_messages || 0}
-**Participants:** ${breakout.unique_participants || 0}
+        return `🚀 Breakout Room Status
 
-**Commands:**
-• \`!decision <text>\` - Record a decision
-• \`!action <text>\` - Record an action item
-• \`!park <text>\` - Park a topic
-• \`!extend 15m\` - Request extension
-• \`!endbreakout\` - End session`;
+Topic: ${breakout.topic}
+Time remaining: ${minutesLeft} minutes
+Ends at: ${etTime} ET / ${ctTime} CT / ${ptTime} PT
+Messages: ${breakout.total_messages || 0}
+Participants: ${breakout.unique_participants || 0}
+
+Commands:
+  !decision <text> - Record a decision
+  !action <text> - Record an action item
+  !park <text> - Park a topic
+  !extend 15m - Request extension
+  !endbreakout - End session`;
       }
     }
 
@@ -7041,7 +7239,71 @@ The invitees have been added to a new Signal group for this discussion.`;
   }
 
   /**
+   * Use AI to extract a clean, actionable task from conversational text
+   */
+  private async extractTaskWithAI(rawText: string, assigneeName?: string): Promise<string> {
+    if (!this.openai) {
+      // Fallback: just return the raw text if AI is not available
+      return rawText;
+    }
+
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a task extraction assistant. Convert conversational text into a clear, actionable task description.
+
+Rules:
+- Output ONLY the task description, nothing else
+- Start with an action verb (Review, Update, Create, Fix, Send, etc.)
+- Be concise but include key details (what, where, when if mentioned)
+- Remove conversational filler ("I think", "maybe", "we should", etc.)
+- Keep technical terms and specifics intact
+- If there's a deadline mentioned, include it
+- Max 100 characters unless more detail is essential
+
+Examples:
+Input: "hey can you look at the PR I submitted yesterday for the auth changes"
+Output: "Review auth changes PR submitted yesterday"
+
+Input: "we need someone to update the docs with the new API endpoints"
+Output: "Update documentation with new API endpoints"
+
+Input: "the login page is broken on mobile, needs fixing asap"
+Output: "Fix mobile login page (urgent)"`
+          },
+          {
+            role: 'user',
+            content: rawText
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 150,
+      });
+
+      const extracted = response.choices[0]?.message?.content?.trim();
+      if (extracted && extracted.length > 0 && extracted.length < 500) {
+        console.log(`🤖 AI extracted task: "${extracted}" from: "${rawText.substring(0, 50)}..."`);
+        return extracted;
+      }
+    } catch (error) {
+      console.error('AI task extraction failed:', error);
+    }
+
+    // Fallback to raw text
+    return rawText;
+  }
+
+  /**
    * !decision, !action, !park - Add annotation to breakout room
+   *
+   * For !action:
+   * - Can be used by replying to a message (quoted text becomes the task)
+   * - @mentions the person to assign the task
+   * - Sends a DM to the assigned person with the task
+   * - Uses AI to extract clean task from conversational quoted messages
    */
   private async handleBreakoutAnnotation(
     type: 'decision' | 'action' | 'park',
@@ -7056,19 +7318,442 @@ The invitees have been added to a new Signal group for this discussion.`;
       return '❌ This command must be used within a group.';
     }
 
-    if (!args.trim()) {
+    // Build content from args and/or quoted message
+    let content = args.trim();
+    let quotedContent = context.quotedText?.trim();
+    let usedAI = false;
+
+    // If replying to a message, use quoted text as context
+    if (quotedContent) {
+      if (type === 'action') {
+        // Extract assignee name for AI context
+        let assigneeName: string | undefined;
+        if (context.mentions && context.mentions.length > 0) {
+          const firstMention = context.mentions[0];
+          if (firstMention.uuid) {
+            const names = await this.dbClient.getMemberDisplayNamesByUuids([firstMention.uuid]);
+            assigneeName = names.get(firstMention.uuid);
+          }
+        }
+
+        if (content) {
+          // User provided additional context: "!action @person <extra instructions>"
+          // Use AI to combine quoted message + user's instructions into clean task
+          const combinedText = `${quotedContent}\n\nAdditional instructions: ${content}`;
+          content = await this.extractTaskWithAI(combinedText, assigneeName);
+          usedAI = true;
+        } else {
+          // Just the quoted message - use AI to extract clean task
+          content = await this.extractTaskWithAI(quotedContent, assigneeName);
+          usedAI = true;
+        }
+      } else if (type === 'decision' || type === 'park') {
+        // For decision/park: use quoted text as content if no args provided
+        if (!content) {
+          content = quotedContent;
+        } else {
+          // If args provided, combine: "quoted text - user's note"
+          content = `${quotedContent} — ${content}`;
+        }
+      }
+    }
+
+    if (!content) {
       const examples = {
-        decision: '`!decision We will use TypeScript for the new project`',
-        action: '`!action @alice Review the PR by Friday`',
-        park: '`!park Discuss budget allocation in next meeting`',
+        decision: '!decision We will use TypeScript for the new project\n\nOr reply to a message with just: !decision',
+        action: '!action @alice Review the PR by Friday\n\nOr reply to a message with: !action @alice',
+        park: '!park Discuss budget allocation in next meeting\n\nOr reply to a message with just: !park',
       };
       return `❌ Please provide content for the ${type}.\n\nExample: ${examples[type]}`;
     }
 
-    // Extract assignee for action items
+    // Extract assignee for action items (if not already extracted above)
     let assignedToUuid: string | undefined;
     let assignedToName: string | undefined;
     if (type === 'action' && context.mentions && context.mentions.length > 0) {
+      const firstMention = context.mentions[0];
+      if (firstMention.uuid) {
+        assignedToUuid = firstMention.uuid;
+        // Check if we already looked up the name
+        if (!assignedToName) {
+          const names = await this.dbClient.getMemberDisplayNamesByUuids([assignedToUuid]);
+          assignedToName = names.get(assignedToUuid);
+        }
+      }
+    }
+
+    // Get breakout room info for context
+    const breakout = await this.breakoutManager.getActiveBreakout(context.groupId);
+
+    const result = await this.breakoutManager.handleAnnotation(
+      context.groupId,
+      type,
+      content,
+      context.sourceUuid || context.sourceNumber,
+      context.sourceName,
+      assignedToUuid,
+      assignedToName
+    );
+
+    // For action items, send DM to assigned person
+    if (type === 'action' && assignedToUuid && result.success && this.bot) {
+      try {
+        const breakoutTopic = breakout?.topic || 'Breakout Room';
+        const assignerName = context.sourceName || 'Someone';
+
+        const dmMessage = `📋 New Action Item Assigned
+
+From: ${assignerName}
+Breakout: ${breakoutTopic}
+
+Task: ${content}
+
+Reply to this message if you have questions.`;
+
+        await this.bot.sendMessage({
+          recipient: assignedToUuid,
+          message: dmMessage,
+        });
+        console.log(`✅ Sent action item DM to ${assignedToName || assignedToUuid}`);
+
+        // Build response with AI indicator if used
+        let response = result.message;
+        if (usedAI) {
+          response += '\n\n🤖 Task extracted by AI from quoted message.';
+        }
+        response += `\n\n📬 ${assignedToName || 'Assignee'} has been notified via DM.`;
+        return response;
+      } catch (dmError) {
+        console.error('Failed to send action item DM:', dmError);
+        // Still return success, but note that DM failed
+        let response = result.message;
+        if (usedAI) {
+          response += '\n\n🤖 Task extracted by AI from quoted message.';
+        }
+        response += '\n\n⚠️ Could not send DM notification.';
+        return response;
+      }
+    }
+
+    // Add AI indicator for non-action types or actions without DM
+    if (usedAI) {
+      return `${result.message}\n\n🤖 Task extracted by AI from quoted message.`;
+    }
+
+    return result.message;
+  }
+
+  /**
+   * !parked / !listparked - List all parked items in the breakout room
+   */
+  private async handleListParked(context: CommandContext): Promise<string> {
+    if (!context.groupId) {
+      return '❌ This command must be used within a group.';
+    }
+
+    if (!this.breakoutManager) {
+      return '❌ Breakout rooms are not available.';
+    }
+
+    // Get active breakout for this group
+    const breakout = await this.dbClient.getActiveBreakoutByGroupId(context.groupId);
+    if (!breakout) {
+      return '❌ No active breakout room in this group.\n\nParking lot is available during active breakout sessions.';
+    }
+
+    // Get all parked items
+    const annotations = await this.dbClient.getBreakoutAnnotations(breakout.id);
+    const parkedItems = annotations.filter((a: any) => a.annotation_type === 'park' && a.status !== 'done');
+
+    if (parkedItems.length === 0) {
+      return '🅿️ Parking Lot is Empty\n\nUse !park <topic> to add items for later discussion.';
+    }
+
+    let response = `🅿️ Parking Lot (${parkedItems.length} item${parkedItems.length !== 1 ? 's' : ''})\n\n`;
+
+    parkedItems.forEach((item: any, index: number) => {
+      const creator = item.created_by_name || 'Someone';
+      response += `${index + 1}. ${item.content}\n`;
+      response += `   └ parked by ${creator}\n`;
+    });
+
+    response += '\n━━━━━━━━━━━━━━━━━━━━━━━━\n';
+    response += 'Use !unpark <number> to address and remove an item';
+
+    return response;
+  }
+
+  /**
+   * !unpark - Remove an item from the parking lot (mark as addressed)
+   */
+  private async handleUnpark(args: string, context: CommandContext): Promise<string> {
+    if (!context.groupId) {
+      return '❌ This command must be used within a group.';
+    }
+
+    if (!this.breakoutManager) {
+      return '❌ Breakout rooms are not available.';
+    }
+
+    // Get active breakout for this group
+    const breakout = await this.dbClient.getActiveBreakoutByGroupId(context.groupId);
+    if (!breakout) {
+      return '❌ No active breakout room in this group.';
+    }
+
+    const trimmedArgs = args.trim();
+
+    // Get all parked items
+    const annotations = await this.dbClient.getBreakoutAnnotations(breakout.id);
+    const parkedItems = annotations.filter((a: any) => a.annotation_type === 'park' && a.status !== 'done');
+
+    if (parkedItems.length === 0) {
+      return '🅿️ Parking lot is empty. Nothing to unpark.';
+    }
+
+    // Parse the number
+    const itemNumber = parseInt(trimmedArgs);
+    if (isNaN(itemNumber) || itemNumber < 1 || itemNumber > parkedItems.length) {
+      return `❌ Please provide a valid item number (1-${parkedItems.length}).\n\nUsage: !unpark <number>\nUse !parked to see the list.`;
+    }
+
+    const itemToUnpark = parkedItems[itemNumber - 1];
+
+    try {
+      // Mark as done/addressed
+      await this.dbClient.updateBreakoutAnnotationStatus(itemToUnpark.id, 'done');
+
+      return `✅ Unparked: "${itemToUnpark.content}"\n\n` +
+        `Item has been marked as addressed and removed from the parking lot.`;
+    } catch (error) {
+      console.error('Error unparking item:', error);
+      return '❌ Failed to unpark item. Please try again.';
+    }
+  }
+
+  /**
+   * !complete / !done - Mark an action item as completed
+   *
+   * Usage:
+   * - Reply to an action message with !complete
+   * - !complete (marks most recent action assigned to you)
+   * - !complete <content match> (marks action matching text)
+   */
+  private async handleCompleteAction(args: string, context: CommandContext): Promise<string> {
+    if (!context.groupId) {
+      return '❌ This command must be used within a group.';
+    }
+
+    // Get active breakout for this group
+    const breakout = await this.dbClient.getActiveBreakoutByGroupId(context.groupId);
+    if (!breakout) {
+      return '❌ No active breakout room in this group.';
+    }
+
+    const completedBy = context.sourceName || context.sourceUuid || 'Someone';
+    const completedByUuid = context.sourceUuid || context.sourceNumber;
+
+    // If replying to a message, try to find the action from quoted text
+    if (context.quotedText) {
+      // Look for action in breakout annotations that matches quoted text
+      const annotations = await this.dbClient.getBreakoutAnnotations(breakout.id);
+      const actionAnnotations = annotations.filter(
+        (a: any) => a.annotation_type === 'action' && a.status === 'open'
+      );
+
+      // Find action that matches quoted text (partial match)
+      const quotedLower = context.quotedText.toLowerCase().trim();
+      const matchingAction = actionAnnotations.find((a: any) =>
+        a.content.toLowerCase().includes(quotedLower) ||
+        quotedLower.includes(a.content.toLowerCase().substring(0, 30))
+      );
+
+      if (matchingAction) {
+        await this.dbClient.updateBreakoutAnnotationStatus(matchingAction.id, 'done');
+
+        // Notify the assigner if different from completer
+        if (matchingAction.created_by_uuid && matchingAction.created_by_uuid !== completedByUuid && this.bot) {
+          try {
+            await this.bot.sendMessage({
+              recipient: matchingAction.created_by_uuid,
+              message: `✅ Action completed by ${completedBy}!\n\nTask: ${matchingAction.content}\n\nBreakout: ${breakout.topic}`,
+            });
+          } catch (e) {
+            console.error('Failed to notify action creator:', e);
+          }
+        }
+
+        return `✅ Action marked as complete!\n\nTask: ${matchingAction.content}\n\nCompleted by: ${completedBy}`;
+      }
+    }
+
+    // If args provided, search for matching action
+    if (args.trim()) {
+      const annotations = await this.dbClient.getBreakoutAnnotations(breakout.id);
+      const actionAnnotations = annotations.filter(
+        (a: any) => a.annotation_type === 'action' && a.status === 'open'
+      );
+
+      const searchLower = args.toLowerCase().trim();
+      const matchingAction = actionAnnotations.find((a: any) =>
+        a.content.toLowerCase().includes(searchLower)
+      );
+
+      if (matchingAction) {
+        await this.dbClient.updateBreakoutAnnotationStatus(matchingAction.id, 'done');
+
+        return `✅ Action marked as complete!\n\nTask: ${matchingAction.content}\n\nCompleted by: ${completedBy}`;
+      }
+
+      return `❌ No open action found matching: "${args}"\n\nTry replying to the action message with !complete`;
+    }
+
+    // No args and no quote - try to find most recent action assigned to this user
+    const annotations = await this.dbClient.getBreakoutAnnotations(breakout.id);
+    const myActions = annotations.filter(
+      (a: any) =>
+        a.annotation_type === 'action' &&
+        a.status === 'open' &&
+        a.assigned_to_uuid === completedByUuid
+    );
+
+    if (myActions.length === 0) {
+      // List open actions
+      const openActions = annotations.filter(
+        (a: any) => a.annotation_type === 'action' && a.status === 'open'
+      );
+
+      if (openActions.length === 0) {
+        return '✅ No open actions in this breakout room.';
+      }
+
+      let msg = '📋 Open actions in this breakout:\n\n';
+      for (let i = 0; i < Math.min(openActions.length, 5); i++) {
+        const a = openActions[i];
+        msg += `${i + 1}. ${a.content}`;
+        if (a.assigned_to_name) msg += ` (assigned to ${a.assigned_to_name})`;
+        msg += '\n';
+      }
+      msg += '\nReply to an action message with !complete to mark it done.';
+      return msg;
+    }
+
+    // Complete the most recent action assigned to this user
+    const mostRecent = myActions[myActions.length - 1];
+    await this.dbClient.updateBreakoutAnnotationStatus(mostRecent.id, 'done');
+
+    // Notify creator
+    if (mostRecent.created_by_uuid && mostRecent.created_by_uuid !== completedByUuid && this.bot) {
+      try {
+        await this.bot.sendMessage({
+          recipient: mostRecent.created_by_uuid,
+          message: `✅ Action completed by ${completedBy}!\n\nTask: ${mostRecent.content}\n\nBreakout: ${breakout.topic}`,
+        });
+      } catch (e) {
+        console.error('Failed to notify action creator:', e);
+      }
+    }
+
+    return `✅ Action marked as complete!\n\nTask: ${mostRecent.content}\n\nCompleted by: ${completedBy}`;
+  }
+
+  /**
+   * !action / !task - Create a task or view task details
+   *
+   * Usage:
+   * - !task #123 - View task details
+   * - !task @person Do the thing - Create and assign task
+   * - !action @person Review the PR
+   * - Reply to a message with: !task @person
+   */
+  private async handleGlobalTask(args: string, context: CommandContext): Promise<string> {
+    // Check if viewing a task by ID (e.g., "!task #123" or "!task 123")
+    const viewMatch = args.trim().match(/^#?(\d+)$/);
+    if (viewMatch) {
+      const taskId = parseInt(viewMatch[1]);
+      const task = await this.dbClient.getTaskById(taskId);
+      if (!task) {
+        return `❌ Task #${taskId} not found.`;
+      }
+
+      // Build detailed view
+      const statusEmojis: Record<string, string> = {
+        'open': '🔵',
+        'in_progress': '▶️',
+        'done': '✅',
+        'cancelled': '❌',
+        'blocked': '🚫',
+      };
+      const priorityEmojis: Record<string, string> = {
+        'low': '🔵',
+        'normal': '⚪',
+        'high': '🟠',
+        'urgent': '🔴',
+      };
+
+      let msg = `📋 Task #${task.id}\n\n`;
+      msg += `${statusEmojis[task.status] || '⚪'} Status: ${task.status.toUpperCase()}\n`;
+      if (task.priority !== 'normal') {
+        msg += `${priorityEmojis[task.priority]} Priority: ${task.priority.toUpperCase()}\n`;
+      }
+      msg += `\n📝 ${task.content}\n`;
+
+      if (task.assigned_to_name) {
+        msg += `\n👤 Assigned to: ${task.assigned_to_name}`;
+      }
+      if (task.created_by_name) {
+        msg += `\n👤 Created by: ${task.created_by_name}`;
+      }
+      if (task.group_name) {
+        msg += `\n📍 Group: ${task.group_name}`;
+      }
+      if (task.breakout_topic) {
+        msg += `\n🔀 Breakout: ${task.breakout_topic}`;
+      }
+
+      const createdAt = new Date(task.created_at);
+      msg += `\n📅 Created: ${createdAt.toLocaleDateString()}`;
+
+      if (task.status === 'done' && task.completed_at) {
+        const completedAt = new Date(task.completed_at);
+        msg += `\n✅ Completed: ${completedAt.toLocaleDateString()}`;
+        if (task.completed_by_name) {
+          msg += ` by ${task.completed_by_name}`;
+        }
+      }
+
+      if (task.due_date) {
+        msg += `\n⏰ Due: ${new Date(task.due_date).toLocaleDateString()}`;
+      }
+
+      if (task.completion_notes) {
+        msg += `\n\n📝 Notes: ${task.completion_notes}`;
+      }
+
+      // Add available actions
+      if (task.status === 'open' || task.status === 'in_progress') {
+        msg += '\n\n📌 Actions:';
+        msg += `\n• !complete #${task.id} - Mark done`;
+        msg += `\n• !cancel #${task.id} - Cancel`;
+        msg += `\n• !priority #${task.id} high - Set priority`;
+        msg += `\n• !assign #${task.id} @person - Reassign`;
+      } else if (task.status === 'done' || task.status === 'cancelled') {
+        msg += `\n\n📌 Use !reopen #${task.id} to reopen this task`;
+      }
+
+      return msg;
+    }
+
+    // Build content from args and/or quoted message
+    let content = args.trim();
+    let quotedContent = context.quotedText?.trim();
+    let rawContent = content;
+    let usedAI = false;
+
+    // Extract assignee from mentions
+    let assignedToUuid: string | undefined;
+    let assignedToName: string | undefined;
+    if (context.mentions && context.mentions.length > 0) {
       const firstMention = context.mentions[0];
       if (firstMention.uuid) {
         assignedToUuid = firstMention.uuid;
@@ -7077,17 +7762,552 @@ The invitees have been added to a new Signal group for this discussion.`;
       }
     }
 
-    const result = await this.breakoutManager.handleAnnotation(
-      context.groupId,
-      type,
-      args.trim(),
-      context.sourceUuid || context.sourceNumber,
-      context.sourceName,
-      assignedToUuid,
-      assignedToName
+    // If replying to a message, use quoted text as context
+    if (quotedContent) {
+      if (content) {
+        // User provided additional context: "!task @person <extra instructions>"
+        const combinedText = `${quotedContent}\n\nAdditional instructions: ${content}`;
+        rawContent = combinedText;
+        content = await this.extractTaskWithAI(combinedText, assignedToName);
+        usedAI = true;
+      } else {
+        // Just the quoted message - use AI to extract clean task
+        rawContent = quotedContent;
+        content = await this.extractTaskWithAI(quotedContent, assignedToName);
+        usedAI = true;
+      }
+    }
+
+    if (!content) {
+      return `❌ Please provide a task description.
+
+Usage:
+• !task @person Do the thing
+• !action @person Review the PR by Friday
+• Reply to a message with !task @person to convert it to a task`;
+    }
+
+    // Get breakout info if in a breakout room
+    let breakoutId: number | undefined;
+    let breakoutTopic: string | undefined;
+    if (this.breakoutManager && context.groupId) {
+      const breakout = await this.breakoutManager.getActiveBreakout(context.groupId);
+      if (breakout) {
+        breakoutId = breakout.id;
+        breakoutTopic = breakout.topic;
+      }
+    }
+
+    // Get group info
+    let groupName: string | undefined;
+    if (context.groupId) {
+      const group = await this.dbClient.getGroupById(context.groupId);
+      groupName = group?.name;
+    }
+
+    // Create the task in the database
+    try {
+      const task = await this.dbClient.createTask({
+        content,
+        rawContent: usedAI ? rawContent : undefined,
+        breakoutId,
+        groupId: context.groupId,
+        groupName,
+        createdByUuid: context.sourceUuid || context.sourceNumber,
+        createdByName: context.sourceName,
+        assignedToUuid,
+        assignedToName,
+        aiExtracted: usedAI,
+        sourceMessageTimestamp: context.timestamp,
+      });
+
+      // Also create breakout annotation if in a breakout
+      if (breakoutId && this.breakoutManager) {
+        await this.breakoutManager.handleAnnotation(
+          context.groupId!,
+          'action',
+          content,
+          context.sourceUuid || context.sourceNumber,
+          context.sourceName,
+          assignedToUuid,
+          assignedToName
+        );
+      }
+
+      // Send DM to assignee
+      if (assignedToUuid && this.bot) {
+        try {
+          const assignerName = context.sourceName || 'Someone';
+          const contextInfo = breakoutTopic
+            ? `Breakout: ${breakoutTopic}`
+            : groupName
+              ? `Group: ${groupName}`
+              : 'Direct Message';
+
+          const dmMessage = `📋 New Task Assigned
+
+From: ${assignerName}
+${contextInfo}
+
+Task: ${content}
+
+Reply to this message if you have questions.`;
+
+          await this.bot.sendMessage({
+            recipient: assignedToUuid,
+            message: dmMessage,
+          });
+          await this.dbClient.markTaskDmSent(task.id);
+          console.log(`✅ Sent task DM to ${assignedToName || assignedToUuid}`);
+        } catch (dmError) {
+          console.error('Failed to send task DM:', dmError);
+        }
+      }
+
+      // Build response
+      let response = `✅ Task #${task.id} created`;
+      if (assignedToName) {
+        response += ` and assigned to ${assignedToName}`;
+      }
+      response += `\n\n📋 ${content}`;
+
+      if (usedAI) {
+        response += '\n\n🤖 Task extracted by AI';
+      }
+
+      if (assignedToUuid) {
+        response += `\n\n📬 ${assignedToName || 'Assignee'} has been notified via DM.`;
+      }
+
+      return response;
+    } catch (error) {
+      console.error('Failed to create task:', error);
+      return '❌ Failed to create task. Please try again.';
+    }
+  }
+
+  /**
+   * !complete / !done - Mark a task as completed
+   *
+   * Usage:
+   * - !complete #123 (complete by task ID - most reliable)
+   * - Reply to a task message with !complete
+   * - !complete (marks most recent task assigned to you)
+   * - !complete <content match> (marks task matching text)
+   */
+  private async handleCompleteTask(args: string, context: CommandContext): Promise<string> {
+    const completedBy = context.sourceName || context.sourceUuid || 'Someone';
+    const completedByUuid = context.sourceUuid || context.sourceNumber;
+
+    // First try global tasks table
+    let task: any = null;
+
+    // Check for #ID syntax (e.g., "!complete #123" or "!complete 123")
+    const idMatch = args.trim().match(/^#?(\d+)$/);
+    if (idMatch) {
+      const taskId = parseInt(idMatch[1]);
+      task = await this.dbClient.getTaskById(taskId);
+      if (!task) {
+        return `❌ Task #${taskId} not found.`;
+      }
+      if (task.status === 'done') {
+        return `ℹ️ Task #${taskId} is already completed.`;
+      }
+      if (task.status === 'cancelled') {
+        return `ℹ️ Task #${taskId} was cancelled. Use !reopen #${taskId} first.`;
+      }
+    }
+
+    // If replying to a message, try to find the task from quoted text
+    if (!task && context.quotedText) {
+      task = await this.dbClient.findTaskByContent(
+        context.quotedText.substring(0, 50),
+        undefined,
+        context.groupId
+      );
+    }
+
+    // If args provided (not an ID), search for matching task
+    if (!task && args.trim() && !idMatch) {
+      task = await this.dbClient.findTaskByContent(
+        args.trim(),
+        completedByUuid,
+        context.groupId
+      );
+    }
+
+    // If no specific task found, get most recent task assigned to this user
+    if (!task && completedByUuid) {
+      task = await this.dbClient.getMostRecentOpenTask(completedByUuid, context.groupId);
+    }
+
+    if (task) {
+      await this.dbClient.updateTaskStatus(task.id, 'done', completedByUuid, completedBy);
+
+      // Notify the task creator if different from completer
+      if (task.created_by_uuid && task.created_by_uuid !== completedByUuid && this.bot) {
+        try {
+          const contextInfo = task.breakout_topic
+            ? `Breakout: ${task.breakout_topic}`
+            : task.group_name
+              ? `Group: ${task.group_name}`
+              : '';
+
+          await this.bot.sendMessage({
+            recipient: task.created_by_uuid,
+            message: `✅ Task completed by ${completedBy}!\n\nTask: ${task.content}${contextInfo ? `\n${contextInfo}` : ''}`,
+          });
+        } catch (e) {
+          console.error('Failed to notify task creator:', e);
+        }
+      }
+
+      return `✅ Task #${task.id} marked as complete!\n\nTask: ${task.content}\n\nCompleted by: ${completedBy}`;
+    }
+
+    // Fallback to breakout annotations if in a breakout room
+    if (context.groupId && this.breakoutManager) {
+      const breakout = await this.dbClient.getActiveBreakoutByGroupId(context.groupId);
+      if (breakout) {
+        // Use the old breakout-specific completion logic
+        return this.handleCompleteAction(args, context);
+      }
+    }
+
+    // List open tasks for this user
+    if (completedByUuid) {
+      const openTasks = await this.dbClient.getOpenTasksByAssignee(completedByUuid);
+
+      if (openTasks.length === 0) {
+        return '✅ You have no open tasks.';
+      }
+
+      let msg = '📋 Your open tasks:\n\n';
+      for (let i = 0; i < Math.min(openTasks.length, 5); i++) {
+        const t = openTasks[i];
+        msg += `${i + 1}. [#${t.id}] ${t.content}`;
+        if (t.group_name) msg += ` (${t.group_name})`;
+        msg += '\n';
+      }
+      msg += '\nUse !complete <text> to mark a specific task done.';
+      return msg;
+    }
+
+    return '❌ No task found to complete.';
+  }
+
+  /**
+   * !tasks / !mytasks - List tasks
+   *
+   * Usage:
+   * - !tasks - Show open tasks in current group
+   * - !mytasks - Show your assigned tasks
+   */
+  private async handleListTasks(args: string, context: CommandContext): Promise<string> {
+    const userUuid = context.sourceUuid || context.sourceNumber;
+
+    // Check if looking for personal tasks or group tasks
+    const isPersonal = args.toLowerCase().includes('my') || args.toLowerCase().includes('mine');
+
+    if (isPersonal || !context.groupId) {
+      // Show tasks assigned to this user
+      if (!userUuid) {
+        return '❌ Could not identify you.';
+      }
+
+      const tasks = await this.dbClient.getOpenTasksByAssignee(userUuid);
+
+      if (tasks.length === 0) {
+        return '✅ You have no open tasks assigned to you.';
+      }
+
+      let msg = `📋 Your open tasks (${tasks.length}):\n\n`;
+      for (let i = 0; i < Math.min(tasks.length, 10); i++) {
+        const t = tasks[i];
+        const priority = t.priority !== 'normal' ? ` [${t.priority.toUpperCase()}]` : '';
+        msg += `${i + 1}. [#${t.id}]${priority} ${t.content}`;
+        if (t.group_name) msg += `\n   📍 ${t.group_name}`;
+        if (t.breakout_topic) msg += ` → ${t.breakout_topic}`;
+        if (t.created_by_name) msg += `\n   👤 From: ${t.created_by_name}`;
+        msg += '\n\n';
+      }
+
+      if (tasks.length > 10) {
+        msg += `... and ${tasks.length - 10} more tasks.`;
+      }
+
+      msg += '\nUse !complete to mark tasks done.';
+      return msg;
+    }
+
+    // Show tasks in current group
+    const tasks = await this.dbClient.getOpenTasksByGroup(context.groupId);
+
+    if (tasks.length === 0) {
+      return '✅ No open tasks in this group.';
+    }
+
+    let msg = `📋 Open tasks in this group (${tasks.length}):\n\n`;
+    for (let i = 0; i < Math.min(tasks.length, 10); i++) {
+      const t = tasks[i];
+      msg += `${i + 1}. [#${t.id}] ${t.content}`;
+      if (t.assigned_to_name) msg += `\n   👤 Assigned to: ${t.assigned_to_name}`;
+      if (t.created_by_name) msg += ` | From: ${t.created_by_name}`;
+      msg += '\n\n';
+    }
+
+    if (tasks.length > 10) {
+      msg += `... and ${tasks.length - 10} more tasks.`;
+    }
+
+    return msg;
+  }
+
+  /**
+   * Change task status (!cancel, !start, !block, !reopen)
+   *
+   * Usage:
+   * - !cancel #123 - Cancel a task
+   * - !start #123 - Mark task as in progress
+   * - !block #123 reason - Mark task as blocked
+   * - !reopen #123 - Reopen a completed/cancelled task
+   */
+  private async handleTaskStatusChange(
+    newStatus: 'open' | 'in_progress' | 'done' | 'cancelled' | 'blocked',
+    args: string,
+    context: CommandContext
+  ): Promise<string> {
+    const userUuid = context.sourceUuid || context.sourceNumber;
+    const userName = context.sourceName || 'Someone';
+
+    // Parse task ID from args (e.g., "#123" or "123" or "#123 reason")
+    const idMatch = args.trim().match(/^#?(\d+)(?:\s+(.*))?$/);
+    if (!idMatch) {
+      const statusNames: Record<string, string> = {
+        'open': 'reopen',
+        'in_progress': 'start',
+        'cancelled': 'cancel',
+        'blocked': 'block',
+      };
+      return `❌ Please specify a task ID.\n\nUsage: !${statusNames[newStatus] || newStatus} #123`;
+    }
+
+    const taskId = parseInt(idMatch[1]);
+    const reason = idMatch[2]?.trim() || undefined;
+
+    const task = await this.dbClient.getTaskById(taskId);
+    if (!task) {
+      return `❌ Task #${taskId} not found.`;
+    }
+
+    // Validate status transitions
+    if (task.status === newStatus) {
+      const statusLabels: Record<string, string> = {
+        'open': 'already open',
+        'in_progress': 'already in progress',
+        'done': 'already completed',
+        'cancelled': 'already cancelled',
+        'blocked': 'already blocked',
+      };
+      return `ℹ️ Task #${taskId} is ${statusLabels[newStatus]}.`;
+    }
+
+    // Update the task status
+    await this.dbClient.updateTaskStatus(
+      taskId,
+      newStatus,
+      newStatus === 'done' ? userUuid : undefined,
+      newStatus === 'done' ? userName : undefined,
+      reason
     );
 
-    return result.message;
+    // Build response
+    const statusEmojis: Record<string, string> = {
+      'open': '🔄',
+      'in_progress': '▶️',
+      'done': '✅',
+      'cancelled': '❌',
+      'blocked': '🚫',
+    };
+    const statusLabels: Record<string, string> = {
+      'open': 'reopened',
+      'in_progress': 'started',
+      'done': 'completed',
+      'cancelled': 'cancelled',
+      'blocked': 'blocked',
+    };
+
+    let response = `${statusEmojis[newStatus]} Task #${taskId} ${statusLabels[newStatus]}!\n\n📋 ${task.content}`;
+
+    if (reason && newStatus === 'blocked') {
+      response += `\n\n🚧 Reason: ${reason}`;
+    }
+
+    // Notify relevant people
+    if (this.bot) {
+      // Notify assignee if different from actor
+      if (task.assigned_to_uuid && task.assigned_to_uuid !== userUuid) {
+        try {
+          await this.bot.sendMessage({
+            recipient: task.assigned_to_uuid,
+            message: `${statusEmojis[newStatus]} Task ${statusLabels[newStatus]} by ${userName}\n\nTask #${taskId}: ${task.content}${reason ? `\n\nReason: ${reason}` : ''}`,
+          });
+        } catch (e) {
+          console.error('Failed to notify assignee:', e);
+        }
+      }
+
+      // Notify creator if different from actor and assignee
+      if (task.created_by_uuid && task.created_by_uuid !== userUuid && task.created_by_uuid !== task.assigned_to_uuid) {
+        try {
+          await this.bot.sendMessage({
+            recipient: task.created_by_uuid,
+            message: `${statusEmojis[newStatus]} Task ${statusLabels[newStatus]} by ${userName}\n\nTask #${taskId}: ${task.content}${reason ? `\n\nReason: ${reason}` : ''}`,
+          });
+        } catch (e) {
+          console.error('Failed to notify creator:', e);
+        }
+      }
+    }
+
+    return response;
+  }
+
+  /**
+   * !priority - Set task priority
+   *
+   * Usage:
+   * - !priority #123 high - Set priority to high
+   * - !priority #123 urgent - Set priority to urgent
+   */
+  private async handleTaskPriority(args: string, context: CommandContext): Promise<string> {
+    // Parse: #123 high OR 123 urgent
+    const match = args.trim().match(/^#?(\d+)\s+(low|normal|high|urgent)$/i);
+    if (!match) {
+      return `❌ Please specify task ID and priority level.
+
+Usage: !priority #123 <level>
+
+Levels: low, normal, high, urgent`;
+    }
+
+    const taskId = parseInt(match[1]);
+    const priority = match[2].toLowerCase();
+
+    const task = await this.dbClient.getTaskById(taskId);
+    if (!task) {
+      return `❌ Task #${taskId} not found.`;
+    }
+
+    // Update priority in database
+    await this.dbClient.updateTaskPriority(taskId, priority);
+
+    const priorityEmojis: Record<string, string> = {
+      'low': '🔵',
+      'normal': '⚪',
+      'high': '🟠',
+      'urgent': '🔴',
+    };
+
+    return `${priorityEmojis[priority]} Task #${taskId} priority set to ${priority.toUpperCase()}\n\n📋 ${task.content}`;
+  }
+
+  /**
+   * !assign - Assign or reassign a task
+   *
+   * Usage:
+   * - !assign #123 @person - Assign task to person
+   * - !assign #123 - Remove assignment (unassign)
+   */
+  private async handleTaskAssign(args: string, context: CommandContext): Promise<string> {
+    const actorName = context.sourceName || 'Someone';
+
+    // Parse: #123 @mention OR just #123
+    const idMatch = args.trim().match(/^#?(\d+)/);
+    if (!idMatch) {
+      return `❌ Please specify a task ID.
+
+Usage:
+• !assign #123 @person - Assign to someone
+• !assign #123 - Remove assignment`;
+    }
+
+    const taskId = parseInt(idMatch[1]);
+
+    const task = await this.dbClient.getTaskById(taskId);
+    if (!task) {
+      return `❌ Task #${taskId} not found.`;
+    }
+
+    // Check for mention
+    let newAssigneeUuid: string | null = null;
+    let newAssigneeName: string | null = null;
+
+    if (context.mentions && context.mentions.length > 0) {
+      const mention = context.mentions[0];
+      if (mention.uuid) {
+        newAssigneeUuid = mention.uuid;
+        const names = await this.dbClient.getMemberDisplayNamesByUuids([mention.uuid]);
+        newAssigneeName = names.get(mention.uuid) || null;
+      }
+    }
+
+    const previousAssignee = task.assigned_to_name || task.assigned_to_uuid;
+
+    // Update assignment in database
+    await this.dbClient.updateTaskAssignment(taskId, newAssigneeUuid, newAssigneeName);
+
+    let response: string;
+
+    if (newAssigneeUuid) {
+      response = `✅ Task #${taskId} assigned to ${newAssigneeName || 'user'}\n\n📋 ${task.content}`;
+
+      // Notify the new assignee via DM
+      if (this.bot) {
+        try {
+          const contextInfo = task.group_name
+            ? `Group: ${task.group_name}`
+            : task.breakout_topic
+              ? `Breakout: ${task.breakout_topic}`
+              : '';
+
+          await this.bot.sendMessage({
+            recipient: newAssigneeUuid,
+            message: `📋 Task Assigned to You
+
+From: ${actorName}
+${contextInfo}
+
+Task #${taskId}: ${task.content}
+
+Reply to this message if you have questions.`,
+          });
+          response += `\n\n📬 ${newAssigneeName || 'Assignee'} has been notified via DM.`;
+        } catch (e) {
+          console.error('Failed to notify new assignee:', e);
+        }
+      }
+
+      // Notify previous assignee if different
+      if (previousAssignee && task.assigned_to_uuid !== newAssigneeUuid && this.bot) {
+        try {
+          await this.bot.sendMessage({
+            recipient: task.assigned_to_uuid,
+            message: `ℹ️ Task #${taskId} has been reassigned to ${newAssigneeName || 'someone else'} by ${actorName}.\n\n📋 ${task.content}`,
+          });
+        } catch (e) {
+          console.error('Failed to notify previous assignee:', e);
+        }
+      }
+    } else {
+      response = `✅ Task #${taskId} unassigned\n\n📋 ${task.content}`;
+
+      if (previousAssignee) {
+        response += `\n\nPreviously assigned to: ${previousAssignee}`;
+      }
+    }
+
+    return response;
   }
 
   /**
@@ -7121,6 +8341,283 @@ The invitees have been added to a new Signal group for this discussion.`;
     );
 
     return result.message;
+  }
+
+  // ============================================================================
+  // TODAY I LEARNED (TIL) HANDLERS
+  // ============================================================================
+
+  /**
+   * !til - Save something you learned today
+   *
+   * Usage:
+   * - Reply to a message with !til - saves that message as TIL
+   * - !til 5 - saves last 5 messages as a TIL
+   * - !til <text> - saves custom text as TIL
+   * - !til (no args, no reply) - shows recent TILs (same as !tils)
+   */
+  private async handleTil(args: string, context: CommandContext): Promise<string> {
+    if (!context.groupId) {
+      return '❌ TIL command must be used within a group.';
+    }
+
+    const trimmedArgs = args.trim();
+    const createdByUuid = context.sourceUuid || context.sourceNumber || 'unknown';
+    const createdByName = context.sourceName || 'Someone';
+
+    // Case 1: Reply to a message - save quoted message as TIL
+    if (context.quotedText) {
+      const originalMessages = context.quotedText;
+      const totalChars = originalMessages.length;
+      let aiSummary: string | undefined;
+
+      // Generate AI summary if content > 300 characters
+      if (totalChars > 300 && this.openai) {
+        try {
+          aiSummary = await this.generateTilSummary(originalMessages);
+        } catch (err) {
+          console.error('Failed to generate TIL summary:', err);
+        }
+      }
+
+      const tilId = await this.dbClient.createTil({
+        groupId: context.groupId,
+        createdByUuid,
+        createdByName,
+        originalMessages,
+        aiSummary,
+        messageCount: 1,
+        totalCharacters: totalChars,
+      });
+
+      let response = `💡 TIL #${tilId} saved!\n\n`;
+      response += `"${originalMessages.substring(0, 200)}${originalMessages.length > 200 ? '...' : ''}"\n\n`;
+      if (aiSummary) {
+        response += `Summary: ${aiSummary}\n\n`;
+      }
+      response += `— Learned by ${createdByName}`;
+
+      return response;
+    }
+
+    // Case 2: Number argument - get last N messages
+    const numMatch = trimmedArgs.match(/^(\d+)$/);
+    if (numMatch) {
+      const count = Math.min(parseInt(numMatch[1]), 20); // Max 20 messages
+      if (count < 1) {
+        return '❌ Please specify a positive number (1-20).';
+      }
+
+      // Get recent messages from the group
+      const recentMessages = await this.dbClient.getRecentMessages(context.groupId, count);
+      if (recentMessages.length === 0) {
+        return '❌ No recent messages found in this group.';
+      }
+
+      // Format messages into a transcript
+      const transcript = recentMessages.map((msg: any) => {
+        const name = msg.sender_name || msg.sender_number || 'Unknown';
+        const text = msg.message_text || '';
+        return `${name}: ${text}`;
+      }).join('\n');
+
+      const totalChars = transcript.length;
+      let aiSummary: string | undefined;
+
+      // Generate AI summary if content > 300 characters
+      if (totalChars > 300 && this.openai) {
+        try {
+          aiSummary = await this.generateTilSummary(transcript);
+        } catch (err) {
+          console.error('Failed to generate TIL summary:', err);
+        }
+      }
+
+      const tilId = await this.dbClient.createTil({
+        groupId: context.groupId,
+        createdByUuid,
+        createdByName,
+        originalMessages: transcript,
+        aiSummary,
+        messageCount: recentMessages.length,
+        totalCharacters: totalChars,
+      });
+
+      let response = `💡 TIL #${tilId} saved from ${recentMessages.length} message${recentMessages.length !== 1 ? 's' : ''}!\n\n`;
+      if (aiSummary) {
+        response += `Summary: ${aiSummary}\n\n`;
+      } else {
+        response += `Preview:\n"${transcript.substring(0, 200)}${transcript.length > 200 ? '...' : ''}"\n\n`;
+      }
+      response += `— Learned by ${createdByName}`;
+
+      return response;
+    }
+
+    // Case 3: Text argument - save custom TIL
+    if (trimmedArgs.length > 0) {
+      const originalMessages = trimmedArgs;
+      const totalChars = originalMessages.length;
+      let aiSummary: string | undefined;
+
+      // Generate AI summary if content > 300 characters
+      if (totalChars > 300 && this.openai) {
+        try {
+          aiSummary = await this.generateTilSummary(originalMessages);
+        } catch (err) {
+          console.error('Failed to generate TIL summary:', err);
+        }
+      }
+
+      const tilId = await this.dbClient.createTil({
+        groupId: context.groupId,
+        createdByUuid,
+        createdByName,
+        originalMessages,
+        aiSummary,
+        messageCount: 1,
+        totalCharacters: totalChars,
+      });
+
+      let response = `💡 TIL #${tilId} saved!\n\n`;
+      response += `"${originalMessages.substring(0, 200)}${originalMessages.length > 200 ? '...' : ''}"\n\n`;
+      if (aiSummary) {
+        response += `Summary: ${aiSummary}\n\n`;
+      }
+      response += `— Learned by ${createdByName}`;
+
+      return response;
+    }
+
+    // Case 4: No args, no reply - show recent TILs
+    return this.handleListTils('', context);
+  }
+
+  /**
+   * Generate AI summary for TIL content
+   */
+  private async generateTilSummary(content: string): Promise<string> {
+    if (!this.openai) {
+      throw new Error('OpenAI not configured');
+    }
+
+    const response = await this.openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a helpful assistant that creates concise summaries of things people learned. Create a 1-2 sentence summary that captures the key insight or learning. Be direct and informative. Do not use markdown formatting.',
+        },
+        {
+          role: 'user',
+          content: `Summarize this TIL (Today I Learned) in 1-2 sentences:\n\n${content}`,
+        },
+      ],
+      max_tokens: 150,
+      temperature: 0.3,
+    });
+
+    return response.choices[0]?.message?.content || '';
+  }
+
+  /**
+   * !tils / !listtil - List recent TILs
+   *
+   * Usage:
+   * - !tils - shows last 5 TILs
+   * - !tils 10 - shows last 10 TILs
+   * - !tils #<id> - shows specific TIL
+   * - !tils search <term> - search TILs
+   */
+  private async handleListTils(args: string, context: CommandContext): Promise<string> {
+    if (!context.groupId) {
+      return '❌ This command must be used within a group.';
+    }
+
+    const trimmedArgs = args.trim();
+
+    // Case 1: Show specific TIL by ID
+    const idMatch = trimmedArgs.match(/^#?(\d+)$/);
+    if (idMatch) {
+      const tilId = parseInt(idMatch[1]);
+      const til = await this.dbClient.getTilById(tilId);
+
+      if (!til) {
+        return `❌ TIL #${tilId} not found.`;
+      }
+
+      if (til.group_id !== context.groupId) {
+        return `❌ TIL #${tilId} is from a different group.`;
+      }
+
+      let response = `💡 TIL #${til.id}\n\n`;
+      response += `${til.original_messages}\n\n`;
+      if (til.ai_summary) {
+        response += `Summary: ${til.ai_summary}\n\n`;
+      }
+      response += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+      response += `Learned by: ${til.created_by_name || 'Unknown'}\n`;
+      response += `Date: ${new Date(til.created_at).toLocaleDateString()}\n`;
+      response += `Messages: ${til.message_count} | Characters: ${til.total_characters}`;
+
+      return response;
+    }
+
+    // Case 2: Search TILs
+    if (trimmedArgs.toLowerCase().startsWith('search ')) {
+      const searchTerm = trimmedArgs.substring(7).trim();
+      if (searchTerm.length < 2) {
+        return '❌ Search term must be at least 2 characters.';
+      }
+
+      const tils = await this.dbClient.searchTils(context.groupId, searchTerm, 10);
+
+      if (tils.length === 0) {
+        return `❌ No TILs found matching "${searchTerm}".`;
+      }
+
+      let response = `🔍 Found ${tils.length} TIL${tils.length !== 1 ? 's' : ''} matching "${searchTerm}":\n\n`;
+
+      for (const til of tils) {
+        const preview = til.ai_summary || til.original_messages.substring(0, 80);
+        const date = new Date(til.created_at).toLocaleDateString();
+        response += `#${til.id} [${date}] ${til.created_by_name || 'Unknown'}:\n`;
+        response += `  ${preview}${preview.length >= 80 ? '...' : ''}\n\n`;
+      }
+
+      response += `Use !tils #<id> to view full TIL`;
+
+      return response;
+    }
+
+    // Case 3: List recent TILs (default or with count)
+    let limit = 5;
+    const countMatch = trimmedArgs.match(/^(\d+)$/);
+    if (countMatch) {
+      limit = Math.min(parseInt(countMatch[1]), 20);
+    }
+
+    const tils = await this.dbClient.getTilsForGroup(context.groupId, limit);
+    const totalCount = await this.dbClient.getTilCount(context.groupId);
+
+    if (tils.length === 0) {
+      return '💡 No TILs saved yet in this group.\n\nUse !til to save something you learned:\n• Reply to a message with !til\n• !til 5 (save last 5 messages)\n• !til <your learning>';
+    }
+
+    let response = `💡 Recent TILs (${tils.length} of ${totalCount})\n\n`;
+
+    for (const til of tils) {
+      const preview = til.ai_summary || til.original_messages.substring(0, 80);
+      const date = new Date(til.created_at).toLocaleDateString();
+      response += `#${til.id} [${date}] ${til.created_by_name || 'Unknown'}:\n`;
+      response += `  ${preview}${preview.length >= 80 ? '...' : ''}\n\n`;
+    }
+
+    response += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    response += `!tils #<id> - view full TIL\n`;
+    response += `!tils search <term> - search TILs`;
+
+    return response;
   }
 
   /**

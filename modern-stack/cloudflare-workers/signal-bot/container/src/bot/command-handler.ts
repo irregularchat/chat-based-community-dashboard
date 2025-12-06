@@ -19,7 +19,11 @@ import {
   fetchArticles,
   generateSearchQueries,
   WikiSearchResult,
+  getKeywordResultsForHybrid,
+  getWikiIndex,
+  fetchArticleContent,
 } from '../utils/wiki-search.js';
+import { WikiEmbeddingsManager } from '../utils/wiki-embeddings.js';
 import {
   organizeFile,
   getDirectoryForGroup,
@@ -157,6 +161,7 @@ export class CommandHandler {
   private bot: any | null = null; // SignalBot instance for accessing bot methods
   private announcementHandler: AnnouncementHandler | null = null;
   private breakoutManager: BreakoutManager | null = null;
+  private wikiEmbeddings: WikiEmbeddingsManager | null = null;
 
   constructor(config: BotConfig, dbClient: PostgresClient) {
     this.config = config;
@@ -187,6 +192,14 @@ export class CommandHandler {
       console.log('🚀 Breakout room manager initialized (with AI summaries)');
     } else {
       console.log('🚀 Breakout room manager initialized (no AI - missing OPENAI_API_KEY)');
+    }
+
+    // Initialize wiki embeddings manager for semantic search
+    this.wikiEmbeddings = new WikiEmbeddingsManager(this.dbClient, this.config.openAiApiKey);
+    if (this.wikiEmbeddings.isEnabled()) {
+      console.log('📚 Wiki embeddings manager initialized (semantic search enabled)');
+    } else {
+      console.log('📚 Wiki embeddings manager initialized (no AI - keyword search only)');
     }
   }
 
@@ -470,6 +483,12 @@ export class CommandHandler {
       case '!wa':
         return this.handleWikiAsk(args, context);
 
+      case '!wikiindex':
+        return this.handleWikiIndex(context);
+
+      case '!wikistats':
+        return this.handleWikiStats();
+
       case '!forum':
         return this.handleForum();
 
@@ -682,6 +701,7 @@ export class CommandHandler {
         '  !clearroom confirm - Remove all non-admins from current group',
         '  !createuser @user email - Create SSO account for mentioned user',
         '  !createuser email name - Create SSO account with name',
+        '  !accountinvite [hours] [-c 1] - Create SSO invite link',
         '',
         '📢 Announcements:',
         '  !announce [groups] [-t time] [-dm] message',
@@ -3641,12 +3661,47 @@ Format:
     const question = args.trim();
 
     try {
-      // Step 1: Generate search queries and find relevant articles
+      // Step 1: Use hybrid search (keyword + semantic) if embeddings available
       console.log(`🤖 WikiAsk: "${question}"`);
-      const queries = generateSearchQueries(question);
-      const searchResults = await parallelSearch(queries, 5);
 
-      if (searchResults.length === 0) {
+      let articleUrls: string[] = [];
+      let searchMethod = 'keyword';
+
+      // Try hybrid search if wiki embeddings are enabled
+      if (this.wikiEmbeddings?.isEnabled()) {
+        try {
+          // Get keyword results
+          const keywordResults = await getKeywordResultsForHybrid(question, 10);
+
+          // Run hybrid search
+          const hybridResults = await this.wikiEmbeddings.hybridSearch(keywordResults, question, 5);
+
+          if (hybridResults.length > 0) {
+            // Get articles from hybrid results
+            const wikiIndex = await getWikiIndex();
+            const articleMap = new Map(wikiIndex.map(a => [a.filePath, a]));
+
+            articleUrls = hybridResults
+              .map(r => articleMap.get(r.filePath)?.url)
+              .filter((url): url is string => !!url);
+
+            searchMethod = 'hybrid';
+            console.log(`📚 Hybrid search: ${hybridResults.length} results (${hybridResults.filter(r => r.source === 'both').length} from both)`);
+          }
+        } catch (error) {
+          console.error('Hybrid search failed, falling back to keyword:', error);
+        }
+      }
+
+      // Fallback to keyword-only search
+      if (articleUrls.length === 0) {
+        const queries = generateSearchQueries(question);
+        const searchResults = await parallelSearch(queries, 5);
+        articleUrls = searchResults.slice(0, 3).map(r => r.article.url);
+        searchMethod = 'keyword';
+      }
+
+      if (articleUrls.length === 0) {
         // No wiki results - still try to answer with AI but note no wiki context
         const response = await this.openai.chat.completions.create({
           model: 'gpt-4o-mini',
@@ -3674,31 +3729,37 @@ Format:
         );
       }
 
-      // Step 2: Fetch content from top 2-3 articles
-      const articleUrls = searchResults.slice(0, 3).map(r => r.article.url);
+      // Step 2: Fetch content from top articles
       console.log(`📄 Fetching ${articleUrls.length} wiki articles for context...`);
       const articles = await fetchArticles(articleUrls);
 
-      // Step 3: Build context from wiki articles
+      // Step 3: Build context from wiki articles with better formatting
       let wikiContext = '';
       const sources: string[] = [];
 
       for (const article of articles) {
-        // Use excerpt (max 500 chars per article) to stay within token limits
-        wikiContext += `\n\n--- ${article.title} ---\n${article.excerpt}`;
+        // Use full excerpt for better context
+        wikiContext += `\n\n=== ARTICLE: ${article.title} ===\n${article.excerpt}`;
         sources.push(`• ${article.title}: ${article.url}`);
       }
 
-      // Step 4: Ask AI with wiki context
+      // Step 4: Ask AI with wiki context - improved prompt engineering
       const response = await this.openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
           {
             role: 'system',
-            content: `You are a helpful assistant for the IrregularChat community wiki (Irregularpedia).
-Answer the user's question based on the wiki content provided below.
-Be concise (2-3 paragraphs max).
-If the wiki content doesn't fully answer the question, say so and provide what you can.
+            content: `You are a knowledgeable assistant for the IrregularChat community wiki (Irregularpedia).
+Your role is to answer questions using the wiki content provided.
+
+INSTRUCTIONS:
+1. Answer based ONLY on the wiki content when relevant information exists
+2. Be helpful and provide actionable information
+3. If the wiki has related content but doesn't directly answer, explain what's available and suggest next steps
+4. If no relevant content exists, say so clearly and offer general guidance
+5. Keep answers concise but complete (2-4 paragraphs max)
+6. Use bullet points for lists when appropriate
+7. Reference specific articles when helpful
 
 WIKI CONTENT:${wikiContext}`,
           },
@@ -3707,8 +3768,8 @@ WIKI CONTENT:${wikiContext}`,
             content: question,
           },
         ],
-        max_tokens: 600,
-        temperature: 0.7,
+        max_tokens: 800,
+        temperature: 0.5,  // Lower temperature for more factual responses
       });
 
       const answer = response.choices[0]?.message?.content || 'No response generated';
@@ -3728,6 +3789,80 @@ WIKI CONTENT:${wikiContext}`,
     } catch (error) {
       console.error('Error in handleWikiAsk:', error);
       return `❌ WikiAsk failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  /**
+   * !wikiindex - Index all wiki articles for semantic search (admin only)
+   */
+  private async handleWikiIndex(context: CommandContext): Promise<string> {
+    // Admin only
+    if (!this.isAdmin(context.sourceNumber)) {
+      return this.formatForSignal('❌ Admin only command');
+    }
+
+    if (!this.wikiEmbeddings) {
+      return this.formatForSignal('❌ Wiki embeddings not initialized');
+    }
+
+    if (!this.wikiEmbeddings.isEnabled()) {
+      return this.formatForSignal(
+        '❌ Semantic search disabled\n\n' +
+        'OpenAI API key required for embeddings.\n' +
+        'Set OPENAI_API_KEY environment variable.'
+      );
+    }
+
+    try {
+      // Start indexing (this takes a while)
+      // Send initial message (best effort - don't wait)
+      if (this.bot && context.groupId) {
+        this.bot.sendMessage({
+          groupId: context.groupId,
+          message: '📚 Starting wiki index... This may take a few minutes.',
+        }).catch((err: Error) => console.error('Failed to send index start message:', err));
+      }
+
+      const result = await this.wikiEmbeddings.indexAllArticles();
+
+      return this.formatForSignal(
+        '✅ Wiki Index Complete\n\n' +
+        `📊 Articles indexed: ${result.indexed}\n` +
+        `❌ Errors: ${result.errors}\n\n` +
+        'Semantic search now available via !wikiask'
+      );
+    } catch (error) {
+      console.error('Error in handleWikiIndex:', error);
+      return `❌ Index failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
+  /**
+   * !wikistats - Show wiki embedding statistics
+   */
+  private async handleWikiStats(): Promise<string> {
+    if (!this.wikiEmbeddings) {
+      return this.formatForSignal('❌ Wiki embeddings not initialized');
+    }
+
+    try {
+      const stats = await this.wikiEmbeddings.getStats();
+
+      const lastIndexStr = stats.lastIndex
+        ? new Date(stats.lastIndex).toLocaleDateString()
+        : 'Never';
+
+      return this.formatForSignal(
+        '📊 Wiki Embedding Stats\n\n' +
+        `📚 Articles indexed: ${stats.articlesIndexed}\n` +
+        `🔢 Total embeddings: ${stats.totalEmbeddings}\n` +
+        `📅 Last full index: ${lastIndexStr}\n` +
+        `🔍 Semantic search: ${this.wikiEmbeddings.isEnabled() ? 'Enabled' : 'Disabled'}\n\n` +
+        'Use !wikiindex to reindex (admin only)'
+      );
+    } catch (error) {
+      console.error('Error in handleWikiStats:', error);
+      return `❌ Failed to get stats: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
   }
 

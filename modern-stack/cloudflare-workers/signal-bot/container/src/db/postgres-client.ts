@@ -64,6 +64,8 @@ export class PostgresClient {
     'breakout_room_members',
     'breakout_room_messages',
     'breakout_annotations',
+    // TIL table
+    'today_i_learned',
   ]);
 
   constructor(config: DatabaseConfig) {
@@ -247,6 +249,7 @@ export class PostgresClient {
 
   /**
    * Save question
+   * Can optionally link to a breakout room if the question was asked inside one
    */
   async saveQuestion(question: {
     questionId: number;
@@ -256,6 +259,8 @@ export class PostgresClient {
     askerPhone: string;
     groupId: string;
     groupName?: string;
+    breakoutId?: number;
+    annotationId?: number;
   }): Promise<void> {
     await this.insert('q_and_a_questions', {
       id: this.generateId(),
@@ -270,6 +275,8 @@ export class PostgresClient {
       answer_count: 0,
       solution_count: 0,
       timestamp: Date.now(),
+      breakout_id: question.breakoutId || null,
+      annotation_id: question.annotationId || null,
     });
   }
 
@@ -326,6 +333,35 @@ export class PostgresClient {
       question,
       answers: answersResult.rows,
     };
+  }
+
+  /**
+   * Get the most recent unanswered question in a group
+   */
+  async getMostRecentUnansweredQuestion(groupId: string): Promise<any | null> {
+    const result = await this.pool.query(`
+      SELECT q.*
+      FROM q_and_a_questions q
+      WHERE q.group_id = $1
+        AND q.solved = false
+      ORDER BY q.timestamp DESC
+      LIMIT 1
+    `, [groupId]);
+
+    return result.rows.length > 0 ? result.rows[0] : null;
+  }
+
+  /**
+   * Get count of unanswered questions in a group
+   */
+  async getUnansweredQuestionCount(groupId: string): Promise<number> {
+    const result = await this.pool.query(`
+      SELECT COUNT(*) as count
+      FROM q_and_a_questions
+      WHERE group_id = $1 AND solved = false
+    `, [groupId]);
+
+    return parseInt(result.rows[0]?.count || '0');
   }
 
   /**
@@ -775,6 +811,19 @@ export class PostgresClient {
   // ============================================================================
 
   /**
+   * Get a signal group by ID
+   */
+  async getGroupById(groupId: string): Promise<{ id: string; name: string; description?: string } | null> {
+    const result = await this.pool.query(`
+      SELECT id, name, description
+      FROM signal_groups
+      WHERE id = $1
+    `, [groupId]);
+
+    return result.rows.length > 0 ? result.rows[0] : null;
+  }
+
+  /**
    * Get members of a specific group
    */
   async getGroupMembers(groupId: string): Promise<{
@@ -825,6 +874,48 @@ export class PostgresClient {
       }
     }
     return displayNames;
+  }
+
+  /**
+   * Find a member by their display name or profile name
+   * Used for looking up action creators when forwarding DM replies
+   * Returns the member's uuid and name info if found
+   */
+  async findMemberByName(name: string): Promise<{ uuid: string; display_name?: string; profile_name?: string } | null> {
+    if (!name || name.trim() === '') {
+      return null;
+    }
+
+    const cleanName = name.trim();
+
+    // Search by exact match first, then fuzzy match
+    const result = await this.pool.query(`
+      SELECT uuid, display_name, profile_name
+      FROM signal_members
+      WHERE display_name = $1
+         OR profile_name = $1
+         OR LOWER(display_name) = LOWER($1)
+         OR LOWER(profile_name) = LOWER($1)
+      ORDER BY
+        CASE
+          WHEN display_name = $1 THEN 1
+          WHEN profile_name = $1 THEN 2
+          WHEN LOWER(display_name) = LOWER($1) THEN 3
+          WHEN LOWER(profile_name) = LOWER($1) THEN 4
+          ELSE 5
+        END
+      LIMIT 1
+    `, [cleanName]);
+
+    if (result.rows.length === 0) {
+      return null;
+    }
+
+    return {
+      uuid: result.rows[0].uuid,
+      display_name: result.rows[0].display_name,
+      profile_name: result.rows[0].profile_name,
+    };
   }
 
   /**
@@ -1170,6 +1261,33 @@ export class PostgresClient {
   }
 
   /**
+   * Update breakout room with announcement message info for emoji-to-join
+   */
+  async updateBreakoutAnnouncement(breakoutId: number, announcementGroupId: string, announcementTimestamp: number): Promise<void> {
+    await this.pool.query(
+      'UPDATE breakout_rooms SET announcement_group_id = $1, announcement_timestamp = $2 WHERE id = $3',
+      [announcementGroupId, announcementTimestamp, breakoutId]
+    );
+  }
+
+  /**
+   * Find active breakout room by announcement message (for emoji-to-join)
+   * @param groupId - The group where the announcement was posted
+   * @param timestamp - The timestamp of the message being reacted to
+   */
+  async getBreakoutByAnnouncement(groupId: string, timestamp: number): Promise<any | null> {
+    const result = await this.pool.query(`
+      SELECT * FROM breakout_rooms
+      WHERE announcement_group_id = $1
+        AND announcement_timestamp = $2
+        AND status = 'active'
+      LIMIT 1
+    `, [groupId, timestamp]);
+
+    return result.rows[0] || null;
+  }
+
+  /**
    * Get active breakout room by Signal group ID
    */
   async getActiveBreakoutByGroupId(signalGroupId: string): Promise<any | null> {
@@ -1262,6 +1380,18 @@ export class PostgresClient {
   }
 
   /**
+   * Get a specific member from a breakout room
+   */
+  async getBreakoutMember(breakoutId: number, memberUuid: string): Promise<any | null> {
+    const result = await this.pool.query(`
+      SELECT * FROM breakout_room_members
+      WHERE breakout_id = $1 AND member_uuid = $2
+    `, [breakoutId, memberUuid]);
+
+    return result.rows[0] || null;
+  }
+
+  /**
    * Record a message in breakout room
    */
   async recordBreakoutMessage(data: {
@@ -1275,12 +1405,19 @@ export class PostgresClient {
     isReply?: boolean;
     replyToMessageId?: string;
     quotedText?: string;
+    urls?: string[];  // Optional URLs extracted from message
   }): Promise<number> {
+    // Build extracted_entities if URLs are provided
+    const extractedEntities = data.urls && data.urls.length > 0
+      ? { urls: data.urls, people: [], dates: [] }
+      : null;
+
     const result = await this.pool.query(`
       INSERT INTO breakout_room_messages (
         breakout_id, signal_message_id, sender_uuid, sender_name, message_text,
-        message_type, timestamp, is_reply, reply_to_message_id, quoted_text
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        message_type, timestamp, is_reply, reply_to_message_id, quoted_text,
+        extracted_entities
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING id
     `, [
       data.breakoutId,
@@ -1292,7 +1429,8 @@ export class PostgresClient {
       data.timestamp,
       data.isReply || false,
       data.replyToMessageId || null,
-      data.quotedText || null
+      data.quotedText || null,
+      extractedEntities ? JSON.stringify(extractedEntities) : null
     ]);
 
     // Update member engagement
@@ -1302,10 +1440,68 @@ export class PostgresClient {
     await this.pool.query(`
       UPDATE breakout_rooms
       SET total_messages = total_messages + 1
-      WHERE id = $1
+      WHERE id = $1::integer
     `, [data.breakoutId]);
 
+    // If URLs were shared, add them to resources_shared_json
+    if (data.urls && data.urls.length > 0) {
+      await this.addBreakoutResources(data.breakoutId, data.urls, data.senderName || 'Unknown', data.messageText);
+    }
+
     return result.rows[0].id;
+  }
+
+  /**
+   * Add URLs to breakout room's resources_shared_json
+   */
+  async addBreakoutResources(
+    breakoutId: number,
+    urls: string[],
+    sharedBy: string,
+    context: string
+  ): Promise<void> {
+    // Get existing resources
+    const existing = await this.pool.query(`
+      SELECT resources_shared_json FROM breakout_rooms WHERE id = $1::integer
+    `, [breakoutId]);
+
+    const currentResources = existing.rows[0]?.resources_shared_json || [];
+
+    // Add new resources (avoiding duplicates)
+    const existingUrls = new Set(currentResources.map((r: any) => r.url));
+    const newResources = urls
+      .filter(url => !existingUrls.has(url))
+      .map(url => ({
+        url,
+        shared_by: sharedBy,
+        context: context.length > 200 ? context.substring(0, 200) + '...' : context,
+        shared_at: new Date().toISOString()
+      }));
+
+    if (newResources.length > 0) {
+      const updatedResources = [...currentResources, ...newResources];
+      await this.pool.query(`
+        UPDATE breakout_rooms
+        SET resources_shared_json = $2::jsonb
+        WHERE id = $1::integer
+      `, [breakoutId, JSON.stringify(updatedResources)]);
+    }
+  }
+
+  /**
+   * Get all resources shared in a breakout room
+   */
+  async getBreakoutResources(breakoutId: number): Promise<Array<{
+    url: string;
+    shared_by: string;
+    context: string;
+    shared_at: string;
+  }>> {
+    const result = await this.pool.query(`
+      SELECT resources_shared_json FROM breakout_rooms WHERE id = $1::integer
+    `, [breakoutId]);
+
+    return result.rows[0]?.resources_shared_json || [];
   }
 
   /**
@@ -1425,13 +1621,13 @@ export class PostgresClient {
     const result = await this.pool.query(`
       UPDATE breakout_rooms
       SET
-        expires_at = expires_at + ($2 || ' minutes')::interval,
-        duration_minutes = duration_minutes + $2,
+        expires_at = expires_at + ($2::text || ' minutes')::interval,
+        duration_minutes = duration_minutes + $2::integer,
         extension_count = extension_count + 1,
         warning_15min_sent = false,
         warning_5min_sent = false,
         warning_1min_sent = false
-      WHERE id = $1
+      WHERE id = $1::integer
       RETURNING expires_at
     `, [breakoutId, additionalMinutes]);
 
@@ -1490,6 +1686,16 @@ export class PostgresClient {
 
     const result = await this.pool.query(sql, params);
     return result.rows;
+  }
+
+  /**
+   * Update breakout annotation status
+   */
+  async updateBreakoutAnnotationStatus(annotationId: number, status: 'open' | 'done' | 'cancelled'): Promise<void> {
+    await this.pool.query(
+      'UPDATE breakout_annotations SET status = $1 WHERE id = $2',
+      [status, annotationId]
+    );
   }
 
   /**
@@ -1618,8 +1824,10 @@ export class PostgresClient {
 
   /**
    * Post breakout summary to Discourse
+   * @param breakoutId - The ID of the breakout room
+   * @param richReport - Optional pre-generated rich report content (from AI analyzer)
    */
-  async postBreakoutToDiscourse(breakoutId: number): Promise<{
+  async postBreakoutToDiscourse(breakoutId: number, richReport?: string): Promise<{
     success: boolean;
     topicId?: number;
     topicUrl?: string;
@@ -1632,12 +1840,6 @@ export class PostgresClient {
         return { success: false, error: 'Breakout room not found' };
       }
 
-      // Get members
-      const members = await this.getBreakoutMembers(breakoutId);
-
-      // Get annotations
-      const annotations = await this.getBreakoutAnnotations(breakoutId);
-
       // Check Discourse configuration
       const discourseUrl = process.env.DISCOURSE_URL || process.env.DISCOURSE_API_URL;
       const discourseApiKey = process.env.DISCOURSE_API_KEY;
@@ -1648,9 +1850,19 @@ export class PostgresClient {
         return { success: false, error: 'Discourse not configured' };
       }
 
+      // Use rich report if provided, otherwise build legacy post
+      let postBody: string;
+      if (richReport) {
+        postBody = richReport;
+      } else {
+        // Legacy fallback: build post from database data
+        const members = await this.getBreakoutMembers(breakoutId);
+        const annotations = await this.getBreakoutAnnotations(breakoutId);
+        postBody = this.buildBreakoutDiscoursePost(room, members, annotations);
+      }
+
       // Build the Discourse post
       const title = `Breakout: ${sanitizeForDiscourse(room.topic)}`;
-      let postBody = this.buildBreakoutDiscoursePost(room, members, annotations);
 
       // Post to Discourse
       const createTopicUrl = `${discourseUrl.replace(/\/$/, '')}/posts.json`;
@@ -1782,16 +1994,32 @@ export class PostgresClient {
       post += `\n`;
     }
 
-    // Open Questions
-    const questions = annotations.filter(a => a.annotation_type === 'question');
+    // Open Questions (not yet answered)
+    const openQuestions = annotations.filter(a => a.annotation_type === 'question' && a.status !== 'answered');
     const questionsJson = room.open_questions_json ? JSON.parse(room.open_questions_json) : [];
-    if (questions.length > 0 || questionsJson.length > 0) {
+    if (openQuestions.length > 0 || questionsJson.length > 0) {
       post += `## Open Questions\n\n`;
-      for (const q of questions) {
-        post += `- ❓ ${sanitizeForDiscourse(q.content)}\n`;
+      for (const q of openQuestions) {
+        post += `- ❓ ${sanitizeForDiscourse(q.content)}`;
+        if (q.created_by_name) post += ` *(asked by ${sanitizeForDiscourse(q.created_by_name)})*`;
+        post += `\n`;
       }
       for (const q of questionsJson) {
         post += `- ❓ ${sanitizeForDiscourse(q.question)}\n`;
+      }
+      post += `\n`;
+    }
+
+    // Answered Questions
+    const answeredQuestions = annotations.filter(a => a.annotation_type === 'question' && a.status === 'answered');
+    if (answeredQuestions.length > 0) {
+      post += `## Answered Questions\n\n`;
+      for (const q of answeredQuestions) {
+        post += `- ✅ ${sanitizeForDiscourse(q.content)}`;
+        if (q.answered_by_name) {
+          post += ` *(answered by ${sanitizeForDiscourse(q.answered_by_name)})*`;
+        }
+        post += `\n`;
       }
       post += `\n`;
     }
@@ -1834,6 +2062,400 @@ export class PostgresClient {
     }
 
     return post;
+  }
+
+  /**
+   * Update breakout annotation as answered (for questions)
+   * Links the !answer command to the question annotation in breakouts
+   */
+  async updateBreakoutAnnotationAnswered(
+    annotationId: number,
+    answererUuid: string,
+    answererName?: string
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE breakout_annotations
+       SET status = 'answered',
+           answered_at = NOW(),
+           answered_by_uuid = $2,
+           answered_by_name = $3
+       WHERE id = $1`,
+      [annotationId, answererUuid, answererName]
+    );
+  }
+
+  /**
+   * Get breakout annotation by ID
+   */
+  async getBreakoutAnnotationById(annotationId: number): Promise<any | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM breakout_annotations WHERE id = $1',
+      [annotationId]
+    );
+    return result.rows[0] || null;
+  }
+
+  /**
+   * Find question by breakout annotation ID
+   * Used to link !answer back to the original question
+   */
+  async getQuestionByAnnotationId(annotationId: number): Promise<any | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM q_and_a_questions WHERE annotation_id = $1',
+      [annotationId]
+    );
+    return result.rows[0] || null;
+  }
+
+  // ============================================================================
+  // GLOBAL TASK METHODS
+  // ============================================================================
+
+  /**
+   * Create a new task
+   */
+  async createTask(data: {
+    content: string;
+    rawContent?: string;
+    breakoutId?: number;
+    groupId?: string;
+    groupName?: string;
+    createdByUuid: string;
+    createdByName?: string;
+    createdByPhone?: string;
+    assignedToUuid?: string;
+    assignedToName?: string;
+    assignedToPhone?: string;
+    priority?: string;
+    dueDate?: Date;
+    aiExtracted?: boolean;
+    aiConfidence?: number;
+    sourceMessageTimestamp?: number;
+  }): Promise<{ id: number; content: string }> {
+    const result = await this.pool.query(`
+      INSERT INTO tasks (
+        content, raw_content, breakout_id, group_id, group_name,
+        created_by_uuid, created_by_name, created_by_phone,
+        assigned_to_uuid, assigned_to_name, assigned_to_phone,
+        priority, due_date, ai_extracted, ai_confidence, source_message_timestamp
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      RETURNING id, content
+    `, [
+      data.content,
+      data.rawContent || null,
+      data.breakoutId || null,
+      data.groupId || null,
+      data.groupName || null,
+      data.createdByUuid,
+      data.createdByName || null,
+      data.createdByPhone || null,
+      data.assignedToUuid || null,
+      data.assignedToName || null,
+      data.assignedToPhone || null,
+      data.priority || 'normal',
+      data.dueDate || null,
+      data.aiExtracted || false,
+      data.aiConfidence || null,
+      data.sourceMessageTimestamp || null,
+    ]);
+
+    return result.rows[0];
+  }
+
+  /**
+   * Get task by ID
+   */
+  async getTaskById(id: number): Promise<any | null> {
+    const result = await this.pool.query(`
+      SELECT * FROM tasks WHERE id = $1
+    `, [id]);
+
+    return result.rows.length > 0 ? result.rows[0] : null;
+  }
+
+  /**
+   * Update task status
+   */
+  async updateTaskStatus(
+    id: number,
+    status: 'open' | 'in_progress' | 'done' | 'cancelled' | 'blocked',
+    completedByUuid?: string,
+    completedByName?: string,
+    completionNotes?: string
+  ): Promise<boolean> {
+    // Use explicit ::text casts to prevent "inconsistent types deduced for parameter $2" error
+    const result = await this.pool.query(`
+      UPDATE tasks
+      SET status = $2::text,
+          completed_at = CASE WHEN $2::text = 'done' THEN NOW() ELSE NULL END,
+          completed_by_uuid = CASE WHEN $2::text = 'done' THEN $3 ELSE NULL END,
+          completed_by_name = CASE WHEN $2::text = 'done' THEN $4 ELSE NULL END,
+          completion_notes = CASE WHEN $2::text = 'done' THEN $5 ELSE completion_notes END,
+          updated_at = NOW()
+      WHERE id = $1
+      RETURNING id
+    `, [id, status, completedByUuid || null, completedByName || null, completionNotes || null]);
+
+    return result.rowCount !== null && result.rowCount > 0;
+  }
+
+  /**
+   * Mark task DM as sent
+   */
+  async markTaskDmSent(id: number): Promise<void> {
+    await this.pool.query(`
+      UPDATE tasks
+      SET dm_sent_to_assignee = true, dm_sent_at = NOW()
+      WHERE id = $1
+    `, [id]);
+  }
+
+  /**
+   * Get open tasks assigned to a user
+   */
+  async getOpenTasksByAssignee(assigneeUuid: string): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT t.*, g.name as group_display_name, b.topic as breakout_topic
+      FROM tasks t
+      LEFT JOIN signal_groups g ON t.group_id = g.id
+      LEFT JOIN breakout_rooms b ON t.breakout_id = b.id
+      WHERE t.assigned_to_uuid = $1
+        AND t.status IN ('open', 'in_progress')
+      ORDER BY
+        CASE t.priority
+          WHEN 'urgent' THEN 1
+          WHEN 'high' THEN 2
+          WHEN 'normal' THEN 3
+          WHEN 'low' THEN 4
+          ELSE 5
+        END,
+        t.due_date NULLS LAST,
+        t.created_at DESC
+    `, [assigneeUuid]);
+
+    return result.rows;
+  }
+
+  /**
+   * Get tasks created by a user
+   */
+  async getTasksByCreator(creatorUuid: string, limit: number = 20): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT t.*, g.name as group_display_name, b.topic as breakout_topic
+      FROM tasks t
+      LEFT JOIN signal_groups g ON t.group_id = g.id
+      LEFT JOIN breakout_rooms b ON t.breakout_id = b.id
+      WHERE t.created_by_uuid = $1
+      ORDER BY t.created_at DESC
+      LIMIT $2
+    `, [creatorUuid, limit]);
+
+    return result.rows;
+  }
+
+  /**
+   * Get open tasks in a group
+   */
+  async getOpenTasksByGroup(groupId: string): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT t.*, b.topic as breakout_topic
+      FROM tasks t
+      LEFT JOIN breakout_rooms b ON t.breakout_id = b.id
+      WHERE t.group_id = $1
+        AND t.status IN ('open', 'in_progress')
+      ORDER BY t.created_at DESC
+    `, [groupId]);
+
+    return result.rows;
+  }
+
+  /**
+   * Find task by content match (for !complete command)
+   */
+  async findTaskByContent(
+    searchText: string,
+    assigneeUuid?: string,
+    groupId?: string
+  ): Promise<any | null> {
+    let query = `
+      SELECT * FROM tasks
+      WHERE status IN ('open', 'in_progress')
+        AND LOWER(content) LIKE $1
+    `;
+    const params: any[] = [`%${searchText.toLowerCase()}%`];
+
+    if (assigneeUuid) {
+      params.push(assigneeUuid);
+      query += ` AND assigned_to_uuid = $${params.length}`;
+    }
+
+    if (groupId) {
+      params.push(groupId);
+      query += ` AND group_id = $${params.length}`;
+    }
+
+    query += ` ORDER BY created_at DESC LIMIT 1`;
+
+    const result = await this.pool.query(query, params);
+    return result.rows.length > 0 ? result.rows[0] : null;
+  }
+
+  /**
+   * Get most recent open task assigned to user (for !complete without args)
+   */
+  async getMostRecentOpenTask(assigneeUuid: string, groupId?: string): Promise<any | null> {
+    let query = `
+      SELECT * FROM tasks
+      WHERE assigned_to_uuid = $1
+        AND status IN ('open', 'in_progress')
+    `;
+    const params: any[] = [assigneeUuid];
+
+    if (groupId) {
+      params.push(groupId);
+      query += ` AND group_id = $${params.length}`;
+    }
+
+    query += ` ORDER BY created_at DESC LIMIT 1`;
+
+    const result = await this.pool.query(query, params);
+    return result.rows.length > 0 ? result.rows[0] : null;
+  }
+
+  /**
+   * Update task priority
+   */
+  async updateTaskPriority(taskId: number, priority: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE tasks SET priority = $2, updated_at = NOW() WHERE id = $1`,
+      [taskId, priority]
+    );
+  }
+
+  /**
+   * Update task assignment
+   */
+  async updateTaskAssignment(
+    taskId: number,
+    assigneeUuid: string | null,
+    assigneeName: string | null
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE tasks
+       SET assigned_to_uuid = $2,
+           assigned_to_name = $3,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [taskId, assigneeUuid, assigneeName]
+    );
+  }
+
+  // ============================================================================
+  // TODAY I LEARNED (TIL) METHODS
+  // ============================================================================
+
+  /**
+   * Create a new TIL entry
+   */
+  async createTil(data: {
+    groupId: string;
+    createdByUuid: string;
+    createdByName?: string;
+    originalMessages: string;
+    aiSummary?: string;
+    messageCount: number;
+    totalCharacters: number;
+    tags?: string[];
+  }): Promise<number> {
+    const result = await this.pool.query(`
+      INSERT INTO today_i_learned (
+        group_id, created_by_uuid, created_by_name, original_messages,
+        ai_summary, message_count, total_characters, tags
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING id
+    `, [
+      data.groupId,
+      data.createdByUuid,
+      data.createdByName || null,
+      data.originalMessages,
+      data.aiSummary || null,
+      data.messageCount,
+      data.totalCharacters,
+      data.tags || null
+    ]);
+
+    return result.rows[0].id;
+  }
+
+  /**
+   * Get TILs for a group
+   */
+  async getTilsForGroup(groupId: string, limit: number = 10): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM today_i_learned
+      WHERE group_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2
+    `, [groupId, limit]);
+
+    return result.rows;
+  }
+
+  /**
+   * Get a specific TIL by ID
+   */
+  async getTilById(id: number): Promise<any | null> {
+    const result = await this.pool.query(`
+      SELECT * FROM today_i_learned
+      WHERE id = $1
+    `, [id]);
+
+    return result.rows.length > 0 ? result.rows[0] : null;
+  }
+
+  /**
+   * Get TILs by user
+   */
+  async getTilsByUser(userUuid: string, limit: number = 10): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM today_i_learned
+      WHERE created_by_uuid = $1
+      ORDER BY created_at DESC
+      LIMIT $2
+    `, [userUuid, limit]);
+
+    return result.rows;
+  }
+
+  /**
+   * Search TILs by content
+   */
+  async searchTils(groupId: string, searchTerm: string, limit: number = 10): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM today_i_learned
+      WHERE group_id = $1
+        AND (
+          original_messages ILIKE $2
+          OR ai_summary ILIKE $2
+          OR $3 = ANY(tags)
+        )
+      ORDER BY created_at DESC
+      LIMIT $4
+    `, [groupId, `%${searchTerm}%`, searchTerm.toLowerCase(), limit]);
+
+    return result.rows;
+  }
+
+  /**
+   * Get TIL count for a group
+   */
+  async getTilCount(groupId: string): Promise<number> {
+    const result = await this.pool.query(`
+      SELECT COUNT(*) as count FROM today_i_learned
+      WHERE group_id = $1
+    `, [groupId]);
+
+    return parseInt(result.rows[0]?.count || '0');
   }
 
   /**

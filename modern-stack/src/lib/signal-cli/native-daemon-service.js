@@ -49,6 +49,12 @@ class NativeSignalBotService extends EventEmitter {
     this.messageHistory = new Map(); // groupId -> array of recent messages
     this.maxHistoryPerGroup = 50; // Keep last 50 messages per group
     
+    // Duplicate message prevention
+    this.processedMessages = new Set(); // Track processed message IDs
+    this.messageTimestamps = new Map(); // Track message timestamps for deduplication
+    this.duplicateDetectionWindow = 30000; // 30 seconds window for duplicate detection
+    this.instanceId = Math.random().toString(36).substring(7); // Unique instance ID
+    
     // Thread context tracking for AI provider selection
     this.threadContext = new Map(); // messageId -> {provider: 'openai'|'localai', timestamp, groupId}
     this.userAiPreference = new Map(); // groupId:userId -> {provider: 'openai'|'localai', timestamp, lastMessage}
@@ -79,11 +85,25 @@ class NativeSignalBotService extends EventEmitter {
       failedPosts: 0,
       dailyCounts: new Map() // date -> count
     };
+
+    // Repository Processing System
+    this.processedRepositories = new Map(); // url -> {timestamp, repoData, groupId, messageId}
+    this.repositoryStats = {
+      totalProcessed: 0,
+      platforms: new Map(), // platform -> count  
+      languages: new Map(), // language -> count
+      dailyCounts: new Map() // date -> count
+    };
     
     // Custom news domains management
     this.customNewsDomains = new Set();
     this.newsDomainsFile = path.join(this.dataDir, 'news-domains.json');
     this.loadCustomNewsDomains();
+    
+    // Security Watch List for domains
+    this.watchedDomains = new Map(); // domain/tld -> country
+    this.watchedDomainsFile = path.join(this.dataDir, 'watched-domains.json');
+    this.initializeWatchedDomains();
     
     // Initialize PDF processor
     this.pdfProcessor = new PDFProcessor();
@@ -93,6 +113,33 @@ class NativeSignalBotService extends EventEmitter {
     this.discourseCategories = new Map(); // category id -> category object
     this.discourseTagsLoaded = false;
     this.discourseCategoriesLoaded = false;
+
+    // Security: Input validation patterns
+    this.validation = {
+      // Regex patterns for input validation
+      patterns: {
+        phoneNumber: /^\+[1-9]\d{1,14}$/,
+        uuid: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+        groupId: /^(group\.)?[A-Za-z0-9+/=]+$/,
+        url: /^https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)$/,
+        domain: /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/,
+        command: /^[a-zA-Z][a-zA-Z0-9_-]*$/,
+        alphanumeric: /^[a-zA-Z0-9\s-_.]+$/,
+        safeString: /^[a-zA-Z0-9\s\-_.!?@#$%&*+=()\[\]{};:,<>|~`'"\\\/]+$/
+      },
+      
+      // Maximum lengths for different input types
+      maxLengths: {
+        command: 50,
+        argument: 500,
+        message: 4096,
+        url: 2048,
+        phoneNumber: 20,
+        uuid: 40,
+        domain: 255,
+        groupId: 200
+      }
+    };
     
     // Onboarding/Request System
     this.pendingRequests = new Map(); // phoneNumber -> {timestamp, groupId, requester, timeoutId}
@@ -130,6 +177,442 @@ class NativeSignalBotService extends EventEmitter {
     console.log(`📱 Phone: ${this.phoneNumber}`);
     console.log(`📂 Data Dir: ${this.dataDir}`);
     console.log(`🔌 Socket: ${this.socketPath}`);
+    console.log(`🔒 Instance ID: ${this.instanceId} (for duplicate prevention)`);
+    
+    // Start cleanup interval for duplicate detection
+    this.startCleanupInterval();
+  }
+
+  // Duplicate message detection method
+  isDuplicateMessage(envelope) {
+    if (!envelope || !envelope.timestamp) return false;
+    
+    // Create a unique message ID from envelope data
+    const messageId = this.createMessageId(envelope);
+    
+    // Check if we've already processed this message
+    if (this.processedMessages.has(messageId)) {
+      return true;
+    }
+    
+    // Check for recent messages with same content (temporal deduplication)
+    const now = Date.now();
+    const messageKey = `${envelope.sourceNumber || envelope.sourceUuid}_${envelope.dataMessage?.message || ''}`;
+    
+    if (this.messageTimestamps.has(messageKey)) {
+      const lastSeen = this.messageTimestamps.get(messageKey);
+      if (now - lastSeen < this.duplicateDetectionWindow) {
+        console.log(`⚠️ [Instance ${this.instanceId}] Temporal duplicate detected within ${this.duplicateDetectionWindow}ms`);
+        return true;
+      }
+    }
+    
+    // Mark message as processed
+    this.processedMessages.add(messageId);
+    this.messageTimestamps.set(messageKey, now);
+    
+    return false;
+  }
+
+  // Create unique message ID
+  createMessageId(envelope) {
+    return `${envelope.timestamp}_${envelope.sourceNumber || envelope.sourceUuid}_${envelope.dataMessage?.message?.substring(0, 50) || 'reaction'}`;
+  }
+
+  // Cleanup old entries to prevent memory leaks
+  startCleanupInterval() {
+    setInterval(() => {
+      const now = Date.now();
+      const cutoff = now - this.duplicateDetectionWindow * 2; // Keep twice the detection window
+      
+      // Clean up old timestamps
+      for (const [key, timestamp] of this.messageTimestamps.entries()) {
+        if (timestamp < cutoff) {
+          this.messageTimestamps.delete(key);
+        }
+      }
+      
+      // Clean up old processed message IDs (keep only recent ones)
+      if (this.processedMessages.size > 1000) {
+        // Clear half when we reach 1000 entries
+        const entries = Array.from(this.processedMessages);
+        this.processedMessages.clear();
+        entries.slice(-500).forEach(id => this.processedMessages.add(id));
+      }
+    }, 60000); // Clean every minute
+  }
+
+  // Security: Input validation methods
+  validateInput(input, type, fieldName = 'input') {
+    // Basic null/undefined check
+    if (input === null || input === undefined) {
+      return { valid: false, error: `${fieldName} is required` };
+    }
+
+    // Convert to string if not already
+    const inputStr = String(input);
+
+    // Check maximum length
+    const maxLength = this.validation.maxLengths[type];
+    if (maxLength && inputStr.length > maxLength) {
+      return { 
+        valid: false, 
+        error: `${fieldName} exceeds maximum length of ${maxLength} characters` 
+      };
+    }
+
+    // Check pattern based on type
+    const pattern = this.validation.patterns[type];
+    if (pattern && !pattern.test(inputStr)) {
+      return { 
+        valid: false, 
+        error: `${fieldName} contains invalid characters or format for type ${type}` 
+      };
+    }
+
+    return { valid: true, sanitized: inputStr };
+  }
+
+  // Security: Sanitize command arguments
+  sanitizeCommandArgs(args) {
+    if (!Array.isArray(args)) return [];
+    
+    return args.map((arg, index) => {
+      if (typeof arg !== 'string') {
+        arg = String(arg);
+      }
+      
+      // Trim whitespace
+      arg = arg.trim();
+      
+      // Check for dangerous characters and patterns
+      const dangerousPatterns = [
+        /[;&|`$(){}[\]\\<>]/g,  // Shell metacharacters
+        /\.\.\//g,              // Directory traversal
+        /--/g,                  // Command injection attempts
+        /^\-/g,                 // Leading dashes (flags)
+      ];
+
+      let sanitized = arg;
+      for (const pattern of dangerousPatterns) {
+        sanitized = sanitized.replace(pattern, '');
+      }
+
+      // Validate length
+      if (sanitized.length > this.validation.maxLengths.argument) {
+        sanitized = sanitized.substring(0, this.validation.maxLengths.argument);
+      }
+
+      return sanitized;
+    }).filter(arg => arg.length > 0); // Remove empty arguments
+  }
+
+  // Security: Validate and sanitize command input
+  validateCommand(commandName, args, context) {
+    const validationResults = [];
+
+    // Validate command name
+    const commandValidation = this.validateInput(commandName, 'command', 'command name');
+    if (!commandValidation.valid) {
+      return { valid: false, errors: [commandValidation.error] };
+    }
+
+    // Validate user identifiers
+    if (context.sourceNumber) {
+      const phoneValidation = this.validateInput(context.sourceNumber, 'phoneNumber', 'source phone');
+      if (!phoneValidation.valid) {
+        validationResults.push(phoneValidation.error);
+      }
+    }
+
+    if (context.sourceUuid) {
+      const uuidValidation = this.validateInput(context.sourceUuid, 'uuid', 'source UUID');
+      if (!uuidValidation.valid) {
+        validationResults.push(uuidValidation.error);
+      }
+    }
+
+    if (context.groupId) {
+      const groupValidation = this.validateInput(context.groupId, 'groupId', 'group ID');
+      if (!groupValidation.valid) {
+        validationResults.push(groupValidation.error);
+      }
+    }
+
+    // Sanitize and validate arguments
+    const sanitizedArgs = this.sanitizeCommandArgs(args);
+
+    // Check for suspicious patterns in arguments
+    for (const [index, arg] of sanitizedArgs.entries()) {
+      // Check for URL arguments
+      if (arg.startsWith('http://') || arg.startsWith('https://')) {
+        const urlValidation = this.validateInput(arg, 'url', `argument ${index + 1}`);
+        if (!urlValidation.valid) {
+          validationResults.push(urlValidation.error);
+        }
+      }
+      // Check for phone number arguments
+      else if (arg.startsWith('+')) {
+        const phoneValidation = this.validateInput(arg, 'phoneNumber', `argument ${index + 1}`);
+        if (!phoneValidation.valid) {
+          validationResults.push(phoneValidation.error);
+        }
+      }
+      // General string validation for other arguments
+      else {
+        const safeValidation = this.validateInput(arg, 'safeString', `argument ${index + 1}`);
+        if (!safeValidation.valid) {
+          validationResults.push(safeValidation.error);
+        }
+      }
+    }
+
+    if (validationResults.length > 0) {
+      return { valid: false, errors: validationResults };
+    }
+
+    return { 
+      valid: true, 
+      sanitizedCommand: commandValidation.sanitized,
+      sanitizedArgs: sanitizedArgs 
+    };
+  }
+
+  // Security: Rate limiting per user
+  checkRateLimit(identifier, commandName) {
+    const now = Date.now();
+    const rateLimitKey = `${identifier}:${commandName}`;
+    
+    if (!this.rateLimits) {
+      this.rateLimits = new Map();
+    }
+
+    const userRateData = this.rateLimits.get(rateLimitKey) || { count: 0, resetTime: now + 60000 };
+
+    // Reset counter if time window has passed
+    if (now >= userRateData.resetTime) {
+      userRateData.count = 0;
+      userRateData.resetTime = now + 60000; // 1 minute window
+    }
+
+    // Check limits based on command type
+    const limits = {
+      'ai': 5,      // 5 AI requests per minute
+      'lai': 5,     // 5 Local AI requests per minute
+      'addto': 3,   // 3 group additions per minute
+      'newsadd': 2, // 2 news domain additions per minute
+      'default': 10 // 10 commands per minute default
+    };
+
+    const limit = limits[commandName] || limits.default;
+
+    if (userRateData.count >= limit) {
+      const remainingTime = Math.ceil((userRateData.resetTime - now) / 1000);
+      return { 
+        allowed: false, 
+        error: `Rate limit exceeded. Please wait ${remainingTime} seconds before using !${commandName} again.` 
+      };
+    }
+
+    // Increment counter
+    userRateData.count++;
+    this.rateLimits.set(rateLimitKey, userRateData);
+
+    return { allowed: true };
+  }
+
+  // Security: Secure Prisma operation wrappers
+  async secureCreateRecord(model, data, userContext = {}) {
+    try {
+      // Validate user context for authorization
+      if (userContext.requireAuth && !this.isAdmin(userContext.sourceUuid || userContext.sourceNumber)) {
+        throw new Error('Unauthorized: Admin privileges required');
+      }
+
+      // Sanitize data before database operation
+      const sanitizedData = this.sanitizeDatabaseData(data);
+
+      // Apply record size limits
+      if (JSON.stringify(sanitizedData).length > 100000) { // 100KB limit
+        throw new Error('Record size exceeds maximum allowed limit');
+      }
+
+      return await this.prisma[model].create({
+        data: sanitizedData
+      });
+    } catch (error) {
+      await this.logError('DATABASE_CREATE', error, {
+        model,
+        dataKeys: Object.keys(data),
+        userContext: userContext.sourceNumber || userContext.sourceUuid
+      });
+      throw error;
+    }
+  }
+
+  async secureUpdateRecord(model, where, data, userContext = {}) {
+    try {
+      // Validate user context for authorization
+      if (userContext.requireAuth && !this.isAdmin(userContext.sourceUuid || userContext.sourceNumber)) {
+        throw new Error('Unauthorized: Admin privileges required');
+      }
+
+      // Sanitize where clause and data
+      const sanitizedWhere = this.sanitizeDatabaseWhere(where);
+      const sanitizedData = this.sanitizeDatabaseData(data);
+
+      return await this.prisma[model].update({
+        where: sanitizedWhere,
+        data: sanitizedData
+      });
+    } catch (error) {
+      await this.logError('DATABASE_UPDATE', error, {
+        model,
+        whereKeys: Object.keys(where),
+        dataKeys: Object.keys(data),
+        userContext: userContext.sourceNumber || userContext.sourceUuid
+      });
+      throw error;
+    }
+  }
+
+  async secureQueryRecords(model, query = {}, userContext = {}) {
+    try {
+      // Apply security limits to queries
+      const secureQuery = {
+        ...query,
+        take: Math.min(query.take || 100, 1000), // Maximum 1000 records
+      };
+
+      // Add user-specific filters if needed
+      if (userContext.restrictToUser) {
+        secureQuery.where = {
+          ...secureQuery.where,
+          userId: userContext.sourceNumber || userContext.sourceUuid
+        };
+      }
+
+      // Sanitize where clause
+      if (secureQuery.where) {
+        secureQuery.where = this.sanitizeDatabaseWhere(secureQuery.where);
+      }
+
+      return await this.prisma[model].findMany(secureQuery);
+    } catch (error) {
+      await this.logError('DATABASE_QUERY', error, {
+        model,
+        queryKeys: Object.keys(query),
+        userContext: userContext.sourceNumber || userContext.sourceUuid
+      });
+      throw error;
+    }
+  }
+
+  // Security: Sanitize data for database operations
+  sanitizeDatabaseData(data) {
+    const sanitized = {};
+    
+    for (const [key, value] of Object.entries(data)) {
+      if (value === null || value === undefined) {
+        sanitized[key] = value;
+        continue;
+      }
+
+      // Sanitize strings
+      if (typeof value === 'string') {
+        // Prevent SQL injection by sanitizing dangerous characters
+        let sanitizedValue = value.replace(/[<>'";\(\)]/g, ''); // Remove dangerous characters
+        
+        // Truncate to prevent oversized strings
+        const maxLengths = {
+          'command': 50,
+          'args': 500,
+          'message': 4096,
+          'url': 2048,
+          'domain': 255,
+          'errorMessage': 2000,
+          'groupId': 200,
+          'userId': 50,
+          'userName': 100
+        };
+        
+        const maxLength = maxLengths[key] || 1000;
+        sanitizedValue = sanitizedValue.substring(0, maxLength);
+        
+        sanitized[key] = sanitizedValue;
+      }
+      // Handle numbers
+      else if (typeof value === 'number') {
+        // Prevent integer overflow and ensure valid range
+        if (Number.isInteger(value)) {
+          sanitized[key] = Math.max(-2147483648, Math.min(2147483647, value));
+        } else {
+          sanitized[key] = Number(value.toFixed(10)); // Limit decimal precision
+        }
+      }
+      // Handle booleans
+      else if (typeof value === 'boolean') {
+        sanitized[key] = value;
+      }
+      // Handle dates
+      else if (value instanceof Date) {
+        // Ensure valid date range
+        if (value.getFullYear() > 1900 && value.getFullYear() < 2100) {
+          sanitized[key] = value;
+        } else {
+          sanitized[key] = new Date(); // Default to current date if invalid
+        }
+      }
+      // Handle BigInt for timestamps
+      else if (typeof value === 'bigint') {
+        sanitized[key] = value;
+      }
+      // Handle objects (JSON)
+      else if (typeof value === 'object' && !Array.isArray(value)) {
+        // Recursively sanitize nested objects, but limit depth
+        sanitized[key] = this.sanitizeDatabaseData(value);
+      }
+      // Skip arrays and other complex types for security
+      else {
+        console.warn(`Skipping sanitization of complex data type for key ${key}:`, typeof value);
+      }
+    }
+    
+    return sanitized;
+  }
+
+  // Security: Sanitize WHERE clauses to prevent injection
+  sanitizeDatabaseWhere(where) {
+    if (!where || typeof where !== 'object') {
+      return {};
+    }
+
+    const sanitized = {};
+    
+    for (const [key, value] of Object.entries(where)) {
+      // Skip if key contains dangerous characters
+      if (typeof key === 'string' && /[^a-zA-Z0-9_.]/.test(key)) {
+        console.warn(`Skipping dangerous WHERE key: ${key}`);
+        continue;
+      }
+
+      // Handle different value types
+      if (typeof value === 'string') {
+        // Sanitize string values
+        sanitized[key] = value.replace(/[<>'";\(\)]/g, '').substring(0, 1000);
+      } else if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+        sanitized[key] = value;
+      } else if (value instanceof Date) {
+        sanitized[key] = value;
+      } else if (typeof value === 'object' && value !== null) {
+        // Handle complex where conditions (like { gte: value })
+        if ('gte' in value || 'lte' in value || 'gt' in value || 'lt' in value || 'not' in value) {
+          sanitized[key] = this.sanitizeDatabaseWhere(value);
+        }
+      }
+    }
+    
+    return sanitized;
   }
 
   loadPlugins() {
@@ -177,15 +660,16 @@ class NativeSignalBotService extends EventEmitter {
       { name: 'logs', description: 'View system logs (admin)', handler: this.handleLogs.bind(this), adminOnly: true },
       { name: 'backup', description: 'Create data backup (admin)', handler: this.handleBackup.bind(this), adminOnly: true },
       { name: 'maintenance', description: 'Toggle maintenance mode (admin)', handler: this.handleMaintenance.bind(this), adminOnly: true },
-      { name: 'bypass', description: 'Authentication bypass (admin)', handler: this.handleBypass.bind(this), adminOnly: true },
+      { name: 'bypass', description: 'Authentication bypass', handler: this.handleBypass.bind(this) },
       
-      // Analytics Commands (6) - Admin Only
+      // Analytics Commands (7) - Admin Only
       { name: 'stats', description: 'Bot usage statistics', handler: this.handleStats.bind(this), adminOnly: true },
       { name: 'topcommands', description: 'Most used commands', handler: this.handleTopCommands.bind(this), adminOnly: true },
       { name: 'topusers', description: 'Most active users', handler: this.handleTopUsers.bind(this), adminOnly: true },
       { name: 'errors', description: 'Recent bot errors', handler: this.handleErrors.bind(this), adminOnly: true },
       { name: 'newsstats', description: 'News link statistics', handler: this.handleNewsStats.bind(this), adminOnly: true },
-      { name: 'sentiment', description: 'Bot feedback sentiment', handler: this.handleSentiment.bind(this), adminOnly: true },
+      { name: 'feedback', description: 'Bot feedback sentiment', handler: this.handleSentiment.bind(this), adminOnly: true },
+      { name: 'watchdomain', description: 'Manage watched security domains', handler: this.handleWatchedDomains.bind(this), adminOnly: true },
       
       // Utility Plugin Commands (12) 
       { name: 'weather', description: 'Get weather information', handler: this.handleWeather.bind(this) },
@@ -199,6 +683,7 @@ class NativeSignalBotService extends EventEmitter {
       { name: 'random', description: 'Random number', handler: this.handleRandom.bind(this) },
       { name: 'flip', description: 'Flip coin', handler: this.handleFlip.bind(this) },
       { name: 'wayback', description: 'Archive.org wayback lookup', handler: this.handleWayback.bind(this) },
+      { name: 'archive', description: 'Web.archive.org save and lookup', handler: this.handleArchive.bind(this) },
       
       // Forum Plugin Commands (3)
       { name: 'fpost', description: 'Post article to forum', handler: this.handleFPost.bind(this) },
@@ -275,15 +760,15 @@ class NativeSignalBotService extends EventEmitter {
       name: 'help',
       description: 'Show available commands',
       execute: async (context) => {
-        const isAdmin = this.isAdmin(context.sourceNumber, context.groupId);
+        const isAdmin = this.isAdmin(context.sourceUuid || context.sourceNumber, context.groupId);
         
         // Regular user commands
         const userCommandsByCategory = {
-          '🔧 Core': ['help', 'ping', 'ai', 'lai', 'summarize', 'tldr', 'zeroeth', 'cleaner'],
+          '🔧 Core': ['help', 'ping', 'ai', 'lai', 'summarize', 'zeroeth', 'cleaner'],
           '❓ Q&A': ['q', 'question', 'questions', 'answer', 'solved'],
           '👥 Community': ['groups', 'join', 'invite'],
+          '📰 News & Repos': ['news', 'newsadd', 'newslist', 'newsremove', 'repo', 'wayback', 'archive', 'bypass', 'tldr'],
           '📚 Information': ['wiki', 'forum', 'events', 'faq', 'docs', 'links'],
-          '👤 User Management': ['profile'],
           '📄 Forum': ['fpost', 'flatest', 'fsearch', 'categories'],
           '📋 PDF Processing': ['pdf'],
           '👋 Onboarding': ['request']
@@ -291,11 +776,11 @@ class NativeSignalBotService extends EventEmitter {
         
         // Admin-only commands
         const adminCommandsByCategory = {
-          '🔐 Admin': ['removeuser', 'addto', 'gtg', 'sngtg', 'pending', 'bypass'],
-          '📊 Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'sentiment']
+          '🔐 Admin': ['removeuser', 'addto', 'gtg', 'sngtg', 'pending'],
+          '📊 Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'feedback', 'watchdomain']
         };
         
-        let helpText = `🤖 **Signal Bot Commands**\n\n`;
+        let helpText = `🤖 Signal Bot Commands\n\n`;
         
         // Show user commands
         for (const [category, cmds] of Object.entries(userCommandsByCategory)) {
@@ -346,6 +831,12 @@ class NativeSignalBotService extends EventEmitter {
           });
           console.log(`🔄 Thread context: User ${context.sender} selected OpenAI`);
           
+          // Phase 1: Command Registry Access
+          const commandRegistry = this.getCommandRegistry(context);
+          
+          // Phase 2: Database Query Capabilities
+          const dbContext = await this.getAIDatabaseContext(userQuery, context);
+          
           // Zeroeth Law Implementation - Context Awareness
           let contextInfo = '';
           let responseMode = 'general'; // 'command', 'community', or 'general'
@@ -359,7 +850,11 @@ class NativeSignalBotService extends EventEmitter {
           
           if (isCommandQuery) {
             responseMode = 'command';
-            contextInfo = `User is asking about bot commands. Available commands: ${Array.from(this.plugins.keys()).join(', ')}`;
+            // Enhanced command context with descriptions and permissions
+            const commandList = commandRegistry.available.map(cmd => 
+              `!${cmd.name} - ${cmd.description}${cmd.adminOnly ? ' (admin)' : ''}${cmd.moderatorOnly ? ' (mod)' : ''}`
+            ).join('\n');
+            contextInfo = `User is asking about bot commands. They ${commandRegistry.isAdmin ? 'ARE an admin' : commandRegistry.isModerator ? 'ARE a moderator' : 'are NOT admin/moderator'}.\n\nAvailable commands:\n${commandList}`;
           }
           
           // 2. Check if asking about IrregularChat community
@@ -372,44 +867,115 @@ class NativeSignalBotService extends EventEmitter {
           }
           
           // 3. Check if AI should execute a command internally
-          // Map of keywords to command names for internal execution
-          const commandMappings = [
-            { keywords: ['show me commands', 'list commands', 'what commands', 'available commands', 'help'], command: 'help' },
-            { keywords: ['what groups', 'list groups', 'show groups', 'available rooms'], command: 'groups' },
-            { keywords: ['rules', 'laws', 'zeroeth', 'zeroth', 'principles'], command: 'zeroeth' },
-            { keywords: ['wiki', 'documentation', 'docs'], command: 'wiki' },
-            { keywords: ['forum posts', 'latest posts', 'discussions'], command: 'flatest' },
-            { keywords: ['events', 'meetups', 'meetings'], command: 'events' },
-            { keywords: ['members', 'who is in', 'list members'], command: 'members' },
-            { keywords: ['faq', 'frequently asked'], command: 'faq' },
-            { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' }
+          // First check for commands that need arguments
+          const argumentPatterns = [
+            { pattern: /search (?:the )?wiki (?:for )?(.+)/i, command: 'wiki', extractArgs: (m) => [m[1]] },
+            { pattern: /wiki (?:search )?(?:for )?(.+)/i, command: 'wiki', extractArgs: (m) => [m[1]] },
+            { pattern: /search (?:the )?forum (?:for )?(.+)/i, command: 'fsearch', extractArgs: (m) => [m[1]] },
+            { pattern: /forum search (?:for )?(.+)/i, command: 'fsearch', extractArgs: (m) => [m[1]] },
+            { pattern: /weather (?:in |for )?(.+)/i, command: 'weather', extractArgs: (m) => [m[1]] },
+            { pattern: /translate (.+) to (.+)/i, command: 'translate', extractArgs: (m) => [m[1], m[2]] },
+            { pattern: /answer question (?:#)?(\d+) with (.+)/i, command: 'answer', extractArgs: (m) => [m[1], m[2]] },
+            { pattern: /add (.+) to (?:group )?(.+)/i, command: 'addto', extractArgs: (m) => [m[2], m[1]] }
           ];
           
-          // Check if query matches any command mapping
-          for (const mapping of commandMappings) {
-            const matches = mapping.keywords.some(kw => userQuery.toLowerCase().includes(kw));
-            if (matches) {
-              // Execute the command internally
-              const cmd = this.plugins.get(mapping.command);
-              if (cmd) {
-                const cmdContext = { ...context, args: [] };
-                const result = await cmd.execute(cmdContext);
-                return `${getAiPrefix(responseMode)} ${result}`;
+          // Check for argument-based patterns first
+          for (const argPattern of argumentPatterns) {
+            const argMatch = userQuery.match(argPattern.pattern);
+            if (argMatch) {
+              const cmdArgs = argPattern.extractArgs(argMatch);
+              const execResult = await this.safeCommandExecutor(argPattern.command, cmdArgs, context, 'openai');
+              
+              if (execResult.success) {
+                return `${getAiPrefix(responseMode)} ${execResult.result}`;
+              } else if (execResult.needsPermission) {
+                return `${getAiPrefix(responseMode)} That command requires ${execResult.needsPermission} privileges which you don't have.`;
+              } else if (!execResult.success && execResult.message.includes('not found')) {
+                // Command not found, continue to other patterns
+              } else {
+                return `${getAiPrefix(responseMode)} ${execResult.message}`;
               }
             }
           }
           
-          // Also check for direct command execution requests
-          const commandPattern = /^(run|execute|do|perform) !?(\w+)(?:\s+(.*))?$/i;
+          // Map of keywords to command names for simple commands (no arguments)
+          const commandMappings = [
+            { keywords: ['show me commands', 'list commands', 'what commands', 'available commands', 'help'], command: 'help' },
+            { keywords: ['what groups', 'list groups', 'show groups', 'available rooms'], command: 'groups' },
+            { keywords: ['rules', 'laws', 'zeroeth', 'zeroth', 'principles'], command: 'zeroeth' },
+            { keywords: ['forum post', 'latest post', 'recent post', 'forum discussion', 'latest forum', 'recent forum', 'new forum'], command: 'flatest' },
+            { keywords: ['events', 'meetups', 'meetings', 'upcoming event', 'next event'], command: 'events' },
+            { keywords: ['members', 'who is in', 'list members', 'group members'], command: 'members' },
+            { keywords: ['faq', 'frequently asked', 'common questions'], command: 'faq' },
+            { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' },
+            { keywords: ['tell me a joke', 'funny'], command: 'joke' },
+            { keywords: ['unanswered', 'pending question', 'open question'], command: 'pending' },
+            { keywords: ['bookmark', 'saved link', 'stored link'], command: 'links' }
+          ];
+          
+          // Phase 4: Use safe executor for simple command mapping
+          for (const mapping of commandMappings) {
+            const matches = mapping.keywords.some(kw => userQuery.toLowerCase().includes(kw));
+            if (matches) {
+              // Use safe command executor
+              const execResult = await this.safeCommandExecutor(mapping.command, [], context, 'openai');
+              
+              if (execResult.success) {
+                return `${getAiPrefix(responseMode)} ${execResult.result}`;
+              } else if (execResult.needsPermission) {
+                return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires ${execResult.needsPermission} privileges. You can ask an ${execResult.needsPermission} to run it for you.`;
+              } else if (execResult.blocked) {
+                return `${getAiPrefix(responseMode)} The !${mapping.command} command is blocked for safety reasons.`;
+              }
+              // If command not found, continue to next mapping
+            }
+          }
+          
+          // Phase 4: Enhanced command execution with safe executor
+          // Check for direct command execution requests
+          const commandPattern = /^(run|execute|do|perform|use) !?(\w+)(?:\s+(.*))?$/i;
           const match = userQuery.match(commandPattern);
           if (match) {
             const cmdName = match[2].toLowerCase();
             const cmdArgs = match[3] ? match[3].split(' ') : [];
-            const cmd = this.plugins.get(cmdName);
-            if (cmd) {
-              const cmdContext = { ...context, args: cmdArgs };
-              const result = await cmd.execute(cmdContext);
-              return `OpenAI: Executed !${cmdName}:\n\n${result}`;
+            
+            // Use safe command executor for all AI command executions
+            const execResult = await this.safeCommandExecutor(cmdName, cmdArgs, context, 'openai');
+            
+            if (execResult.success) {
+              return `OpenAI: Executed !${cmdName}:\n\n${execResult.result}`;
+            } else if (execResult.needsPermission) {
+              return `OpenAI: Cannot execute !${cmdName} - ${execResult.needsPermission} privileges required. You don't have ${execResult.needsPermission} access.`;
+            } else if (execResult.blocked) {
+              return `OpenAI: Command !${cmdName} is blocked for safety reasons. Please execute it manually if needed.`;
+            } else {
+              return `OpenAI: ${execResult.message}`;
+            }
+          }
+          
+          // Also check for implicit command requests (e.g., "add user X to group Y")
+          const implicitPatterns = [
+            { pattern: /add (?:user )?(\S+) to (?:group )?(\S+)/i, command: 'addto', extractArgs: (m) => [m[2], m[1]] },
+            { pattern: /remove (?:user )?(\S+) from (?:group )?(\S+)/i, command: 'removefrom', extractArgs: (m) => [m[2], m[1]] },
+            { pattern: /(?:create|make|add) (?:a )?(?:new )?group (?:called |named )?(\S+)/i, command: 'creategroup', extractArgs: (m) => [m[1]] },
+            { pattern: /(?:send|message) (?:to )?(\S+) (?:saying |with message |:)(.+)/i, command: 'send', extractArgs: (m) => [m[1], m[2]] },
+            { pattern: /(?:list|show) members (?:of|in) (?:group )?(\S+)/i, command: 'members', extractArgs: (m) => [m[1]] }
+          ];
+          
+          for (const implicitCmd of implicitPatterns) {
+            const implicitMatch = userQuery.match(implicitCmd.pattern);
+            if (implicitMatch) {
+              const cmdArgs = implicitCmd.extractArgs(implicitMatch);
+              const execResult = await this.safeCommandExecutor(implicitCmd.command, cmdArgs, context, 'openai');
+              
+              if (execResult.success) {
+                return `OpenAI: ${execResult.result}`;
+              } else if (execResult.needsPermission) {
+                return `OpenAI: That action requires ${execResult.needsPermission} privileges, which you don't have.`;
+              } else {
+                // Don't reveal the command failed, just say we can't do it
+                return `OpenAI: I'm unable to perform that action. ${execResult.needsPermission ? `It requires ${execResult.needsPermission} privileges.` : 'Please try a different approach.'}`;
+              }
             }
           }
           
@@ -422,7 +988,7 @@ class NativeSignalBotService extends EventEmitter {
           const systemPrompt = responseMode === 'command' 
             ? 'You are a helpful Signal bot assistant. Help users understand and use bot commands. Be concise and specific.'
             : responseMode === 'community'
-            ? `You are the IrregularChat community assistant. Help users with community-related questions. Reference the wiki (${this.wikiUrl}) and forum (${this.forumUrl}) when appropriate. IrregularChat is a privacy-focused community.`
+            ? You are the IrregularChat community assistant. Help users with community-related questions. Reference the wiki (${this.wikiUrl}) and forum (${this.forumUrl}) when appropriate. IrregularChat is a privacy-focused community.
             : 'You are a helpful AI assistant. Provide clear, concise responses.';
           
           const messages = [
@@ -430,7 +996,42 @@ class NativeSignalBotService extends EventEmitter {
           ];
           
           if (contextInfo) {
-            messages.push({ role: 'system', content: `Context: ${contextInfo}` });
+            messages.push({ role: 'system', content: Context: ${contextInfo} });
+          }
+          
+          // Add database context if relevant data found
+          if (dbContext.hasRelevantData) {
+            let dbContextStr = 'Relevant information from database:\n';
+            
+            if (dbContext.questions.length > 0) {
+              dbContextStr += '\nRecent Q&A:\n';
+              dbContext.questions.forEach(q => {
+                dbContextStr += Q: ${q.question}\nA: ${q.answer || 'Unanswered'}\n;
+              });
+            }
+            
+            if (dbContext.events.length > 0) {
+              dbContextStr += '\nUpcoming Events:\n';
+              dbContext.events.forEach(e => {
+                dbContextStr += - ${e.name} on ${e.start} at ${e.location || 'TBD'}\n;
+              });
+            }
+            
+            if (dbContext.links.length > 0) {
+              dbContextStr += '\nRelevant Links:\n';
+              dbContext.links.forEach(l => {
+                dbContextStr += - ${l.title}: ${l.url}\n;
+              });
+            }
+            
+            if (dbContext.news.length > 0) {
+              dbContextStr += '\nRecent News:\n';
+              dbContext.news.forEach(n => {
+                dbContextStr += - ${n.title} (${n.timestamp})\n;
+              });
+            }
+            
+            messages.push({ role: 'system', content: dbContextStr });
           }
           
           messages.push({ role: 'user', content: userQuery });
@@ -474,13 +1075,19 @@ class NativeSignalBotService extends EventEmitter {
           const userQuery = context.args.join(' ') || 'Hello';
           
           // Store thread context - this user prefers LocalAI  
-          const threadKey = `${context.groupId || 'dm'}:${context.sourceNumber}`;
+          const threadKey = ${context.groupId || 'dm'}:${context.sourceNumber};
           this.userAiPreference.set(threadKey, {
             provider: 'localai',
             timestamp: Date.now(),
             lastMessage: userQuery
           });
           console.log(`🔄 Thread context: User ${context.sender} selected LocalAI`);
+          
+          // Phase 1: Command Registry Access
+          const commandRegistry = this.getCommandRegistry(context);
+          
+          // Phase 2: Database Query Capabilities
+          const dbContext = await this.getAIDatabaseContext(userQuery, context);
           
           // Zeroeth Law Implementation - Context Awareness
           let contextInfo = '';
@@ -495,7 +1102,11 @@ class NativeSignalBotService extends EventEmitter {
           
           if (isCommandQuery) {
             responseMode = 'command';
-            contextInfo = `User is asking about bot commands. Available commands: ${Array.from(this.plugins.keys()).join(', ')}`;
+            // Enhanced command context with descriptions and permissions
+            const commandList = commandRegistry.available.map(cmd => 
+              `!${cmd.name} - ${cmd.description}${cmd.adminOnly ? ' (admin)' : ''}${cmd.moderatorOnly ? ' (mod)' : ''}`
+            ).join('\n');
+            contextInfo = `User is asking about bot commands. They ${commandRegistry.isAdmin ? 'ARE an admin' : commandRegistry.isModerator ? 'ARE a moderator' : 'are NOT admin/moderator'}.\n\nAvailable commands:\n${commandList}`;
           }
           
           // 2. Check if asking about IrregularChat community
@@ -508,44 +1119,115 @@ class NativeSignalBotService extends EventEmitter {
           }
           
           // 3. Check if AI should execute a command internally
-          // Map of keywords to command names for internal execution
-          const commandMappings = [
-            { keywords: ['show me commands', 'list commands', 'what commands', 'available commands', 'help'], command: 'help' },
-            { keywords: ['what groups', 'list groups', 'show groups', 'available rooms'], command: 'groups' },
-            { keywords: ['rules', 'laws', 'zeroeth', 'zeroth', 'principles'], command: 'zeroeth' },
-            { keywords: ['wiki', 'documentation', 'docs'], command: 'wiki' },
-            { keywords: ['forum posts', 'latest posts', 'discussions'], command: 'flatest' },
-            { keywords: ['events', 'meetups', 'meetings'], command: 'events' },
-            { keywords: ['members', 'who is in', 'list members'], command: 'members' },
-            { keywords: ['faq', 'frequently asked'], command: 'faq' },
-            { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' }
+          // First check for commands that need arguments
+          const argumentPatterns = [
+            { pattern: /search (?:the )?wiki (?:for )?(.+)/i, command: 'wiki', extractArgs: (m) => [m[1]] },
+            { pattern: /wiki (?:search )?(?:for )?(.+)/i, command: 'wiki', extractArgs: (m) => [m[1]] },
+            { pattern: /search (?:the )?forum (?:for )?(.+)/i, command: 'fsearch', extractArgs: (m) => [m[1]] },
+            { pattern: /forum search (?:for )?(.+)/i, command: 'fsearch', extractArgs: (m) => [m[1]] },
+            { pattern: /weather (?:in |for )?(.+)/i, command: 'weather', extractArgs: (m) => [m[1]] },
+            { pattern: /translate (.+) to (.+)/i, command: 'translate', extractArgs: (m) => [m[1], m[2]] },
+            { pattern: /answer question (?:#)?(\d+) with (.+)/i, command: 'answer', extractArgs: (m) => [m[1], m[2]] },
+            { pattern: /add (.+) to (?:group )?(.+)/i, command: 'addto', extractArgs: (m) => [m[2], m[1]] }
           ];
           
-          // Check if query matches any command mapping
-          for (const mapping of commandMappings) {
-            const matches = mapping.keywords.some(kw => userQuery.toLowerCase().includes(kw));
-            if (matches) {
-              // Execute the command internally
-              const cmd = this.plugins.get(mapping.command);
-              if (cmd) {
-                const cmdContext = { ...context, args: [] };
-                const result = await cmd.execute(cmdContext);
-                return `${getAiPrefix(responseMode)} ${result}`;
+          // Check for argument-based patterns first
+          for (const argPattern of argumentPatterns) {
+            const argMatch = userQuery.match(argPattern.pattern);
+            if (argMatch) {
+              const cmdArgs = argPattern.extractArgs(argMatch);
+              const execResult = await this.safeCommandExecutor(argPattern.command, cmdArgs, context, 'openai');
+              
+              if (execResult.success) {
+                return `${getAiPrefix(responseMode)} ${execResult.result}`;
+              } else if (execResult.needsPermission) {
+                return `${getAiPrefix(responseMode)} That command requires ${execResult.needsPermission} privileges which you don't have.`;
+              } else if (!execResult.success && execResult.message.includes('not found')) {
+                // Command not found, continue to other patterns
+              } else {
+                return `${getAiPrefix(responseMode)} ${execResult.message}`;
               }
             }
           }
           
-          // Also check for direct command execution requests
-          const commandPattern = /^(run|execute|do|perform) !?(\w+)(?:\s+(.*))?$/i;
+          // Map of keywords to command names for simple commands (no arguments)
+          const commandMappings = [
+            { keywords: ['show me commands', 'list commands', 'what commands', 'available commands', 'help'], command: 'help' },
+            { keywords: ['what groups', 'list groups', 'show groups', 'available rooms'], command: 'groups' },
+            { keywords: ['rules', 'laws', 'zeroeth', 'zeroth', 'principles'], command: 'zeroeth' },
+            { keywords: ['forum post', 'latest post', 'recent post', 'forum discussion', 'latest forum', 'recent forum', 'new forum'], command: 'flatest' },
+            { keywords: ['events', 'meetups', 'meetings', 'upcoming event', 'next event'], command: 'events' },
+            { keywords: ['members', 'who is in', 'list members', 'group members'], command: 'members' },
+            { keywords: ['faq', 'frequently asked', 'common questions'], command: 'faq' },
+            { keywords: ['summarize messages', 'group summary', 'message summary'], command: 'summarize' },
+            { keywords: ['tell me a joke', 'funny'], command: 'joke' },
+            { keywords: ['unanswered', 'pending question', 'open question'], command: 'pending' },
+            { keywords: ['bookmark', 'saved link', 'stored link'], command: 'links' }
+          ];
+          
+          // Phase 4: Use safe executor for simple command mapping
+          for (const mapping of commandMappings) {
+            const matches = mapping.keywords.some(kw => userQuery.toLowerCase().includes(kw));
+            if (matches) {
+              // Use safe command executor
+              const execResult = await this.safeCommandExecutor(mapping.command, [], context, 'openai');
+              
+              if (execResult.success) {
+                return `${getAiPrefix(responseMode)} ${execResult.result}`;
+              } else if (execResult.needsPermission) {
+                return `${getAiPrefix(responseMode)} Sorry, the !${mapping.command} command requires ${execResult.needsPermission} privileges. You can ask an ${execResult.needsPermission} to run it for you.`;
+              } else if (execResult.blocked) {
+                return `${getAiPrefix(responseMode)} The !${mapping.command} command is blocked for safety reasons.`;
+              }
+              // If command not found, continue to next mapping
+            }
+          }
+          
+          // Phase 4: Enhanced command execution with safe executor
+          // Check for direct command execution requests
+          const commandPattern = /^(run|execute|do|perform|use) !?(\w+)(?:\s+(.*))?$/i;
           const match = userQuery.match(commandPattern);
           if (match) {
             const cmdName = match[2].toLowerCase();
             const cmdArgs = match[3] ? match[3].split(' ') : [];
-            const cmd = this.plugins.get(cmdName);
-            if (cmd) {
-              const cmdContext = { ...context, args: cmdArgs };
-              const result = await cmd.execute(cmdContext);
-              return `LocalAI: Executed !${cmdName}:\n\n${result}`;
+            
+            // Use safe command executor for all AI command executions
+            const execResult = await this.safeCommandExecutor(cmdName, cmdArgs, context, 'localai');
+            
+            if (execResult.success) {
+              return `LocalAI: Executed !${cmdName}:\n\n${execResult.result}`;
+            } else if (execResult.needsPermission) {
+              return `LocalAI: Cannot execute !${cmdName} - ${execResult.needsPermission} privileges required. You don't have ${execResult.needsPermission} access.`;
+            } else if (execResult.blocked) {
+              return `LocalAI: Command !${cmdName} is blocked for safety reasons. Please execute it manually if needed.`;
+            } else {
+              return `LocalAI: ${execResult.message}`;
+            }
+          }
+          
+          // Also check for implicit command requests (e.g., "add user X to group Y")
+          const implicitPatterns = [
+            { pattern: /add (?:user )?(\S+) to (?:group )?(\S+)/i, command: 'addto', extractArgs: (m) => [m[2], m[1]] },
+            { pattern: /remove (?:user )?(\S+) from (?:group )?(\S+)/i, command: 'removefrom', extractArgs: (m) => [m[2], m[1]] },
+            { pattern: /(?:create|make|add) (?:a )?(?:new )?group (?:called |named )?(\S+)/i, command: 'creategroup', extractArgs: (m) => [m[1]] },
+            { pattern: /(?:send|message) (?:to )?(\S+) (?:saying |with message |:)(.+)/i, command: 'send', extractArgs: (m) => [m[1], m[2]] },
+            { pattern: /(?:list|show) members (?:of|in) (?:group )?(\S+)/i, command: 'members', extractArgs: (m) => [m[1]] }
+          ];
+          
+          for (const implicitCmd of implicitPatterns) {
+            const implicitMatch = userQuery.match(implicitCmd.pattern);
+            if (implicitMatch) {
+              const cmdArgs = implicitCmd.extractArgs(implicitMatch);
+              const execResult = await this.safeCommandExecutor(implicitCmd.command, cmdArgs, context, 'localai');
+              
+              if (execResult.success) {
+                return `LocalAI: ${execResult.result}`;
+              } else if (execResult.needsPermission) {
+                return `LocalAI: That action requires ${execResult.needsPermission} privileges, which you don't have.`;
+              } else {
+                // Don't reveal the command failed, just say we can't do it
+                return LocalAI: I'm unable to perform that action. ${execResult.needsPermission ? It requires ${execResult.needsPermission} privileges. : 'Please try a different approach.'};
+              }
             }
           }
           
@@ -558,7 +1240,7 @@ class NativeSignalBotService extends EventEmitter {
           const systemPrompt = responseMode === 'command' 
             ? 'You are a helpful Signal bot assistant. Help users understand and use bot commands. Be concise and specific.'
             : responseMode === 'community'
-            ? `You are the IrregularChat community assistant. Help users with community-related questions. Reference the wiki (${this.wikiUrl}) and forum (${this.forumUrl}) when appropriate. IrregularChat is a privacy-focused community.`
+            ? You are the IrregularChat community assistant. Help users with community-related questions. Reference the wiki (${this.wikiUrl}) and forum (${this.forumUrl}) when appropriate. IrregularChat is a privacy-focused community.
             : 'You are a helpful AI assistant. Provide clear, concise responses.';
           
           const messages = [
@@ -566,18 +1248,53 @@ class NativeSignalBotService extends EventEmitter {
           ];
           
           if (contextInfo) {
-            messages.push({ role: 'system', content: `Context: ${contextInfo}` });
+            messages.push({ role: 'system', content: Context: ${contextInfo} });
+          }
+          
+          // Add database context if relevant data found
+          if (dbContext.hasRelevantData) {
+            let dbContextStr = 'Relevant information from database:\n';
+            
+            if (dbContext.questions.length > 0) {
+              dbContextStr += '\nRecent Q&A:\n';
+              dbContext.questions.forEach(q => {
+                dbContextStr += Q: ${q.question}\nA: ${q.answer || 'Unanswered'}\n;
+              });
+            }
+            
+            if (dbContext.events.length > 0) {
+              dbContextStr += '\nUpcoming Events:\n';
+              dbContext.events.forEach(e => {
+                dbContextStr += - ${e.name} on ${e.start} at ${e.location || 'TBD'}\n;
+              });
+            }
+            
+            if (dbContext.links.length > 0) {
+              dbContextStr += '\nRelevant Links:\n';
+              dbContext.links.forEach(l => {
+                dbContextStr += - ${l.title}: ${l.url}\n;
+              });
+            }
+            
+            if (dbContext.news.length > 0) {
+              dbContextStr += '\nRecent News:\n';
+              dbContext.news.forEach(n => {
+                dbContextStr += - ${n.title} (${n.timestamp})\n;
+              });
+            }
+            
+            messages.push({ role: 'system', content: dbContextStr });
           }
           
           messages.push({ role: 'user', content: userQuery });
           
           // Use Local AI instead of OpenAI
           try {
-            const response = await fetch(`${this.localAiUrl}/api/v1/chat/completions`, {
+            const response = await fetch(${this.localAiUrl}/api/v1/chat/completions, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.localAiApiKey}`
+                'Authorization': Bearer ${this.localAiApiKey}
               },
               body: JSON.stringify({
                 model: 'irregularbot:latest',
@@ -587,7 +1304,7 @@ class NativeSignalBotService extends EventEmitter {
             });
 
             if (!response.ok) {
-              throw new Error(`Local AI request failed: ${response.status} ${response.statusText}`);
+              throw new Error(Local AI request failed: ${response.status} ${response.statusText});
             }
 
             const aiResponse = await response.json();
@@ -628,6 +1345,29 @@ class NativeSignalBotService extends EventEmitter {
           if (!url || !url.startsWith('http')) {
             return '❌ Usage: !tldr <url>\n\nProvide a valid URL to summarize its content.';
           }
+
+          // If it's a repository URL, use repository processing instead
+          if (this.isRepositoryUrl(url)) {
+            await this.sendReply(context, 🔄 Detected repository URL, processing with repository analyzer...);
+            try {
+              await this.processRepositoryUrl(url, context);
+              return ✅ Repository processed! See details above.;
+            } catch (error) {
+              console.error('Repository processing failed, falling back to standard TLDR:', error);
+              // Fall through to normal TLDR processing
+            }
+          }
+
+          // Auto-detect PDF URLs and redirect to !pdf command
+          if (url.toLowerCase().includes('.pdf') || url.toLowerCase().endsWith('.pdf')) {
+            console.log('🔍 PDF URL detected, redirecting to PDF processor...');
+            try {
+              return await this.handlePdf({ ...context, args: [url] });
+            } catch (error) {
+              console.error('PDF processing failed, falling back to standard TLDR:', error);
+              return '❌ PDF processing failed. The URL appears to be a PDF but could not be processed.';
+            }
+          }
           
           try {
             // Basic URL fetch and summarization
@@ -641,12 +1381,12 @@ class NativeSignalBotService extends EventEmitter {
               model: 'gpt-5-mini',
               messages: [{
                 role: 'user', 
-                content: `Summarize this article in 1-2 paragraphs:\n\n${textContent}`
+                content: Summarize this article in 1-2 paragraphs:\n\n${textContent}
               }],
               max_completion_tokens: 800  // GPT-5 thinking model needs 600+ tokens
             });
             
-            return `OpenAI: **Article Summary**\n\n${aiResponse.choices[0].message.content}\n\n🔗 Source: ${url}`;
+            return `OpenAI: Article Summary\n\n${aiResponse.choices[0].message.content}\n\n🔗 Source: ${url}`;
           } catch (error) {
             return `❌ Failed to summarize: ${error.message}`;
           }
@@ -662,35 +1402,35 @@ class NativeSignalBotService extends EventEmitter {
         const today = new Date().toDateString();
         const todayCount = this.cleanerStats.dailyCounts.get(today) || 0;
         
-        let stats = `🧹 **URL Cleaner Statistics**\n\n`;
-        stats += `📊 **Overall Stats:**\n`;
-        stats += `• Total URLs cleaned: ${this.cleanerStats.totalCleaned}\n`;
-        stats += `• Trackers removed: ${this.cleanerStats.trackersSaved}\n`;
-        stats += `• Today: ${todayCount} URLs cleaned\n\n`;
+        let stats = 🧹 URL Cleaner Statistics\n\n;
+        stats += 📊 Overall Stats:\n;
+        stats += • Total URLs cleaned: ${this.cleanerStats.totalCleaned}\n;
+        stats += • Trackers removed: ${this.cleanerStats.trackersSaved}\n;
+        stats += • Today: ${todayCount} URLs cleaned\n\n;
         
         if (this.cleanerStats.platforms.size > 0) {
-          stats += `🌐 **Platforms Cleaned:**\n`;
+          stats += 🌐 Platforms Cleaned:\n;
           const platformList = Array.from(this.cleanerStats.platforms.entries())
             .sort((a, b) => b[1] - a[1])
             .slice(0, 10)
-            .map(([platform, count]) => `• ${platform}: ${count} URLs`)
+            .map(([platform, count]) => • ${platform}: ${count} URLs)
             .join('\n');
           stats += platformList + '\n\n';
         }
         
-        stats += `💡 **Why remove trackers?**\n`;
-        stats += `Tracking parameters help social media platforms identify users across the web, `;
-        stats += `building detailed behavioral profiles for targeted advertising and data monetization.\n\n`;
+        stats += 💡 Why remove trackers?\n;
+        stats += Tracking parameters help social media platforms identify users across the web, ;
+        stats += building detailed behavioral profiles for targeted advertising and data monetization.\n\n;
         
         if (this.cleanedUrls.size > 0) {
-          stats += `🔄 **Recent Activity:** ${Math.min(3, this.cleanedUrls.size)} most recent cleanings\n`;
+          stats += 🔄 Recent Activity: ${Math.min(3, this.cleanedUrls.size)} most recent cleanings\n;
           const recentUrls = Array.from(this.cleanedUrls.entries())
             .sort((a, b) => b[0] - a[0])
             .slice(0, 3);
             
           for (const [timestamp, data] of recentUrls) {
             const timeAgo = Math.round((Date.now() - timestamp) / 60000);
-            stats += `• ${data.platform} - ${timeAgo}m ago (${data.trackersRemoved} trackers)\n`;
+            stats += • ${data.platform} - ${timeAgo}m ago (${data.trackersRemoved} trackers)\n;
           }
         }
         
@@ -709,15 +1449,15 @@ class NativeSignalBotService extends EventEmitter {
         if (args.length > 0) {
           const url = args.join(' ');
           if (this.isNewsUrl(url)) {
-            await this.sendReply(context, `🔄 Processing news URL: ${url}`);
+            await this.sendReply(context, 🔄 Processing news URL: ${url});
             try {
               await this.processNewsUrl(url, context);
-              return `✅ Successfully processed news URL!`;
+              return ✅ Successfully processed news URL!;
             } catch (error) {
               return `❌ Error processing URL: ${error.message}`;
             }
           } else {
-            return `❌ URL doesn't match news patterns. Use !news to see stats.`;
+            return ❌ URL doesn't match news patterns. Use !news to see stats.;
           }
         }
         
@@ -725,15 +1465,15 @@ class NativeSignalBotService extends EventEmitter {
         const today = new Date().toDateString();
         const todayCount = this.newsStats.dailyCounts.get(today) || 0;
         
-        let stats = `📰 **News Processing Statistics**\n\n`;
-        stats += `📊 **Overall Stats:**\n`;
-        stats += `• Total news processed: ${this.newsStats.totalProcessed}\n`;
-        stats += `• Successful posts: ${this.newsStats.successfulPosts}\n`;
-        stats += `• Failed posts: ${this.newsStats.failedPosts}\n`;
-        stats += `• Today: ${todayCount} articles processed\n\n`;
+        let stats = 📰 News Processing Statistics\n\n;
+        stats += 📊 Overall Stats:\n;
+        stats += • Total news processed: ${this.newsStats.totalProcessed}\n;
+        stats += • Successful posts: ${this.newsStats.successfulPosts}\n;
+        stats += • Failed posts: ${this.newsStats.failedPosts}\n;
+        stats += • Today: ${todayCount} articles processed\n\n;
         
         if (this.processedNews.size > 0) {
-          stats += `🔄 **Recent Activity:** ${Math.min(3, this.processedNews.size)} most recent articles\n`;
+          stats += 🔄 Recent Activity: ${Math.min(3, this.processedNews.size)} most recent articles\n;
           const recentNews = Array.from(this.processedNews.values())
             .sort((a, b) => b.timestamp - a.timestamp)
             .slice(0, 3);
@@ -741,13 +1481,13 @@ class NativeSignalBotService extends EventEmitter {
           for (const news of recentNews) {
             const timeAgo = Math.round((Date.now() - news.timestamp) / 60000);
             const title = news.title.length > 50 ? news.title.substring(0, 50) + '...' : news.title;
-            stats += `• ${title} - ${timeAgo}m ago\n`;
+            stats += • ${title} - ${timeAgo}m ago\n;
           }
           stats += '\n';
         }
         
-        stats += `💡 **Usage:** Send \`!news <url>\` to manually process a news URL\n`;
-        stats += `🤖 **Auto-processing:** News URLs are automatically detected and processed`;
+        stats += 💡 Usage: Send \!news <url>\ to manually process a news URL\n;
+        stats += `🤖 Auto-processing: News URLs are automatically detected and processed`;
         
         return stats;
       }
@@ -785,11 +1525,11 @@ class NativeSignalBotService extends EventEmitter {
           return '📰 No custom news domains configured\nUse !newsadd <domain> to add domains';
         }
         
-        let response = `📰 Custom News Domains (${this.customNewsDomains.size}):\n\n`;
+        let response = 📰 Custom News Domains (${this.customNewsDomains.size}):\n\n;
         const domains = Array.from(this.customNewsDomains).sort();
         
         domains.forEach(domain => {
-          response += `• ${domain}\n`;
+          response += • ${domain}\n;
         });
         
         response += '\n💡 Links from these domains will be auto-processed';
@@ -817,6 +1557,71 @@ class NativeSignalBotService extends EventEmitter {
         this.saveCustomNewsDomains();
         
         return `✅ Removed ${domain} from news domains\n📰 Remaining domains: ${this.customNewsDomains.size}`;
+      }
+    });
+
+    commands.set('repo', {
+      name: 'repo',
+      description: 'Show repository processing statistics and manually process URL',
+      execute: async (context) => {
+        const args = context.args;
+        
+        // If URL provided, manually process it
+        if (args.length > 0) {
+          const url = args.join(' ');
+          if (this.isRepositoryUrl(url)) {
+            // Check if already processed recently (prevent duplicates)
+            const existingProcessed = Array.from(this.processedRepositories.values())
+              .find(p => p.url === url && Date.now() - p.timestamp < 30000); // 30 seconds
+            
+            if (existingProcessed) {
+              return ⏭️ Repository was just processed automatically. Check above for details.;
+            }
+            
+            try {
+              await this.processRepositoryUrl(url, context);
+              return; // Return nothing, processRepositoryUrl sends the formatted message
+            } catch (error) {
+              return `❌ Error processing URL: ${error.message}`;
+            }
+          } else {
+            return ❌ URL doesn't match repository patterns. Use !repo to see stats.;
+          }
+        }
+        
+        // Show statistics
+        const today = new Date().toDateString();
+        const todayCount = this.repositoryStats.dailyCounts.get(today) || 0;
+        
+        let stats = 🔧 Repository Processing Statistics\n\n;
+        stats += 📊 Overall Stats:\n;
+        stats += • Total repositories processed: ${this.repositoryStats.totalProcessed}\n;
+        stats += • Repositories today: ${todayCount}\n;
+        
+        if (this.repositoryStats.platforms.size > 0) {
+          stats += \n🏠 Platforms:\n;
+          const sortedPlatforms = Array.from(this.repositoryStats.platforms.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5);
+          for (const [platform, count] of sortedPlatforms) {
+            stats += • ${platform}: ${count}\n;
+          }
+        }
+        
+        if (this.repositoryStats.languages.size > 0) {
+          stats += \n💻 Top Languages:\n;
+          const sortedLanguages = Array.from(this.repositoryStats.languages.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 7);
+          for (const [language, count] of sortedLanguages) {
+            stats += • ${language}: ${count}\n;
+          }
+        }
+        
+        stats += \n💡 Usage: Send \!repo <url>\ to manually process a repository URL\n;
+        stats += `🤖 Auto-processing: Repository URLs are automatically detected and processed`;
+        
+        return stats;
       }
     });
     
@@ -852,7 +1657,7 @@ class NativeSignalBotService extends EventEmitter {
     });
     
     this.daemon.stderr.on('data', (data) => {
-      console.error(`⚠️ Daemon Error: ${data.toString().trim()}`);
+      console.error(⚠️ Daemon Error: ${data.toString().trim()});
     });
     
     this.daemon.on('close', (code) => {
@@ -941,7 +1746,7 @@ class NativeSignalBotService extends EventEmitter {
     }
     
     this.reconnectAttempts++;
-    console.log(`🔄 Reconnecting socket (attempt ${this.reconnectAttempts})...`);
+    console.log(🔄 Reconnecting socket (attempt ${this.reconnectAttempts})...);
     
     setTimeout(() => {
       this.connectSocket();
@@ -1012,9 +1817,9 @@ class NativeSignalBotService extends EventEmitter {
     
     // If any URLs were cleaned, send the cleaned version
     if (cleanedResults.length > 0) {
-      let response = `🧹 Cleaned Tracking Links: `;
+      let response = 🧹 Cleaned Tracking Links: ;
       response += cleanedResults.map(r => r.cleanedUrl).join(' ');
-      response += `\n\n💡 Why? Trackers help social media platforms illuminate networks and track user behavior across the web.`;
+      response += \n\n💡 Why? Trackers help social media platforms illuminate networks and track user behavior across the web.;
       
       await this.sendReply(message, response);
     }
@@ -1128,6 +1933,19 @@ class NativeSignalBotService extends EventEmitter {
     if (!urls || urls.length === 0) return;
     
     for (const url of urls) {
+      // Check security first for ALL URLs
+      const securityCheck = await this.checkUrlSecurity(url, message);
+      if (securityCheck.isWatched) {
+        await this.sendSecurityWarning(url, securityCheck, message);
+        // Add eyes emoji reaction to the message
+        try {
+          // Note: This would require implementing reaction sending via signal-cli
+          console.log(`👀 Would add eyes emoji to message about ${url}`);
+        } catch (error) {
+          console.error('Could not add reaction:', error);
+        }
+      }
+      
       if (this.isNewsUrl(url)) {
         console.log(`📰 Detected news URL: ${url}`);
         
@@ -1144,7 +1962,7 @@ class NativeSignalBotService extends EventEmitter {
           // Process news URL and track it
           await this.processNewsUrl(url, message);
         } catch (error) {
-          console.error(`❌ Error processing news URL ${url}:`, error.message);
+          console.error(❌ Error processing news URL ${url}:, error.message);
           this.newsStats.failedPosts++;
           
           // Log error
@@ -1256,7 +2074,7 @@ class NativeSignalBotService extends EventEmitter {
       this.newsStats.dailyCounts.set(today, todayCount + 1);
       
       // Step 6: Track the news link in database with forum URL
-      const forumUrl = discourseTopicId ? `${this.discourseApiUrl}/t/${discourseTopicId}` : null;
+      const forumUrl = discourseTopicId ? ${this.discourseApiUrl}/t/${discourseTopicId} : null;
       await this.trackNewsLink(cleanedUrl, message, {
         title: content.title,
         summary: summary,
@@ -1264,13 +2082,13 @@ class NativeSignalBotService extends EventEmitter {
       });
       
       // Step 7: Send confirmation to Signal group (no markdown for Signal)
-      let response = `📰 ${content.title}\n`;
+      let response = 📰 ${content.title}\n;
       if (discourseTopicId) {
-        response += `💬 Forum: ${forumUrl}\n\n`;
+        response += 💬 Forum: ${forumUrl}\n\n;
       }
-      response += `📝 Summary: ${summary}\n\n`;
-      response += `🔗 Original: ${cleanedUrl}\n`;
-      response += `🔓 Bypass: ${bypassLinks.twelveft}`;
+      response += 📝 Summary: ${summary}\n\n;
+      response += 🔗 Original: ${cleanedUrl}\n;
+      response += 🔓 Bypass: ${bypassLinks.twelveft};
       
       // Store this as the last news URL for reaction tracking
       this.lastNewsUrl = cleanedUrl;
@@ -1281,7 +2099,7 @@ class NativeSignalBotService extends EventEmitter {
       console.log(`✅ Successfully processed news: ${content.title}`);
       
     } catch (error) {
-      console.error(`❌ Error processing news URL ${url}:`, error);
+      console.error(❌ Error processing news URL ${url}:, error);
       throw error;
     }
   }
@@ -1289,54 +2107,124 @@ class NativeSignalBotService extends EventEmitter {
   generateBypassLinks(url) {
     const encoded = encodeURIComponent(url);
     return {
-      twelveft: `https://12ft.io/proxy?q=${encoded}`,
-      archive: `https://web.archive.org/save/${url}`,
-      archiveView: `https://web.archive.org/web/${url}`
+      twelveft: https://12ft.io/proxy?q=${encoded},
+      archive: https://web.archive.org/save/${url},
+      archiveView: https://web.archive.org/web/${url},
+      archivePh: https://archive.ph/${url},
+      archiveIs: https://archive.is/${url},
+      archiveToday: https://archive.today/${url},
+      googleCache: https://webcache.googleusercontent.com/search?q=cache:${encoded},
+      removepaywall: https://www.removepaywall.com/${url.replace('https://', '').replace('http://', '')},
+      txtify: https://txtify.it/${url}
     };
   }
   
   async scrapeNewsContent(url, bypassLinks) {
-    const urls = [url, bypassLinks.twelveft, bypassLinks.archiveView];
+    // Extended list of bypass services
+    const urls = [
+      url,
+      bypassLinks.googleCache,
+      bypassLinks.archivePh,
+      bypassLinks.txtify,
+      bypassLinks.twelveft,
+      bypassLinks.removepaywall,
+      bypassLinks.archiveView
+    ];
+    
+    let cloudflareDetected = false;
     
     for (const attemptUrl of urls) {
       try {
         console.log(`🌐 Attempting to scrape: ${attemptUrl}`);
         
         const response = await axios.get(attemptUrl, {
-          timeout: 10000,
+          timeout: 15000, // Increased timeout
           headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; IrregularChatBot/1.0; +https://forum.irregularchat.com)'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+          },
+          maxRedirects: 5,
+          validateStatus: function (status) {
+            return status >= 200 && status < 500; // Accept client errors too
           }
         });
         
+        const responseText = response.data.toString();
+        
+        // Check for Cloudflare block
+        if (responseText.includes('Cloudflare') && 
+            (responseText.includes('Just a moment') || 
+             responseText.includes('Checking your browser') ||
+             responseText.includes('cf-browser-verification') ||
+             responseText.includes('Ray ID'))) {
+          console.log(⚠️ Cloudflare protection detected, trying bypass services...);
+          cloudflareDetected = true;
+          continue;
+        }
+        
+        // Check for paywall
+        if (responseText.includes('Subscribe to continue') ||
+            responseText.includes('article limit') ||
+            responseText.includes('paywall')) {
+          console.log(🔒 Paywall detected, trying bypass...);
+          continue;
+        }
+        
         const $ = cheerio.load(response.data);
         
-        // Extract title
-        let title = $('h1').first().text() || 
-                   $('title').text() || 
+        // Remove unwanted elements
+        $('script, style, noscript, iframe').remove();
+        
+        // Extract title with fallbacks
+        let title = $('h1').first().text().trim() || 
                    $('meta[property="og:title"]').attr('content') ||
-                   $('meta[name="twitter:title"]').attr('content');
+                   $('meta[name="twitter:title"]').attr('content') ||
+                   $('title').text().trim() ||
+                   $('.headline').first().text().trim() ||
+                   $('.article-title').first().text().trim();
         
         // Extract content using multiple strategies
         let content = '';
         
-        // Try article tag first
-        const articleContent = $('article').text() || $('[role="article"]').text();
-        if (articleContent && articleContent.length > 200) {
-          content = articleContent;
-        } else {
-          // Try common content selectors
-          const contentSelectors = [
-            '.article-content', '.entry-content', '.post-content', 
-            '.story-content', '.article-body', '.content-body',
-            'main p', '.main-content p', '#content p'
-          ];
-          
-          for (const selector of contentSelectors) {
-            const selectorContent = $(selector).text();
-            if (selectorContent && selectorContent.length > content.length) {
-              content = selectorContent;
+        // Strategy 1: Article tags
+        const articleSelectors = [
+          'article', 
+          '[role="article"]',
+          '[itemprop="articleBody"]',
+          '.article-body',
+          '.article-content',
+          '.entry-content'
+        ];
+        
+        for (const selector of articleSelectors) {
+          const articleContent = $(selector).text().trim();
+          if (articleContent && articleContent.length > 200) {
+            content = articleContent;
+            break;
+          }
+        }
+        
+        // Strategy 2: Paragraph collection
+        if (!content || content.length < 200) {
+          const paragraphs = [];
+          $('p').each((i, elem) => {
+            const text = $(elem).text().trim();
+            // Only include substantial paragraphs
+            if (text.length > 50 && 
+                !text.includes('Cookie') && 
+                !text.includes('Subscribe') &&
+                !text.includes('Advertisement')) {
+              paragraphs.push(text);
             }
+          });
+          
+          if (paragraphs.length > 2) {
+            content = paragraphs.join(' ');
           }
         }
         
@@ -1344,15 +2232,36 @@ class NativeSignalBotService extends EventEmitter {
         content = content.replace(/\s+/g, ' ').trim();
         title = title.replace(/\s+/g, ' ').trim();
         
+        // Remove common junk
+        content = content.replace(/Share this.*/gi, '');
+        content = content.replace(/Advertisement.*/gi, '');
+        content = content.replace(/Read more at.*/gi, '');
+        
         if (title && content && content.length > 100) {
           console.log(`✅ Successfully scraped from: ${attemptUrl}`);
           return { title, content };
         }
         
       } catch (error) {
-        console.log(`❌ Failed to scrape ${attemptUrl}: ${error.message}`);
+        if (error.code === 'ECONNREFUSED') {
+          console.log(`🚫 Connection refused for ${attemptUrl}`);
+        } else if (error.code === 'ETIMEDOUT') {
+          console.log(`⏱️ Timeout for ${attemptUrl}`);
+        } else if (error.response && error.response.status === 403) {
+          console.log(`🚫 Access forbidden for ${attemptUrl}`);
+        } else {
+          console.log(`❌ Error scraping ${attemptUrl}: ${error.message}`);
+        }
         continue;
       }
+    }
+    
+    // If Cloudflare was detected, provide a helpful message
+    if (cloudflareDetected) {
+      return {
+        title: 'Article Protected by Cloudflare',
+        content: This article is protected by Cloudflare and cannot be automatically summarized. The URL appears to be about: "${new URL(url).pathname.split('/').pop().replace(/-/g, ' ')}". Please visit the original link to read the full article, or try sharing the article text directly for summarization.
+      };
     }
     
     console.log(`❌ Failed to scrape content from all sources for: ${url}`);
@@ -1412,16 +2321,16 @@ ${content.content.substring(0, 3000)}...`;
       // Select appropriate category (default to news category 5)
       const categoryId = this.selectDiscourseCategory(content, summary);
       
-      const title = `[News] ${content.title}`;
+      const title = [News] ${content.title};
       const body = `${summary}
 
-**Source:** [${url}](${url})
-**Bypass:** [12ft.io](${bypassLinks.twelveft})
-**Archive:** [Web Archive](${bypassLinks.archiveView})
+Source: [${url}](${url})
+Bypass: [12ft.io](${bypassLinks.twelveft})
+Archive: [Web Archive](${bypassLinks.archiveView})
 
-*Posted automatically by Signal Bot*`;
+Posted automatically by Signal Bot`;
       
-      const response = await axios.post(`${this.discourseApiUrl}/posts.json`, {
+      const response = await axios.post(${this.discourseApiUrl}/posts.json, {
         title: title,
         raw: body,
         category: categoryId,
@@ -1451,6 +2360,12 @@ ${content.content.substring(0, 3000)}...`;
     const envelope = params.envelope;
     const dataMessage = envelope.dataMessage;
     const reactionMessage = envelope.reactionMessage;
+    
+    // Check for duplicate messages
+    if (this.isDuplicateMessage(envelope)) {
+      console.log(`⚠️ [Instance ${this.instanceId}] Duplicate message detected, skipping processing`);
+      return;
+    }
     
     // Handle reaction messages separately
     if (reactionMessage) {
@@ -1530,6 +2445,9 @@ ${content.content.substring(0, 3000)}...`;
     // Check for news URLs and auto-process them
     await this.checkAndProcessNewsUrls(message);
     
+    // Check for repository URLs and auto-process them
+    await this.checkAndProcessRepositoryUrls(message);
+    
     // Check for event follow-up responses
     const eventContext = this.eventFollowUpContext.get(message.sourceNumber);
     if (eventContext && (Date.now() - eventContext.timestamp < 300000)) { // 5 minute timeout
@@ -1547,7 +2465,7 @@ ${content.content.substring(0, 3000)}...`;
     // Check for AI thread continuation (no command prefix)
     const text = message.message.trim();
     if (!text.startsWith('!')) {
-      const threadKey = `${message.groupId || 'dm'}:${message.sourceNumber}`;
+      const threadKey = ${message.groupId || 'dm'}:${message.sourceNumber};
       const userPref = this.userAiPreference.get(threadKey);
       
       // Check if user has recent AI preference
@@ -1593,7 +2511,7 @@ ${content.content.substring(0, 3000)}...`;
                 }
               }
             } catch (error) {
-              console.error(`Error in AI thread continuation:`, error);
+              console.error(Error in AI thread continuation:, error);
             }
           }
         } else {
@@ -1624,9 +2542,9 @@ ${content.content.substring(0, 3000)}...`;
     
     // If this is a reply to bot, use the full message as the query
     if (message.isReplyToBot && query) {
-      console.log(`📬 Received reply to bot: "${query}"`);
+      console.log(📬 Received reply to bot: "${query}");
       if (message.quotedMessage) {
-        console.log(`   Replying to: "${message.quotedMessage}"`);
+        console.log(   Replying to: "${message.quotedMessage}");
       }
     }
     
@@ -1647,7 +2565,7 @@ ${content.content.substring(0, 3000)}...`;
       if (isCommunityQuery) {
         // Get community context
         const context = await this.getContextFromCommunity(query);
-        const response = `OpenAI [Community]: I can help with that! ${context}\n\nFor more info, check our wiki: ${this.wikiUrl} or forum: ${this.forumUrl}`;
+        const response = OpenAI [Community]: I can help with that! ${context}\n\nFor more info, check our wiki: ${this.wikiUrl} or forum: ${this.forumUrl};
         await this.sendReply(message, response);
         return;
       }
@@ -1660,7 +2578,7 @@ ${content.content.substring(0, 3000)}...`;
         // Add context if this is a reply
         let systemPrompt = 'You are a helpful Signal bot assistant for the IrregularChat community. Be concise and friendly.';
         if (message.isReplyToBot && message.quotedMessage) {
-          systemPrompt += `\n\nContext: The user is replying to your previous message: "${message.quotedMessage}"`;
+          systemPrompt += \n\nContext: The user is replying to your previous message: "${message.quotedMessage}";
         }
         
         const response = await openai.chat.completions.create({
@@ -1672,7 +2590,7 @@ ${content.content.substring(0, 3000)}...`;
           max_completion_tokens: 700  // GPT-5 thinking model needs 600+ tokens
         });
         
-        await this.sendReply(message, `OpenAI: ${response.choices[0].message.content}`);
+        await this.sendReply(message, OpenAI: ${response.choices[0].message.content});
       }
     } catch (error) {
       console.error('Failed to handle mention:', error);
@@ -1687,10 +2605,40 @@ ${content.content.substring(0, 3000)}...`;
     
     console.log(`📝 Processing command: !${commandName} with ${args.length} args`);
     
+    // Security: Validate and sanitize command input
+    const context = {
+      sender: message.sourceName || message.sourceNumber,
+      senderName: message.sourceName,
+      sourceNumber: message.sourceNumber,
+      sourceUuid: message.sourceUuid,
+      groupId: message.groupId
+    };
+
+    const validation = this.validateCommand(commandName, args, context);
+    if (!validation.valid) {
+      const errorMessage = ❌ Security validation failed: ${validation.errors.join(', ')};
+      console.log(`🛡️ ${errorMessage}`);
+      await this.sendReply(message, errorMessage);
+      return;
+    }
+
+    // Security: Check rate limits
+    const userIdentifier = message.sourceUuid || message.sourceNumber;
+    const rateLimit = this.checkRateLimit(userIdentifier, commandName);
+    if (!rateLimit.allowed) {
+      console.log(`🚫 Rate limit exceeded for ${userIdentifier}: ${commandName}`);
+      await this.sendReply(message, 🚫 ${rateLimit.error});
+      return;
+    }
+
+    // Use sanitized inputs from validation
+    const sanitizedCommandName = validation.sanitizedCommand;
+    const sanitizedArgs = validation.sanitizedArgs;
+    
     // Track command usage
     const usageData = {
-      command: commandName,
-      args: args.join(' ').substring(0, 1000), // Limit args length
+      command: sanitizedCommandName,
+      args: sanitizedArgs.join(' ').substring(0, 1000), // Limit args length
       groupId: message.groupId || null,
       groupName: message.groupName || null,
       userId: message.sourceNumber,
@@ -1701,14 +2649,14 @@ ${content.content.substring(0, 3000)}...`;
     };
     console.log(`📦 Available commands: ${Array.from(this.plugins.keys()).join(', ')}`);
     
-    const command = this.plugins.get(commandName);
+    const command = this.plugins.get(sanitizedCommandName);
     if (!command) {
-      console.log(`❌ Command not found: !${commandName}`);
+      console.log(`❌ Command not found: !${sanitizedCommandName}`);
       usageData.success = false;
       usageData.errorMessage = 'Command not found';
       usageData.responseTime = Date.now() - startTime;
       await this.trackCommandUsage(usageData);
-      await this.sendReply(message, `Unknown command: !${commandName}. Use !help for available commands.`);
+      await this.sendReply(message, Unknown command: !${sanitizedCommandName}. Use !help for available commands.);
       return;
     }
     
@@ -1716,8 +2664,9 @@ ${content.content.substring(0, 3000)}...`;
       const context = {
         sender: message.sourceName || message.sourceNumber, // Display name first, phone as fallback
         senderName: message.sourceName,
-        sourceNumber: message.sourceNumber, // Keep phone number for admin functions
-        args: args,
+        sourceNumber: message.sourceNumber, // Legacy - being phased out
+        sourceUuid: message.sourceUuid, // Primary identifier for security
+        args: sanitizedArgs, // Use sanitized arguments for security
         groupId: message.groupId,
         isGroup: !!message.groupId,
         isDM: !message.groupId,
@@ -1746,7 +2695,7 @@ ${content.content.substring(0, 3000)}...`;
         await this.sendReply(message, response);
       }
     } catch (error) {
-      console.error(`❌ Command ${commandName} failed:`, error);
+      console.error(❌ Command ${commandName} failed:, error);
       
       // Track failed command
       usageData.success = false;
@@ -1763,7 +2712,7 @@ ${content.content.substring(0, 3000)}...`;
         userName: message.sourceName
       });
       
-      await this.sendReply(message, `Command failed: ${error.message}`);
+      await this.sendReply(message, Command failed: ${error.message});
     }
   }
 
@@ -1786,14 +2735,14 @@ ${content.content.substring(0, 3000)}...`;
           groupId: groupId,
           addMembers: [userNumber]
         },
-        id: `adduser-${Date.now()}`
+        id: adduser-${Date.now()}
       };
       
       const result = await this.sendJsonRpcRequest(request);
       console.log(`✅ Added ${userNumber} to group ${groupId}`);
       return result;
     } catch (error) {
-      console.error(`Failed to add user to group: ${error.message}`);
+      console.error(Failed to add user to group: ${error.message});
       throw error;
     }
   }
@@ -1804,7 +2753,7 @@ ${content.content.substring(0, 3000)}...`;
       await this.sendGroupMessage(groupId, message);
       console.log(`✅ Sent message to group ${groupId}`);
     } catch (error) {
-      console.error(`Failed to send to group: ${error.message}`);
+      console.error(Failed to send to group: ${error.message});
       throw error;
     }
   }
@@ -1921,6 +2870,10 @@ ${content.content.substring(0, 3000)}...`;
     }
   }
 
+  async isDaemonRunning() {
+    return fs.existsSync(this.socketPath);
+  }
+
   async startListening() {
     if (this.isListening) {
       console.log('⚠️ Already listening');
@@ -1930,14 +2883,23 @@ ${content.content.substring(0, 3000)}...`;
     // Check if account is registered
     const accountExists = await this.checkAccountRegistered();
     if (!accountExists) {
-      throw new Error(`Account ${this.phoneNumber} is not registered. Please register first using signal-cli.`);
+      throw new Error(Account ${this.phoneNumber} is not registered. Please register first using signal-cli.);
     }
     
     this.isListening = true;
     
     try {
-      await this.startDaemon();
-      await this.connectSocket();
+      // Check if daemon is already running
+      const daemonRunning = await this.isDaemonRunning();
+      if (daemonRunning) {
+        console.log('🔌 Daemon already running, connecting to existing socket...');
+        await this.connectSocket();
+      } else {
+        console.log('🚀 Starting new daemon...');
+        await this.startDaemon();
+        await this.connectSocket();
+      }
+      
       console.log('✅ Signal bot is listening for messages');
       
       // Load Discourse metadata in background
@@ -1973,7 +2935,514 @@ ${content.content.substring(0, 3000)}...`;
       console.error('❌ Error saving custom news domains:', error.message);
     }
   }
+
+  // Repository Processing System
+  async checkAndProcessRepositoryUrls(message) {
+    // Skip automatic processing if this message starts with a command that handles repos
+    const repoCommands = ['!repo', '!tldr', '!summarize'];
+    const isRepoCommand = repoCommands.some(cmd => message.message.trim().toLowerCase().startsWith(cmd));
+    
+    if (isRepoCommand) {
+      console.log('⏭️ Skipping automatic repository detection for manual command');
+      return;
+    }
+    
+    const urlRegex = /https?:\/\/[^\s]+/g;
+    const urls = message.message.match(urlRegex);
+    
+    if (!urls || urls.length === 0) return;
+    
+    for (const url of urls) {
+      // Check security first for ALL URLs
+      const securityCheck = await this.checkUrlSecurity(url, message);
+      if (securityCheck.isWatched) {
+        await this.sendSecurityWarning(url, securityCheck, message);
+        continue;
+      }
+      
+      if (this.isRepositoryUrl(url)) {
+        console.log(`🔧 Detected repository URL: ${url}`);
+        
+        // Check if we've already processed this URL recently (within 6 hours)
+        const existingProcessed = Array.from(this.processedRepositories.values())
+          .find(p => p.url === url && Date.now() - p.timestamp < 21600000); // 6 hours
+        
+        if (existingProcessed) {
+          console.log(`⏭️ Repository already processed recently: ${url}`);
+          continue;
+        }
+        
+        // Process repository asynchronously
+        setTimeout(() => {
+          this.processRepositoryUrl(url, message).catch(error => {
+            console.error(❌ Failed to process repository: ${url}, error);
+          });
+        }, 100);
+      }
+    }
+  }
   
+  isRepositoryUrl(url) {
+    try {
+      const urlObj = new URL(url);
+      const hostname = urlObj.hostname.toLowerCase();
+      const pathname = urlObj.pathname.toLowerCase();
+      
+      // GitHub patterns
+      const githubPatterns = [
+        /^github\.com$/,
+        /^www\.github\.com$/,
+        /^gist\.github\.com$/ // Also support GitHub Gists
+      ];
+      
+      // GitLab patterns  
+      const gitlabPatterns = [
+        /^gitlab\.com$/,
+        /^www\.gitlab\.com$/,
+        /.*gitlab.*/ // Self-hosted GitLab instances
+      ];
+      
+      // Check if hostname matches known Git hosting services
+      const isGitHost = [
+        ...githubPatterns,
+        ...gitlabPatterns,
+        /^bitbucket\.org$/,
+        /^codeberg\.org$/,
+        /^sr\.ht$/, // SourceHut
+        /^git\./,   // Common git subdomain pattern
+      ].some(pattern => pattern.test(hostname));
+      
+      if (!isGitHost) return false;
+      
+      // Exclude non-repository URLs
+      const excludePatterns = [
+        /\/issues\/\d+/,      // Issue pages
+        /\/pull\/\d+/,        // PR pages  
+        /\/discussions/,      // Discussion pages
+        /\/releases\/tag/,    // Release pages
+        /\/actions/,          // Actions pages
+        /\/settings/,         // Settings pages
+        /\/wiki/,             // Wiki pages
+        /\/projects/,         // Project boards
+        /\/security/,         // Security pages
+        /\/pulse/,            // Pulse pages
+        /\/graphs/,           // Graph pages
+        /\/network/,          // Network pages
+        /\/blame/,            // Blame pages
+        /\/commit\/[a-f0-9]+/, // Individual commit pages
+        /\/tree\/[^\/]+\/.*/, // Specific file/folder views (beyond root)
+        /\/blob\/[^\/]+\/.*/, // Individual file views
+      ];
+      
+      const isExcluded = excludePatterns.some(pattern => pattern.test(pathname));
+      if (isExcluded) return false;
+      
+      // Must have owner/repo pattern (at minimum)
+      // Matches: /owner/repo, /owner/repo/, /owner/repo.git
+      const repoPattern = /^\/[^\/]+\/[^\/]+\/?(?:\.git)?$/;
+      const isRootRepoUrl = repoPattern.test(pathname);
+      
+      // Also accept basic repository URLs with common suffixes
+      const allowedSuffixes = [
+        '',           // /owner/repo
+        '/',          // /owner/repo/
+        '.git',       // /owner/repo.git
+        '/tree/main', // /owner/repo/tree/main
+        '/tree/master', // /owner/repo/tree/master
+        '/tree/develop', // /owner/repo/tree/develop
+      ];
+      
+      const hasAllowedSuffix = allowedSuffixes.some(suffix => 
+        pathname === pathname.split('/').slice(0, 3).join('/') + suffix
+      );
+      
+      return isRootRepoUrl || hasAllowedSuffix;
+      
+    } catch (error) {
+      return false;
+    }
+  }
+  
+  async processRepositoryUrl(url, message) {
+    console.log(`🔄 Processing repository URL: ${url}`);
+    
+    try {
+      // Step 1: Extract repository information from URL
+      const repoInfo = this.parseRepositoryUrl(url);
+      if (!repoInfo) {
+        console.log(`❌ Could not parse repository URL: ${url}`);
+        return;
+      }
+      
+      // Step 2: Fetch repository data from API
+      const repoData = await this.fetchRepositoryData(repoInfo);
+      if (!repoData) {
+        console.log(`❌ Could not fetch repository data: ${url}`);
+        return;
+      }
+      
+      // Step 3: Format repository summary
+      const summary = this.formatRepositorySummary(repoData, url);
+      
+      // Step 4: Send repository summary to chat
+      await this.sendReply(message, summary);
+      
+      // Step 5: Store processed repository
+      this.processedRepositories.set(url, {
+        url: url,
+        timestamp: Date.now(),
+        repoData: repoData,
+        groupId: message.groupId || 'dm',
+        messageId: message.timestamp
+      });
+      
+      // Step 6: Track in database (skip if no prisma client or model doesn't exist)
+      try {
+        if (this.prisma && this.prisma.repositoryLink) {
+          await this.trackRepositoryLink(url, message, repoData);
+        }
+      } catch (dbError) {
+        console.error('Database tracking failed (continuing without tracking):', dbError.message);
+      }
+      
+      console.log(`✅ Successfully processed repository: ${repoData.full_name || repoData.path_with_namespace}`);
+      
+    } catch (error) {
+      console.error(❌ Error processing repository ${url}:, error.message);
+      
+      // Send error message to chat for debugging
+      if (process.env.DEBUG === 'true') {
+        await this.sendReply(message, ⚠️ Repository processing failed: ${error.message});
+      }
+    }
+  }
+  
+  parseRepositoryUrl(url) {
+    try {
+      const urlObj = new URL(url);
+      const hostname = urlObj.hostname.toLowerCase();
+      const pathname = urlObj.pathname;
+      
+      // Remove leading slash and split path
+      const pathParts = pathname.substring(1).split('/');
+      
+      if (pathParts.length < 2) return null;
+      
+      const owner = pathParts[0];
+      const repo = pathParts[1].replace(/\.git$/, ''); // Remove .git suffix if present
+      
+      // Determine platform
+      let platform = 'unknown';
+      if (hostname.includes('github')) {
+        platform = 'github';
+      } else if (hostname.includes('gitlab')) {
+        platform = 'gitlab';
+      } else if (hostname.includes('bitbucket')) {
+        platform = 'bitbucket';
+      } else if (hostname.includes('codeberg')) {
+        platform = 'codeberg';
+      }
+      
+      return {
+        platform: platform,
+        hostname: hostname,
+        owner: owner,
+        repo: repo,
+        fullName: ${owner}/${repo},
+        originalUrl: url
+      };
+      
+    } catch (error) {
+      console.error('Error parsing repository URL:', error);
+      return null;
+    }
+  }
+  
+  async fetchRepositoryData(repoInfo) {
+    try {
+      if (repoInfo.platform === 'github') {
+        return await this.fetchGitHubData(repoInfo);
+      } else if (repoInfo.platform === 'gitlab') {
+        return await this.fetchGitLabData(repoInfo);
+      } else {
+        // For other platforms, try to extract basic info from HTML
+        return await this.fetchGenericRepositoryData(repoInfo);
+      }
+    } catch (error) {
+      console.error(Error fetching ${repoInfo.platform} data:, error);
+      return null;
+    }
+  }
+  
+  async fetchGitHubData(repoInfo) {
+    try {
+      const apiUrl = https://api.github.com/repos/${repoInfo.fullName};
+      
+      // GitHub API request with optional authentication
+      const headers = {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'IrregularChat-Bot/1.0'
+      };
+      
+      // Add GitHub token if available (for higher rate limits)
+      if (process.env.GITHUB_TOKEN) {
+        headers['Authorization'] = token ${process.env.GITHUB_TOKEN};
+      }
+      
+      const response = await fetch(apiUrl, { 
+        headers,
+        timeout: 10000 
+      });
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          console.log(`Repository not found: ${repoInfo.fullName}`);
+          return null;
+        }
+        throw new Error(GitHub API error: ${response.status} ${response.statusText});
+      }
+      
+      const data = await response.json();
+      
+      return {
+        platform: 'GitHub',
+        name: data.name,
+        full_name: data.full_name,
+        description: data.description,
+        language: data.language,
+        stars: data.stargazers_count,
+        forks: data.forks_count,
+        open_issues: data.open_issues_count,
+        created_at: data.created_at,
+        updated_at: data.updated_at,
+        pushed_at: data.pushed_at,
+        size: data.size,
+        license: data.license?.spdx_id || data.license?.name,
+        topics: data.topics || [],
+        is_private: data.private,
+        is_fork: data.fork,
+        html_url: data.html_url,
+        clone_url: data.clone_url,
+        default_branch: data.default_branch,
+        archived: data.archived,
+        disabled: data.disabled
+      };
+      
+    } catch (error) {
+      console.error('Error fetching GitHub data:', error);
+      throw error;
+    }
+  }
+  
+  async fetchGitLabData(repoInfo) {
+    try {
+      // For gitlab.com
+      let apiUrl;
+      if (repoInfo.hostname === 'gitlab.com' || repoInfo.hostname === 'www.gitlab.com') {
+        // Encode the project path for GitLab API
+        const projectPath = encodeURIComponent(repoInfo.fullName);
+        apiUrl = https://gitlab.com/api/v4/projects/${projectPath};
+      } else {
+        // For self-hosted GitLab instances
+        const projectPath = encodeURIComponent(repoInfo.fullName);
+        apiUrl = https://${repoInfo.hostname}/api/v4/projects/${projectPath};
+      }
+      
+      const headers = {
+        'Accept': 'application/json',
+        'User-Agent': 'IrregularChat-Bot/1.0'
+      };
+      
+      // Add GitLab token if available
+      if (process.env.GITLAB_TOKEN) {
+        headers['Authorization'] = Bearer ${process.env.GITLAB_TOKEN};
+      }
+      
+      const response = await fetch(apiUrl, { 
+        headers,
+        timeout: 10000 
+      });
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          console.log(`GitLab repository not found: ${repoInfo.fullName}`);
+          return null;
+        }
+        throw new Error(GitLab API error: ${response.status} ${response.statusText});
+      }
+      
+      const data = await response.json();
+      
+      return {
+        platform: 'GitLab',
+        name: data.name,
+        full_name: data.path_with_namespace,
+        description: data.description,
+        language: data.language || 'Unknown',
+        stars: data.star_count,
+        forks: data.forks_count,
+        open_issues: data.open_issues_count || 0,
+        created_at: data.created_at,
+        updated_at: data.last_activity_at,
+        pushed_at: data.last_activity_at,
+        size: 0, // GitLab doesn't provide repository size in basic API
+        license: data.license?.name,
+        topics: data.topics || data.tag_list || [],
+        is_private: data.visibility === 'private',
+        is_fork: data.forked_from_project !== null,
+        html_url: data.web_url,
+        clone_url: data.http_url_to_repo,
+        default_branch: data.default_branch,
+        archived: data.archived,
+        disabled: false
+      };
+      
+    } catch (error) {
+      console.error('Error fetching GitLab data:', error);
+      throw error;
+    }
+  }
+  
+  async fetchGenericRepositoryData(repoInfo) {
+    try {
+      // Fallback for other Git hosting services
+      // Fetch the HTML page and try to extract basic information
+      const response = await fetch(repoInfo.originalUrl, {
+        headers: {
+          'User-Agent': 'IrregularChat-Bot/1.0'
+        },
+        timeout: 10000
+      });
+      
+      if (!response.ok) {
+        throw new Error(HTTP ${response.status});
+      }
+      
+      const html = await response.text();
+      
+      // Basic extraction using regex (not as reliable as API)
+      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      const descMatch = html.match(/<meta[^>]*name="description"[^>]*content="([^"]*)"[^>]*>/i);
+      
+      return {
+        platform: repoInfo.platform.charAt(0).toUpperCase() + repoInfo.platform.slice(1),
+        name: repoInfo.repo,
+        full_name: repoInfo.fullName,
+        description: descMatch ? descMatch[1] : 'No description available',
+        language: 'Unknown',
+        stars: 0,
+        forks: 0,
+        open_issues: 0,
+        created_at: null,
+        updated_at: null,
+        pushed_at: null,
+        size: 0,
+        license: null,
+        topics: [],
+        is_private: false,
+        is_fork: false,
+        html_url: repoInfo.originalUrl,
+        clone_url: null,
+        default_branch: null,
+        archived: false,
+        disabled: false
+      };
+      
+    } catch (error) {
+      console.error('Error fetching generic repository data:', error);
+      throw error;
+    }
+  }
+  
+  formatRepositorySummary(repoData, originalUrl) {
+    let summary = Repository Snapshot\n\n;
+    
+    // Repository name and platform
+    summary += ${repoData.full_name};
+    if (repoData.is_private) {
+      summary +=  🔒;
+    }
+    if (repoData.is_fork) {
+      summary +=  🍴;
+    }
+    if (repoData.archived) {
+      summary +=  (Archived);
+    }
+    summary += \n;
+    summary += Platform: ${repoData.platform}\n;
+    
+    // Description
+    if (repoData.description) {
+      const desc = repoData.description.length > 200 
+        ? repoData.description.substring(0, 200) + '...'
+        : repoData.description;
+      summary += ${desc}\n;
+    }
+    
+    summary += \n;
+    
+    // Stats section
+    summary += Stats:\n;
+    if (repoData.language && repoData.language !== 'Unknown') {
+      summary += • Language: ${repoData.language}\n;
+    }
+    
+    if (repoData.stars > 0) {
+      summary += • ⭐ ${repoData.stars.toLocaleString()} stars\n;
+    }
+    
+    if (repoData.forks > 0) {
+      summary += • 🍴 ${repoData.forks.toLocaleString()} forks\n;
+    }
+    
+    if (repoData.open_issues > 0) {
+      summary += • 🐛 ${repoData.open_issues.toLocaleString()} open issues\n;
+    }
+    
+    // Last activity
+    if (repoData.updated_at || repoData.pushed_at) {
+      const lastUpdate = repoData.pushed_at || repoData.updated_at;
+      const updateDate = new Date(lastUpdate);
+      const now = new Date();
+      const diffDays = Math.floor((now - updateDate) / (1000 * 60 * 60 * 24));
+      
+      let timeAgo;
+      if (diffDays === 0) {
+        timeAgo = 'today';
+      } else if (diffDays === 1) {
+        timeAgo = 'yesterday';
+      } else if (diffDays < 7) {
+        timeAgo = ${diffDays} days ago;
+      } else if (diffDays < 30) {
+        timeAgo = ${Math.floor(diffDays / 7)} weeks ago;
+      } else if (diffDays < 365) {
+        timeAgo = ${Math.floor(diffDays / 30)} months ago;
+      } else {
+        timeAgo = ${Math.floor(diffDays / 365)} years ago;
+      }
+      
+      summary += • Last updated: ${timeAgo}\n;
+    }
+    
+    // License
+    if (repoData.license) {
+      summary += • License: ${repoData.license}\n;
+    }
+    
+    // Topics/Tags
+    if (repoData.topics && repoData.topics.length > 0) {
+      const topicsList = repoData.topics.slice(0, 5).join(', ');
+      summary += • Topics: ${topicsList}\n;
+      if (repoData.topics.length > 5) {
+        summary +=   (+${repoData.topics.length - 5} more)\n;
+      }
+    }
+    
+    summary += \nShare related repos with the group and tell us why you find them interesting!;
+    
+    return summary;
+  }
+
   // Discourse Metadata Management
   async loadDiscourseMetadata() {
     if (!this.discourseApiKey || !this.discourseApiUrl) {
@@ -1985,7 +3454,7 @@ ${content.content.substring(0, 3000)}...`;
     
     try {
       // Load tags
-      const tagsResponse = await axios.get(`${this.discourseApiUrl}/tags.json`, {
+      const tagsResponse = await axios.get(${this.discourseApiUrl}/tags.json, {
         headers: {
           'Api-Key': this.discourseApiKey,
           'Api-Username': this.discourseApiUsername
@@ -2001,7 +3470,7 @@ ${content.content.substring(0, 3000)}...`;
       }
       
       // Load categories
-      const categoriesResponse = await axios.get(`${this.discourseApiUrl}/categories.json`, {
+      const categoriesResponse = await axios.get(${this.discourseApiUrl}/categories.json, {
         headers: {
           'Api-Key': this.discourseApiKey,
           'Api-Username': this.discourseApiUsername
@@ -2023,7 +3492,7 @@ ${content.content.substring(0, 3000)}...`;
   
   extractNewsTagsFromContent(content, summary) {
     const tags = [];
-    const text = `${content.title} ${summary} ${content.content}`.toLowerCase();
+    const text = ${content.title} ${summary} ${content.content}.toLowerCase();
     
     // Technology tags
     if (text.includes('ai') || text.includes('artificial intelligence')) tags.push('ai');
@@ -2057,7 +3526,7 @@ ${content.content.substring(0, 3000)}...`;
   }
   
   selectDiscourseCategory(content, summary) {
-    const text = `${content.title} ${summary}`.toLowerCase();
+    const text = ${content.title} ${summary}.toLowerCase();
     
     // Category mapping (adjust IDs based on your Discourse setup)
     if (text.includes('cyber') || text.includes('security') || text.includes('hack')) return 7; // Cybersecurity
@@ -2166,39 +3635,32 @@ ${content.content.substring(0, 3000)}...`;
   }
 
   async getGroups() {
-    return new Promise((resolve, reject) => {
-      const listGroups = spawn('signal-cli', [
-        '-a', this.phoneNumber,
-        '--config', this.dataDir,
-        'listGroups',
-        '--detailed'
-      ]);
+    try {
+      const request = {
+        jsonrpc: '2.0',
+        method: 'listGroups',
+        params: {
+          account: this.phoneNumber
+        },
+        id: Date.now()
+      };
       
-      let output = '';
-      let error = '';
+      const response = await this.sendJsonRpcRequest(request);
+      if (response.error) {
+        throw new Error(response.error.message || 'Failed to list groups');
+      }
       
-      listGroups.stdout.on('data', (data) => {
-        output += data.toString();
-      });
+      // Transform the response to match expected format
+      const groups = (response.result || []).map(group => ({
+        id: group.id,
+        name: group.name || 'Unknown Group'
+      }));
       
-      listGroups.stderr.on('data', (data) => {
-        error += data.toString();
-      });
-      
-      listGroups.on('close', (code) => {
-        if (code === 0) {
-          try {
-            // Parse the output to extract group information
-            const groups = this.parseGroupsOutput(output);
-            resolve(groups);
-          } catch (parseError) {
-            reject(parseError);
-          }
-        } else {
-          reject(new Error(error || 'Failed to list groups'));
-        }
-      });
-    });
+      return groups;
+    } catch (error) {
+      console.error('Error getting groups via JSON-RPC:', error);
+      throw error;
+    }
   }
 
   parseGroupsOutput(output) {
@@ -2220,6 +3682,66 @@ ${content.content.substring(0, 3000)}...`;
     }
     
     return groups;
+  }
+
+  async getContacts() {
+    try {
+      const request = {
+        jsonrpc: '2.0',
+        method: 'listContacts',
+        params: {
+          account: this.phoneNumber
+        },
+        id: Date.now()
+      };
+      
+      const response = await this.sendJsonRpcRequest(request);
+      if (response.error) {
+        throw new Error(response.error.message || 'Failed to list contacts');
+      }
+      
+      // Transform the response to match expected format
+      const contacts = (response.result || []).map(contact => ({
+        identifier: contact.uuid || contact.number,
+        displayName: contact.name || contact.number || contact.uuid || 'Unknown Contact',
+        phoneNumber: contact.number,
+        uuid: contact.uuid
+      }));
+      
+      return contacts;
+    } catch (error) {
+      console.error('Error getting contacts via JSON-RPC:', error);
+      throw error;
+    }
+  }
+
+  parseContactsOutput(output) {
+    const contacts = [];
+    const lines = output.split('\n');
+    
+    for (const line of lines) {
+      if (line.includes('Number:') || line.includes('UUID:')) {
+        const numberMatch = line.match(/Number: ([^\s]+)/);
+        const uuidMatch = line.match(/UUID: ([^\s]+)/);
+        const nameMatch = line.match(/Name: (.+?)(?:\s+|$)/);
+        
+        const contact = {};
+        if (numberMatch) contact.number = numberMatch[1];
+        if (uuidMatch) contact.uuid = uuidMatch[1];
+        if (nameMatch) contact.name = nameMatch[1].trim();
+        
+        if (Object.keys(contact).length > 0) {
+          contacts.push({
+            identifier: contact.uuid || contact.number,
+            displayName: contact.name || contact.number || contact.uuid,
+            phoneNumber: contact.number,
+            uuid: contact.uuid
+          });
+        }
+      }
+    }
+    
+    return contacts;
   }
 
   async getHealth() {
@@ -2253,47 +3775,28 @@ ${content.content.substring(0, 3000)}...`;
       // Check if user wants to refresh the cache
       const forceRefresh = args && args[0] === 'refresh';
       
-      // Fetch groups using the new caching mechanism
-      const groups = await this.getSignalGroups(forceRefresh);
-      
       if (forceRefresh) {
-        console.log('✅ Groups cache refreshed');
+        // Force refresh from Signal and sync to database
+        await this.syncGroupsToDatabase();
+        console.log('✅ Groups synced from Signal to database');
       }
+      
+      // Get groups from database (fast response)
+      const groups = await this.getGroupsFromDatabase();
       
       if (!groups || groups.length === 0) {
-        return '❌ Unable to fetch groups or bot is not in any groups.';
-      }
-      
-      let response = '📱 Signal Groups (Bot Membership):\n\n';
-      
-      groups.forEach((group, index) => {
-        // Use memberCount from cache, or count members array if available
-        const memberCount = group.memberCount || (group.members ? group.members.length : 0);
-        const isAdmin = this.isBotAdmin(group);
-        const adminIcon = isAdmin ? '👑' : '👤';
+        // Try to sync from Signal if database is empty
+        console.log('📊 Database empty, syncing groups from Signal...');
+        await this.syncGroupsToDatabase();
+        const retryGroups = await this.getGroupsFromDatabase();
         
-        response += `${index + 1}. ${group.name || 'Unnamed Group'} ${adminIcon}\n`;
-        response += `   Members: ${memberCount}`;
-        if (isAdmin) {
-          response += ' (Bot is Admin)';
+        if (!retryGroups || retryGroups.length === 0) {
+          return '❌ Unable to fetch groups or bot is not in any groups.';
         }
-        response += '\n\n';
-      });
-      
-      response += '────────────────\n';
-      response += '👑 = Bot has admin rights\n';
-      response += '👤 = Bot is regular member\n\n';
-      
-      const adminGroups = groups.filter(g => this.isBotAdmin(g));
-      if (adminGroups.length > 0) {
-        response += `✅ Bot can add users to ${adminGroups.length} group(s)\n`;
-        response += 'Use !addto <group-number> @user to add users\n';
-      } else {
-        response += '⚠️ Bot has no admin rights in any group\n';
-        response += 'Cannot add users without admin permissions\n';
+        return this.formatGroupsResponse(retryGroups);
       }
       
-      return response;
+      return this.formatGroupsResponse(groups);
       
     } catch (error) {
       console.error('Error in handleGroups:', error);
@@ -2301,31 +3804,175 @@ ${content.content.substring(0, 3000)}...`;
     }
   }
   
+  // Get groups from database (fast)
+  async getGroupsFromDatabase() {
+    if (!this.prisma) {
+      console.log('⚠️ Database not available, falling back to file cache');
+      return await this.getSignalGroups(false);
+    }
+    
+    try {
+      const groups = await this.prisma.signalGroup.findMany({
+        where: { botIsMember: true },
+        orderBy: { memberCount: 'desc' }
+      });
+      
+      console.log(`📊 Retrieved ${groups.length} groups from database`);
+      return groups;
+    } catch (error) {
+      console.error('Error fetching groups from database:', error);
+      // Fallback to file cache
+      return await this.getSignalGroups(false);
+    }
+  }
+  
+  // Sync groups from Signal to database
+  async syncGroupsToDatabase() {
+    if (!this.prisma) {
+      console.log('⚠️ Database not available, skipping sync');
+      return;
+    }
+    
+    try {
+      // Get fresh data from Signal
+      const signalGroups = await this.getSignalGroups(true);
+      
+      if (!signalGroups || signalGroups.length === 0) {
+        console.log('⚠️ No groups received from Signal');
+        return;
+      }
+      
+      console.log(`🔄 Syncing ${signalGroups.length} groups to database...`);
+      
+      // Sync each group to database using upsert
+      for (const group of signalGroups) {
+        const memberCount = group.members ? group.members.length : 
+                           group.memberCount ? group.memberCount : 0;
+        const isAdmin = this.isBotAdmin(group);
+        
+        await this.prisma.signalGroup.upsert({
+          where: { id: group.id },
+          create: {
+            id: group.id,
+            name: group.name || 'Unnamed Group',
+            description: group.description,
+            memberCount: memberCount,
+            botIsAdmin: isAdmin,
+            botIsMember: true,
+            groupType: group.type,
+            lastUpdated: new Date()
+          },
+          update: {
+            name: group.name || 'Unnamed Group',
+            description: group.description,
+            memberCount: memberCount,
+            botIsAdmin: isAdmin,
+            botIsMember: true,
+            groupType: group.type,
+            lastUpdated: new Date()
+          }
+        });
+      }
+      
+      console.log(`✅ Synced ${signalGroups.length} groups to database`);
+      
+    } catch (error) {
+      console.error('Error syncing groups to database:', error);
+    }
+  }
+  
+  // Format groups response
+  formatGroupsResponse(groups) {
+    let response = '📱 Signal Groups (Sorted by Size):\n\n';
+    
+    groups.forEach((group, index) => {
+      const adminIcon = group.botIsAdmin ? '👑' : '👤';
+      
+      response += ${index + 1}. ${group.name} ${adminIcon}\n;
+      response +=    Members: ${group.memberCount};
+      if (group.botIsAdmin) {
+        response += ' (Bot is Admin)';
+      }
+      response += '\n\n';
+    });
+    
+    response += '────────────────\n';
+    
+    // Calculate totals
+    const totalMembers = groups.reduce((sum, group) => sum + group.memberCount, 0);
+    response += 📊 Total: ${groups.length} groups, ~${totalMembers} total members\n;
+    response += '👑 = Bot has admin rights\n';
+    response += '👤 = Bot is regular member\n\n';
+    
+    const adminGroups = groups.filter(g => g.botIsAdmin);
+    if (adminGroups.length > 0) {
+      response += ✅ Bot can add users to ${adminGroups.length} group(s)\n;
+      response += 'Use !addto <group-number> @user to add users\n';
+    } else {
+      response += '⚠️ Bot has no admin rights in any group\n';
+      response += 'Cannot add users without admin permissions\n';
+    }
+    
+    return response;
+  }
+  
   async fetchAndCacheGroups() {
-    // Try to fetch groups using a direct command
+    // Use secure spawn instead of exec to prevent command injection
     return new Promise((resolve, reject) => {
-      const { exec } = require('child_process');
-      exec(`echo '{"jsonrpc":"2.0","method":"listGroups","params":{"account":"${this.phoneNumber}"},"id":1}' | nc -U ${this.socketPath}`, 
-        { timeout: 5000 },
-        (error, stdout, stderr) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          try {
-            const response = JSON.parse(stdout);
-            if (response.result) {
-              this.cachedGroups = response.result;
-              this.cachedGroupsTime = Date.now();
-              resolve(response.result);
-            } else {
-              reject(new Error('No result in response'));
-            }
-          } catch (parseError) {
-            reject(parseError);
-          }
+      const { spawn } = require('child_process');
+      
+      // Create JSON-RPC payload securely
+      const payload = JSON.stringify({
+        jsonrpc: "2.0",
+        method: "listGroups",
+        params: { account: this.phoneNumber },
+        id: 1
+      });
+      
+      // Use spawn with controlled arguments instead of shell exec
+      const nc = spawn('nc', ['-U', this.socketPath], {
+        timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      
+      let stdout = '';
+      let stderr = '';
+      
+      nc.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+      
+      nc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+      
+      nc.on('close', (code) => {
+        if (code !== 0) {
+          reject(new Error(nc process exited with code ${code}: ${stderr}));
+          return;
         }
-      );
+        
+        try {
+          const response = JSON.parse(stdout);
+          if (response.result) {
+            this.cachedGroups = response.result;
+            this.cachedGroupsTime = Date.now();
+            resolve(response.result);
+          } else {
+            reject(new Error('No result in response'));
+          }
+        } catch (parseError) {
+          reject(parseError);
+        }
+      });
+      
+      nc.on('error', (error) => {
+        reject(error);
+      });
+      
+      // Send the payload to nc via stdin
+      nc.stdin.write(payload);
+      nc.stdin.end();
     });
   }
   
@@ -2343,7 +3990,7 @@ ${content.content.substring(0, 3000)}...`;
           if (cache.lastUpdated && cache.groups && cache.groups.length > 0) {
             const age = Date.now() - cache.lastUpdated;
             if (age < CACHE_DURATION) {
-              console.log(`📦 Using cached groups (${cache.groups.length} groups, age: ${Math.round(age/1000)}s)`);
+              console.log(📦 Using cached groups (${cache.groups.length} groups, age: ${Math.round(age/1000)}s));
               return cache.groups;
             }
           }
@@ -2360,7 +4007,7 @@ ${content.content.substring(0, 3000)}...`;
         method: 'listGroups',
         params: {
           account: this.phoneNumber,
-          'get-members': false  // Don't fetch members to speed up
+          'get-members': true  // Fetch members to get accurate count
         },
         id: Date.now()
       };
@@ -2479,7 +4126,7 @@ ${content.content.substring(0, 3000)}...`;
     // The message text after the command and group number
     // This will contain the replacement characters for mentions
     const fullMessage = message?.message || '';
-    const commandPrefix = `!addto ${groupIdentifier}`;
+    const commandPrefix = !addto ${groupIdentifier};
     const afterCommand = fullMessage.substring(fullMessage.indexOf(commandPrefix) + commandPrefix.length).trim();
     
     console.log('🔍 AddTo Debug:');
@@ -2548,12 +4195,12 @@ ${content.content.substring(0, 3000)}...`;
                 users.push({ identifier: member.uuid, display: userArg });
               } else {
                 console.log(`⚠️ Could not find UUID for ${userArg}`);
-                return `❌ Could not find user "${userArg}". Please use @mention or provide their UUID.`;
+                return ❌ Could not find user "${userArg}". Please use @mention or provide their UUID.;
               }
             }
           } catch (error) {
             console.error('Error fetching group members:', error);
-            return `❌ Error looking up user "${userArg}"`;
+            return ❌ Error looking up user "${userArg}";
           }
         }
       }
@@ -2570,8 +4217,8 @@ ${content.content.substring(0, 3000)}...`;
       // Find the group by number
       const groupNum = parseInt(groupIdentifier);
       if (isNaN(groupNum) || groupNum < 1 || groupNum > groups.length) {
-        return `❌ Invalid group number: ${groupIdentifier}\n\n` +
-               `Please use a number between 1 and ${groups.length}\n` +
+        return ❌ Invalid group number: ${groupIdentifier}\n\n +
+               Please use a number between 1 and ${groups.length}\n +
                'Use !groups to see available groups.';
       }
       
@@ -2579,7 +4226,7 @@ ${content.content.substring(0, 3000)}...`;
       const isAdmin = this.isBotAdmin(targetGroup);
       
       if (!isAdmin) {
-        return `❌ Cannot add users to "${targetGroup.name}"\n\n` +
+        return ❌ Cannot add users to "${targetGroup.name}"\n\n +
                'Bot does not have admin permissions in this group.\n' +
                'Only group admins can add new members.';
       }
@@ -2590,7 +4237,7 @@ ${content.content.substring(0, 3000)}...`;
       
       // Attempt to add users via Signal CLI
       const results = [];
-      console.log(`🎯 Attempting to add ${users.length} users to group: ${targetGroup.name} (${targetGroup.id})`);
+      console.log(🎯 Attempting to add ${users.length} users to group: ${targetGroup.name} (${targetGroup.id}));
       
       for (const user of users) {
         try {
@@ -2608,7 +4255,7 @@ ${content.content.substring(0, 3000)}...`;
             id: Date.now()
           };
           
-          console.log(`📤 Sending updateGroup request:`);
+          console.log(📤 Sending updateGroup request:);
           console.log(`   Group: ${targetGroup.name}`);
           console.log(`   User UUID: ${userIdentifier}`);
           console.log(`   Display: ${user.display}`);
@@ -2616,17 +4263,17 @@ ${content.content.substring(0, 3000)}...`;
           const success = await this.sendJsonRpcRequest(request);
           if (success) {
             console.log(`✅ Successfully added ${user.display}`);
-            results.push(`✅ ${user.display} added successfully`);
+            results.push(✅ ${user.display} added successfully);
           } else {
             console.log(`⚠️ Failed to add ${user.display}`);
-            results.push(`⚠️ ${user.display} (could not add - check if UUID is valid)`);
+            results.push(⚠️ ${user.display} (could not add - check if UUID is valid));
           }
         } catch (error) {
-          console.error(`Error adding ${user.display}:`, error);
+          console.error(Error adding ${user.display}:, error);
           if (error.message.includes('timeout')) {
-            results.push(`⚠️ ${user.display} (request timed out - user may not exist)`);
+            results.push(⚠️ ${user.display} (request timed out - user may not exist));
           } else {
-            results.push(`❌ ${user.display}: ${error.message}`);
+            results.push(❌ ${user.display}: ${error.message});
           }
         }
       }
@@ -2635,13 +4282,13 @@ ${content.content.substring(0, 3000)}...`;
       const successCount = results.filter(r => r.includes('✅')).length;
       const failCount = results.filter(r => r.includes('❌') || r.includes('⚠️')).length;
       
-      let summary = `📱 Adding users to "${targetGroup.name}":\n\n`;
+      let summary = 📱 Adding users to "${targetGroup.name}":\n\n;
       summary += results.join('\n');
       
       if (successCount > 0 && failCount === 0) {
         summary += '\n\n✅ Operation complete';
       } else if (successCount > 0 && failCount > 0) {
-        summary += `\n\n⚠️ Partially complete: ${successCount} added, ${failCount} failed`;
+        summary += \n\n⚠️ Partially complete: ${successCount} added, ${failCount} failed;
       } else {
         summary += '\n\n❌ Failed to add users';
       }
@@ -2650,8 +4297,8 @@ ${content.content.substring(0, 3000)}...`;
              
     } catch (error) {
       console.error('Error in handleAddTo:', error);
-      return `❌ Failed to add users\n\n` +
-             `Error: ${error.message}`;
+      return ❌ Failed to add users\n\n +
+             Error: ${error.message};
     }
   }
   
@@ -2721,35 +4368,35 @@ ${content.content.substring(0, 3000)}...`;
   async handleJoin(context) {
     const { args } = context;
     if (!args) return '❌ Usage: !join <group-name>';
-    return `✅ Join request submitted for "${args}". Admins will review your request.`;
+    return ✅ Join request submitted for "${args}". Admins will review your request.;
   }
 
   async handleLeave(context) {
     const { args } = context;  
     if (!args) return '❌ Usage: !leave <group-name>';
-    return `✅ You have left the "${args}" group.`;
+    return ✅ You have left the "${args}" group.;
   }
 
   async handleAddUser(context) {
     const { args } = context;
     if (!args) return '❌ Usage: !adduser @user <group>';
-    return `✅ User added to group successfully.`;
+    return ✅ User added to group successfully.;
   }
 
   async handleRemoveUser(context) {
     const { args } = context;
     if (!args) return '❌ Usage: !removeuser @user <group>';
-    return `✅ User removed from group successfully.`;
+    return ✅ User removed from group successfully.;
   }
 
   async handleGroupInfo(context) {
     const { args } = context;
     if (!args) return '❌ Usage: !groupinfo <group>';
-    return `📊 **Group: ${args}**\nMembers: 25\nActive today: 8\nDescription: Community discussions`;
+    return `📊 Group: ${args}\nMembers: 25\nActive today: 8\nDescription: Community discussions`;
   }
 
   async handleMembers(context) {
-    return `👥 **Group Members:**\n• Admin1 (Admin)\n• User1\n• User2\n• User3\n\nTotal: 15 members`;
+    return 👥 Group Members:\n• Admin1 (Admin)\n• User1\n• User2\n• User3\n\nTotal: 15 members;
   }
 
   async handleInvite(context) {
@@ -2758,7 +4405,7 @@ ${content.content.substring(0, 3000)}...`;
     // TODO: Add the sender to the entry room (Actions Chat)
     // This would require knowing the entry room group ID and using updateGroup API
     
-    const inviteInstructions = `📋 **To invite someone to IrregularChat:**
+    const inviteInstructions = `📋 To invite someone to IrregularChat:
 
 1. Let them know you're vouching for them
 2. Make sure you have an SSO login: https://sso.irregularchat.com
@@ -2780,17 +4427,17 @@ That's it! The onboarding process will begin once you type !request.`;
     const { args } = context;
     
     if (!args || args.length === 0) {
-      return `📚 **IrregularPedia Wiki**\n\n` +
-             `Usage: !wiki <search term>\n` +
-             `Example: !wiki security\n\n` +
-             `Browse: https://irregularpedia.org`;
+      return 📚 IrregularPedia Wiki\n\n +
+             Usage: !wiki <search term>\n +
+             Example: !wiki security\n\n +
+             Browse: https://irregularpedia.org;
     }
     
     const searchTerm = Array.isArray(args) ? args.join(' ') : args;
     
     try {
       // Search MediaWiki API
-      const apiUrl = `https://irregularpedia.org/api.php`;
+      const apiUrl = https://irregularpedia.org/api.php;
       const searchParams = new URLSearchParams({
         action: 'query',
         list: 'search',
@@ -2800,10 +4447,10 @@ That's it! The onboarding process will begin once you type !request.`;
         srprop: 'snippet|size|wordcount|timestamp'
       });
       
-      const response = await fetch(`${apiUrl}?${searchParams}`);
+      const response = await fetch(${apiUrl}?${searchParams});
       
       if (!response.ok) {
-        throw new Error(`Wiki API error: ${response.status}`);
+        throw new Error(Wiki API error: ${response.status});
       }
       
       const data = await response.json();
@@ -2815,22 +4462,22 @@ That's it! The onboarding process will begin once you type !request.`;
         const titleParams = new URLSearchParams({
           action: 'query',
           list: 'search',
-          srsearch: `intitle:${searchTerm}`,
+          srsearch: intitle:${searchTerm},
           format: 'json',
           srlimit: '5'
         });
         
-        const titleResponse = await fetch(`${apiUrl}?${titleParams}`);
+        const titleResponse = await fetch(${apiUrl}?${titleParams});
         const titleData = await titleResponse.json();
         const titleResults = titleData.query?.search || [];
         
         if (titleResults.length === 0) {
-          return `Wiki Search: "${searchTerm}"\n\n` +
-                 `No results found.\n\n` +
-                 `Try:\n` +
-                 `• Different keywords\n` +
-                 `• Browse all pages: https://irregularpedia.org/wiki/Special:AllPages\n` +
-                 `• Main page: https://irregularpedia.org`;
+          return Wiki Search: "${searchTerm}"\n\n +
+                 No results found.\n\n +
+                 Try:\n +
+                 • Different keywords\n +
+                 • Browse all pages: https://irregularpedia.org/wiki/Special:AllPages\n +
+                 • Main page: https://irregularpedia.org;
         }
         
         // Use title results
@@ -2838,7 +4485,7 @@ That's it! The onboarding process will begin once you type !request.`;
       }
       
       // Format results for Signal
-      let output = `Wiki Search: "${searchTerm}"\n\n`;
+      let output = Wiki Search: "${searchTerm}"\n\n;
       
       let displayCount = 0;
       for (let i = 0; i < results.length && displayCount < 5; i++) {
@@ -2853,7 +4500,7 @@ That's it! The onboarding process will begin once you type !request.`;
         const title = result.title.replace(/_/g, ' ');
         
         // Build direct URL
-        const pageUrl = `https://irregularpedia.org/wiki/${encodeURIComponent(result.title.replace(/ /g, '_'))}`;
+        const pageUrl = https://irregularpedia.org/wiki/${encodeURIComponent(result.title.replace(/ /g, '_'))};
         
         // Clean snippet - aggressively remove ALL HTML artifacts
         let snippet = '';
@@ -2900,7 +4547,7 @@ That's it! The onboarding process will begin once you type !request.`;
         }
         
         displayCount++;
-        output += `${displayCount}. ${title}\n`;
+        output += ${displayCount}. ${title}\n;
         
         // Only add snippet if it's meaningful and clean (no HTML artifacts)
         if (snippet && snippet.length > 10 && 
@@ -2909,27 +4556,27 @@ That's it! The onboarding process will begin once you type !request.`;
             !snippet.includes('id=') &&
             !snippet.includes('/>') &&
             !snippet.includes('</')) {
-          output += `   ${snippet}\n`;
+          output +=    ${snippet}\n;
         }
         
-        output += `   ${pageUrl}\n\n`;
+        output +=    ${pageUrl}\n\n;
       }
       
       // If no valid results after filtering
       if (displayCount === 0) {
-        return `Wiki Search: "${searchTerm}"\n\n` +
-               `No results found.\n\n` +
-               `Browse all pages: https://irregularpedia.org/wiki/Special:AllPages\n` +
-               `Main page: https://irregularpedia.org`;
+        return Wiki Search: "${searchTerm}"\n\n +
+               No results found.\n\n +
+               Browse all pages: https://irregularpedia.org/wiki/Special:AllPages\n +
+               Main page: https://irregularpedia.org;
       }
       
       // Add summary
       if (totalHits > displayCount) {
-        output += `Showing ${displayCount} of ${totalHits} results\n`;
+        output += Showing ${displayCount} of ${totalHits} results\n;
       }
       
       // Add search link
-      output += `More: https://irregularpedia.org/wiki/Special:Search?search=${encodeURIComponent(searchTerm)}`;
+      output += More: https://irregularpedia.org/wiki/Special:Search?search=${encodeURIComponent(searchTerm)};
       
       return output;
       
@@ -2937,11 +4584,11 @@ That's it! The onboarding process will begin once you type !request.`;
       console.error('Wiki search error:', error);
       
       // Fallback response
-      return `Wiki Search: "${searchTerm}"\n\n` +
-             `Direct search:\n` +
-             `https://irregularpedia.org/wiki/Special:Search?search=${encodeURIComponent(searchTerm)}\n\n` +
-             `Browse all pages:\n` +
-             `https://irregularpedia.org/wiki/Special:AllPages`;
+      return Wiki Search: "${searchTerm}"\n\n +
+             Direct search:\n +
+             https://irregularpedia.org/wiki/Special:Search?search=${encodeURIComponent(searchTerm)}\n\n +
+             Browse all pages:\n +
+             https://irregularpedia.org/wiki/Special:AllPages;
     }
   }
 
@@ -2960,7 +4607,7 @@ That's it! The onboarding process will begin once you type !request.`;
     }
     
     const query = args.join(' ').trim();
-    console.log(`🔍 Advanced search for: "${query}" by ${sender}`);
+    console.log(🔍 Advanced search for: "${query}" by ${sender});
     
     try {
       // Collect data from multiple sources
@@ -2975,7 +4622,7 @@ That's it! The onboarding process will begin once you type !request.`;
       // 1. Search forum posts (if API configured)
       if (this.discourseApiUrl && this.discourseApiKey) {
         try {
-          const forumUrl = `${this.discourseApiUrl}/search.json?q=${encodeURIComponent(query)}`;
+          const forumUrl = ${this.discourseApiUrl}/search.json?q=${encodeURIComponent(query)};
           const forumResponse = await fetch(forumUrl, {
             headers: {
               'Api-Key': this.discourseApiKey,
@@ -2990,7 +4637,7 @@ That's it! The onboarding process will begin once you type !request.`;
             
             searchResults.forum = posts.slice(0, 3).map(post => {
               const topic = topics.find(t => t.id === post.topic_id) || {};
-              const title = topic.title || post.topic_title || `Post #${post.id}`;
+              const title = topic.title || post.topic_title || Post #${post.id};
               const slug = topic.slug || post.topic_slug || 'topic';
               const topicId = post.topic_id || topic.id;
               
@@ -2998,8 +4645,8 @@ That's it! The onboarding process will begin once you type !request.`;
                 type: 'forum',
                 title: title,
                 content: post.blurb || post.excerpt || '',
-                url: topicId ? `https://forum.irregularchat.com/t/${slug}/${topicId}` : 
-                              `https://forum.irregularchat.com/p/${post.id}`
+                url: topicId ? https://forum.irregularchat.com/t/${slug}/${topicId} : 
+                              https://forum.irregularchat.com/p/${post.id}
               };
             });
           }
@@ -3010,7 +4657,7 @@ That's it! The onboarding process will begin once you type !request.`;
       
       // 2. Search wiki
       try {
-        const wikiUrl = `https://irregularpedia.org/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=3`;
+        const wikiUrl = https://irregularpedia.org/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=3;
         const wikiResponse = await fetch(wikiUrl);
         
         if (wikiResponse.ok) {
@@ -3020,7 +4667,7 @@ That's it! The onboarding process will begin once you type !request.`;
             type: 'wiki',
             title: article.title,
             content: article.snippet?.replace(/<[^>]*>/g, '').substring(0, 100) || '',
-            url: `https://irregularpedia.org/wiki/${encodeURIComponent(article.title.replace(/ /g, '_'))}`
+            url: https://irregularpedia.org/wiki/${encodeURIComponent(article.title.replace(/ /g, '_'))}
           }));
         }
       } catch (error) {
@@ -3076,12 +4723,12 @@ That's it! The onboarding process will begin once you type !request.`;
       ];
       
       if (allResults.length === 0) {
-        return `🔍 No results found for: "${query}"\n\n` +
-               `Try:\n` +
-               `• Different keywords\n` +
-               `• !wiki for wiki search\n` +
-               `• !fsearch for forum search\n` +
-               `• !questions to see Q&A`;
+        return 🔍 No results found for: "${query}"\n\n +
+               Try:\n +
+               • Different keywords\n +
+               • !wiki for wiki search\n +
+               • !fsearch for forum search\n +
+               • !questions to see Q&A;
       }
       
       // 6. Use Local AI to synthesize results (for privacy) - with timeout
@@ -3102,11 +4749,11 @@ That's it! The onboarding process will begin once you type !request.`;
             }))
           };
           
-          const aiPromise = fetch(`${this.localAiUrl}/v1/chat/completions`, {
+          const aiPromise = fetch(${this.localAiUrl}/v1/chat/completions, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer ${this.localAiApiKey}`
+              'Authorization': Bearer ${this.localAiApiKey}
             },
             body: JSON.stringify({
               model: this.localAiModel,
@@ -3115,7 +4762,7 @@ That's it! The onboarding process will begin once you type !request.`;
                 content: 'Synthesize search results in 2-3 sentences max. Be direct and helpful.'
               }, {
                 role: 'user',
-                content: `Query: "${query}"\nResults: ${JSON.stringify(contextData.results)}`
+                content: Query: "${query}"\nResults: ${JSON.stringify(contextData.results)}
               }],
               max_completion_tokens: 650  // GPT-5 minimum for thinking models
             })
@@ -3135,43 +4782,43 @@ That's it! The onboarding process will begin once you type !request.`;
       }
       
       // 7. Format response (compact for large groups)
-      let response = `Search Results for: "${query}"\n\n`;
+      let response = Search Results for: "${query}"\n\n;
       
       // Add AI summary if available (skip if too long)
       if (aiSummary && aiSummary.length < 150) {
-        response += `${aiSummary}\n\n`;
+        response += ${aiSummary}\n\n;
       }
       
       // Add categorized results (compact format)
       if (searchResults.wiki.length > 0) {
-        response += `📚 Wiki Articles:\n`;
+        response += 📚 Wiki Articles:\n;
         searchResults.wiki.slice(0, 3).forEach(r => {  // Limit to 3
-          response += `• ${r.title}\n  ${r.url}\n`;
+          response += • ${r.title}\n  ${r.url}\n;
         });
         response += '\n';
       }
       
       if (searchResults.forum.length > 0) {
-        response += `💬 Forum Posts:\n`;
+        response += 💬 Forum Posts:\n;
         searchResults.forum.slice(0, 3).forEach(r => {  // Limit to 3
-          response += `• ${r.title}\n  ${r.url}\n`;
+          response += • ${r.title}\n  ${r.url}\n;
         });
         response += '\n';
       }
       
       if (searchResults.questions.length > 0) {
-        response += `❓ Questions:\n`;
+        response += ❓ Questions:\n;
         searchResults.questions.forEach(q => {
           const status = q.solved ? '✅' : '❓';
-          response += `${status} ${q.id}: ${q.title} (${q.answers} answers)\n`;
+          response += ${status} ${q.id}: ${q.title} (${q.answers} answers)\n;
         });
         response += '\n';
       }
       
       if (searchResults.messages.length > 0) {
-        response += `💭 Recent Messages:\n`;
+        response += 💭 Recent Messages:\n;
         searchResults.messages.forEach(m => {
-          response += `• just now - ${m.content.substring(0, 50)}...\n`;  // Shorter content
+          response += • just now - ${m.content.substring(0, 50)}...\n;  // Shorter content
         });
       }
       
@@ -3190,7 +4837,7 @@ That's it! The onboarding process will begin once you type !request.`;
 
   async handleForum(context) {
     const { args } = context;
-    return `💬 **Forum Search${args ? `: "${args}"` : ''}**\n\nVisit: https://forum.irregularchat.com\n\n💡 Use the forum for detailed discussions.`;
+    return `💬 Forum Search${args ? : "${args}" : ''}\n\nVisit: https://forum.irregularchat.com\n\n💡 Use the forum for detailed discussions.`;
   }
 
   async handleEvents(context) {
@@ -3220,7 +4867,7 @@ That's it! The onboarding process will begin once you type !request.`;
       // Also try to fetch latest events from Discourse if API is available
       if (this.discourseApiUrl && this.discourseApiKey) {
         try {
-          const response = await fetch(`${this.discourseApiUrl}/tags/event.json`, {
+          const response = await fetch(${this.discourseApiUrl}/tags/event.json, {
             headers: {
               'Api-Key': this.discourseApiKey,
               'Api-Username': this.discourseApiUsername || 'system'
@@ -3248,29 +4895,29 @@ That's it! The onboarding process will begin once you type !request.`;
         const startDate = new Date(event.eventStart);
         const endDate = event.eventEnd ? new Date(event.eventEnd) : null;
         
-        response += `${event.eventName}\n`;
-        response += `📅 ${this.formatEventDate(startDate)}\n`;
+        response += ${event.eventName}\n;
+        response += 📅 ${this.formatEventDate(startDate)}\n;
         if (endDate) {
-          response += `⏰ Ends: ${this.formatEventTime(endDate)}\n`;
+          response += ⏰ Ends: ${this.formatEventTime(endDate)}\n;
         }
         if (event.location) {
-          response += `📍 ${event.location}\n`;
+          response += 📍 ${event.location}\n;
         }
         if (event.discourseUrl) {
-          response += `🔗 ${event.discourseUrl}\n`;
+          response += 🔗 ${event.discourseUrl}\n;
         }
         response += '\n';
       }
       
-      response += `View all events: ${this.discourseApiUrl}/upcoming-events\n`;
-      response += `Add an event: !eventadd <details>`;
+      response += View all events: ${this.discourseApiUrl}/upcoming-events\n;
+      response += Add an event: !eventadd <details>;
       
       await prisma.$disconnect();
       return response;
       
     } catch (error) {
       console.error('Error fetching events:', error);
-      return `📅 **Upcoming Events:**\n\n⚠️ Unable to fetch events at this time.\n\nView events online: ${this.discourseApiUrl}/upcoming-events`;
+      return `📅 Upcoming Events:\n\n⚠️ Unable to fetch events at this time.\n\nView events online: ${this.discourseApiUrl}/upcoming-events`;
     }
   }
   
@@ -3324,13 +4971,13 @@ That's it! The onboarding process will begin once you type !request.`;
           minute: '2-digit' 
         });
         
-        return `LocalAI: ✅ Event Created!\n\n` +
-               `${pendingEvent.parsed.name}\n` +
-               `📅 ${dateStr}\n` +
-               `🕐 ${timeStr}\n` +
-               `📍 ${pendingEvent.parsed.location}\n\n` +
-               `📎 Forum link: ${createdEvent.url}\n\n` +
-               `The event has been posted to the forum calendar and saved to our database.`;
+        return LocalAI: ✅ Event Created!\n\n +
+               ${pendingEvent.parsed.name}\n +
+               📅 ${dateStr}\n +
+               🕐 ${timeStr}\n +
+               📍 ${pendingEvent.parsed.location}\n\n +
+               📎 Forum link: ${createdEvent.url}\n\n +
+               The event has been posted to the forum calendar and saved to our database.;
       } else {
         return `LocalAI: ❌ Failed to create event: ${createdEvent.error}`;
       }
@@ -3361,23 +5008,23 @@ That's it! The onboarding process will begin once you type !request.`;
         
         if (missingFields.length === 0) {
           // We have everything, confirm creation
-          return `LocalAI: Great! I now have all the details:\n\n` +
-                 `• Name: ${pendingEvent.parsed.name}\n` +
-                 `• Start: ${pendingEvent.parsed.start}\n` +
-                 `• Location: ${pendingEvent.parsed.location}\n\n` +
-                 `Reply "yes" to create this event or "cancel" to stop.`;
+          return LocalAI: Great! I now have all the details:\n\n +
+                 • Name: ${pendingEvent.parsed.name}\n +
+                 • Start: ${pendingEvent.parsed.start}\n +
+                 • Location: ${pendingEvent.parsed.location}\n\n +
+                 Reply "yes" to create this event or "cancel" to stop.;
         }
       }
     }
     
     // Update pending event and ask for confirmation
     pendingEvent.timestamp = Date.now();
-    return `LocalAI: I've updated the location to: ${pendingEvent.parsed.location}\n\n` +
-           `Event details:\n` +
-           `• Name: ${pendingEvent.parsed.name}\n` +
-           `• Start: ${pendingEvent.parsed.start}\n` +
-           `• Location: ${pendingEvent.parsed.location}\n\n` +
-           `Reply "yes" to create this event or "cancel" to stop.`;
+    return LocalAI: I've updated the location to: ${pendingEvent.parsed.location}\n\n +
+           Event details:\n +
+           • Name: ${pendingEvent.parsed.name}\n +
+           • Start: ${pendingEvent.parsed.start}\n +
+           • Location: ${pendingEvent.parsed.location}\n\n +
+           Reply "yes" to create this event or "cancel" to stop.;
   }
 
   async handleEventAdd(context) {
@@ -3424,7 +5071,7 @@ That's it! The onboarding process will begin once you type !request.`;
       }
       
       // Store pending event in memory for follow-up
-      const pendingEventId = `pending_${Date.now()}`;
+      const pendingEventId = pending_${Date.now()};
       this.pendingEvents = this.pendingEvents || new Map();
       this.pendingEvents.set(pendingEventId, {
         parsed: parsedEvent,
@@ -3452,24 +5099,24 @@ That's it! The onboarding process will begin once you type !request.`;
       if (missingFields.length > 0) {
         let response = 'LocalAI: 📅 Creating Event\n\n';
         response += 'I understood:\n';
-        if (parsedEvent.name) response += `• Name: ${parsedEvent.name}\n`;
-        if (parsedEvent.start) response += `• Start: ${parsedEvent.start}\n`;
-        if (parsedEvent.end) response += `• End: ${parsedEvent.end}\n`;
-        if (parsedEvent.location) response += `• Location: ${parsedEvent.location}\n`;
+        if (parsedEvent.name) response += • Name: ${parsedEvent.name}\n;
+        if (parsedEvent.start) response += • Start: ${parsedEvent.start}\n;
+        if (parsedEvent.end) response += • End: ${parsedEvent.end}\n;
+        if (parsedEvent.location) response += • Location: ${parsedEvent.location}\n;
         
-        response += `\n❓ Missing information: ${missingFields.join(', ')}\n\n`;
-        response += `Please provide the missing details. For example:\n`;
-        if (!parsedEvent.name) response += `"The event name is Community Meetup"\n`;
-        if (!parsedEvent.start) response += `"It starts on January 15 at 6pm"\n`;
-        if (!parsedEvent.location) response += `"Location is 123 Main St, Anytown, CA"\n`;
+        response += \n❓ Missing information: ${missingFields.join(', ')}\n\n;
+        response += Please provide the missing details. For example:\n;
+        if (!parsedEvent.name) response += "The event name is Community Meetup"\n;
+        if (!parsedEvent.start) response += "It starts on January 15 at 6pm"\n;
+        if (!parsedEvent.location) response += "Location is 123 Main St, Anytown, CA"\n;
         if (missingFields.includes('city and state for the address')) {
-          response += `"The city is Anytown, CA" (please include city and state)\n`;
+          response += "The city is Anytown, CA" (please include city and state)\n;
         }
         if (missingFields.includes('complete address with city and state')) {
-          response += `"${parsedEvent.location} is at 123 Main St, Anytown, CA"\n`;
+          response += "${parsedEvent.location} is at 123 Main St, Anytown, CA"\n;
         }
         
-        response += `\n💡 Or reply with the complete details and I'll try again.`;
+        response += \n💡 Or reply with the complete details and I'll try again.;
         
         return response;
       }
@@ -3492,11 +5139,11 @@ That's it! The onboarding process will begin once you type !request.`;
       
       let response = 'LocalAI: 📅 Ready to Create Event\n\n';
       response += 'Event Details:\n';
-      response += `• Name: ${parsedEvent.name}\n`;
-      response += `• When: ${formattedDate}\n`;
-      response += `• Where: ${parsedEvent.location}\n`;
+      response += • Name: ${parsedEvent.name}\n;
+      response += • When: ${formattedDate}\n;
+      response += • Where: ${parsedEvent.location}\n;
       if (parsedEvent.description && parsedEvent.description !== eventDescription) {
-        response += `• Details: ${parsedEvent.description}\n`;
+        response += • Details: ${parsedEvent.description}\n;
       }
       
       response += '\n✅ Reply "yes" to create this event\n';
@@ -3507,9 +5154,9 @@ That's it! The onboarding process will begin once you type !request.`;
       
     } catch (error) {
       console.error('Error in handleEventAdd:', error);
-      return `❌ **Error processing event**\n\n` +
-             `Please try again with a clearer description, for example:\n` +
-             `!eventadd "Community Meetup on January 15 at 6pm at 123 Main St"`;
+      return ❌ Error processing event\n\n +
+             Please try again with a clearer description, for example:\n +
+             !eventadd "Community Meetup on January 15 at 6pm at 123 Main St";
     }
   }
   
@@ -3542,11 +5189,11 @@ Event description: "${description}"
 
 Return ONLY valid JSON with these fields. Use null for missing values. Today's date is ${new Date().toISOString().split('T')[0]}.`;
 
-      const response = await fetch(`${this.localAiUrl}/v1/chat/completions`, {
+      const response = await fetch(${this.localAiUrl}/v1/chat/completions, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.localAiApiKey}`
+          'Authorization': Bearer ${this.localAiApiKey}
         },
         body: JSON.stringify({
           model: this.localAiModel || 'gpt-oss-120',
@@ -3790,10 +5437,10 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       const day = String(eventStart.getDate()).padStart(2, '0');
       const hours = String(eventStart.getHours()).padStart(2, '0');
       const minutes = String(eventStart.getMinutes()).padStart(2, '0');
-      const eventDateTime = `${year}-${month}-${day} ${hours}:${minutes}`;
+      const eventDateTime = ${year}-${month}-${day} ${hours}:${minutes};
       
       // Create event tag with optional end time
-      let eventTag = `[event start="${eventDateTime}" status="public"`;
+      let eventTag = [event start="${eventDateTime}" status="public";
       if (eventData.end) {
         const endDate = new Date(eventData.end);
         const endYear = endDate.getFullYear();
@@ -3801,23 +5448,23 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         const endDay = String(endDate.getDate()).padStart(2, '0');
         const endHours = String(endDate.getHours()).padStart(2, '0');
         const endMinutes = String(endDate.getMinutes()).padStart(2, '0');
-        const endDateTime = `${endYear}-${endMonth}-${endDay} ${endHours}:${endMinutes}`;
-        eventTag += ` end="${endDateTime}"`;
+        const endDateTime = ${endYear}-${endMonth}-${endDay} ${endHours}:${endMinutes};
+        eventTag +=  end="${endDateTime}";
       }
-      eventTag += `]\n[/event]`;
+      eventTag += ]\n[/event];
       
       // Format the post content with event details
-      const postContent = eventTag + `\n\n` +
-                         `## ${eventData.name}\n\n` +
-                         `📍 **Location:** ${eventData.location || 'TBD'}\n` +
-                         `🕐 **Time:** ${eventStart.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} at ${startTime}\n` +
-                         `🌐 **Timezone:** ${eventData.timezone || 'America/New_York'}\n\n` +
-                         `${eventData.description || ''}\n\n` +
-                         `---\n` +
-                         `*Event created via Signal bot by ${createdBy}*`;
+      const postContent = eventTag + \n\n +
+                         ## ${eventData.name}\n\n +
+                         📍 Location: ${eventData.location || 'TBD'}\n +
+                         🕐 Time: ${eventStart.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} at ${startTime}\n +
+                         🌐 Timezone: ${eventData.timezone || 'America/New_York'}\n\n +
+                         ${eventData.description || ''}\n\n +
+                         ---\n +
+                         Event created via Signal bot by ${createdBy};
       
       // Create the topic in Discourse
-      const response = await fetch(`${this.discourseApiUrl}/posts.json`, {
+      const response = await fetch(${this.discourseApiUrl}/posts.json, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3834,7 +5481,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       
       if (response.ok) {
         const result = await response.json();
-        const eventUrl = `${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id}`;
+        const eventUrl = ${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id};
         
         // Store in database
         const { PrismaClient } = require('../../generated/prisma');
@@ -3872,7 +5519,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         console.error('Discourse API error:', response.status, errorText);
         return {
           success: false,
-          error: `Forum API error: ${response.status}`
+          error: Forum API error: ${response.status}
         };
       }
       
@@ -3906,14 +5553,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
               eventStart: new Date(topic.event.start),
               eventEnd: topic.event.end ? new Date(topic.event.end) : null,
               location: topic.event.location || null,
-              discourseUrl: `${this.discourseApiUrl}/t/${topic.slug}/${topic.id}`,
+              discourseUrl: ${this.discourseApiUrl}/t/${topic.slug}/${topic.id},
               description: topic.excerpt || null,
               status: topic.event.status || 'public'
             }
           });
         }
       } catch (error) {
-        console.error(`Failed to sync event ${topic.id}:`, error);
+        console.error(Failed to sync event ${topic.id}:, error);
       }
     }
     
@@ -3921,15 +5568,15 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   }
 
   async handleResources(context) {
-    return `📚 **IrregularChat Resources:**\n\n**Main Services:**\n• Wiki: https://irregularpedia.org\n• Forum: https://forum.irregularchat.com\n• SSO: https://sso.irregularchat.com\n\n**Tools:**\n• Matrix: https://matrix.irregularchat.com\n• CryptPad: https://cryptpad.irregularchat.com\n• Search: https://search.irregularchat.com`;
+    return 📚 IrregularChat Resources:\n\nMain Services:\n• Wiki: https://irregularpedia.org\n• Forum: https://forum.irregularchat.com\n• SSO: https://sso.irregularchat.com\n\nTools:\n• Matrix: https://matrix.irregularchat.com\n• CryptPad: https://cryptpad.irregularchat.com\n• Search: https://search.irregularchat.com;
   }
 
   async handleFAQ(context) {
     const { args } = context;
-    if (!args) return `❓ **FAQ Topics:** join, rules, sso, wiki, matrix, help\n\n💡 Usage: !faq <topic>`;
+    if (!args) return ❓ FAQ Topics: join, rules, sso, wiki, matrix, help\n\n💡 Usage: !faq <topic>;
     
     const faqs = {
-      join: 'Use `!join <group>` to request group access. Admins will review your request.',
+      join: 'Use !join <group> to request group access. Admins will review your request.',
       rules: '1. Be respectful\n2. Stay on topic\n3. No classified info\n4. Follow Chatham House Rule',
       sso: 'Visit https://sso.irregularchat.com for account access.',
       wiki: 'Contribute at https://irregularpedia.org',
@@ -3937,22 +5584,22 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       help: 'Use !help for commands, !faq for questions.'
     };
     
-    return faqs[args.toLowerCase()] || `❌ FAQ topic "${args}" not found.`;
+    return faqs[args.toLowerCase()] || ❌ FAQ topic "${args}" not found.;
   }
 
   async handleDocs(context) {
-    return `📖 **Documentation:**\n\nMain resources:\n• Wiki: https://irregularpedia.org\n• Forum: https://forum.irregularchat.com\n• GitHub: https://github.com/irregularchat\n\n💡 Use specific search terms.`;
+    return 📖 Documentation:\n\nMain resources:\n• Wiki: https://irregularpedia.org\n• Forum: https://forum.irregularchat.com\n• GitHub: https://github.com/irregularchat\n\n💡 Use specific search terms.;
   }
 
   async handleLinks(context) {
-    return `🔗 **Important Links:**\n\n🏠 **Main:**\n• Wiki: https://irregularpedia.org\n• Forum: https://forum.irregularchat.com\n• SSO: https://sso.irregularchat.com\n\n🛠️ **Tools:**\n• Matrix: https://matrix.irregularchat.com\n• CryptPad: https://cryptpad.irregularchat.com\n• Search: https://search.irregularchat.com`;
+    return 🔗 Important Links:\n\n🏠 Main:\n• Wiki: https://irregularpedia.org\n• Forum: https://forum.irregularchat.com\n• SSO: https://sso.irregularchat.com\n\n🛠️ Tools:\n• Matrix: https://matrix.irregularchat.com\n• CryptPad: https://cryptpad.irregularchat.com\n• Search: https://search.irregularchat.com;
   }
 
 
   // User Plugin Handlers
   async handleProfile(context) {
     const { sender, senderName } = context;
-    return `👤 **Your Profile:**\n\nSignal: ${sender}\nName: ${senderName || 'Not set'}\nTimezone: Not set\n\n💡 Use !timezone to set your timezone.`;
+    return `👤 Your Profile:\n\nSignal: ${sender}\nName: ${senderName || 'Not set'}\nTimezone: Not set\n\n💡 Use !timezone to set your timezone.`;
   }
 
 
@@ -3981,7 +5628,30 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async handleLogs(context) { return 'Admin system - View logs placeholder'; }
   async handleBackup(context) { return 'Admin system - Backup placeholder'; }
   async handleMaintenance(context) { return 'Admin system - Maintenance mode placeholder'; }
-  async handleBypass(context) { return 'Admin system - Authentication bypass placeholder'; }
+  async handleBypass(context) {
+    const { args } = context;
+    
+    if (!args.length) {
+      return '🔓 Bypass Links Generator\n\nUsage: !bypass <url>\n\nGenerate bypass links for paywalled articles using multiple services like 12ft.io, archive.ph, and more.';
+    }
+    
+    const url = args[0];
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      return '❌ Please provide a valid URL starting with http:// or https://';
+    }
+    
+    const bypassLinks = this.generateBypassLinks(url);
+    
+    let response = 🔓 Bypass Links for: ${url}\n\n;
+    response += 🚪 12ft.io: ${bypassLinks.twelveft}\n;
+    response += 📦 Archive.ph: ${bypassLinks.archivePh}\n;
+    response += 📄 Txtify: ${bypassLinks.txtify}\n;
+    response += 🗑️ RemovePaywall: ${bypassLinks.removepaywall}\n;
+    response += 🌐 Google Cache: ${bypassLinks.googleCache}\n;
+    response += 📚 Web Archive: ${bypassLinks.archiveView};
+    
+    return response;
+  }
 
   // Analytics Command Handlers (Admin Only)
   async handleStats(context) {
@@ -4052,11 +5722,11 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         return '📊 No command usage data available yet';
       }
       
-      let response = `🏆 Top ${limit} Commands\n\n`;
+      let response = 🏆 Top ${limit} Commands\n\n;
       
       topCommands.forEach((cmd, index) => {
-        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
-        response += `${medal} !${cmd.command}: ${cmd._count.command} uses\n`;
+        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : ${index + 1}.;
+        response += ${medal} !${cmd.command}: ${cmd._count.command} uses\n;
       });
       
       return response;
@@ -4084,12 +5754,12 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         return '👥 No user activity data available yet';
       }
       
-      let response = `👥 Top ${limit} Active Users\n\n`;
+      let response = 👥 Top ${limit} Active Users\n\n;
       
       topUsers.forEach((user, index) => {
-        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : ${index + 1}.;
         const firstName = user.userName.split(' ')[0];
-        response += `${medal} ${firstName}: ${user._count.userName} commands\n`;
+        response += ${medal} ${firstName}: ${user._count.userName} commands\n;
       });
       
       return response;
@@ -4120,13 +5790,13 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         return '✅ No errors logged (excellent!)';
       }
       
-      let response = `❌ Recent Errors (${recentErrors.length})\n\n`;
+      let response = ❌ Recent Errors (${recentErrors.length})\n\n;
       
       recentErrors.forEach(error => {
         const timeAgo = this.getTimeAgo(error.timestamp);
-        const cmd = error.command ? `!${error.command}` : 'N/A';
+        const cmd = error.command ? !${error.command} : 'N/A';
         const msg = error.errorMessage.substring(0, 50);
-        response += `• ${error.errorType}\n  Cmd: ${cmd}\n  ${timeAgo}\n\n`;
+        response += • ${error.errorType}\n  Cmd: ${cmd}\n  ${timeAgo}\n\n;
       });
       
       return response;
@@ -4166,16 +5836,16 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         }
       });
       
-      let response = `📰 News Statistics (${days} days)\n\n`;
-      response += `Total Links: ${totalNewsLinks}\n\n`;
+      let response = 📰 News Statistics (${days} days)\n\n;
+      response += Total Links: ${totalNewsLinks}\n\n;
       
       if (topNews.length > 0) {
-        response += `🔥 Top News by Engagement:\n\n`;
+        response += 🔥 Top News by Engagement:\n\n;
         
         topNews.forEach((news, index) => {
           const title = news.title ? news.title.substring(0, 30) + '...' : news.domain;
-          response += `${index + 1}. ${title}\n`;
-          response += `   👍 ${news.thumbsUp} 👎 ${news.thumbsDown} 🔄 ${news.postCount}x\n\n`;
+          response += ${index + 1}. ${title}\n;
+          response +=    👍 ${news.thumbsUp} 👎 ${news.thumbsDown} 🔄 ${news.postCount}x\n\n;
         });
       }
       
@@ -4220,16 +5890,16 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         ? ((positiveReactions / totalReactions) * 100).toFixed(1)
         : 0;
       
-      let response = `💭 Bot Sentiment (${days} days)\n\n`;
-      response += `Overall: ${sentimentScore}% Positive\n\n`;
-      response += `📊 Breakdown:\n`;
-      response += `👍 Positive: ${positiveReactions}\n`;
-      response += `👎 Negative: ${negativeReactions}\n\n`;
+      let response = 💭 Bot Sentiment (${days} days)\n\n;
+      response += Overall: ${sentimentScore}% Positive\n\n;
+      response += 📊 Breakdown:\n;
+      response += 👍 Positive: ${positiveReactions}\n;
+      response += 👎 Negative: ${negativeReactions}\n\n;
       
       if (reactionBreakdown.length > 0) {
-        response += `🎯 Top Reactions:\n`;
+        response += 🎯 Top Reactions:\n;
         reactionBreakdown.forEach(r => {
-          response += `${r.reaction}: ${r._count.reaction}x\n`;
+          response += ${r.reaction}: ${r._count.reaction}x\n;
         });
       }
       
@@ -4258,7 +5928,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async handleWeather(context) { return 'Weather service placeholder - !weather <location>'; }
   async handleTime(context) { 
     const now = new Date().toLocaleString();
-    return `🕒 **Current Time**: ${now}\n\nUsage: !time <timezone>`; 
+    return `🕒 Current Time: ${now}\n\nUsage: !time <timezone>`; 
   }
   async handleTranslate(context) { return 'Translation service placeholder - !translate <text>'; }
   async handleShorten(context) { return 'URL shortener placeholder - !shorten <url>'; }
@@ -4268,13 +5938,52 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async handleCalc(context) { return 'Calculator placeholder - !calc <expression>'; }
   async handleRandom(context) { 
     const num = Math.floor(Math.random() * 100) + 1;
-    return `🎲 **Random Number**: ${num}\n\nUsage: !random <min> <max>`; 
+    return `🎲 Random Number: ${num}\n\nUsage: !random <min> <max>`; 
   }
   async handleFlip(context) { 
     const result = Math.random() < 0.5 ? 'heads' : 'tails';
-    return `🪙 **Coin Flip**: ${result.toUpperCase()}!`; 
+    return `🪙 Coin Flip: ${result.toUpperCase()}!`; 
   }
-  async handleWayback(context) { return 'Wayback Machine placeholder - !wayback <url> [date]'; }
+  async handleWayback(context) {
+    const { args } = context;
+    
+    if (!args.length) {
+      return '📚 Wayback Machine\n\nUsage: !wayback <url>\n\nGet the latest archived version from web.archive.org and create a new save point if needed.';
+    }
+    
+    const url = args[0];
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      return '❌ Please provide a valid URL starting with http:// or https://';
+    }
+    
+    const bypassLinks = this.generateBypassLinks(url);
+    
+    let response = 📚 Wayback Machine for: ${url}\n\n;
+    response += 🔍 Latest Archive: ${bypassLinks.archiveView}\n;
+    response += 💾 Save New Copy: ${bypassLinks.archive}\n\n;
+    response += 💡 The save link will create a new archive if one doesn't exist today.;
+    
+    return response;
+  }
+
+  async handleArchive(context) {
+    const { args } = context;
+    if (!args) return '❌ Usage: !archive <url>\nGet web.archive.org links for a URL';
+
+    const url = args.trim();
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      return '❌ Please provide a valid URL starting with http:// or https://';
+    }
+
+    const bypassLinks = this.generateBypassLinks(url);
+    
+    let response = 🏛️ Archive.org for: ${url}\n\n;
+    response += 🔍 View Latest Archive: ${bypassLinks.archiveView}\n;
+    response += 💾 Create New Archive: ${bypassLinks.archive}\n\n;
+    response += 💡 The create link will save a new copy to archive.org if needed.;
+    
+    return response;
+  }
 
   // Forum Plugin Handlers
   async handleFPost(context) {
@@ -4294,7 +6003,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
       
       // Fetch latest posts from Discourse
-      const response = await fetch(`${this.discourseApiUrl}/posts.json`, {
+      const response = await fetch(${this.discourseApiUrl}/posts.json, {
         headers: {
           'Api-Key': this.discourseApiKey,
           'Api-Username': this.discourseApiUsername || 'system'
@@ -4302,7 +6011,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       });
       
       if (!response.ok) {
-        throw new Error(`Failed to fetch posts: ${response.status}`);
+        throw new Error(Failed to fetch posts: ${response.status});
       }
       
       const data = await response.json();
@@ -4313,7 +6022,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
       
       // Format the response with post titles and short links
-      let result = `📰 Latest Forum Posts (${Math.min(count, posts.length)}):\n\n`;
+      let result = 📰 Latest Forum Posts (${Math.min(count, posts.length)}):\n\n;
       
       for (let i = 0; i < Math.min(count, posts.length); i++) {
         const post = posts[i];
@@ -4330,13 +6039,13 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         }
         
         // Create short link with just the topic and post IDs
-        const shortLink = `${this.discourseApiUrl.replace('/api', '')}/t/${post.topic_id}/${post.post_number || 1}`;
+        const shortLink = ${this.discourseApiUrl.replace('/api', '')}/t/${post.topic_id}/${post.post_number || 1};
         
-        result += `${i + 1}. ${title}\n`;
-        result += `   ${shortLink}\n\n`;
+        result += ${i + 1}. ${title}\n;
+        result +=    ${shortLink}\n\n;
       }
       
-      result += `🔗 Visit ${this.discourseApiUrl.replace('/api', '')} for more`;
+      result += 🔗 Visit ${this.discourseApiUrl.replace('/api', '')} for more;
       
       return result;
       
@@ -4344,9 +6053,9 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       console.error('Error fetching latest posts:', error);
       
       // Fallback to generic message on error
-      return `📰 Latest Forum Posts\n\n` +
-             `Unable to fetch posts at this time.\n\n` +
-             `🔗 Visit forum.irregularchat.com directly`;
+      return 📰 Latest Forum Posts\n\n +
+             Unable to fetch posts at this time.\n\n +
+             🔗 Visit forum.irregularchat.com directly;
     }
   }
 
@@ -4367,76 +6076,76 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
       
       // Fallback to contextual results when API isn't available
-      const searchUrl = `https://forum.irregularchat.com/search?q=${encodeURIComponent(query)}`;
+      const searchUrl = https://forum.irregularchat.com/search?q=${encodeURIComponent(query)};
       
       // For now, provide a structured response with common search categories
       // This gives users immediate value while we await API configuration
-      let results = `OpenAI [Community]: Forum Search for "${query}":\n\n`;
+      let results = OpenAI [Community]: Forum Search for "${query}":\n\n;
       
       // Provide contextual results based on common queries
       const queryLower = query.toLowerCase();
       
       if (queryLower.includes('job') || queryLower.includes('work') || queryLower.includes('career')) {
-        results += `📋 Top Results:\n\n`;
-        results += `1. Job Opportunities Board\n`;
-        results += `   https://forum.irregularchat.com/c/opportunities/5\n\n`;
-        results += `2. Remote Work Discussion\n`;
-        results += `   https://forum.irregularchat.com/t/remote-work-best-practices/142\n\n`;
-        results += `3. Career Development Resources\n`;
-        results += `   https://forum.irregularchat.com/t/career-development-resources/89\n\n`;
-        results += `4. Freelancing Tips & Tricks\n`;
-        results += `   https://forum.irregularchat.com/t/freelancing-guide/201\n\n`;
-        results += `5. Tech Industry Job Market\n`;
-        results += `   https://forum.irregularchat.com/t/tech-job-market-2024/315\n\n`;
+        results += 📋 Top Results:\n\n;
+        results += 1. Job Opportunities Board\n;
+        results +=    https://forum.irregularchat.com/c/opportunities/5\n\n;
+        results += 2. Remote Work Discussion\n;
+        results +=    https://forum.irregularchat.com/t/remote-work-best-practices/142\n\n;
+        results += 3. Career Development Resources\n;
+        results +=    https://forum.irregularchat.com/t/career-development-resources/89\n\n;
+        results += 4. Freelancing Tips & Tricks\n;
+        results +=    https://forum.irregularchat.com/t/freelancing-guide/201\n\n;
+        results += 5. Tech Industry Job Market\n;
+        results +=    https://forum.irregularchat.com/t/tech-job-market-2024/315\n\n;
       } else if (queryLower.includes('security') || queryLower.includes('privacy')) {
-        results += `🔒 Top Results:\n\n`;
-        results += `1. Security Best Practices Guide\n`;
-        results += `   https://forum.irregularchat.com/t/security-best-practices/45\n\n`;
-        results += `2. Privacy Tools & Services\n`;
-        results += `   https://forum.irregularchat.com/t/privacy-tools-recommendations/78\n\n`;
-        results += `3. End-to-End Encryption Discussion\n`;
-        results += `   https://forum.irregularchat.com/t/e2e-encryption-explained/112\n\n`;
-        results += `4. VPN Comparison Thread\n`;
-        results += `   https://forum.irregularchat.com/t/vpn-services-compared/234\n\n`;
-        results += `5. Data Protection Strategies\n`;
-        results += `   https://forum.irregularchat.com/t/data-protection-guide/298\n\n`;
+        results += 🔒 Top Results:\n\n;
+        results += 1. Security Best Practices Guide\n;
+        results +=    https://forum.irregularchat.com/t/security-best-practices/45\n\n;
+        results += 2. Privacy Tools & Services\n;
+        results +=    https://forum.irregularchat.com/t/privacy-tools-recommendations/78\n\n;
+        results += 3. End-to-End Encryption Discussion\n;
+        results +=    https://forum.irregularchat.com/t/e2e-encryption-explained/112\n\n;
+        results += 4. VPN Comparison Thread\n;
+        results +=    https://forum.irregularchat.com/t/vpn-services-compared/234\n\n;
+        results += 5. Data Protection Strategies\n;
+        results +=    https://forum.irregularchat.com/t/data-protection-guide/298\n\n;
       } else if (queryLower.includes('rule') || queryLower.includes('guideline') || queryLower.includes('community')) {
-        results += `📜 Top Results:\n\n`;
-        results += `1. Community Rules & Guidelines\n`;
-        results += `   https://forum.irregularchat.com/t/community-rules/1\n\n`;
-        results += `2. Welcome to IrregularChat\n`;
-        results += `   https://forum.irregularchat.com/t/welcome-new-members/2\n\n`;
-        results += `3. Code of Conduct\n`;
-        results += `   https://forum.irregularchat.com/t/code-of-conduct/3\n\n`;
-        results += `4. How to Report Issues\n`;
-        results += `   https://forum.irregularchat.com/t/reporting-guidelines/15\n\n`;
-        results += `5. Community FAQ\n`;
-        results += `   https://forum.irregularchat.com/t/frequently-asked-questions/8\n\n`;
+        results += 📜 Top Results:\n\n;
+        results += 1. Community Rules & Guidelines\n;
+        results +=    https://forum.irregularchat.com/t/community-rules/1\n\n;
+        results += 2. Welcome to IrregularChat\n;
+        results +=    https://forum.irregularchat.com/t/welcome-new-members/2\n\n;
+        results += 3. Code of Conduct\n;
+        results +=    https://forum.irregularchat.com/t/code-of-conduct/3\n\n;
+        results += 4. How to Report Issues\n;
+        results +=    https://forum.irregularchat.com/t/reporting-guidelines/15\n\n;
+        results += 5. Community FAQ\n;
+        results +=    https://forum.irregularchat.com/t/frequently-asked-questions/8\n\n;
       } else {
         // Generic search results structure
-        results += `🔍 Searching for: "${query}"\n\n`;
-        results += `Top categories to explore:\n\n`;
-        results += `1. General Discussion\n`;
-        results += `   https://forum.irregularchat.com/c/general/1\n\n`;
-        results += `2. Technical Topics\n`;
-        results += `   https://forum.irregularchat.com/c/technical/3\n\n`;
-        results += `3. Community Projects\n`;
-        results += `   https://forum.irregularchat.com/c/projects/4\n\n`;
-        results += `4. Resources & Tutorials\n`;
-        results += `   https://forum.irregularchat.com/c/resources/6\n\n`;
-        results += `5. Announcements\n`;
-        results += `   https://forum.irregularchat.com/c/announcements/2\n\n`;
+        results += 🔍 Searching for: "${query}"\n\n;
+        results += Top categories to explore:\n\n;
+        results += 1. General Discussion\n;
+        results +=    https://forum.irregularchat.com/c/general/1\n\n;
+        results += 2. Technical Topics\n;
+        results +=    https://forum.irregularchat.com/c/technical/3\n\n;
+        results += 3. Community Projects\n;
+        results +=    https://forum.irregularchat.com/c/projects/4\n\n;
+        results += 4. Resources & Tutorials\n;
+        results +=    https://forum.irregularchat.com/c/resources/6\n\n;
+        results += 5. Announcements\n;
+        results +=    https://forum.irregularchat.com/c/announcements/2\n\n;
       }
       
-      results += `View all results: ${searchUrl}`;
+      results += View all results: ${searchUrl};
       
       return results;
       
     } catch (error) {
       console.error('Forum search error:', error);
-      return `OpenAI [Community]: Search temporarily unavailable.\n\n` +
-             `Try searching directly:\n` +
-             `https://forum.irregularchat.com/search?q=${encodeURIComponent(query)}`;
+      return OpenAI [Community]: Search temporarily unavailable.\n\n +
+             Try searching directly:\n +
+             https://forum.irregularchat.com/search?q=${encodeURIComponent(query)};
     }
   }
 
@@ -4457,7 +6166,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
       
       // Search using Discourse API
-      const searchUrl = `${this.discourseApiUrl}/search.json?q=${encodeURIComponent(query)}`;
+      const searchUrl = ${this.discourseApiUrl}/search.json?q=${encodeURIComponent(query)};
       const response = await fetch(searchUrl, {
         headers: {
           'Api-Key': this.discourseApiKey,
@@ -4466,7 +6175,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       });
       
       if (!response.ok) {
-        throw new Error(`Search failed: ${response.status}`);
+        throw new Error(Search failed: ${response.status});
       }
       
       const data = await response.json();
@@ -4474,13 +6183,13 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       const topics = data.topics || [];
       
       if (posts.length === 0) {
-        return `OpenAI [Community]: No results found for "${query}"\n\n` +
-               `Try different keywords or browse categories:\n` +
-               `https://forum.irregularchat.com/categories`;
+        return OpenAI [Community]: No results found for "${query}"\n\n +
+               Try different keywords or browse categories:\n +
+               https://forum.irregularchat.com/categories;
       }
       
       // Build results (top 5)
-      let results = `OpenAI [Community]: Forum Search Results for "${query}":\n\n`;
+      let results = OpenAI [Community]: Forum Search Results for "${query}":\n\n;
       
       const maxResults = Math.min(5, posts.length);
       for (let i = 0; i < maxResults; i++) {
@@ -4495,19 +6204,19 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         const baseUrl = this.discourseApiUrl ? 
           this.discourseApiUrl.replace('/api/v3', '').replace('http://', '').replace('https://', '') :
           'forum.irregularchat.com';
-        const postUrl = `https://${baseUrl}/t/${topic.slug || post.topic_slug}/${post.topic_id}/${post.post_number || 1}`;
+        const postUrl = https://${baseUrl}/t/${topic.slug || post.topic_slug}/${post.topic_id}/${post.post_number || 1};
         
         // Add tags if available
-        const tags = topic.tags && topic.tags.length > 0 ? ` [${topic.tags.slice(0, 2).join(', ')}]` : '';
+        const tags = topic.tags && topic.tags.length > 0 ?  [${topic.tags.slice(0, 2).join(', ')}] : '';
         
-        results += `${i + 1}. ${truncatedTitle}${tags}\n`;
-        results += `   ${postUrl}\n\n`;
+        results += ${i + 1}. ${truncatedTitle}${tags}\n;
+        results +=    ${postUrl}\n\n;
       }
       
       // Add search link for more results
       if (posts.length > 5) {
-        results += `📊 Showing 5 of ${posts.length} results\n`;
-        results += `🔗 More: https://forum.irregularchat.com/search?q=${encodeURIComponent(query)}`;
+        results += 📊 Showing 5 of ${posts.length} results\n;
+        results += 🔗 More: https://forum.irregularchat.com/search?q=${encodeURIComponent(query)};
       }
       
       return results;
@@ -4516,15 +6225,15 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       console.error('Forum search error:', error);
       
       // Fallback with direct link
-      return `OpenAI [Community]: Forum Search for "${query}":\n\n` +
-             `Direct search link:\n` +
-             `https://forum.irregularchat.com/search?q=${encodeURIComponent(query)}\n\n` +
-             `💡 Browse all topics: https://forum.irregularchat.com`;
+      return OpenAI [Community]: Forum Search for "${query}":\n\n +
+             Direct search link:\n +
+             https://forum.irregularchat.com/search?q=${encodeURIComponent(query)}\n\n +
+             💡 Browse all topics: https://forum.irregularchat.com;
     }
   }
 
   async handleCategories(context) {
-    return `📁 Forum Categories:\n\n• General Discussion\n• Technology\n• Security & Privacy\n• Community Events\n• Support & Help\n• Off-Topic\n\n🔗 Browse at forum.irregularchat.com`;
+    return 📁 Forum Categories:\n\n• General Discussion\n• Technology\n• Security & Privacy\n• Community Events\n• Support & Help\n• Off-Topic\n\n🔗 Browse at forum.irregularchat.com;
   }
 
   // PDF Plugin Handlers
@@ -4643,7 +6352,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
               },
               { 
                 role: 'user', 
-                content: `Summarize this document in 3-5 paragraphs:\n\n${textContent}`
+                content: Summarize this document in 3-5 paragraphs:\n\n${textContent}
               }
             ],
             max_completion_tokens: 1000  // Increased for GPT-5 thinking model
@@ -4669,17 +6378,17 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Prepare response
       const wordCount = textContent.split(/\s+/).length;
       
-      let response = `PDF Summary: ${pdfFilename}\n`;
-      response += `Pages: ${pageCount} | Words: ~${wordCount}\n\n`;
-      response += `Summary:\n${summary}\n\n`;
+      let response = PDF Summary: ${pdfFilename}\n;
+      response += Pages: ${pageCount} | Words: ~${wordCount}\n\n;
+      response += Summary:\n${summary}\n\n;
       
       // Add first few lines as preview if summary failed
       if (summary === 'AI summary unavailable' || summary === 'AI summarization is not enabled') {
-        const preview = textContent.split('\n').slice(0, 5).join('\n');
+        let preview = textContent.split('\n').slice(0, 5).join('\n');
         if (preview.length > 300) {
           preview = preview.substring(0, 300) + '...';
         }
-        response += `Preview:\n${preview}`;
+        response += Preview:\n${preview};
       }
       
       return response;
@@ -4811,29 +6520,29 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     
     // Add title
     if (sections.title) {
-      condensedContent += `Title: ${sections.title}\n\n`;
+      condensedContent += Title: ${sections.title}\n\n;
     }
     
     // Add abstract if found
     if (sections.abstract) {
-      condensedContent += `Abstract:\n${sections.abstract.substring(0, 500)}\n\n`;
+      condensedContent += Abstract:\n${sections.abstract.substring(0, 500)}\n\n;
     }
     
     // Add table of contents if found (helps understand structure)
     if (sections.toc) {
-      condensedContent += `Table of Contents:\n${sections.toc.substring(0, 300)}\n\n`;
+      condensedContent += Table of Contents:\n${sections.toc.substring(0, 300)}\n\n;
     }
     
     // Add introduction
     if (sections.introduction) {
-      condensedContent += `Introduction:\n${sections.introduction.substring(0, 600)}\n\n`;
+      condensedContent += Introduction:\n${sections.introduction.substring(0, 600)}\n\n;
     }
     
     // Add chapter headings and key content
     if (sections.chapters.length > 0) {
-      condensedContent += `Main Chapters:\n`;
+      condensedContent += Main Chapters:\n;
       sections.chapters.slice(0, 10).forEach(ch => {
-        condensedContent += `- ${ch}\n`;
+        condensedContent += - ${ch}\n;
       });
       condensedContent += '\n';
     }
@@ -4841,12 +6550,12 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     // Add some key content from chapters
     if (sections.keyContent.length > 0) {
       const keySnippet = sections.keyContent.slice(0, 20).join('\n');
-      condensedContent += `Key Content:\n${keySnippet.substring(0, 800)}\n\n`;
+      condensedContent += Key Content:\n${keySnippet.substring(0, 800)}\n\n;
     }
     
     // Add conclusion
     if (sections.conclusion) {
-      condensedContent += `Conclusion:\n${sections.conclusion.substring(0, 500)}\n`;
+      condensedContent += Conclusion:\n${sections.conclusion.substring(0, 500)}\n;
     }
     
     // If we didn't find structured content, fall back to first/last approach
@@ -4854,7 +6563,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       console.log('📄 No clear structure found, using first/last pages approach');
       const firstPart = lines.slice(0, 100).join('\n').substring(0, 2000);
       const lastPart = lines.slice(-50).join('\n').substring(0, 1000);
-      condensedContent = `Beginning of document:\n${firstPart}\n\n[...]\n\nEnd of document:\n${lastPart}`;
+      condensedContent = Beginning of document:\n${firstPart}\n\n[...]\n\nEnd of document:\n${lastPart};
     }
     
     // Ensure we don't exceed token limits
@@ -4863,7 +6572,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       condensedContent = condensedContent.substring(0, maxLength) + '\n\n[Content truncated for processing]';
     }
     
-    console.log(`📊 Extracted ${condensedContent.length} chars from ${fullText.length} chars (${Math.round(condensedContent.length/fullText.length*100)}% of original)`);
+    console.log(📊 Extracted ${condensedContent.length} chars from ${fullText.length} chars (${Math.round(condensedContent.length/fullText.length*100)}% of original));
     
     return condensedContent;
   }
@@ -4883,13 +6592,13 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     if (!args || args.length === 0) {
       // Check if they have a pending request
       if (this.pendingRequests.has(sourceNumber)) {
-        return `⏳ You already have a pending request. Please provide your introduction:\n\n` +
-               `1. NAME\n` +
-               `2. YOUR_ORGANIZATION\n` +
-               `3. Who invited you (mention them)\n` +
-               `4. EMAIL_OR_EMAIL_ALIAS\n` +
-               `5. YOUR_INTERESTS\n` +
-               `6. LinkedIn profile (optional)`;
+        return ⏳ You already have a pending request. Please provide your introduction:\n\n +
+               1. NAME\n +
+               2. YOUR_ORGANIZATION\n +
+               3. Who invited you (mention them)\n +
+               4. EMAIL_OR_EMAIL_ALIAS\n +
+               5. YOUR_INTERESTS\n +
+               6. LinkedIn profile (optional);
       }
       
       // Send the onboarding prompt
@@ -4915,18 +6624,18 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     });
     
     // Notify admins
-    const adminNotification = `🆕 New member request from ${sender}:\n\n` +
-                            `${introText}\n\n` +
-                            `✅ Approve with: !gtg ${sourceNumber}\n` +
-                            `❌ Timeout in: ${this.requestTimeoutMinutes / 60} hours`;
+    const adminNotification = 🆕 New member request from ${sender}:\n\n +
+                            ${introText}\n\n +
+                            ✅ Approve with: !gtg ${sourceNumber}\n +
+                            ❌ Timeout in: ${this.requestTimeoutMinutes / 60} hours;
     
     // Log to console for now (would send to admin channel)
     console.log('📨 Admin notification:', adminNotification);
     
-    return `✅ Your introduction has been submitted!\n\n` +
-           `An admin will review your request shortly.\n` +
-           `You'll be notified once approved.\n\n` +
-           `⏰ Request expires in ${this.requestTimeoutMinutes / 60} hours.`;
+    return ✅ Your introduction has been submitted!\n\n +
+           An admin will review your request shortly.\n +
+           You'll be notified once approved.\n\n +
+           ⏰ Request expires in ${this.requestTimeoutMinutes / 60} hours.;
   }
   
   async sendOnboardingPrompt(phoneNumber, groupId, sender) {
@@ -4947,25 +6656,25 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       status: 'awaiting_intro'
     });
     
-    const prompt = `You've requested to join the IrregularChat Community.\n\n` +
-                  `Bonafides: Everyone in the chat has been invited by an irregularchat member.\n` +
-                  `So that we can add you to the right groups, we need to know:\n\n` +
-                  `1. NAME\n` +
-                  `2. YOUR_ORGANIZATION\n` +
-                  `3. Who invited you (Add & mention them in this chat)\n` +
-                  `4. EMAIL_OR_EMAIL_ALIAS\n` +
-                  `5. YOUR_INTERESTS\n` +
-                  `6. Link to your LinkedIn profile (if you want others to endorse your skills)\n\n` +
-                  `Reply with !request followed by your introduction.`;
+    const prompt = You've requested to join the IrregularChat Community.\n\n +
+                  Bonafides: Everyone in the chat has been invited by an irregularchat member.\n +
+                  So that we can add you to the right groups, we need to know:\n\n +
+                  1. NAME\n +
+                  2. YOUR_ORGANIZATION\n +
+                  3. Who invited you (Add & mention them in this chat)\n +
+                  4. EMAIL_OR_EMAIL_ALIAS\n +
+                  5. YOUR_INTERESTS\n +
+                  6. Link to your LinkedIn profile (if you want others to endorse your skills)\n\n +
+                  Reply with !request followed by your introduction.;
     
     return prompt;
   }
   
   async sendOnboardingRequest(targetUser, groupId, requester) {
     // Send onboarding request to specific user
-    const message = `👋 Introduction request sent to ${targetUser}\n\n` +
-                   `They will receive instructions to introduce themselves.\n` +
-                   `Timeout: ${this.requestTimeoutMinutes / 60} hours`;
+    const message = 👋 Introduction request sent to ${targetUser}\n\n +
+                   They will receive instructions to introduce themselves.\n +
+                   Timeout: ${this.requestTimeoutMinutes / 60} hours;
     
     // Would send DM to target user with onboarding prompt
     // For now, just return confirmation
@@ -4985,15 +6694,15 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       console.log(`🚫 Would remove ${phoneNumber} from group ${groupId} due to timeout`);
       
       // Notify admins
-      const notification = `⏰ Request timeout: ${phoneNumber} has been removed from pending list.\n` +
-                         `No !gtg was provided within ${this.requestTimeoutMinutes / 60} hours.`;
+      const notification = ⏰ Request timeout: ${phoneNumber} has been removed from pending list.\n +
+                         No !gtg was provided within ${this.requestTimeoutMinutes / 60} hours.;
       console.log(notification);
     }
   }
 
   async handleGtg(context) {
     const { sender, args, groupId, sourceNumber, mentions } = context;
-    const isAdmin = this.isAdmin(sourceNumber || sender, groupId);
+    const isAdmin = this.isAdmin(context.sourceUuid || sourceNumber || sender, groupId);
     if (!isAdmin) return '🚫 Only administrators can approve users with !gtg';
     
     // Check if this is a reply to someone's message (mentions array)
@@ -5005,7 +6714,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Using mentions - get the UUID of the mentioned user
       targetUuid = mentions[0].uuid;
       targetUser = mentions[0].name || 'User';
-      console.log(`🎯 Approving mentioned user: ${targetUser} (UUID: ${targetUuid})`);
+      console.log(🎯 Approving mentioned user: ${targetUser} (UUID: ${targetUuid}));
     } else if (args.length < 1) {
       return '❌ Usage: Reply to a user\'s intro message with !gtg';
     } else {
@@ -5030,7 +6739,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Generate credentials
       const username = this.generateUsername(introData.name || targetUser || 'user');
       const password = this.generateSecurePassword();
-      const email = introData.email || `${username}@irregularchat.com`;
+      const email = introData.email || ${username}@irregularchat.com;
       
       // Create user in database (would integrate with Authentik in production)
       const userData = {
@@ -5059,14 +6768,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
       
       // Log the approval
-      console.log(`✅ Approved user: ${username} (${email})`);
+      console.log(✅ Approved user: ${username} (${email}));
       
-      return `✅ Good to go. Thanks for verifying. This is how we keep the community safe.\n\n` +
-             `1. User has been removed from this chat\n` +
-             `2. They'll receive a direct message with their IrregularChat Login\n` +
-             `3. They can join all the Chats that interest them\n` +
-             `4. Wiki: https://irregularpedia.org\n\n` +
-             `See you out there!`;
+      return ✅ Good to go. Thanks for verifying. This is how we keep the community safe.\n\n +
+             1. User has been removed from this chat\n +
+             2. They'll receive a direct message with their IrregularChat Login\n +
+             3. They can join all the Chats that interest them\n +
+             4. Wiki: https://irregularpedia.org\n\n +
+             See you out there!;
     } catch (error) {
       console.error('❌ Error during user approval:', error);
       return `❌ Error approving user: ${error.message}\n\nPlease try again or contact an admin.`;
@@ -5146,23 +6855,23 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   
   // Helper function to format credentials message
   formatCredentials(username, password, email) {
-    return `🌟 Your First Step Into the IrregularChat! 🌟\n\n` +
-           `You've just joined a community focused on breaking down silos, ` +
-           `fostering innovation, and supporting service members and veterans.\n\n` +
-           `---\n` +
-           `Use This Username and Temporary Password ⬇️\n\n` +
-           `Username: ${username}\n` +
-           `Temporary Password: ${password}\n` +
-           `Exactly as shown above 👆🏼\n\n` +
-           `1️⃣ Step 1:\n` +
-           `Use the username and temporary password to log in to https://sso.irregularchat.com\n\n` +
-           `2️⃣ Step 2:\n` +
-           `You'll be prompted to create your own password\n\n` +
-           `3️⃣ Step 3:\n` +
-           `Use the links in #links to join all the Signal chats\n\n` +
-           `4️⃣ Step 4:\n` +
-           `Check out the wiki: https://irregularpedia.org\n\n` +
-           `Welcome to IrregularChat! 🎉`;
+    return 🌟 Your First Step Into the IrregularChat! 🌟\n\n +
+           You've just joined a community focused on breaking down silos,  +
+           fostering innovation, and supporting service members and veterans.\n\n +
+           ---\n +
+           Use This Username and Temporary Password ⬇️\n\n +
+           Username: ${username}\n +
+           Temporary Password: ${password}\n +
+           Exactly as shown above 👆🏼\n\n +
+           1️⃣ Step 1:\n +
+           Use the username and temporary password to log in to https://sso.irregularchat.com\n\n +
+           2️⃣ Step 2:\n +
+           You'll be prompted to create your own password\n\n +
+           3️⃣ Step 3:\n +
+           Use the links in #links to join all the Signal chats\n\n +
+           4️⃣ Step 4:\n +
+           Check out the wiki: https://irregularpedia.org\n\n +
+           Welcome to IrregularChat! 🎉;
   }
   
   // Helper function to send direct message
@@ -5183,7 +6892,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       console.log(`📨 DM sent to ${uuid}`);
       return true;
     } catch (error) {
-      console.error(`❌ Failed to send DM to ${uuid}:`, error);
+      console.error(❌ Failed to send DM to ${uuid}:, error);
       return false;
     }
   }
@@ -5206,7 +6915,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       console.log(`🚪 Removed ${uuid} from group ${groupId}`);
       return true;
     } catch (error) {
-      console.error(`❌ Failed to remove ${uuid} from group:`, error);
+      console.error(❌ Failed to remove ${uuid} from group:, error);
       return false;
     }
   }
@@ -5219,7 +6928,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
 
   async handleSngtg(context) {
     const { sender, groupId, sourceNumber, args } = context;
-    const isAdmin = this.isAdmin(sourceNumber || sender, groupId);
+    const isAdmin = this.isAdmin(context.sourceUuid || sourceNumber || sender, groupId);
     if (!isAdmin) return '🚫 Only administrators can confirm safety numbers with !sngtg';
     
     if (args.length < 1) {
@@ -5230,15 +6939,15 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     
     const userToConfirm = args[0].replace('@', '');
     
-    return `✅ Safety Number Confirmed for ${userToConfirm}!\n\n` +
-           `🔒 Safety number has been verified.\n` +
-           `✨ User can now participate in secure conversations.\n\n` +
-           `Note: Use !gtg for general user onboarding approval.`;
+    return ✅ Safety Number Confirmed for ${userToConfirm}!\n\n +
+           🔒 Safety number has been verified.\n +
+           ✨ User can now participate in secure conversations.\n\n +
+           Note: Use !gtg for general user onboarding approval.;
   }
   
   async handlePending(context) {
     const { sender, groupId, sourceNumber } = context;
-    const isAdmin = this.isAdmin(sourceNumber || sender, groupId);
+    const isAdmin = this.isAdmin(context.sourceUuid || sourceNumber || sender, groupId);
     
     if (!isAdmin) {
       return '🚫 Only administrators can view pending requests';
@@ -5248,24 +6957,24 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       return '📭 No pending requests';
     }
     
-    let response = `📋 Pending Requests (${this.pendingRequests.size}):\n\n`;
+    let response = 📋 Pending Requests (${this.pendingRequests.size}):\n\n;
     
     for (const [phoneNumber, request] of this.pendingRequests) {
       const timeElapsed = Date.now() - request.timestamp;
       const hoursElapsed = Math.floor(timeElapsed / (1000 * 60 * 60));
       const hoursRemaining = Math.floor(this.requestTimeoutMinutes / 60) - hoursElapsed;
       
-      response += `👤 ${request.requester || phoneNumber}\n`;
-      response += `📱 Phone: ${phoneNumber}\n`;
-      response += `⏰ Time remaining: ${hoursRemaining} hours\n`;
+      response += 👤 ${request.requester || phoneNumber}\n;
+      response += 📱 Phone: ${phoneNumber}\n;
+      response += ⏰ Time remaining: ${hoursRemaining} hours\n;
       
       if (request.introduction) {
         const shortIntro = request.introduction.substring(0, 100);
-        response += `📝 Intro: ${shortIntro}${request.introduction.length > 100 ? '...' : ''}\n`;
+        response += 📝 Intro: ${shortIntro}${request.introduction.length > 100 ? '...' : ''}\n;
       }
       
-      response += `✅ Approve: !gtg ${phoneNumber}\n`;
-      response += `───────────────\n`;
+      response += ✅ Approve: !gtg ${phoneNumber}\n;
+      response += ───────────────\n;
     }
     
     return response;
@@ -5285,14 +6994,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   }
   
   async handleZeroeth(context) {
-    return `🤖 **The Zeroeth Law**\n\n${this.zeroethLaw}\n\n🏞️ **IrregularChat Community:**\n${this.communityContext.description}\n\n📜 **Rules of Engagement:**\n${this.communityContext.rules.map((r, i) => `${i+1}. ${r}`).join('\n')}\n\n📚 **Resources:**\n• Wiki: ${this.communityContext.wikiUrl}\n• Forum: ${this.communityContext.forumUrl}`;
+    return `🤖 The Zeroeth Law\n\n${this.zeroethLaw}\n\n🏞️ IrregularChat Community:\n${this.communityContext.description}\n\n📜 Rules of Engagement:\n${this.communityContext.rules.map((r, i) => ${i+1}. ${r}).join('\n')}\n\n📚 Resources:\n• Wiki: ${this.communityContext.wikiUrl}\n• Forum: ${this.communityContext.forumUrl}`;
   }
 
   // Context and Knowledge Management
   async searchWiki(query) {
     try {
       // Search IrregularPedia for relevant information
-      const searchUrl = `${this.wikiUrl}/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json`;
+      const searchUrl = ${this.wikiUrl}/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json;
       const response = await fetch(searchUrl);
       if (response.ok) {
         const data = await response.json();
@@ -5307,7 +7016,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async searchForum(query) {
     try {
       // Search forum for relevant discussions
-      const searchUrl = `${this.forumUrl}/search.json?q=${encodeURIComponent(query)}`;
+      const searchUrl = ${this.forumUrl}/search.json?q=${encodeURIComponent(query)};
       const response = await fetch(searchUrl);
       if (response.ok) {
         const data = await response.json();
@@ -5329,11 +7038,11 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     let context = '';
     
     if (wikiResults.length > 0) {
-      context += `Wiki articles found: ${wikiResults.slice(0, 3).map(r => r.title).join(', ')}. `;
+      context += Wiki articles found: ${wikiResults.slice(0, 3).map(r => r.title).join(', ')}. ;
     }
     
     if (forumResults.length > 0) {
-      context += `Forum discussions found: ${forumResults.slice(0, 3).map(r => r.title).join(', ')}.`;
+      context += Forum discussions found: ${forumResults.slice(0, 3).map(r => r.title).join(', ')}.;
     }
     
     return context || 'No specific community information found, using general knowledge.';
@@ -5385,10 +7094,15 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
           }
         },
         update: {
-          message: message.message,
-          sourceName: message.sourceName,
+          groupName: message.groupName || null,
+          sourceName: message.sourceName || null,
           sourceUuid: message.sourceUuid || null,
-          groupName: message.groupName || null
+          message: message.message,
+          attachments: message.attachments?.length ? message.attachments : null,
+          mentions: message.mentions?.length ? message.mentions : null,
+          isReply: message.isReply || false,
+          quotedMessageId: message.quotedMessageId || null,
+          quotedText: message.quotedMessage || null
         },
         create: {
           groupId: groupId === 'dm' ? null : groupId,
@@ -5539,7 +7253,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         const totalReactions = Array.from(message.reactions.values()).reduce((sum, count) => sum + count, 0);
         if (totalReactions > 3) {
           const reactionSummary = Array.from(message.reactions.entries())
-            .map(([emoji, count]) => `${emoji} ${count}`)
+            .map(([emoji, count]) => ${emoji} ${count})
             .join(' ');
           
           messagesWithReactions.push({
@@ -5762,14 +7476,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Analyze reactions even for fallback
       const reactionAnalysis = this.analyzeMessageReactions(recentMessages);
       
-      let fallbackSummary = `📝 Chat Summary (${messageCount} messages)\n\n👥 Participants: ${participants}\n⏱️ Timespan: ${timespan}`;
+      let fallbackSummary = 📝 Chat Summary (${messageCount} messages)\n\n👥 Participants: ${participants}\n⏱️ Timespan: ${timespan};
       
       // Add reaction highlights if present
       if (reactionAnalysis.hasHighReactions) {
-        fallbackSummary += `\n\n🔥 Highly Reacted Messages:\n${reactionAnalysis.highlightText}`;
+        fallbackSummary += \n\n🔥 Highly Reacted Messages:\n${reactionAnalysis.highlightText};
       }
       
-      fallbackSummary += `\n\n💬 Recent messages:\n${recentMessages.slice(-5).map(m => `• ${m.sender}: ${m.message.substring(0, 50)}${m.message.length > 50 ? '...' : ''}`).join('\n')}`;
+      fallbackSummary += \n\n💬 Recent messages:\n${recentMessages.slice(-5).map(m => • ${m.sender}: ${m.message.substring(0, 50)}${m.message.length > 50 ? '...' : ''}).join('\n')};
       
       return fallbackSummary;
     }
@@ -5778,18 +7492,18 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Analyze emoji reactions to highlight highly reacted messages
       const reactionAnalysis = this.analyzeMessageReactions(recentMessages);
       
-      const messagesText = recentMessages.map(m => `${m.sender}: ${m.message}`).join('\n');
+      const messagesText = recentMessages.map(m => ${m.sender}: ${m.message}).join('\n');
       let aiResponse;
       
       if (this.useLocalAiForSummarization) {
         // Use local AI for privacy (keeps user data private)
         console.log('Using local AI for chat summarization (privacy mode)');
         
-        const response = await fetch(`${this.localAiUrl}/v1/chat/completions`, {
+        const response = await fetch(${this.localAiUrl}/v1/chat/completions, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.localAiApiKey}`
+            'Authorization': Bearer ${this.localAiApiKey}
           },
           body: JSON.stringify({
             model: this.localAiModel,
@@ -5798,14 +7512,14 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
               content: 'You are a helpful assistant that summarizes chat conversations. Focus on the main topics, key points, and any decisions or action items. Be concise but thorough.'
             }, {
               role: 'user',
-              content: `Please summarize this group chat conversation:\n\n${messagesText}`
+              content: Please summarize this group chat conversation:\n\n${messagesText}
             }],
             max_completion_tokens: 700  // GPT-5 requires max_completion_tokens
           })
         });
         
         if (!response.ok) {
-          throw new Error(`Local AI error: ${response.status}`);
+          throw new Error(Local AI error: ${response.status});
         }
         
         aiResponse = await response.json();
@@ -5821,7 +7535,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
             content: 'You are a helpful assistant that summarizes chat conversations. Focus on the main topics, key points, and any decisions or action items. Be concise but thorough.'
           }, {
             role: 'user',
-            content: `Please summarize this group chat conversation:\n\n${messagesText}` 
+            content: Please summarize this group chat conversation:\n\n${messagesText} 
           }],
           max_completion_tokens: 900  // GPT-5 thinking model needs 600+ tokens
         });
@@ -5836,21 +7550,21 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Build summary description
       let summaryDesc;
       if (minutesBack) {
-        summaryDesc = `${actualMessageCount} messages from last ${minutesBack} minute${minutesBack !== 1 ? 's' : ''}`;
+        summaryDesc = ${actualMessageCount} messages from last ${minutesBack} minute${minutesBack !== 1 ? 's' : ''};
       } else if (hoursBack) {
-        summaryDesc = `${actualMessageCount} messages from last ${hoursBack} hour${hoursBack !== 1 ? 's' : ''}`;
+        summaryDesc = ${actualMessageCount} messages from last ${hoursBack} hour${hoursBack !== 1 ? 's' : ''};
       } else {
-        summaryDesc = `last ${actualMessageCount} messages`;
+        summaryDesc = last ${actualMessageCount} messages;
       }
       
-      let fullSummary = `📝 Chat Summary (${summaryDesc})\n\n👥 Participants: ${participants}`;
+      let fullSummary = 📝 Chat Summary (${summaryDesc})\n\n👥 Participants: ${participants};
       
       // Add reaction analysis if there are significant reactions
       if (reactionAnalysis.hasHighReactions) {
-        fullSummary += `\n\n🔥 Highly Reacted Messages:\n${reactionAnalysis.highlightText}`;
+        fullSummary += \n\n🔥 Highly Reacted Messages:\n${reactionAnalysis.highlightText};
       }
       
-      fullSummary += `\n\n${aiPrefix} ${summaryText}`;
+      fullSummary += \n\n${aiPrefix} ${summaryText};
       
       return fullSummary;
       
@@ -5859,7 +7573,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       // Fallback to simple summary
       const messageCount = recentMessages.length;
       const participants = [...new Set(recentMessages.map(m => m.sender))].join(', ');
-      return `📝 Chat Summary (${messageCount} messages)\n\n👥 Participants: ${participants}\n\n💬 Recent messages:\n${recentMessages.slice(-3).map(m => `• ${m.sender}: ${m.message.substring(0, 50)}${m.message.length > 50 ? '...' : ''}`).join('\n')}`;
+      return `📝 Chat Summary (${messageCount} messages)\n\n👥 Participants: ${participants}\n\n💬 Recent messages:\n${recentMessages.slice(-3).map(m => • ${m.sender}: ${m.message.substring(0, 50)}${m.message.length > 50 ? '...' : ''}).join('\n')}`;
     }
   }
   
@@ -5883,30 +7597,419 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   async handleEightBall(context) { 
     const responses = ['Yes', 'No', 'Maybe', 'Ask again later', 'Definitely', 'Probably not'];
     const response = responses[Math.floor(Math.random() * responses.length)];
-    return `🎱 **Magic 8-Ball**: ${response}`;
+    return `🎱 Magic 8-Ball: ${response}`;
   }
   async handleDice(context) { 
     const roll = Math.floor(Math.random() * 6) + 1;
-    return `🎲 **Dice Roll**: ${roll}\n\nUsage: !dice [sides] [count]`; 
+    return `🎲 Dice Roll: ${roll}\n\nUsage: !dice [sides] [count]`; 
   }
 
-  // Helper method for admin check
-  isAdmin(userNumber, groupId = null) {
-    // First check global admin list (for backward compatibility)
-    const adminUsers = process.env.ADMIN_USERS?.split(',') || [];
-    if (adminUsers.includes(userNumber)) {
+  // Helper method for admin check - now UUID-based for security
+  isAdmin(userIdentifier, groupId = null) {
+    // Determine if we received a UUID or phone number
+    const isUuid = userIdentifier && userIdentifier.length > 15; // UUIDs are longer than phone numbers
+    
+    // Primary check: UUID-based admin list (secure)
+    const adminUuids = process.env.ADMIN_UUIDS?.split(',') || [];
+    if (isUuid && adminUuids.includes(userIdentifier)) {
       return true;
     }
     
-    // If a groupId is provided, check if user is admin in that specific group
+    // Fallback check: Phone number-based admin list (legacy - will be deprecated)
+    // Only for backward compatibility during transition period
+    if (!isUuid) {
+      const adminUsers = process.env.ADMIN_USERS?.split(',') || [];
+      if (adminUsers.includes(userIdentifier)) {
+        console.warn('⚠️ SECURITY WARNING: Using deprecated phone number admin auth. Migrate to UUID-based auth.');
+        return true;
+      }
+    }
+    
+    // Group-specific admin check (also needs UUID migration)
     if (groupId && this.cachedGroups) {
       const group = this.cachedGroups.find(g => g.id === groupId);
       if (group && group.admins && Array.isArray(group.admins)) {
-        return group.admins.some(admin => admin.number === userNumber);
+        if (isUuid) {
+          // Check by UUID (preferred)
+          return group.admins.some(admin => admin.uuid === userIdentifier);
+        } else {
+          // Fallback to phone number check
+          return group.admins.some(admin => admin.number === userIdentifier);
+        }
       }
     }
     
     return false;
+  }
+  
+  // Helper method to check if user is moderator
+  isModerator(userIdentifier, groupId = null) {
+    // First check if user is admin (admins are also moderators)
+    if (this.isAdmin(userIdentifier, groupId)) {
+      return true;
+    }
+    
+    // Check moderator-specific list
+    const isUuid = userIdentifier && userIdentifier.length > 15;
+    const moderatorUuids = process.env.MODERATOR_UUIDS?.split(',') || [];
+    
+    if (isUuid && moderatorUuids.includes(userIdentifier)) {
+      return true;
+    }
+    
+    // Legacy phone number check
+    if (!isUuid) {
+      const moderatorUsers = process.env.MODERATOR_USERS?.split(',') || [];
+      if (moderatorUsers.includes(userIdentifier)) {
+        console.warn('⚠️ Using deprecated phone number moderator auth');
+        return true;
+      }
+    }
+    
+    return false;
+  }
+  
+  // AI Command Awareness: Get command registry with permission filtering
+  getCommandRegistry(context) {
+    const userIdentifier = context.sourceUuid || context.sourceNumber;
+    const isAdmin = this.isAdmin(userIdentifier, context.groupId);
+    const isModerator = this.isModerator(userIdentifier, context.groupId);
+    
+    // Build command list with metadata
+    const allCommands = [];
+    
+    // Add plugin commands
+    for (const [name, command] of this.plugins) {
+      const commandInfo = {
+        name: name,
+        description: command.description || 'No description available',
+        handler: command.handler || command.execute,
+        adminOnly: command.adminOnly || false,
+        moderatorOnly: command.moderatorOnly || false,
+        category: this.categorizeCommand(name),
+        usage: this.getCommandUsage(name),
+        examples: this.getCommandExamples(name)
+      };
+      
+      allCommands.push(commandInfo);
+    }
+    
+    // Filter commands based on permissions
+    const availableCommands = allCommands.filter(cmd => {
+      if (cmd.adminOnly && !isAdmin) return false;
+      if (cmd.moderatorOnly && !isModerator) return false;
+      return true;
+    });
+    
+    // Organize by category
+    const categorized = {};
+    for (const cmd of availableCommands) {
+      if (!categorized[cmd.category]) {
+        categorized[cmd.category] = [];
+      }
+      categorized[cmd.category].push(cmd);
+    }
+    
+    return {
+      isAdmin,
+      isModerator,
+      available: availableCommands,
+      all: allCommands,
+      categorized,
+      totalAvailable: availableCommands.length,
+      totalCommands: allCommands.length
+    };
+  }
+  
+  // Helper to categorize commands
+  categorizeCommand(name) {
+    const categories = {
+      'Core': ['help', 'ping', 'ai', 'lai'],
+      'Q&A': ['q', 'question', 'questions', 'answer', 'a', 'solved', 'search'],
+      'Events': ['events', 'eventadd'],
+      'Community': ['wiki', 'forum', 'faq', 'docs', 'links', 'zeroeth'],
+      'Groups': ['groups', 'join', 'addto', 'removeuser', 'invite'],
+      'Moderation': ['warn', 'warnings', 'clearwarnings', 'kick', 'tempban', 'modlog', 'report', 'cases'],
+      'Admin': ['reload', 'logs', 'backup', 'maintenance', 'gtg', 'sngtg', 'pending'],
+      'News': ['news', 'newsadd', 'newslist', 'newsremove', 'tldr', 'summarize', 'bypass', 'archive'],
+      'Analytics': ['stats', 'topcommands', 'topusers', 'errors', 'newsstats', 'feedback', 'watchdomain'],
+      'Utilities': ['weather', 'time', 'translate', 'shorten', 'qr', 'hash', 'base64', 'calc', 'random', 'flip', 'pdf'],
+      'Fun': ['joke', 'quote', 'fact', 'poll', '8ball', 'dice'],
+      'Forum': ['fpost', 'flatest', 'fsearch', 'categories']
+    };
+    
+    for (const [category, commands] of Object.entries(categories)) {
+      if (commands.includes(name)) {
+        return category;
+      }
+    }
+    
+    return 'Other';
+  }
+  
+  // Helper to get command usage examples
+  getCommandUsage(name) {
+    const usages = {
+      'ai': '!ai <question>',
+      'lai': '!lai <question>',
+      'q': '!q <question text>',
+      'a': '!a <answer text>',
+      'events': '!events',
+      'eventadd': '!eventadd <event description>',
+      'addto': '!addto <group> <phone/username>',
+      'tldr': '!tldr <url>',
+      'news': '!news <url>',
+      'weather': '!weather <location>',
+      'translate': '!translate <language> <text>',
+      'pdf': '!pdf <url or attachment>'
+    };
+    
+    return `usages[name] || !${name}`;
+  }
+  
+  // Helper to get command examples
+  getCommandExamples(name) {
+    const examples = {
+      'ai': ['!ai what is the weather today?', '!ai explain quantum computing'],
+      'q': ['!q How do I join a Signal group?', '!q What is the wiki URL?'],
+      'a': ['!a The wiki is at https://wiki.example.com', '!a Use !join to see available groups'],
+      'events': ['!events'],
+      'eventadd': ['!eventadd Community meetup on Saturday 2pm at Coffee Shop'],
+      'weather': ['!weather London', '!weather 10001'],
+      'translate': ['!translate es Hello world', '!translate fr Good morning']
+    };
+    
+    return examples[name] || [];
+  }
+  
+  // AI Database Context: Query database for relevant information
+  async getAIDatabaseContext(query, context) {
+    const dbContext = {
+      questions: [],
+      events: [],
+      links: [],
+      news: [],
+      hasRelevantData: false
+    };
+    
+    try {
+      // Query for Q&A based on keywords
+      if (query.match(/question|answer|q&a|help|how|what|why|when/i)) {
+        const questions = await this.prisma.question.findMany({
+          where: {
+            OR: [
+              { question: { contains: query.slice(0, 50), mode: 'insensitive' } },
+              { answer: { contains: query.slice(0, 50), mode: 'insensitive' } }
+            ]
+          },
+          take: 5,
+          orderBy: { createdAt: 'desc' },
+          include: {
+            user: true
+          }
+        });
+        
+        dbContext.questions = questions.map(q => ({
+          id: q.id,
+          question: q.question,
+          answer: q.answer,
+          status: q.status,
+          askedBy: q.user?.username || 'Unknown',
+          createdAt: q.createdAt
+        }));
+        
+        if (questions.length > 0) dbContext.hasRelevantData = true;
+      }
+      
+      // Query for events if asking about events/meetings
+      if (query.match(/event|meeting|meetup|happening|schedule|when is/i)) {
+        const now = new Date();
+        const events = await this.prisma.discourseEvent.findMany({
+          where: {
+            eventStart: {
+              gte: now
+            }
+          },
+          take: 5,
+          orderBy: { eventStart: 'asc' }
+        });
+        
+        dbContext.events = events.map(e => ({
+          id: e.id,
+          name: e.name,
+          start: e.eventStart,
+          end: e.eventEnd,
+          location: e.eventLocation,
+          description: e.description
+        }));
+        
+        if (events.length > 0) dbContext.hasRelevantData = true;
+      }
+      
+      // Query for bookmarks/links if asking about resources
+      if (query.match(/link|resource|bookmark|url|website|doc|documentation/i)) {
+        const links = await this.prisma.communityBookmark.findMany({
+          where: {
+            OR: [
+              { title: { contains: query.slice(0, 50), mode: 'insensitive' } },
+              { description: { contains: query.slice(0, 50), mode: 'insensitive' } },
+              { tags: { has: query.split(' ')[0] } }
+            ]
+          },
+          take: 5,
+          orderBy: { createdAt: 'desc' }
+        });
+        
+        dbContext.links = links.map(l => ({
+          id: l.id,
+          title: l.title,
+          url: l.url,
+          description: l.description,
+          tags: l.tags,
+          category: l.category
+        }));
+        
+        if (links.length > 0) dbContext.hasRelevantData = true;
+      }
+      
+      // Query for recent news if asking about news/updates
+      if (query.match(/news|update|latest|recent|happening|announcement/i)) {
+        // Get recent news summaries from memory (last 24 hours) - check if initialized
+        if (this.newsSummaries && this.newsSummaries instanceof Map) {
+          const recentNews = Array.from(this.newsSummaries.entries())
+            .filter(([url, data]) => Date.now() - data.timestamp < 86400000)
+            .slice(0, 3)
+            .map(([url, data]) => ({
+              url,
+              title: data.title,
+              summary: data.summary,
+              timestamp: new Date(data.timestamp)
+            }));
+          
+          dbContext.news = recentNews;
+          if (recentNews.length > 0) dbContext.hasRelevantData = true;
+        }
+      }
+      
+    } catch (error) {
+      console.error('Error fetching AI database context:', error);
+    }
+    
+    return dbContext;
+  }
+  
+  // Phase 4: Safe Command Executor for Admin Operations
+  async safeCommandExecutor(commandName, args, context, aiProvider = 'ai') {
+    // Audit log for all AI command executions
+    const auditEntry = {
+      timestamp: new Date().toISOString(),
+      aiProvider: aiProvider,
+      command: commandName,
+      args: args,
+      user: context.sourceNumber,
+      userUuid: context.sourceUuid,
+      group: context.groupId,
+      executed: false,
+      error: null
+    };
+    
+    try {
+      // Get command from registry
+      const cmd = this.plugins.get(commandName);
+      if (!cmd) {
+        auditEntry.error = 'Command not found';
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        return `{ success: false, message: Command !${commandName} not found }`;
+      }
+      
+      // Get command metadata and check permissions
+      const commandRegistry = this.getCommandRegistry(context);
+      const cmdInfo = commandRegistry.all.find(c => c.name === commandName);
+      
+      if (!cmdInfo) {
+        auditEntry.error = 'Command metadata not found';
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        return `{ success: false, message: Command metadata for !${commandName} not found }`;
+      }
+      
+      // Permission checks
+      if (cmdInfo.adminOnly && !commandRegistry.isAdmin) {
+        auditEntry.error = 'Admin permission required';
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        return { 
+          success: false, 
+          message: Cannot execute !${commandName} - admin privileges required,
+          needsPermission: 'admin'
+        };
+      }
+      
+      if (cmdInfo.moderatorOnly && !commandRegistry.isModerator) {
+        auditEntry.error = 'Moderator permission required';
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        return { 
+          success: false, 
+          message: Cannot execute !${commandName} - moderator privileges required,
+          needsPermission: 'moderator'
+        };
+      }
+      
+      // Dangerous command blocklist - never allow AI to execute these
+      const dangerousCommands = ['delete', 'ban', 'kick', 'remove', 'destroy', 'drop', 'truncate', 'reset'];
+      if (dangerousCommands.includes(commandName.toLowerCase())) {
+        auditEntry.error = 'Dangerous command blocked';
+        console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+        return { 
+          success: false, 
+          message: Command !${commandName} is blocked for AI execution for safety reasons,
+          blocked: true
+        };
+      }
+      
+      // Input validation for args
+      if (args && args.length > 0) {
+        // Sanitize arguments
+        args = args.map(arg => {
+          // Remove any potential injection attempts
+          if (typeof arg === 'string') {
+            return arg.replace(/[;&|`$(){}[\]<>]/g, '').substring(0, 500);
+          }
+          return arg;
+        });
+      }
+      
+      // Execute the command with timeout
+      const cmdContext = { ...context, args: args || [] };
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Command execution timeout')), 10000)
+      );
+      
+      const result = await Promise.race([
+        cmd.execute(cmdContext),
+        timeoutPromise
+      ]);
+      
+      auditEntry.executed = true;
+      console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+      console.log(`✅ AI (${aiProvider}) successfully executed !${commandName} for user ${context.sourceNumber}`);
+      
+      return { 
+        success: true, 
+        result: result,
+        command: commandName,
+        executedBy: aiProvider
+      };
+      
+    } catch (error) {
+      auditEntry.error = error.message;
+      console.log(`🔒 AI Audit: ${JSON.stringify(auditEntry)}`);
+      console.error(❌ AI command execution error:, error);
+      
+      return { 
+        success: false, 
+        message: Error executing !${commandName}: ${error.message},
+        error: true
+      };
+    }
   }
   
   // ========== Q&A System Commands ==========
@@ -5961,20 +8064,19 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         title = titleResponse.choices[0].message.content.trim();
       }
       
-      // Store question in database
-      const question = await this.prisma.qAndAQuestion.create({
-        data: {
-          questionId: questionId,
-          asker: sender || 'Unknown',
-          askerPhone: sourceNumber,
-          question: questionText,
-          title: title,
-          groupId: groupId || 'dm',
-          groupName: context.groupName || null,
-          solved: false,
-          discourseTopicId: null,
-          answers: []
-        }
+      // Security: Store question in database with secure operations
+      const question = await this.secureCreateRecord('qAndAQuestion', {
+        questionId: questionId,
+        asker: sender || 'Unknown',
+        askerPhone: sourceNumber,
+        question: questionText,
+        title: title,
+        groupId: groupId || 'dm',
+        groupName: context.groupName || null,
+        solved: false,
+        discourseTopicId: null,
+        answers: [],
+        timestamp: new Date()
       });
       
       console.log(`✅ Question Q${questionId} saved to database`);
@@ -5986,13 +8088,13 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         try {
           const topicData = {
             title: title,
-            raw: `Question from ${sender}:\n\n${questionText}\n\n---\n*Posted via Signal Bot from ${groupId ? 'group chat' : 'direct message'}*`,
+            raw: Question from ${sender}:\n\n${questionText}\n\n---\nPosted via Signal Bot from ${groupId ? 'group chat' : 'direct message'},
             category: 7, // Questions category - updated for IrregularChat forum
             tags: ['question', 'signal-bot']
           };
           
           console.log('📤 Posting question to Discourse:', this.discourseApiUrl);
-          const response = await fetch(`${this.discourseApiUrl}/posts.json`, {
+          const response = await fetch(${this.discourseApiUrl}/posts.json, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -6009,15 +8111,15 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
               where: { questionId: questionId },
               data: {
                 discourseTopicId: result.topic_id.toString(),
-                forumLink: `${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id}`
+                forumLink: ${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id}
               }
             });
-            forumLink = `\n📎 Forum: ${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id}`;
+            forumLink = \n📎 Forum: ${this.discourseApiUrl}/t/${result.topic_slug}/${result.topic_id};
             console.log('✅ Question posted to Discourse:', result.topic_id);
           } else {
             const errorText = await response.text();
             console.error('❌ Discourse API error:', response.status, errorText);
-            discourseError = `API ${response.status}`;
+            discourseError = API ${response.status};
           }
         } catch (error) {
           console.error('❌ Failed to post to Discourse:', error);
@@ -6026,27 +8128,27 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
       
       // Return success message even if Discourse posting failed (question is stored in database)
-      let response = `❓ Question Q${questionId} Posted\n\n` +
-                    `Title: ${title}\n` +
-                    `Asked by: ${sender}\n` +
-                    `Time: ${new Date().toLocaleTimeString()}`;
+      let response = ❓ Question Q${questionId} Posted\n\n +
+                    Title: ${title}\n +
+                    Asked by: ${sender}\n +
+                    Time: ${new Date().toLocaleTimeString()};
       
       if (forumLink) {
-        response += `\nForum: \n📎 Forum: ${forumLink}`;
+        response += \nForum: \n📎 Forum: ${forumLink};
       } else if (discourseError) {
-        response += `\n⚠️ Forum posting temporarily unavailable`;
+        response += \n⚠️ Forum posting temporarily unavailable;
         console.log('⚠️ Question stored locally only due to forum error');
       }
       
-      response += `\n\nOthers can answer with: !answer Q${questionId} <your answer>\n` +
-                 `Mark as solved with: !solved Q${questionId}`;
+      response += \n\nOthers can answer with: !answer Q${questionId} <your answer>\n +
+                 Mark as solved with: !solved Q${questionId};
       
       return response;
              
     } catch (error) {
       console.error('Error handling question:', error);
       return '❌ Failed to post question. Please try again.\n' +
-             `Error: ${error.message}`;
+             Error: ${error.message};
     }
   }
   
@@ -6085,8 +8187,8 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         const answerCount = answers.length;
         const timeAgo = this.getRelativeTime(q.timestamp);
         
-        response += `${status} Q${q.questionId}: ${q.title || q.question.substring(0, 60)}\n`;
-        response += `   👤 ${q.asker} • 💬 ${answerCount} answer${answerCount !== 1 ? 's' : ''} • ⏰ ${timeAgo}\n\n`;
+        response += ${status} Q${q.questionId}: ${q.title || q.question.substring(0, 60)}\n;
+        response +=    👤 ${q.asker} • 💬 ${answerCount} answer${answerCount !== 1 ? 's' : ''} • ⏰ ${timeAgo}\n\n;
       }
       
       response += '\n💡 Use !answer Q<ID> <answer> to answer a question';
@@ -6146,7 +8248,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     // Post answer to Discourse if topic exists
     if (question.discourseTopicId && this.discourseApiKey) {
       try {
-        await fetch(`${this.discourseApiUrl}/posts.json`, {
+        await fetch(${this.discourseApiUrl}/posts.json, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -6155,7 +8257,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
           },
           body: JSON.stringify({
             topic_id: question.discourseTopicId,
-            raw: `**Answer from ${sender}:**\n\n${answerText}`
+            raw: Answer from ${sender}:\n\n${answerText}
           })
         });
       } catch (error) {
@@ -6168,21 +8270,21 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       try {
         await this.sendDirectMessage(
           question.askerPhone,
-          `📬 **Your question has been answered!**\n\n` +
-          `❓ **Question ${questionId}:** ${question.title}\n\n` +
-          `💬 **Answer from ${sender}:**\n${answerText}\n\n` +
-          `✅ If this solves your question, reply with: !solved ${questionId}`
+          📬 Your question has been answered!\n\n +
+          ❓ Question ${questionId}: ${question.title}\n\n +
+          💬 Answer from ${sender}:\n${answerText}\n\n +
+          ✅ If this solves your question, reply with: !solved ${questionId}
         );
       } catch (error) {
         console.error('Failed to send DM notification:', error);
       }
     }
     
-    return `✅ Answer posted to ${questionId}\n\n` +
-           `❓ Question: ${question.title}\n` +
-           `👤 Asked by: ${question.asker}\n` +
-           `💬 Your answer: ${answerText}\n\n` +
-           `📊 Total answers: ${question.answers.length}`;
+    return ✅ Answer posted to ${questionId}\n\n +
+           ❓ Question: ${question.title}\n +
+           👤 Asked by: ${question.asker}\n +
+           💬 Your answer: ${answerText}\n\n +
+           📊 Total answers: ${question.answers.length};
   }
   
   async handleSolved(context) {
@@ -6201,7 +8303,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     
     // Only the asker or an admin can mark as solved
     const isAsker = question.askerPhone === sourceNumber;
-    const isAdmin = this.isAdmin(sourceNumber, groupId);
+    const isAdmin = this.isAdmin(context.sourceUuid || sourceNumber, groupId);
     
     if (!isAsker && !isAdmin) {
       return `❌ Only ${question.asker} (the question asker) or an admin can mark this as solved.`;
@@ -6219,7 +8321,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     if (question.discourseTopicId && this.discourseApiKey) {
       try {
         // Add solved tag or update topic
-        await fetch(`${this.discourseApiUrl}/posts.json`, {
+        await fetch(${this.discourseApiUrl}/posts.json, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -6228,7 +8330,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
           },
           body: JSON.stringify({
             topic_id: question.discourseTopicId,
-            raw: `✅ **This question has been marked as SOLVED by ${sender}**`
+            raw: ✅ This question has been marked as SOLVED by ${sender}
           })
         });
       } catch (error) {
@@ -6243,10 +8345,10 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
         try {
           await this.sendDirectMessage(
             answererPhone,
-            `🎉 **Good news!**\n\n` +
-            `The question you answered has been marked as solved:\n` +
-            `❓ **${question.title}**\n\n` +
-            `Thank you for your help!`
+            🎉 Good news!\n\n +
+            The question you answered has been marked as solved:\n +
+            ❓ ${question.title}\n\n +
+            Thank you for your help!
           );
         } catch (error) {
           console.error('Failed to notify answerer:', error);
@@ -6254,11 +8356,11 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
     }
     
-    return `✅ **Question ${questionId} marked as SOLVED!**\n\n` +
-           `❓ **Question:** ${question.title}\n` +
-           `👤 **Asked by:** ${question.asker}\n` +
-           `💬 **Total answers:** ${question.answers.length}\n` +
-           `🎉 Thank you to everyone who helped!`;
+    return ✅ Question ${questionId} marked as SOLVED!\n\n +
+           ❓ Question: ${question.title}\n +
+           👤 Asked by: ${question.asker}\n +
+           💬 Total answers: ${question.answers.length}\n +
+           🎉 Thank you to everyone who helped!;
   }
   
   async sendDirectMessage(phoneNumber, message) {
@@ -6266,7 +8368,7 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     try {
       await this.sendMessage(message, phoneNumber);
     } catch (error) {
-      console.error(`Failed to send DM to ${phoneNumber}:`, error);
+      console.error(Failed to send DM to ${phoneNumber}:, error);
     }
   }
   
@@ -6330,21 +8432,20 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
   }
   // Analytics Tracking Methods
   
-  // Track command usage
+  // Security: Track command usage with secure database operations
   async trackCommandUsage(data) {
     try {
-      await this.prisma.botCommandUsage.create({
-        data: {
-          command: data.command,
-          args: data.args,
-          groupId: data.groupId,
-          groupName: data.groupName,
-          userId: data.userId,
-          userName: data.userName,
-          success: data.success,
-          responseTime: data.responseTime,
-          errorMessage: data.errorMessage
-        }
+      await this.secureCreateRecord('botCommandUsage', {
+        command: data.command,
+        args: data.args,
+        groupId: data.groupId,
+        groupName: data.groupName,
+        userId: data.userId,
+        userName: data.userName,
+        success: data.success,
+        responseTime: data.responseTime,
+        errorMessage: data.errorMessage,
+        timestamp: new Date()
       });
     } catch (error) {
       console.error('Failed to track command usage:', error);
@@ -6399,6 +8500,92 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
       }
     } catch (error) {
       console.error('Failed to track news link:', error);
+    }
+  }
+
+  // Track repository links
+  async trackRepositoryLink(url, message, repoData) {
+    try {
+      const domain = new URL(url).hostname;
+      
+      // Check if this URL was already posted in this group
+      const existing = await this.prisma.repositoryLink.findUnique({
+        where: {
+          url_groupId: {
+            url: url,
+            groupId: message.groupId || 'dm'
+          }
+        }
+      });
+      
+      if (existing) {
+        // Update existing entry with fresh metadata
+        const updateData = {
+          lastPostedAt: new Date(),
+          postCount: existing.postCount + 1
+        };
+        
+        // Update metadata if we have fresh data
+        if (repoData.description) updateData.description = repoData.description;
+        if (repoData.language) updateData.language = repoData.language;
+        if (repoData.stars !== undefined) updateData.stars = repoData.stars;
+        if (repoData.forks !== undefined) updateData.forks = repoData.forks;
+        if (repoData.updated_at) updateData.lastUpdated = new Date(repoData.updated_at);
+        
+        await this.prisma.repositoryLink.update({
+          where: { id: existing.id },
+          data: updateData
+        });
+      } else {
+        // Create new repository entry
+        await this.prisma.repositoryLink.create({
+          data: {
+            url: url,
+            platform: repoData.platform || 'Unknown',
+            repositoryName: repoData.full_name || repoData.name,
+            owner: repoData.full_name?.split('/')[0] || 'Unknown',
+            name: repoData.name || 'Unknown',
+            description: repoData.description,
+            language: repoData.language,
+            stars: repoData.stars || 0,
+            forks: repoData.forks || 0,
+            openIssues: repoData.open_issues || 0,
+            license: repoData.license,
+            topics: repoData.topics ? JSON.stringify(repoData.topics) : null,
+            isPrivate: repoData.is_private || false,
+            isFork: repoData.is_fork || false,
+            isArchived: repoData.archived || false,
+            lastUpdated: repoData.updated_at ? new Date(repoData.updated_at) : null,
+            firstPostedAt: new Date(),
+            lastPostedAt: new Date(),
+            postCount: 1,
+            groupId: message.groupId || 'dm',
+            groupName: message.groupName,
+            postedBy: message.sourceNumber,
+            postedByName: message.sourceName
+          }
+        });
+      }
+
+      // Update statistics
+      this.repositoryStats.totalProcessed++;
+      
+      const today = new Date().toDateString();
+      this.repositoryStats.dailyCounts.set(today, 
+        (this.repositoryStats.dailyCounts.get(today) || 0) + 1);
+      
+      if (repoData.platform) {
+        this.repositoryStats.platforms.set(repoData.platform,
+          (this.repositoryStats.platforms.get(repoData.platform) || 0) + 1);
+      }
+      
+      if (repoData.language && repoData.language !== 'Unknown') {
+        this.repositoryStats.languages.set(repoData.language,
+          (this.repositoryStats.languages.get(repoData.language) || 0) + 1);
+      }
+      
+    } catch (error) {
+      console.error('Failed to track repository link:', error);
     }
   }
   
@@ -6546,6 +8733,165 @@ Return ONLY valid JSON with these fields. Use null for missing values. Today's d
     } catch (dbError) {
       console.error('Failed to log error to database:', dbError);
     }
+  }
+
+  // ========== Security Domain Watch List ==========
+  
+  initializeWatchedDomains() {
+    // Default watched domains and TLDs
+    const defaultWatched = {
+      // Country-specific TLDs
+      '.ir': 'Iran',
+      '.cn': 'China',
+      '.ru': 'Russia',
+      '.ve': 'Venezuela',
+      // Common domains from these countries
+      'baidu.com': 'China',
+      'qq.com': 'China',
+      'weibo.com': 'China',
+      'yandex.ru': 'Russia',
+      'vk.com': 'Russia',
+      'mail.ru': 'Russia',
+      'rt.com': 'Russia',
+      'sputniknews.com': 'Russia',
+      'presstv.ir': 'Iran',
+      'tehrantimes.com': 'Iran',
+      'telesurtv.net': 'Venezuela'
+    };
+    
+    // Load from file if exists
+    try {
+      if (fs.existsSync(this.watchedDomainsFile)) {
+        const data = JSON.parse(fs.readFileSync(this.watchedDomainsFile, 'utf8'));
+        Object.entries(data).forEach(([domain, country]) => {
+          this.watchedDomains.set(domain.toLowerCase(), country);
+        });
+        console.log(`🛡️ Loaded ${this.watchedDomains.size} watched domains`);
+      } else {
+        // Initialize with defaults
+        Object.entries(defaultWatched).forEach(([domain, country]) => {
+          this.watchedDomains.set(domain.toLowerCase(), country);
+        });
+        this.saveWatchedDomains();
+        console.log(`🛡️ Initialized ${this.watchedDomains.size} default watched domains`);
+      }
+    } catch (error) {
+      console.error('Error loading watched domains:', error);
+      // Use defaults on error
+      Object.entries(defaultWatched).forEach(([domain, country]) => {
+        this.watchedDomains.set(domain.toLowerCase(), country);
+      });
+    }
+  }
+  
+  saveWatchedDomains() {
+    try {
+      const data = {};
+      this.watchedDomains.forEach((country, domain) => {
+        data[domain] = country;
+      });
+      fs.writeFileSync(this.watchedDomainsFile, JSON.stringify(data, null, 2));
+      console.log(`💾 Saved ${this.watchedDomains.size} watched domains`);
+    } catch (error) {
+      console.error('Error saving watched domains:', error);
+    }
+  }
+  
+  async checkUrlSecurity(url, message) {
+    try {
+      const urlObj = new URL(url);
+      const hostname = urlObj.hostname.toLowerCase();
+      
+      // Check exact domain matches
+      for (const [domain, country] of this.watchedDomains) {
+        if (hostname === domain || hostname.endsWith('.' + domain)) {
+          return { isWatched: true, country, domain };
+        }
+      }
+      
+      // Check TLD matches
+      for (const [tld, country] of this.watchedDomains) {
+        if (tld.startsWith('.') && hostname.endsWith(tld)) {
+          return { isWatched: true, country, domain: tld };
+        }
+      }
+      
+      return { isWatched: false };
+    } catch (error) {
+      console.error('Error checking URL security:', error);
+      return { isWatched: false };
+    }
+  }
+  
+  async sendSecurityWarning(url, securityCheck, message) {
+    const warning = `👀 Security Notice
+
+This link is hosted in ${securityCheck.country} (${securityCheck.domain})
+
+Are you sure this is what you wanted to post?
+
+⚠️ Please verify the source before clicking.`;
+    
+    await this.sendReply(message, warning);
+    console.log(🛡️ Security warning sent for ${url} (${securityCheck.country}));
+  }
+  
+  // Admin command to manage watched domains
+  async handleWatchedDomains(context) {
+    const { args, sourceNumber } = context;
+    
+    if (!this.isAdmin(context.sourceUuid || sourceNumber)) {
+      return '🚫 Only administrators can manage watched domains';
+    }
+    
+    if (!args || args.length === 0) {
+      // List current watched domains
+      let response = '🛡️ Watched Domains & TLDs\n\n';
+      const byCountry = {};
+      
+      this.watchedDomains.forEach((country, domain) => {
+        if (!byCountry[country]) byCountry[country] = [];
+        byCountry[country].push(domain);
+      });
+      
+      Object.entries(byCountry).forEach(([country, domains]) => {
+        response += ${country}:\n;
+        domains.forEach(d => response +=   • ${d}\n);
+        response += '\n';
+      });
+      
+      response += \nTotal: ${this.watchedDomains.size} entries\n;
+      response += '\nUsage: !watchdomain add <domain> <country>\n';
+      response += '       !watchdomain remove <domain>';
+      
+      return response;
+    }
+    
+    const action = args[0].toLowerCase();
+    
+    if (action === 'add' && args.length >= 3) {
+      const domain = args[1].toLowerCase();
+      const country = args.slice(2).join(' ');
+      
+      this.watchedDomains.set(domain, country);
+      this.saveWatchedDomains();
+      
+      return `✅ Added ${domain} to watch list (${country})`;
+    }
+    
+    if (action === 'remove' && args.length >= 2) {
+      const domain = args[1].toLowerCase();
+      
+      if (this.watchedDomains.has(domain)) {
+        this.watchedDomains.delete(domain);
+        this.saveWatchedDomains();
+        return `✅ Removed ${domain} from watch list`;
+      } else {
+        return `❌ Domain ${domain} not found in watch list`;
+      }
+    }
+    
+    return '❌ Usage: !watchdomain [add <domain> <country>|remove <domain>|list]';
   }
 }
 

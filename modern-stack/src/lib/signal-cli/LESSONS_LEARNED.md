@@ -998,5 +998,234 @@ This implementation provides a solid foundation for further enhancements while m
 
 ---
 
-*Last Updated: November 2024*
-*Version: 1.0.0*
+## Recent Updates (December 2024)
+
+### Security Hardening Implementation
+
+#### UUID-Based Authentication
+**Problem**: Phone number-based authentication was easily spoofed.
+
+**Solution**: Implemented UUID-based authentication system:
+```javascript
+// Migrated from phone number to UUID
+const ADMIN_UUIDS = process.env.ADMIN_UUIDS?.split(',') || [];
+
+isAdmin(context) {
+  // Prefer UUID over phone number
+  if (context.sourceUuid && ADMIN_UUIDS.includes(context.sourceUuid)) {
+    return true;
+  }
+  // Fallback to phone for backward compatibility
+  return context.sourceNumber === process.env.ADMIN_PHONE;
+}
+```
+
+**Lesson**: Always use cryptographically secure identifiers for authentication.
+
+#### Command Injection Prevention
+**Problem**: Using `exec()` with user-controlled input created command injection vulnerability.
+
+**Solution**: Replaced all `exec()` calls with secure `spawn()`:
+```javascript
+// BEFORE (vulnerable):
+exec(`echo '${JSON.stringify(payload)}' | nc -U ${this.socketPath}`)
+
+// AFTER (secure):
+const nc = spawn('nc', ['-U', this.socketPath], {
+  timeout: 5000,
+  stdio: ['pipe', 'pipe', 'pipe']
+});
+nc.stdin.write(JSON.stringify(payload));
+```
+
+**Lesson**: Never use `exec()` with user input. Always use parameterized commands with `spawn()`.
+
+### Repository Processing System
+
+#### Automatic URL Detection
+**Problem**: Need to automatically process repository URLs posted in chat.
+
+**Solution**: Implemented intelligent URL detection with platform-specific handling:
+```javascript
+// Supports GitHub, GitLab, Bitbucket, Codeberg
+const isRepositoryUrl = (url) => {
+  const patterns = {
+    github: 'github.com',
+    gitlab: 'gitlab.com',
+    bitbucket: 'bitbucket.org',
+    codeberg: 'codeberg.org'
+  };
+  // Check URL patterns and validate repository structure
+};
+```
+
+**Lesson**: Design flexible pattern matching for multiple platforms.
+
+#### Duplicate Processing Prevention
+**Problem**: Repository URLs were processed twice - once automatically and once via command.
+
+**Solution**: Skip automatic processing when commands are detected:
+```javascript
+const repoCommands = ['!repo', '!tldr', '!summarize'];
+const isRepoCommand = repoCommands.some(cmd => 
+  message.message.trim().toLowerCase().startsWith(cmd)
+);
+if (isRepoCommand) return; // Skip automatic processing
+```
+
+**Lesson**: Coordinate between automatic and manual processing systems.
+
+### Signal Protocol Issues
+
+#### Decryption Failures
+**Problem**: `InvalidMessageException: invalid Whisper message: decryption failed`
+
+**Common Causes**:
+1. Session key mismatch after device changes
+2. Multiple Signal sessions on same number
+3. Corrupted local session store
+
+**Solutions**:
+```bash
+# Reset session with specific contact
+signal-cli -a +PHONE sendEndSessionMessage +CONTACT_PHONE
+
+# Clear session store (nuclear option)
+rm -rf ~/.local/share/signal-cli/data/+PHONE/sessions/
+
+# Re-sync contacts
+signal-cli -a +PHONE sendContacts
+```
+
+**Lesson**: Signal's end-to-end encryption requires careful session management.
+
+#### Connection Stability
+**Problem**: `Connection closed unexpectedly, reconnecting`
+
+**Solution**: Implement exponential backoff for reconnections:
+```javascript
+let reconnectDelay = 1000;
+const maxDelay = 30000;
+
+async function reconnect() {
+  await new Promise(resolve => setTimeout(resolve, reconnectDelay));
+  reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+  // Attempt reconnection
+}
+```
+
+**Lesson**: Network issues are common; implement robust reconnection logic.
+
+### Command Naming and User Experience
+
+#### Command Clarity
+**Problem**: `!sentiment` was unclear - users didn't understand it was for bot feedback.
+
+**Solution**: Renamed to `!feedback` for clarity:
+```javascript
+// More intuitive command naming
+{ name: 'feedback', description: 'Bot feedback sentiment' }
+```
+
+**Lesson**: Choose command names that clearly communicate their purpose.
+
+### Database Schema Evolution
+
+#### Missing Model Handling
+**Problem**: Code expected `RepositoryLink` model that didn't exist in database.
+
+**Solution**: Graceful degradation when models are missing:
+```javascript
+try {
+  if (this.prisma && this.prisma.repositoryLink) {
+    await this.trackRepositoryLink(url, message, repoData);
+  }
+} catch (dbError) {
+  console.error('Database tracking failed (continuing):', dbError.message);
+}
+```
+
+**Lesson**: Always handle missing database models gracefully.
+
+### Performance Optimizations
+
+#### Message Processing Pipeline
+**Problem**: Processing all messages synchronously caused delays.
+
+**Solution**: Asynchronous processing with timeouts:
+```javascript
+setTimeout(() => {
+  this.processRepositoryUrl(url, message).catch(error => {
+    console.error(`Failed to process: ${url}`, error);
+  });
+}, 100);
+```
+
+**Lesson**: Use async processing for non-critical operations.
+
+### Duplicate Message Prevention
+
+#### Multiple Bot Instance Collision (January 2025)
+**Problem**: Multiple bot instances (up to 4 discovered) were connecting to the same Signal CLI daemon socket, causing duplicate message processing and responses.
+
+**Root Causes**:
+1. Multiple Node.js processes running concurrently
+2. All instances connecting to same UNIX socket `/tmp/signal-cli-socket`
+3. No message deduplication system
+4. No instance collision detection
+
+**Solution**: Implemented comprehensive duplicate prevention system:
+
+```javascript
+// In constructor - Duplicate message prevention
+this.processedMessages = new Set(); // Track processed message IDs
+this.messageTimestamps = new Map(); // Track message timestamps for deduplication
+this.duplicateDetectionWindow = 30000; // 30 seconds window
+this.instanceId = Math.random().toString(36).substring(7); // Unique instance ID
+
+// Duplicate detection method
+isDuplicateMessage(envelope) {
+  if (!envelope || !envelope.timestamp) return false;
+  
+  const messageId = this.createMessageId(envelope);
+  
+  // Check if already processed
+  if (this.processedMessages.has(messageId)) return true;
+  
+  // Temporal deduplication - same message within time window
+  const now = Date.now();
+  const messageKey = `${envelope.sourceNumber || envelope.sourceUuid}_${envelope.dataMessage?.message || ''}`;
+  
+  if (this.messageTimestamps.has(messageKey)) {
+    const lastSeen = this.messageTimestamps.get(messageKey);
+    if (now - lastSeen < this.duplicateDetectionWindow) {
+      return true; // Duplicate within time window
+    }
+  }
+  
+  // Mark as processed
+  this.processedMessages.add(messageId);
+  this.messageTimestamps.set(messageKey, now);
+  return false;
+}
+```
+
+**Key Features**:
+- **Instance ID**: Each bot instance gets unique identifier for logging
+- **Message ID Tracking**: Unique IDs prevent exact message duplicates
+- **Temporal Deduplication**: 30-second window prevents near-duplicate processing
+- **Memory Management**: Automatic cleanup of old entries to prevent memory leaks
+- **Early Return**: Duplicate messages are detected before any processing occurs
+
+**Prevention Strategy**:
+- Kill all duplicate bot instances before starting new one
+- Use `pkill -f "node.*native-daemon"` to clean processes
+- Monitor for multiple instances in production
+- Consider implementing file-based locking for single-instance enforcement
+
+**Lesson**: Always implement instance collision detection and message deduplication for production bots.
+
+---
+
+*Last Updated: January 2025*
+*Version: 1.2.0*

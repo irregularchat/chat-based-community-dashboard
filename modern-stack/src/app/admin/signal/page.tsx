@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ArrowLeft, Phone, MessageCircle, Settings, Activity, QrCode, CheckCircle, AlertTriangle, Send, Download, User, Upload, RefreshCw, MessageSquare, AtSign, HelpCircle } from 'lucide-react';
+import { ArrowLeft, Phone, MessageCircle, Settings, Activity, QrCode, CheckCircle, AlertTriangle, Send, Download, User, Upload, RefreshCw, MessageSquare, AtSign, HelpCircle, Users } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import QRCode from 'qrcode';
@@ -65,11 +65,12 @@ export default function AdminSignalPage() {
   const { data: healthStatus, refetch: refetchHealth } = trpc.signal.getHealth.useQuery();
   const { data: config, refetch: refetchConfig } = trpc.signal.getConfig.useQuery();
   const { data: accountInfo, refetch: refetchAccount } = trpc.signal.getAccountInfo.useQuery();
-  const { data: groups, refetch: refetchGroups } = trpc.signal.getGroups.useQuery();
-  const { data: conversation, refetch: refetchConversation } = trpc.signal.getConversation.useQuery(
-    { recipient: selectedConversation, limit: conversationLimit },
-    { enabled: !!selectedConversation }
-  );
+  const { data: groups, refetch: refetchGroups } = trpc.signal.getGroups.useQuery({});
+  // TODO: Implement getConversation API if needed
+  // const { data: conversation, refetch: refetchConversation } = trpc.signal.getConversation.useQuery(
+  //   { recipient: selectedConversation, limit: conversationLimit },
+  //   { enabled: !!selectedConversation }
+  // );
 
   // Mutations
   const registerMutation = trpc.signal.registerPhoneNumber.useMutation({
@@ -119,9 +120,9 @@ export default function AdminSignalPage() {
     },
   });
 
-  const sendMessageMutation = trpc.signal.sendMessageAdvanced.useMutation({
+  const sendMessageMutation = trpc.signal.sendMessage.useMutation({
     onSuccess: (data) => {
-      toast.success(data.message);
+      toast.success('Message sent successfully');
       setMessagingForm({ recipients: '', message: '', isUsername: false });
     },
     onError: (error) => {
@@ -332,7 +333,7 @@ export default function AdminSignalPage() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="status" className="flex items-center gap-2">
               <Activity className="w-4 h-4" />
               Status
@@ -344,6 +345,10 @@ export default function AdminSignalPage() {
             <TabsTrigger value="messaging" className="flex items-center gap-2">
               <MessageCircle className="w-4 h-4" />
               Messaging
+            </TabsTrigger>
+            <TabsTrigger value="requests" className="flex items-center gap-2">
+              <Users className="w-4 h-4" />
+              Group Requests
             </TabsTrigger>
             <TabsTrigger value="profile" className="flex items-center gap-2">
               <User className="w-4 h-4" />
@@ -788,7 +793,7 @@ export default function AdminSignalPage() {
                         if (messagingForm.recipients && !messagingForm.isUsername) {
                           console.log('Setting conversation to:', messagingForm.recipients);
                           setSelectedConversation(messagingForm.recipients);
-                          refetchConversation();
+                          // refetchConversation();
                         }
                       }}
                       disabled={!messagingForm.recipients || messagingForm.isUsername}
@@ -868,9 +873,9 @@ export default function AdminSignalPage() {
                       </div>
                       
                       <div className="border rounded-lg p-4 h-96 overflow-y-auto bg-gray-50 dark:bg-gray-900">
-                        {conversation?.messages && conversation.messages.length > 0 ? (
+                        {false && false ? ( // TODO: Enable when conversation API is implemented
                           <div className="space-y-3">
-                            {conversation.messages.map((msg: any) => (
+                            {[].map((msg: any) => (
                               <div
                                 key={msg.id}
                                 className={`flex ${msg.direction === 'outgoing' ? 'justify-end' : 'justify-start'}`}
@@ -928,6 +933,11 @@ export default function AdminSignalPage() {
                 </CardContent>
               </Card>
             </div>
+          </TabsContent>
+
+          {/* Group Requests Tab - Phase 2 */}
+          <TabsContent value="requests" className="space-y-6">
+            <GroupJoinRequestsManager />
           </TabsContent>
 
           {/* Profile Tab */}
@@ -1250,5 +1260,214 @@ export default function AdminSignalPage() {
         </Tabs>
       </div>
     </div>
+  );
+}
+
+// ============================================================================
+// Group Join Requests Manager Component - Phase 2
+// ============================================================================
+function GroupJoinRequestsManager() {
+  const [selectedRequests, setSelectedRequests] = useState<string[]>([]);
+  
+  // Get pending join requests
+  const { data: pendingRequests, isLoading, refetch } = trpc.signal.getPendingJoinRequests.useQuery();
+  
+  // Approval/denial mutations  
+  const approveRequestMutation = trpc.signal.approveJoinRequest.useMutation({
+    onSuccess: (result) => {
+      toast.success(result.message);
+      refetch();
+      setSelectedRequests(prev => prev.filter(id => id !== result.requestId));
+    },
+    onError: (error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const denyRequestMutation = trpc.signal.denyJoinRequest.useMutation({
+    onSuccess: (result) => {
+      toast.success(result.message);
+      refetch();
+      setSelectedRequests(prev => prev.filter(id => id !== result.requestId));
+    },
+    onError: (error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const handleApproveRequest = (requestId: string) => {
+    approveRequestMutation.mutate({ requestId });
+  };
+
+  const handleDenyRequest = (requestId: string, reason?: string) => {
+    denyRequestMutation.mutate({ requestId, reason });
+  };
+
+  const handleBulkAction = (action: 'approve' | 'deny') => {
+    if (selectedRequests.length === 0) {
+      toast.error('Please select requests to process');
+      return;
+    }
+
+    const confirmMessage = action === 'approve' 
+      ? `Approve ${selectedRequests.length} join request(s)?`
+      : `Deny ${selectedRequests.length} join request(s)?`;
+      
+    if (confirm(confirmMessage)) {
+      selectedRequests.forEach(requestId => {
+        if (action === 'approve') {
+          approveRequestMutation.mutate({ requestId });
+        } else {
+          denyRequestMutation.mutate({ requestId, reason: 'Bulk denial by administrator' });
+        }
+      });
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Users className="w-5 h-5" />
+            Group Join Requests
+          </CardTitle>
+          <CardDescription>Loading join requests...</CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center justify-center py-8">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Users className="w-5 h-5" />
+          Group Join Requests
+          {pendingRequests && pendingRequests.length > 0 && (
+            <Badge variant="default" className="bg-blue-600">
+              {pendingRequests.length} pending
+            </Badge>
+          )}
+        </CardTitle>
+        <CardDescription>
+          Review and approve requests from users who want to join Signal groups
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Bulk Actions */}
+        {pendingRequests && pendingRequests.length > 0 && (
+          <div className="flex items-center gap-2 p-4 bg-blue-50 rounded-lg border border-blue-200">
+            <div className="flex items-center gap-2 flex-1">
+              <span className="text-sm font-medium">
+                {selectedRequests.length > 0 
+                  ? `${selectedRequests.length} selected`
+                  : 'Select requests for bulk actions'
+                }
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleBulkAction('approve')}
+                disabled={selectedRequests.length === 0 || approveRequestMutation.isPending}
+              >
+                <CheckCircle className="w-4 h-4 mr-2" />
+                Approve Selected
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleBulkAction('deny')}
+                disabled={selectedRequests.length === 0 || denyRequestMutation.isPending}
+              >
+                <AlertTriangle className="w-4 h-4 mr-2" />
+                Deny Selected
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => refetch()}
+                disabled={isLoading}
+              >
+                <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Requests List */}
+        {pendingRequests && pendingRequests.length > 0 ? (
+          <div className="space-y-3">
+            {pendingRequests.map((request) => (
+              <div key={request.id} className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50">
+                <div className="flex items-center gap-3">
+                  <Checkbox
+                    checked={selectedRequests.includes(request.id)}
+                    onCheckedChange={(checked) => {
+                      if (checked) {
+                        setSelectedRequests([...selectedRequests, request.id]);
+                      } else {
+                        setSelectedRequests(selectedRequests.filter(id => id !== request.id));
+                      }
+                    }}
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{request.userName}</span>
+                      <Badge variant="outline" className="text-xs">
+                        {request.userEmail}
+                      </Badge>
+                    </div>
+                    <div className="text-sm text-muted-foreground mt-1">
+                      <strong>Group:</strong> {request.groupName}
+                    </div>
+                    {request.message && (
+                      <div className="text-sm text-muted-foreground mt-1">
+                        <strong>Message:</strong> {request.message}
+                      </div>
+                    )}
+                    <div className="text-xs text-muted-foreground mt-2">
+                      Requested {new Date(request.requestedAt).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => handleApproveRequest(request.id)}
+                    disabled={approveRequestMutation.isPending}
+                    className="bg-green-600 hover:bg-green-700"
+                  >
+                    <CheckCircle className="w-4 h-4 mr-1" />
+                    Approve
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleDenyRequest(request.id)}
+                    disabled={denyRequestMutation.isPending}
+                    className="border-red-200 text-red-600 hover:bg-red-50"
+                  >
+                    <AlertTriangle className="w-4 h-4 mr-1" />
+                    Deny
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-8 text-muted-foreground">
+            <Users className="w-12 h-12 mx-auto mb-4 opacity-50" />
+            <p className="text-lg font-medium">No pending join requests</p>
+            <p className="text-sm">All group join requests have been processed</p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

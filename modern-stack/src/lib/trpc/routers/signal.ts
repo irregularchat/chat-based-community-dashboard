@@ -1,9 +1,10 @@
 import { z } from 'zod';
-import { createTRPCRouter, moderatorProcedure } from '../trpc';
+import { createTRPCRouter, moderatorProcedure, protectedProcedure } from '../trpc';
 import { TRPCError } from '@trpc/server';
 import { enhancedSignalClient } from '@/lib/signal/enhanced-api-client';
 import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
 import { NativeSignalBotService } from '@/lib/signal-cli/native-daemon-service';
+import { signalCliHealthMonitor } from '@/lib/signal-cli-health';
 
 let nativeBot: NativeSignalBotService | null = null;
 
@@ -21,7 +22,7 @@ function getNativeBot() {
 }
 
 export const signalRouter = createTRPCRouter({
-  // Get Signal groups with enhanced display names
+  // Get Signal groups using native daemon
   getGroups: moderatorProcedure
     .input(
       z.object({
@@ -30,14 +31,8 @@ export const signalRouter = createTRPCRouter({
     )
     .query(async ({ input }) => {
       try {
-        // Set phone number from environment if not provided
-        const phoneNumber = input.phoneNumber || process.env.SIGNAL_PHONE_NUMBER;
-        if (!phoneNumber) {
-          throw new Error('Signal phone number not configured');
-        }
-
-        enhancedSignalClient.setPhoneNumber(phoneNumber);
-        const groups = await enhancedSignalClient.getGroupsWithNames();
+        const bot = getNativeBot();
+        const groups = await bot.getGroups();
         
         return groups;
       } catch (error) {
@@ -46,7 +41,7 @@ export const signalRouter = createTRPCRouter({
       }
     }),
 
-  // Get Signal users/contacts with enhanced display names
+  // Get Signal users/contacts using native daemon
   getUsers: moderatorProcedure
     .input(
       z.object({
@@ -55,16 +50,10 @@ export const signalRouter = createTRPCRouter({
     )
     .query(async ({ input }) => {
       try {
-        // Set phone number from environment if not provided
-        const phoneNumber = input.phoneNumber || process.env.SIGNAL_PHONE_NUMBER;
-        if (!phoneNumber) {
-          throw new Error('Signal phone number not configured');
-        }
-
-        enhancedSignalClient.setPhoneNumber(phoneNumber);
-        const users = await enhancedSignalClient.getUsersWithNames();
+        const bot = getNativeBot();
+        const contacts = await bot.getContacts();
         
-        return users;
+        return contacts;
       } catch (error) {
         console.error('Error fetching Signal users:', error);
         throw new Error('Failed to fetch Signal users');
@@ -282,12 +271,12 @@ export const signalRouter = createTRPCRouter({
     }
   }),
 
-  // Get health status (alias for getServiceStatus for backward compatibility)  
+  // Get health status - Updated to use native daemon socket instead of REST API
   getHealth: moderatorProcedure.query(async () => {
-    const baseUrl = process.env.SIGNAL_CLI_REST_API_BASE_URL || 'http://localhost:50240';
+    const socketPath = process.env.SIGNAL_CLI_SOCKET_PATH || '/tmp/signal-cli-socket';
     const phoneNumber = process.env.SIGNAL_BOT_PHONE_NUMBER || process.env.SIGNAL_PHONE_NUMBER;
     
-    if (!baseUrl || !phoneNumber) {
+    if (!phoneNumber) {
       return {
         status: 'unhealthy',
         containerStatus: 'unknown',
@@ -298,40 +287,40 @@ export const signalRouter = createTRPCRouter({
     }
 
     try {
+      const fs = require('fs').promises;
       const startTime = Date.now();
-      const response = await fetch(`${baseUrl}/v1/about`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(5000)
-      });
-      const apiResponseTime = Date.now() - startTime;
-
-      if (response.ok) {
-        // Check if phone number is registered
-        const accountsResponse = await fetch(`${baseUrl}/v1/accounts`, {
-          method: 'GET',
-          signal: AbortSignal.timeout(5000)
-        });
-        
-        let registrationStatus = 'unregistered';
-        if (accountsResponse.ok) {
-          const accounts = await accountsResponse.json();
-          const isRegistered = Array.isArray(accounts) && accounts.some((acc: any) => 
-            acc.number === phoneNumber || acc === phoneNumber
-          );
-          registrationStatus = isRegistered ? 'registered' : 'unregistered';
-        }
-
-        return {
-          status: 'healthy',
-          containerStatus: 'running',
-          registrationStatus,
-          apiResponseTime,
-          messagesSentToday: 0 // TODO: implement message counting
-        };
-      } else {
+      
+      // Check if socket file exists
+      try {
+        await fs.access(socketPath);
+      } catch {
         return {
           status: 'unhealthy',
-          containerStatus: 'error',
+          containerStatus: 'socket_not_found',
+          registrationStatus: 'unknown',
+          apiResponseTime: null,
+          messagesSentToday: undefined
+        };
+      }
+      
+      // Try to get health from native bot
+      try {
+        const bot = getNativeBot();
+        const healthCheck = await bot.getHealth();
+        const apiResponseTime = Date.now() - startTime;
+        
+        return {
+          status: healthCheck.status === 'healthy' ? 'healthy' : 'unhealthy',
+          containerStatus: 'running',
+          registrationStatus: healthCheck.isRegistered ? 'registered' : 'unregistered',
+          apiResponseTime,
+          messagesSentToday: 0
+        };
+      } catch (healthError) {
+        const apiResponseTime = Date.now() - startTime;
+        return {
+          status: 'unhealthy',
+          containerStatus: 'daemon_error',
           registrationStatus: 'unknown',
           apiResponseTime,
           messagesSentToday: undefined
@@ -348,98 +337,67 @@ export const signalRouter = createTRPCRouter({
     }
   }),
 
-  // Get Signal CLI service health and registration status
+  // Get Signal CLI service health and registration status - Updated to use native daemon
   getServiceStatus: moderatorProcedure.query(async () => {
-    const baseUrl = process.env.SIGNAL_CLI_REST_API_BASE_URL || 'http://localhost:50240';
+    const socketPath = process.env.SIGNAL_CLI_SOCKET_PATH || '/tmp/signal-cli-socket';
     const phoneNumber = process.env.SIGNAL_PHONE_NUMBER;
     
-    if (!baseUrl || !phoneNumber) {
+    if (!phoneNumber) {
       return {
         isHealthy: false,
         isRegistered: false,
-        error: 'Signal CLI not configured - missing base URL or phone number',
-        configuration: { baseUrl, phoneNumber }
+        error: 'Signal CLI not configured - missing phone number',
+        configuration: { socketPath, phoneNumber }
       };
     }
 
     try {
-      // Check service health
-      const healthResponse = await fetch(`${baseUrl}/v1/health`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(5000)
-      });
-
-      const isHealthy = healthResponse.status === 204 || healthResponse.status === 200;
+      const fs = require('fs').promises;
       
-      if (!isHealthy) {
+      // Check if socket file exists
+      try {
+        await fs.access(socketPath);
+      } catch {
         return {
           isHealthy: false,
           isRegistered: false,
-          error: `Signal CLI service unhealthy (HTTP ${healthResponse.status})`,
-          configuration: { baseUrl, phoneNumber }
+          error: 'Native Signal CLI daemon socket not found - bot may not be running',
+          configuration: { socketPath, phoneNumber }
         };
       }
-
-      // Check if phone number is registered
-      let isRegistered = false;
-      let registrationError = null;
-
+      
+      // Try to get health status from native bot
       try {
-        const accountsResponse = await fetch(`${baseUrl}/v1/accounts`, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(5000)
-        });
-
-        if (accountsResponse.ok) {
-          const accounts = await accountsResponse.json();
-          isRegistered = Array.isArray(accounts) && accounts.includes(phoneNumber);
-          
-          if (!isRegistered) {
-            registrationError = `Phone number ${phoneNumber} is not registered with Signal CLI`;
-          }
-        } else {
-          registrationError = `Failed to check account registration (HTTP ${accountsResponse.status})`;
-        }
-      } catch (regError) {
-        registrationError = `Failed to check registration: ${regError instanceof Error ? regError.message : 'Unknown error'}`;
+        const bot = getNativeBot();
+        const healthCheck = await bot.getHealth();
+        
+        return {
+          isHealthy: healthCheck.status === 'healthy',
+          isRegistered: healthCheck.isRegistered || false,
+          error: healthCheck.status !== 'healthy' ? healthCheck.error || 'Daemon unhealthy' : null,
+          configuration: { socketPath, phoneNumber },
+          accountInfo: healthCheck.isRegistered ? {
+            phoneNumber,
+            displayName: 'Community Dashboard Bot',
+            socketPath
+          } : null,
+          lastChecked: new Date().toISOString()
+        };
+      } catch (healthError) {
+        return {
+          isHealthy: false,
+          isRegistered: false,
+          error: `Failed to check daemon health: ${healthError instanceof Error ? healthError.message : 'Unknown error'}`,
+          configuration: { socketPath, phoneNumber }
+        };
       }
-
-      // Try to get account info for more details if registered
-      let accountInfo = null;
-      if (isRegistered) {
-        try {
-          const accountResponse = await fetch(`${baseUrl}/v1/accounts/${encodeURIComponent(phoneNumber)}`, {
-            method: 'GET',
-            headers: { 'Content-Type': 'application/json' },
-            signal: AbortSignal.timeout(5000)
-          });
-          
-          if (accountResponse.ok) {
-            accountInfo = await accountResponse.json();
-          }
-        } catch (error) {
-          // Non-critical error, continue without account info
-          console.warn('Could not fetch account info:', error instanceof Error ? error.message : 'Unknown error');
-        }
-      }
-
-      return {
-        isHealthy,
-        isRegistered,
-        error: registrationError,
-        configuration: { baseUrl, phoneNumber },
-        accountInfo,
-        lastChecked: new Date().toISOString()
-      };
 
     } catch (error) {
       return {
         isHealthy: false,
         isRegistered: false,
-        error: `Signal CLI service unavailable: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        configuration: { baseUrl, phoneNumber }
+        error: `Signal CLI daemon unavailable: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        configuration: { socketPath, phoneNumber }
       };
     }
   }),
@@ -901,4 +859,423 @@ export const signalRouter = createTRPCRouter({
         });
       }
     }),
+
+  // ============================================================================
+  // Phase 1: Signal Group Discovery & Status APIs (v0.4.0)
+  // ============================================================================
+
+  // Get user's current Signal status and memberships
+  getMySignalStatus: protectedProcedure.query(async ({ ctx }) => {
+    try {
+      const userId = parseInt(ctx.session.user.id);
+      
+      // Get user's Signal verification status
+      const signalIdentity = ctx.session.user.signalIdentity;
+      const phoneNumber = ctx.session.user.attributes && typeof ctx.session.user.attributes === 'object'
+        ? (ctx.session.user.attributes as any).phone_number
+        : null;
+
+      // Get user's current group memberships
+      const memberships = await ctx.prisma.signalGroupMembership.findMany({
+        where: { 
+          userId,
+          status: 'active'
+        },
+        include: {
+          group: true // This will include SignalGroup data if it exists
+        },
+        orderBy: { joinedAt: 'desc' }
+      });
+
+      // Get verified Signal groups from the cache (for enhanced names)
+      const groupIds = memberships.map(m => m.groupId);
+      const cachedGroups = await ctx.prisma.signalGroup.findMany({
+        where: { id: { in: groupIds } }
+      });
+      const groupMap = new Map(cachedGroups.map(g => [g.id, g]));
+
+      // Enhance memberships with cached group data
+      const enhancedMemberships = memberships.map(membership => {
+        const cachedGroup = groupMap.get(membership.groupId);
+        return {
+          id: membership.id,
+          groupId: membership.groupId,
+          groupName: cachedGroup?.name || membership.groupName || 'Unknown Group',
+          description: cachedGroup?.description,
+          memberCount: cachedGroup?.memberCount,
+          joinedAt: membership.joinedAt,
+          status: membership.status
+        };
+      });
+
+      return {
+        isSignalVerified: !!signalIdentity,
+        signalIdentity,
+        phoneNumber,
+        groupMemberships: enhancedMemberships,
+        totalGroups: enhancedMemberships.length
+      };
+    } catch (error) {
+      console.error('Error getting Signal status:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get Signal status'
+      });
+    }
+  }),
+
+  // Get available Signal groups user can join
+  getAvailableSignalGroups: protectedProcedure
+    .input(z.object({
+      page: z.number().default(1),
+      limit: z.number().min(1).max(50).default(25),
+      search: z.string().optional()
+    }))
+    .query(async ({ ctx, input }) => {
+      try {
+        const userId = parseInt(ctx.session.user.id);
+        const { page, limit, search } = input;
+        const skip = (page - 1) * limit;
+
+        // Get groups user is NOT already a member of
+        const existingMembershipGroupIds = await ctx.prisma.signalGroupMembership.findMany({
+          where: { 
+            userId,
+            status: 'active'
+          },
+          select: { groupId: true }
+        }).then(memberships => memberships.map(m => m.groupId));
+
+        // Build where clause
+        const where = {
+          isActive: true,
+          isPublic: true, // Only show public groups users can join
+          ...(existingMembershipGroupIds.length > 0 && {
+            groupId: { notIn: existingMembershipGroupIds }
+          }),
+          ...(search && {
+            OR: [
+              { groupName: { contains: search, mode: 'insensitive' as const } },
+              { description: { contains: search, mode: 'insensitive' as const } }
+            ]
+          })
+        };
+
+        // Get available groups with pagination
+        const [groups, total] = await Promise.all([
+          ctx.prisma.signalAvailableGroup.findMany({
+            where,
+            orderBy: [
+              { memberCount: 'desc' }, // Show groups with more members first
+              { groupName: 'asc' }
+            ],
+            skip,
+            take: limit
+          }),
+          ctx.prisma.signalAvailableGroup.count({ where })
+        ]);
+
+        // Enhance with cached group data for more accurate member counts
+        const groupIds = groups.map(g => g.groupId);
+        const cachedGroups = await ctx.prisma.signalGroup.findMany({
+          where: { id: { in: groupIds } }
+        });
+        const cachedGroupMap = new Map(cachedGroups.map(g => [g.id, g]));
+
+        const enhancedGroups = groups.map(group => {
+          const cachedGroup = cachedGroupMap.get(group.groupId);
+          return {
+            groupId: group.groupId,
+            groupName: cachedGroup?.name || group.groupName,
+            description: cachedGroup?.description || group.description,
+            memberCount: cachedGroup?.memberCount || group.memberCount || 0,
+            isPublic: group.isPublic,
+            requiresApproval: group.requiresApproval,
+            tags: group.tags || [],
+            lastUpdated: cachedGroup?.lastUpdated || group.updatedAt
+          };
+        });
+
+        return {
+          groups: enhancedGroups,
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit)
+        };
+      } catch (error) {
+        console.error('Error getting available Signal groups:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to get available Signal groups'
+        });
+      }
+    }),
+
+  // Check specific Signal group membership status
+  checkSignalMembership: protectedProcedure
+    .input(z.object({
+      groupId: z.string()
+    }))
+    .query(async ({ ctx, input }) => {
+      try {
+        const userId = parseInt(ctx.session.user.id);
+        
+        // Check if user is already a member
+        const membership = await ctx.prisma.signalGroupMembership.findUnique({
+          where: {
+            userId_groupId: {
+              userId,
+              groupId: input.groupId
+            }
+          }
+        });
+
+        // Check if user has a pending join request
+        const pendingRequest = await ctx.prisma.signalGroupJoinRequest.findFirst({
+          where: {
+            userId,
+            groupId: input.groupId,
+            status: 'pending'
+          }
+        });
+
+        // Get group information
+        const group = await ctx.prisma.signalAvailableGroup.findUnique({
+          where: { groupId: input.groupId }
+        });
+
+        // Get cached group data for more accurate info
+        const cachedGroup = await ctx.prisma.signalGroup.findUnique({
+          where: { id: input.groupId }
+        });
+
+        return {
+          isMember: !!membership && membership.status === 'active',
+          membershipStatus: membership?.status || null,
+          joinedAt: membership?.joinedAt || null,
+          hasPendingRequest: !!pendingRequest,
+          pendingRequestId: pendingRequest?.id || null,
+          group: group ? {
+            groupId: group.groupId,
+            groupName: cachedGroup?.name || group.groupName,
+            description: cachedGroup?.description || group.description,
+            memberCount: cachedGroup?.memberCount || group.memberCount || 0,
+            isPublic: group.isPublic,
+            requiresApproval: group.requiresApproval
+          } : null
+        };
+      } catch (error) {
+        console.error('Error checking Signal membership:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to check Signal membership'
+        });
+      }
+    }),
+
+  // Request to join a Signal group (for Phase 2)
+  requestSignalGroupJoin: protectedProcedure
+    .input(z.object({
+      groupId: z.string(),
+      message: z.string().max(500).optional()
+    }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const userId = parseInt(ctx.session.user.id);
+        
+        // Check if user already has membership or pending request
+        const [existingMembership, existingRequest] = await Promise.all([
+          ctx.prisma.signalGroupMembership.findUnique({
+            where: {
+              userId_groupId: {
+                userId,
+                groupId: input.groupId
+              }
+            }
+          }),
+          ctx.prisma.signalGroupJoinRequest.findFirst({
+            where: {
+              userId,
+              groupId: input.groupId,
+              status: 'pending'
+            }
+          })
+        ]);
+
+        if (existingMembership?.status === 'active') {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'You are already a member of this group'
+          });
+        }
+
+        if (existingRequest) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'You already have a pending request for this group'
+          });
+        }
+
+        // Get group information
+        const group = await ctx.prisma.signalAvailableGroup.findUnique({
+          where: { groupId: input.groupId }
+        });
+
+        if (!group) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Group not found'
+          });
+        }
+
+        if (!group.isActive) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'This group is not currently accepting new members'
+          });
+        }
+
+        // Create join request
+        const joinRequest = await ctx.prisma.signalGroupJoinRequest.create({
+          data: {
+            userId,
+            groupId: input.groupId,
+            message: input.message,
+            status: 'pending'
+          }
+        });
+
+        return {
+          success: true,
+          requestId: joinRequest.id,
+          message: group.requiresApproval 
+            ? 'Join request submitted for approval' 
+            : 'Join request submitted'
+        };
+
+      } catch (error) {
+        console.error('Error requesting group join:', error);
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to submit join request'
+        });
+      }
+    }),
+
+  // Update Signal profile (display name and/or avatar)
+  updateProfile: moderatorProcedure
+    .input(z.object({
+      displayName: z.string().optional(),
+      avatarBase64: z.string().optional()
+    }))
+    .mutation(async ({ input }) => {
+      try {
+        // TODO: Implement actual Signal CLI profile update
+        // For now, return a success message as a placeholder
+        console.log('Profile update requested:', input);
+        
+        return {
+          success: true,
+          message: 'Profile update placeholder - implement Signal CLI profile update'
+        };
+      } catch (error) {
+        console.error('Error updating profile:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to update profile'
+        });
+      }
+    }),
+
+  // Signal CLI Database Health Monitoring
+  getSignalCliHealth: moderatorProcedure.query(async ({ ctx }) => {
+    try {
+      const healthStatus = await signalCliHealthMonitor.checkHealth();
+      
+      // Log admin event for health check
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'signal_cli_health_check',
+          username: ctx.session.user.username || 'unknown',
+          details: `Signal CLI health check: ${healthStatus.isHealthy ? 'Healthy' : 'Unhealthy'} - ${healthStatus.errorMessages.length} errors, ${healthStatus.recommendations.length} recommendations`,
+        },
+      });
+
+      return healthStatus;
+    } catch (error) {
+      console.error('Error checking Signal CLI health:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to check Signal CLI health'
+      });
+    }
+  }),
+
+  createSignalCliBackup: moderatorProcedure.mutation(async ({ ctx }) => {
+    try {
+      const backupResult = await signalCliHealthMonitor.createBackup();
+      
+      // Log admin event
+      await ctx.prisma.adminEvent.create({
+        data: {
+          eventType: 'signal_cli_backup',
+          username: ctx.session.user.username || 'unknown',
+          details: `Signal CLI backup ${backupResult.success ? 'created' : 'failed'}: ${backupResult.success ? `${backupResult.backupPath} (${(backupResult.backupSize || 0 / 1024 / 1024).toFixed(1)}MB)` : backupResult.errorMessage}`,
+        },
+      });
+
+      return backupResult;
+    } catch (error) {
+      console.error('Error creating Signal CLI backup:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to create Signal CLI backup'
+      });
+    }
+  }),
+
+  restoreSignalCliFromBackup: moderatorProcedure
+    .input(z.object({
+      backupPath: z.string()
+    }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const restoreResult = await signalCliHealthMonitor.restoreFromBackup(input.backupPath);
+        
+        // Log admin event
+        await ctx.prisma.adminEvent.create({
+          data: {
+            eventType: 'signal_cli_restore',
+            username: ctx.session.user.username || 'unknown',
+            details: `Signal CLI restore ${restoreResult.success ? 'completed' : 'failed'}: ${restoreResult.success ? `Restored from ${input.backupPath}` : restoreResult.errorMessage}`,
+          },
+        });
+
+        return restoreResult;
+      } catch (error) {
+        console.error('Error restoring Signal CLI from backup:', error);
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to restore Signal CLI from backup'
+        });
+      }
+    }),
+
+  getSignalCliBackups: moderatorProcedure.query(async () => {
+    try {
+      // This would list available backups - implement based on signalCliHealthMonitor methods
+      // For now, return empty array as placeholder
+      return { backups: [] };
+    } catch (error) {
+      console.error('Error getting Signal CLI backups:', error);
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get Signal CLI backups'
+      });
+    }
+  }),
 });

@@ -1,0 +1,30 @@
+{
+  "name": "signal-cli-bot-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker for Signal CLI Bot Container",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:production": "wrangler deploy --env production",
+    "build": "tsc",
+    "type-check": "tsc --noEmit",
+    "tail": "wrangler tail",
+    "kv:create": "wrangler kv:namespace create SIGNAL_CACHE",
+    "r2:create": "wrangler r2 bucket create signal-cli-data",
+    "secret:set-phone": "wrangler secret put SIGNAL_PHONE_NUMBER",
+    "secret:set-openai": "wrangler secret put OPENAI_API_KEY",
+    "container:build": "docker build -t signal-cli-bot:latest .",
+    "container:push": "wrangler deploy --container",
+    "logs": "wrangler tail --format pretty"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "latest"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250106.0",
+    "typescript": "^5.3.3",
+    "wrangler": "^3.94.0"
+  }
+}

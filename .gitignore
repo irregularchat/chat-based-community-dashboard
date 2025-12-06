@@ -1,38 +1,24 @@
+# Environment files (all variations)
 .env
+.env.*
+!.env.example
+!.env.template
+!.env-template
+*.env.local
+*.env.local.*
+deploy.env
+deploy.env.*
 environment
+
+# Virtual environments
 the
 virtual
 create
 \#
 venv
 env
-.idea
-.vscode
-#macos ignores
-.DS_Store
-#pyc files
-*.pyc
-*.pyo
-*.pyd
-#pycache
-__pycache__
-__pycache__/ 
-#logs
-*.log
-#database
-*.db
-*.csv
-users.csv
-.cursorignore
 .venv/
-# postgres from /app/db/postgres
-pg_dump.sql
-app/db/postgres/
-
-# postgres data directory
-app/db/postgres_data/
-app/db/postgres_data/*
-data/matrix_rooms.json
+.venv/*
 test_env/bin/*
 test_env/lib/*
 test_env/lib64/*
@@ -40,13 +26,58 @@ test_env/Scripts/*
 test_env/share/*
 test_env/include/*
 test_env/man/*
-app/db/init_db.py
-app/db/migrations/__init__.py
-app/db/migrations/add_signal_identity.py
-app/db/init_db.py
 test_env/pyvenv.cfg
 test_env/etc/jupyter/nbconfig/notebook.d/pydeck.json
 .venv/bin/Activate.ps1
 .venv/bin/pip3
-.venv/*
+
+# IDE
+.idea
+.vscode
+.cursor
+.cursorignore
+
+# macOS
+.DS_Store
+
+# Python
+*.pyc
+*.pyo
+*.pyd
+__pycache__
+__pycache__/
+
+# Logs
+*.log
+
+# Database files
+*.db
+*.csv
+users.csv
+pg_dump.sql
+
+# Signal data (SENSITIVE - contains messages, attachments, credentials)
+modern-stack/signal-data/
+modern-stack/signal-data/**/*
+signal-data/
+**/signal-data/
+
+# Signal bot local data
+modern-stack/data/
+modern-stack/data/**/*
+
+# Postgres
+app/db/postgres/
+app/db/postgres_data/
+app/db/postgres_data/*
+
+# Test data
+tests/test_database/
+tests/test_database/**/*
+data/matrix_rooms.json
 matrix_data_analysis.json
+
+# Migration scripts (if they contain sensitive data)
+app/db/init_db.py
+app/db/migrations/__init__.py
+app/db/migrations/add_signal_identity.py

@@ -3,6 +3,7 @@ import { createTRPCRouter, protectedProcedure, moderatorProcedure, adminProcedur
 import { authentikService } from '@/lib/authentik';
 import { emailService } from '@/lib/email';
 import { discourseService } from '@/lib/discourse';
+import { matrixService } from '@/lib/matrix';
 import { logCommunityEvent, getCategoryForEventType } from '@/lib/community-timeline';
 import { normalizePhoneNumber, formatPhoneForDisplay } from '@/lib/phone-utils';
 import { parseAdvancedSearch } from '@/lib/advanced-search';
@@ -152,22 +153,22 @@ export const userRouter = createTRPCRouter({
             const cachedUsers = await matrixSyncService.getUsersFromPriorityRooms();
             matrixUsers = cachedUsers
               .filter(user => {
-                // Only include users with valid userId
-                if (!user.userId) return false;
+                // Only include users with valid user_id
+                if (!user.user_id) return false;
                 
                 if (search) {
                   const searchLower = search.toLowerCase();
-                  return user.displayName?.toLowerCase().includes(searchLower) ||
-                         user.userId?.toLowerCase().includes(searchLower);
+                  return user.display_name?.toLowerCase().includes(searchLower) ||
+                         user.user_id?.toLowerCase().includes(searchLower);
                 }
                 return true;
               })
               .map(user => ({
-                id: parseInt(user.userId.replace(/[@:]/g, '').slice(0, 8), 36), // Generate numeric ID
-                username: user.userId.split(':')[0].substring(1),
-                email: `${user.userId.split(':')[0].substring(1)}@${user.userId.split(':')[1]}`,
-                firstName: user.displayName?.split(' ')[0] || '',
-                lastName: user.displayName?.split(' ').slice(1).join(' ') || '',
+                id: parseInt(user.user_id.replace(/[@:]/g, '').slice(0, 8), 36), // Generate numeric ID
+                username: user.user_id.split(':')[0].substring(1),
+                email: `${user.user_id.split(':')[0].substring(1)}@${user.user_id.split(':')[1]}`,
+                firstName: user.display_name?.split(' ')[0] || '',
+                lastName: user.display_name?.split(' ').slice(1).join(' ') || '',
                 isActive: true,
                 isAdmin: false,
                 isModerator: false,
@@ -176,14 +177,15 @@ export const userRouter = createTRPCRouter({
                 authentikId: null,
                 groups: [],
                 notes: [],
-                attributes: { source: 'matrix', matrixUserId: user.userId },
+                attributes: { source: 'matrix', matrixUserId: user.user_id },
               }));
           }
         } catch (matrixError) {
           console.warn('Matrix users not available:', matrixError);
         }
 
-        // Try to fetch Authentik users with timeout (non-blocking)
+        // Try to fetch Authentik users with proper pagination
+        let authentikTotal = 0;
         try {
           const authentikResult = await authentikService.listUsers(search, page, limit);
           authentikUsers = authentikResult.users.filter(user => {
@@ -192,13 +194,14 @@ export const userRouter = createTRPCRouter({
             }
             return true;
           });
-          console.log(`✅ Authentik users fetched in ${Date.now() - startTime}ms`);
+          authentikTotal = authentikResult.total;
+          console.log(`✅ Authentik users fetched: ${authentikUsers.length}/${authentikTotal} in ${Date.now() - startTime}ms`);
         } catch (error) {
           authentikError = error instanceof Error ? error.message : 'Unknown error';
           console.warn(`⚠️ Authentik unavailable after ${Date.now() - startTime}ms:`, authentikError);
         }
 
-        // Get local user data for additional info
+        // Get local user data with proper database-level pagination
         const { where: searchWhere } = parseAdvancedSearch(search || '');
         const localWhere = {
           ...searchWhere,
@@ -207,6 +210,8 @@ export const userRouter = createTRPCRouter({
 
         const localUsers = await ctx.prisma.user.findMany({
           where: localWhere,
+          skip: (page - 1) * limit,
+          take: limit,
           orderBy: { dateJoined: 'desc' },
           include: {
             groups: {
@@ -237,11 +242,14 @@ export const userRouter = createTRPCRouter({
           ...(authentikUsers.length < 10 ? matrixUsers : [])
         ];
 
-        // Calculate pagination
-        const totalUsers = allUsers.length;
+        // Fixed pagination - use proper totals from each source
+        const totalUsers = authentikUsers.length > 0 && !authentikError ? 
+          authentikTotal : 
+          await ctx.prisma.user.count({ where: localWhere });
         const totalPages = Math.ceil(totalUsers / limit);
-        const skip = (page - 1) * limit;
-        const paginatedUsers = allUsers.slice(skip, skip + limit);
+        
+        // Return the already paginated users (no need to slice)
+        const paginatedUsers = allUsers;
 
         return {
           users: paginatedUsers,
@@ -254,6 +262,14 @@ export const userRouter = createTRPCRouter({
           authentikAvailable: !authentikError,
           authentikError,
           fallbackToMatrix: !!authentikError && matrixUsers.length > 0,
+          debug: {
+            authentikFetched: authentikUsers.length,
+            authentikTotal,
+            localFetched: localUsers.length, 
+            finalUserCount: paginatedUsers.length,
+            matrixUserCount: matrixUsers.length,
+            hasAuthentikError: !!authentikError,
+          },
         };
       }
 
@@ -2956,7 +2972,7 @@ The invitation email has been sent. You'll be notified when they accept the invi
       const { generateVerificationCode, hashVerificationCode, createExpirationDate, formatPhoneForSignal, validatePhoneNumber, formatVerificationMessage } = await import('@/lib/verification-codes');
       const { matrixService } = await import('@/lib/matrix');
       
-      const userId = ctx.session.user.id;
+      const userId = parseInt(ctx.session.user.id);
       const phoneNumber = formatPhoneForSignal(input.phoneNumber);
       
       // Validate phone number
@@ -3065,7 +3081,7 @@ The invitation email has been sent. You'll be notified when they accept the invi
     )
     .mutation(async ({ ctx, input }) => {
       const { verifyCode, isCodeExpired } = await import('@/lib/verification-codes');
-      const userId = ctx.session.user.id;
+      const userId = parseInt(ctx.session.user.id);
       
       // Find the most recent verification code for this user
       const verificationRecord = await ctx.prisma.signalVerificationCode.findFirst({
@@ -3166,7 +3182,7 @@ The invitation email has been sent. You'll be notified when they accept the invi
 
   getSignalVerificationStatus: protectedProcedure
     .query(async ({ ctx }) => {
-      const userId = ctx.session.user.id;
+      const userId = parseInt(ctx.session.user.id);
       
       const user = await ctx.prisma.user.findUnique({
         where: { id: userId },

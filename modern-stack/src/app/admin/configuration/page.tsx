@@ -380,6 +380,7 @@ export default function AdminConfigurationPage() {
                                 welcomeRoomId: (config.welcomeRoomId as string) || '',
                                 signalBridgeRoomId: (config.signalBridgeRoomId as string) || '',
                                 enableEncryption: (config.enableEncryption as boolean) || false,
+                                securityKey: (config.securityKey as string) || '',
                               });
                             }
                           }
@@ -530,7 +531,7 @@ export default function AdminConfigurationPage() {
                          'Enabled' : 'Disabled'}
                       </p>
                     </div>
-                    {(allSettings?.settings?.matrix_config as Record<string, unknown>)?.enableEncryption && (
+                    {Boolean((allSettings?.settings?.matrix_config as Record<string, unknown>)?.enableEncryption) && (
                       <div className="border rounded-lg p-4">
                         <h4 className="font-medium text-gray-900 mb-2">Security Key</h4>
                         <p className="text-sm text-gray-600">

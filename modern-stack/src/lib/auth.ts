@@ -1,13 +1,72 @@
 import { NextAuthOptions } from 'next-auth';
 import { PrismaAdapter } from '@auth/prisma-adapter';
 import CredentialsProvider from 'next-auth/providers/credentials';
+import GoogleProvider from 'next-auth/providers/google';
 import { prisma } from '@/lib/prisma';
+import { getSecretOrEnv } from '@/lib/secrets';
 import bcrypt from 'bcryptjs';
+
+// Cache for secrets to avoid repeated calls
+let secretsCache: {
+  googleClientId?: string;
+  googleClientSecret?: string;
+  authentikClientId?: string;
+  authentikClientSecret?: string;
+  authentikIssuer?: string;
+} = {};
+
+// Function to load secrets on first access
+async function loadSecrets() {
+  if (Object.keys(secretsCache).length > 0) {
+    return secretsCache;
+  }
+
+  try {
+    // Try to load from Google Cloud Secret Manager, with fallback to environment
+    const [googleClientId, googleClientSecret, authentikClientId, authentikClientSecret, authentikIssuer] = await Promise.allSettled([
+      getSecretOrEnv('GOOGLE_CLIENT_ID'),
+      getSecretOrEnv('GOOGLE_CLIENT_SECRET'), 
+      getSecretOrEnv('AUTHENTIK_CLIENT_ID'),
+      getSecretOrEnv('AUTHENTIK_CLIENT_SECRET'),
+      getSecretOrEnv('AUTHENTIK_ISSUER')
+    ]);
+
+    secretsCache = {
+      googleClientId: googleClientId.status === 'fulfilled' ? googleClientId.value : undefined,
+      googleClientSecret: googleClientSecret.status === 'fulfilled' ? googleClientSecret.value : undefined,
+      authentikClientId: authentikClientId.status === 'fulfilled' ? authentikClientId.value : undefined,
+      authentikClientSecret: authentikClientSecret.status === 'fulfilled' ? authentikClientSecret.value : undefined,
+      authentikIssuer: authentikIssuer.status === 'fulfilled' ? authentikIssuer.value : undefined,
+    };
+  } catch (error) {
+    console.warn('Failed to load some secrets, falling back to environment variables:', error);
+    // Fallback to environment variables
+    secretsCache = {
+      googleClientId: process.env.GOOGLE_CLIENT_ID,
+      googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      authentikClientId: process.env.AUTHENTIK_CLIENT_ID,
+      authentikClientSecret: process.env.AUTHENTIK_CLIENT_SECRET,
+      authentikIssuer: process.env.AUTHENTIK_ISSUER,
+    };
+  }
+
+  return secretsCache;
+}
+
+// Initialize secrets immediately
+loadSecrets().catch(console.error);
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
   providers: [
-    // Authentik OIDC Provider (only if configured)
+    // Google OAuth Provider (only if configured)
+    ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+      ? [GoogleProvider({
+          clientId: process.env.GOOGLE_CLIENT_ID,
+          clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        })]
+      : []),
+    // Authentik OIDC Provider (only if configured)  
     ...(process.env.AUTHENTIK_CLIENT_ID && process.env.AUTHENTIK_CLIENT_SECRET && process.env.AUTHENTIK_ISSUER
       ? [{
           id: 'authentik',
@@ -143,7 +202,63 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
     async signIn({ user, account, profile: _profile }) {
-      if (account?.provider === 'authentik') {
+      if (account?.provider === 'google') {
+        try {
+          console.log('Google signIn callback:', { 
+            userId: user.id, 
+            email: user.email, 
+            name: user.name 
+          });
+          
+          // Check if prisma is available
+          if (!prisma) {
+            console.error('Prisma client not available in signIn callback');
+            return false;
+          }
+          
+          // Handle Google OAuth sign-in
+          const existingUser = await prisma.user.findUnique({
+            where: { email: user.email || '' },
+          });
+
+          if (!existingUser) {
+            console.log('Creating new user from Google profile');
+            // Create new user from Google profile
+            const nameParts = user.name?.split(' ') || [];
+            await prisma.user.create({
+              data: {
+                email: user.email || '',
+                username: user.email?.split('@')[0] || `user_${Date.now()}`,
+                firstName: nameParts[0] || '',
+                lastName: nameParts.slice(1).join(' ') || '',
+                isActive: true,
+                lastLogin: new Date(),
+                isAdmin: false,
+                isModerator: false,
+              },
+            });
+            console.log('Successfully created new user');
+          } else {
+            console.log('Updating existing user');
+            // Update existing user
+            await prisma.user.update({
+              where: { email: user.email || '' },
+              data: {
+                lastLogin: new Date(),
+              },
+            });
+            console.log('Successfully updated existing user');
+          }
+        } catch (error) {
+          console.error('Google signIn callback error:', error);
+          console.error('Error details:', {
+            message: error instanceof Error ? error.message : 'Unknown error',
+            userId: user.id,
+            email: user.email
+          });
+          return false;
+        }
+      } else if (account?.provider === 'authentik') {
         try {
           console.log('Authentik signIn callback:', { 
             userId: user.id, 
@@ -196,7 +311,7 @@ export const authOptions: NextAuthOptions = {
             console.log('Successfully updated existing user');
           }
         } catch (error) {
-          console.error('SignIn callback error:', error);
+          console.error('Authentik signIn callback error:', error);
           console.error('Error details:', {
             message: error instanceof Error ? error.message : 'Unknown error',
             userId: user.id,

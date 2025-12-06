@@ -1,0 +1,72 @@
+# Self-Hosted Signal Bot Dockerfile
+# Uses PostgreSQL instead of Cloudflare D1/R2
+FROM node:20-slim
+
+# Install dependencies including Java 21
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    bash \
+    git \
+    ffmpeg \
+    python3 \
+    python3-pip \
+    apt-transport-https \
+    gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && wget -O - https://packages.adoptium.net/artifactory/api/gpg/key/public | tee /etc/apt/keyrings/adoptium.asc \
+    && echo "deb [signed-by=/etc/apt/keyrings/adoptium.asc] https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" | tee /etc/apt/sources.list.d/adoptium.list \
+    && apt-get update \
+    && apt-get install -y temurin-21-jre \
+    && pip3 install --no-cache-dir --break-system-packages yt-dlp \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install signal-cli
+ARG SIGNAL_CLI_VERSION=0.13.22
+RUN wget https://github.com/AsamK/signal-cli/releases/download/v${SIGNAL_CLI_VERSION}/signal-cli-${SIGNAL_CLI_VERSION}.tar.gz && \
+    tar xf signal-cli-${SIGNAL_CLI_VERSION}.tar.gz -C /opt && \
+    ln -sf /opt/signal-cli-${SIGNAL_CLI_VERSION}/bin/signal-cli /usr/local/bin/signal-cli && \
+    rm signal-cli-${SIGNAL_CLI_VERSION}.tar.gz
+
+# Create app directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+COPY tsconfig.json ./
+
+# Install Node.js dependencies
+RUN npm ci --only=production
+
+# Install dev dependencies for building
+RUN npm install --save-dev typescript @types/node @types/pg
+
+# Copy source code
+COPY src/ ./src/
+
+# Build TypeScript (using index-selfhosted.ts)
+RUN npm run build
+
+# Create signal data directory
+RUN mkdir -p /app/signal-data && chmod 755 /app/signal-data
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
+
+# Expose port
+EXPOSE 8080
+
+# Environment variables (overrideable)
+ENV NODE_ENV=production \
+    PORT=8080 \
+    SIGNAL_CLI_CONFIG_DIR=/app/signal-data \
+    DB_TYPE=postgres \
+    DB_HOST=postgres \
+    DB_PORT=5432 \
+    DB_NAME=signal_bot \
+    DB_USER=signal_bot \
+    AUTO_START=true
+
+# Start command (uses index-selfhosted.ts)
+CMD ["node", "dist/index-selfhosted.js"]

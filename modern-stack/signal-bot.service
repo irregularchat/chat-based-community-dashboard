@@ -1,0 +1,38 @@
+[Unit]
+Description=Signal Bot Manager - Production-grade bot management
+After=network.target postgresql.service docker.service
+Wants=postgresql.service docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/chat-based-community-dashboard/modern-stack
+ExecStart=/usr/bin/node signal-bot-manager.js start
+ExecStop=/usr/bin/node signal-bot-manager.js stop
+ExecReload=/usr/bin/node signal-bot-manager.js restart
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=signal-bot-manager
+
+# Environment variables
+Environment=NODE_ENV=production
+Environment=DATABASE_URL=postgresql://dashboarduser:password_for_db@localhost:5436/dashboarddb
+Environment=OPENAI_API_KEY=sk-proj-test-gpt5mini
+Environment=LOCAL_AI_URL=http://localhost:8080
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=1G
+CPUQuota=80%
+
+# Security settings
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/home/chat-based-community-dashboard/modern-stack/logs
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

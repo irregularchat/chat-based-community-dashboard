@@ -1,0 +1,60 @@
+{
+  "enabled": true,
+  "reactions": [
+    {
+      "keywords": ["potato", "potatoes", "🥔"],
+      "emoji": "🥔",
+      "description": "React with potato emoji when someone mentions potato",
+      "caseSensitive": false
+    },
+    {
+      "keywords": ["pizza", "🍕"],
+      "emoji": "🍕",
+      "description": "React with pizza emoji",
+      "caseSensitive": false
+    },
+    {
+      "keywords": ["beer", "🍺"],
+      "emoji": "🍺",
+      "description": "React with beer emoji",
+      "caseSensitive": false
+    },
+    {
+      "keywords": ["coffee", "☕"],
+      "emoji": "☕",
+      "description": "React with coffee emoji",
+      "caseSensitive": false
+    },
+    {
+      "keywords": ["fire", "🔥", "lit"],
+      "emoji": "🔥",
+      "description": "React with fire emoji for exciting content",
+      "caseSensitive": false
+    },
+    {
+      "keywords": ["thumbsup", "👍", "good job", "nice work"],
+      "emoji": "👍",
+      "description": "React with thumbs up for positive content",
+      "caseSensitive": false
+    },
+    {
+      "keywords": ["laugh", "lol", "😂", "haha"],
+      "emoji": "😂",
+      "description": "React with laughing emoji for funny content",
+      "caseSensitive": false
+    },
+    {
+      "keywords": ["heart", "❤️", "love"],
+      "emoji": "❤️",
+      "description": "React with heart emoji",
+      "caseSensitive": false
+    }
+  ],
+  "settings": {
+    "matchWholeWord": false,
+    "maxReactionsPerMessage": 3,
+    "reactToOwnMessages": false,
+    "reactToCommands": false,
+    "debounceMs": 1000
+  }
+}

@@ -30,8 +30,8 @@ model User {
   attributes        Json?
   authentikId       String?               @unique @map("authentik_id")
   signalIdentity    String?               @map("signal_identity")
-  // signalVerified    Boolean               @default(false) @map("signal_verified")
-  // signalPhoneNumber String?               @map("signal_phone_number")
+  signalVerified    Boolean               @default(false) @map("signal_verified")
+  signalPhoneNumber String?               @map("signal_phone_number")
   matrixUsername    String?               @map("matrix_username")
   
   // Relationships
@@ -415,6 +415,25 @@ model SignalVerificationCode {
   @@map("signal_verification_codes")
 }
 
+// Signal Groups - Cached group information for fast retrieval
+model SignalGroup {
+  id              String    @id // Use the actual Signal group ID
+  name            String
+  description     String?
+  memberCount     Int       @default(0) @map("member_count")
+  botIsAdmin      Boolean   @default(false) @map("bot_is_admin")
+  botIsMember     Boolean   @default(true) @map("bot_is_member")
+  groupType       String?   @map("group_type") // "normal", "announcement", etc.
+  inviteLink      String?   @map("invite_link")
+  lastUpdated     DateTime  @default(now()) @map("last_updated")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  
+  @@index([memberCount])
+  @@index([lastUpdated])
+  @@index([botIsAdmin])
+  @@map("signal_groups")
+}
+
 // Signal group memberships tracking
 model SignalGroupMembership {
   id        Int      @id @default(autoincrement())
@@ -487,7 +506,7 @@ model SignalMessage {
   id               String    @id @default(cuid())
   groupId          String?   @map("group_id") // null for DMs
   groupName        String?   @map("group_name")
-  sourceNumber     String    @map("source_number")
+  sourceNumber     String?   @map("source_number")
   sourceName       String?   @map("source_name")
   sourceUuid       String?   @map("source_uuid")
   message          String    @db.Text
@@ -504,11 +523,11 @@ model SignalMessage {
   quotedMessage    SignalMessage? @relation("QuotedMessages", fields: [quotedMessageId], references: [id])
   quotingMessages  SignalMessage[] @relation("QuotedMessages")
   
+  @@unique([timestamp, sourceNumber, groupId])
   @@index([groupId])
   @@index([sourceNumber])
   @@index([timestamp])
   @@index([createdAt])
-  @@unique([timestamp, sourceNumber, groupId])
   @@map("signal_messages")
 }
 
@@ -560,6 +579,44 @@ model NewsLink {
   @@index([postedBy])
   @@index([firstPostedAt])
   @@map("news_links")
+}
+
+// Repository Link Tracking - Track GitHub/GitLab repositories shared in chat
+model RepositoryLink {
+  id               String    @id @default(cuid())
+  url              String
+  platform         String    // GitHub, GitLab, Bitbucket, etc.
+  repositoryName   String    @map("repository_name") // owner/repo format
+  owner            String    // repository owner
+  name             String    // repository name
+  description      String?   @db.Text
+  language         String?   // primary programming language
+  stars            Int       @default(0)
+  forks            Int       @default(0)
+  openIssues       Int       @default(0) @map("open_issues")
+  license          String?
+  topics           String?   @db.Text // JSON array of topics/tags
+  isPrivate        Boolean   @default(false) @map("is_private")
+  isFork           Boolean   @default(false) @map("is_fork")
+  isArchived       Boolean   @default(false) @map("is_archived")
+  lastUpdated      DateTime? @map("last_updated") // when repo was last updated
+  groupId          String    @map("group_id")
+  groupName        String?   @map("group_name")
+  postedBy         String    @map("posted_by") // phone number
+  postedByName     String?   @map("posted_by_name")
+  postCount        Int       @default(1) @map("post_count") // Times this URL was shared
+  firstPostedAt    DateTime  @default(now()) @map("first_posted_at")
+  lastPostedAt     DateTime  @default(now()) @map("last_posted_at")
+  
+  @@unique([url, groupId])
+  @@index([groupId])
+  @@index([platform])
+  @@index([language])
+  @@index([owner])
+  @@index([postedBy])
+  @@index([firstPostedAt])
+  @@index([stars])
+  @@map("repository_links")
 }
 
 // URL Summary Tracking - Track URLs processed through !tldr
@@ -646,6 +703,58 @@ model BotError {
   @@index([groupId])
   @@index([timestamp])
   @@map("bot_errors")
+}
+
+// Signal Member - Track unique members across groups with proper deduplication
+model SignalMember {
+  id                String    @id @default(cuid())
+  uuid              String?   @unique // Signal UUID for unique identification
+  phoneNumber       String?   @map("phone_number") // Phone number (if available)
+  displayName       String?   @map("display_name") // Current display name
+  firstName         String?   @map("first_name") 
+  lastName          String?   @map("last_name")
+  profileName       String?   @map("profile_name") // Signal profile name
+  profilePicture    String?   @map("profile_picture") // Profile picture URL
+  isBot             Boolean   @default(false) @map("is_bot")
+  lastSeenAt        DateTime? @map("last_seen_at") // Last time member sent a message
+  firstSeenAt       DateTime  @default(now()) @map("first_seen_at") // First time we saw this member
+  totalGroups       Int       @default(0) @map("total_groups") // Count of groups member belongs to
+  totalMessages     Int       @default(0) @map("total_messages") // Total messages sent
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  
+  // Relationships
+  groupMemberships  SignalMemberGroupMembership[]
+  
+  @@index([uuid])
+  @@index([phoneNumber])
+  @@index([lastSeenAt])
+  @@index([totalGroups])
+  @@index([totalMessages])
+  @@map("signal_members")
+}
+
+// Signal Member Group Membership - Track which groups each member belongs to
+model SignalMemberGroupMembership {
+  id            String       @id @default(cuid())
+  memberId      String       @map("member_id")
+  groupId       String       @map("group_id")
+  groupName     String?      @map("group_name")
+  joinedAt      DateTime     @default(now()) @map("joined_at")
+  lastActiveAt  DateTime?    @map("last_active_at") // Last time member was active in this group
+  messageCount  Int          @default(0) @map("message_count") // Messages sent in this group
+  isActive      Boolean      @default(true) @map("is_active") // Still in group
+  leftAt        DateTime?    @map("left_at") // When member left group (if applicable)
+  
+  // Relationships
+  member        SignalMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  
+  @@unique([memberId, groupId])
+  @@index([memberId])
+  @@index([groupId])
+  @@index([lastActiveAt])
+  @@index([isActive])
+  @@map("signal_member_group_memberships")
 }
 
 // Q&A System - Track questions and answers

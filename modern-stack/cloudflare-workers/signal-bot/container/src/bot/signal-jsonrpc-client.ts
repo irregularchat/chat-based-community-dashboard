@@ -509,6 +509,38 @@ export class SignalJsonRpcClient extends EventEmitter {
   }
 
   /**
+   * Trust a user's identity (after safety number change)
+   *
+   * This allows the bot to continue receiving/sending messages
+   * to a contact whose safety number has changed.
+   *
+   * @param recipient - Phone number or UUID of the contact
+   * @param trustAllKnownKeys - If true, trusts all keys without verification
+   * @param verifiedSafetyNumber - Optional: verify a specific safety number
+   */
+  async trustIdentity(params: {
+    recipient: string;
+    trustAllKnownKeys?: boolean;
+    verifiedSafetyNumber?: string;
+  }): Promise<void> {
+    const rpcParams: any = {
+      recipient: params.recipient,
+    };
+
+    if (params.trustAllKnownKeys) {
+      rpcParams.trustAllKnownKeys = true;
+    }
+
+    if (params.verifiedSafetyNumber) {
+      rpcParams.verifiedSafetyNumber = params.verifiedSafetyNumber;
+    }
+
+    console.log(`🔐 Trusting identity for ${params.recipient}...`);
+    await this.request('trust', rpcParams);
+    console.log(`✅ Identity trusted for ${params.recipient}`);
+  }
+
+  /**
    * Check if connected
    */
   isConnected(): boolean {

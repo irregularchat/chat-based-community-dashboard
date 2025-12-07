@@ -98,7 +98,7 @@ Add to your `.env.local` file:
 
 ```bash
 # Google Cloud Configuration
-GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
+
 GOOGLE_APPLICATION_CREDENTIALS="/path/to/dashboard-secrets-key.json"
 ```
 
@@ -212,7 +212,7 @@ Example production environment variables:
 # Production configuration
 NODE_ENV=production
 NEXTAUTH_URL=https://dashboard.yourdomain.com
-GOOGLE_CLOUD_PROJECT=your-production-project-id
+
 GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/service-account-key.json
 ```
 

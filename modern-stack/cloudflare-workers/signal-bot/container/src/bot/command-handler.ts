@@ -282,6 +282,54 @@ export class CommandHandler {
   }
 
   /**
+   * Bot Development Room ID for error logging
+   */
+  private readonly BOT_DEV_GROUP_ID = process.env.BOT_DEV_GROUP_ID || '6PP/i0JBlXpAe+dkxvH64ZKmOQoeaukKtsPUQU5wQTg=';
+
+  /**
+   * Centralized error handler for commands
+   *
+   * - Logs error to console
+   * - Sends detailed error to Bot Development room
+   * - Returns clean user-friendly error message
+   *
+   * @param error - The error that occurred
+   * @param command - The command that failed (e.g., "!ai", "!sn")
+   * @param context - Command context for additional info
+   * @param userMessage - Optional clean message to show users (default: generic error)
+   * @returns Clean error message for users
+   */
+  private async handleCommandError(
+    error: unknown,
+    command: string,
+    context: CommandContext,
+    userMessage: string = '❌ Something went wrong. Please try again or contact an admin.'
+  ): Promise<string> {
+    // 1. Log to console
+    console.error(`❌ [${command}] Error:`, error);
+
+    // 2. Send detailed error to Bot Development room
+    const errorDetails = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error && error.stack ? `\n\nStack:\n${error.stack.slice(0, 500)}` : '';
+
+    try {
+      await this.bot?.sendMessage({
+        groupId: this.BOT_DEV_GROUP_ID,
+        message: `⚠️ ${command} Error\n\n` +
+          `User: ${context.sourceName}\n` +
+          `Group: ${context.groupId || 'DM'}\n` +
+          `Error: ${errorDetails}${errorStack}`,
+      });
+    } catch {
+      // Ignore if we can't send to bot dev group
+      console.error(`Failed to send error to Bot Dev room`);
+    }
+
+    // 3. Return clean message to user
+    return userMessage;
+  }
+
+  /**
    * Handle a command
    */
   async handle(command: string, context: CommandContext): Promise<CommandResponse> {
@@ -351,7 +399,7 @@ export class CommandHandler {
 
       // Group Management
       case '!groups':
-        return this.handleGroups();
+        return this.handleGroups(context);
 
       case '!refreshgroups':
         return this.handleRefreshGroups();
@@ -514,6 +562,14 @@ export class CommandHandler {
       case '!remove':
         return this.handleRemove(args, context);
 
+      case '!sn':
+      case '!safetynumber':
+        return this.handleSafetyNumberVerify(args, context);
+
+      case '!sngtg':
+      case '!sngoodtogo':
+        return this.handleSafetyNumberGoodToGo(args, context);
+
       case '!clearroom':
         return this.handleClearRoom(args, context);
 
@@ -538,6 +594,10 @@ export class CommandHandler {
       case '!req':
       case '!request':
         return this.handleRequest(args, context);
+
+      case '!safetycheck':
+      case '!sc':
+        return this.handlePending(context);  // Alias for !pending
 
       // Discourse/Forum Commands
       case '!fpost':
@@ -696,9 +756,12 @@ export class CommandHandler {
       lines.push(
         '🔐 Admin:',
         '  !gtg @user - Approve user (Good To Go)',
-        '  !pending - Show pending users',
+        '  !pending, !sc - Show pending requests & safety number changes',
+        '  !sn @user - Trigger safety number verification for user',
         '  !remove @user - Remove from all groups (safety number)',
         '  !clearroom confirm - Remove all non-admins from current group',
+        '',
+        '👤 SSO Account Management:',
         '  !createuser @user email - Create SSO account for mentioned user',
         '  !createuser email name - Create SSO account with name',
         '  !accountinvite [hours] [-c 1] - Create SSO invite link',
@@ -758,6 +821,15 @@ export class CommandHandler {
       );
     }
 
+    // Security: !ai must be run in a group chat for visibility/audit
+    if (!context.groupId) {
+      return this.formatForSignal(
+        '🔒 Security Notice\n\n' +
+        'The !ai command must be used in a group chat, not in DMs.\n\n' +
+        'This ensures AI usage is visible to the community.'
+      );
+    }
+
     if (!question || question.trim().length === 0) {
       return '❌ Please provide a question.\n\nUsage: !ai <your question>';
     }
@@ -808,8 +880,7 @@ export class CommandHandler {
 
       return this.formatForSignal(`🤖 AI Response:\n\n${answer}`);
     } catch (error) {
-      console.error('AI error:', error);
-      return `❌ AI error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      return this.handleCommandError(error, '!ai', context, '❌ AI request failed. Please try again.');
     }
   }
 
@@ -890,8 +961,7 @@ export class CommandHandler {
         breakoutInfo
       );
     } catch (error) {
-      console.error('Error saving question:', error);
-      return `❌ Failed to save question: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      return this.handleCommandError(error, '!ask', context, '❌ Failed to save question. Please try again.');
     }
   }
 
@@ -925,8 +995,7 @@ export class CommandHandler {
 
       return this.formatForSignal(lines.join('\n'));
     } catch (error) {
-      console.error('Error loading questions:', error);
-      return `❌ Failed to load questions: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      return this.handleCommandError(error, '!questions', context, '❌ Failed to load questions. Please try again.');
     }
   }
 
@@ -1031,8 +1100,7 @@ export class CommandHandler {
         breakoutInfo
       );
     } catch (error) {
-      console.error('Error adding answer:', error);
-      return `❌ Failed to add answer: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      return this.handleCommandError(error, '!answer', context, '❌ Failed to add answer. Please try again.');
     }
   }
 
@@ -1140,8 +1208,7 @@ export class CommandHandler {
 
       return this.formatForSignal(response);
     } catch (error) {
-      console.error('Error marking as solved:', error);
-      return `❌ Failed to mark as solved: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      return this.handleCommandError(error, '!solved', context, '❌ Failed to mark as solved. Please try again.');
     }
   }
   // Bot UUID cache - looked up once from database
@@ -1258,9 +1325,18 @@ export class CommandHandler {
   /**
    * !groups - List all Signal groups
    */
-  private async handleGroups(): Promise<string> {
+  private async handleGroups(context: CommandContext): Promise<string> {
     if (!this.bot) {
       return '❌ Bot instance not available';
+    }
+
+    // Security: !groups must be run in a group chat for visibility
+    if (!context.groupId) {
+      return this.formatForSignal(
+        '🔒 Security Notice\n\n' +
+        'The !groups command must be used in a group chat, not in DMs.\n\n' +
+        'This ensures group information requests are visible to the community.'
+      );
     }
 
     try {
@@ -1375,6 +1451,15 @@ export class CommandHandler {
     const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
     if (!isUserAdmin) {
       return '❌ Admin-only command';
+    }
+
+    // Security: Admin commands must be run in a group chat for visibility/audit
+    if (!context.groupId) {
+      return this.formatForSignal(
+        '🔒 Security Notice\n\n' +
+        'Admin commands must be used in a group chat, not in DMs.\n\n' +
+        'This ensures admin actions are visible to the community.'
+      );
     }
 
     if (!this.bot) {
@@ -1573,8 +1658,7 @@ export class CommandHandler {
 
       return this.formatForSignal(response);
     } catch (error) {
-      console.error('Error adding users:', error);
-      return `❌ Failed to add users: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      return this.handleCommandError(error, '!addto', context, '❌ Failed to add users. Please try again.');
     }
   }
 
@@ -1636,6 +1720,15 @@ export class CommandHandler {
   private async handleJoin(args: string, context: CommandContext): Promise<string> {
     if (!this.bot) {
       return '❌ Bot instance not available';
+    }
+
+    // Security: !join must be run in a group chat for visibility/audit
+    if (!context.groupId) {
+      return this.formatForSignal(
+        '🔒 Security Notice\n\n' +
+        'The !join command must be used in a group chat, not in DMs.\n\n' +
+        'This ensures group join requests are visible to the community for security.'
+      );
     }
 
     const userUuid = context.sourceUuid;
@@ -1804,8 +1897,7 @@ export class CommandHandler {
       return this.formatForSignal(response);
 
     } catch (error) {
-      console.error('Error in handleJoin:', error);
-      return `❌ Failed to join groups: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      return this.handleCommandError(error, '!join', context, '❌ Failed to join groups. Please try again.');
     }
   }
 
@@ -1924,8 +2016,7 @@ Structure your summary as:
         const summary = response.choices[0]?.message?.content || 'No summary available';
         return this.formatForSignal(`📝 Summary${countDesc}:\n\n${summary}`);
       } catch (error) {
-        console.error('Conversation summarization error:', error);
-        return `❌ Summarization failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        return this.handleCommandError(error, '!summarize', context, '❌ Summarization failed. Please try again.');
       }
     }
 
@@ -2213,8 +2304,7 @@ Structure your summary as:
         return this.formatForSignal(`📝 Summary:\n\n${summary}`);
       }
     } catch (error) {
-      console.error('Summarize error:', error);
-      return `❌ Summarization failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      return this.handleCommandError(error, '!summarize', context, '❌ Summarization failed. Please try again.');
     }
   }
 
@@ -2438,8 +2528,7 @@ The file will be organized into the IrregularChat shared drive based on this gro
       return lines.join('\n');
 
     } catch (error) {
-      console.error('Archive error:', error);
-      return `❌ Archive failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      return this.handleCommandError(error, '!archive', context, '❌ Archive failed. Please try again.');
     }
   }
 
@@ -2580,8 +2669,7 @@ Consider installing ClamAV for file scanning capabilities.`;
       }
 
     } catch (error) {
-      console.error('Virus scan error:', error);
-      return `❌ Scan failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      return this.handleCommandError(error, '!scan', context, '❌ Scan failed. Please try again.');
     }
   }
 
@@ -2757,8 +2845,7 @@ Examples:
       return result.message;
 
     } catch (error) {
-      console.error('File search error:', error);
-      return `❌ Search failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      return this.handleCommandError(error, '!files', context, '❌ Search failed. Please try again.');
     }
   }
 
@@ -2926,8 +3013,7 @@ Format:
       return `📄 TLDR: ${file.name}\n\n${summary}\n\n📂 Link: ${url}`;
 
     } catch (error) {
-      console.error('TLDR error:', error);
-      return `❌ Failed to summarize: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      return this.handleCommandError(error, 'tldr', context, '❌ Failed to summarize. Please try again.');
     }
   }
 
@@ -3616,8 +3702,7 @@ Format:
       return this.formatForSignal(lines.join('\n'));
 
     } catch (error) {
-      console.error('Error in handleWikiSearch:', error);
-      return `❌ Wiki search failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      return this.handleCommandError(error, '!wiki', context, '❌ Wiki search failed. Please try again.');
     }
   }
 
@@ -3909,8 +3994,28 @@ WIKI CONTENT:${wikiContext}`,
       return this.handleLinksGit(options, context);
     }
 
+    // Route to trending view
+    if (options.showTrending) {
+      return this.handleLinksTrending(options, context);
+    }
+
+    // Route to topics view
+    if (options.showTopics) {
+      return this.handleLinksTopics(options, context);
+    }
+
+    // Route to top contributors view
+    if (options.showTop) {
+      return this.handleLinksTop(options, context);
+    }
+
+    // Default: Show weekly digest (unless -all flag is set)
+    if (!options.showAll && !options.keyword && !options.domain && !options.groupId && !options.currentGroupOnly) {
+      return this.handleLinksDigest(options, context);
+    }
+
     try {
-      // Build query with JOIN to get human-readable group names
+      // -all mode or filtered query: Build query with JOIN to get human-readable group names
       let sql = `
         SELECT n.url, n.domain, n.title, n.summary, n.forum_url, n.post_count,
                n.first_posted_at, n.last_posted_at, n.posted_by_name,
@@ -4070,6 +4175,10 @@ WIKI CONTENT:${wikiContext}`,
     showArchive?: boolean;
     noStats?: boolean;
     showGit?: boolean;
+    showAll?: boolean;      // -all: show raw list (old default behavior)
+    showTrending?: boolean; // -trending: show links shared multiple times
+    showTopics?: boolean;   // -topics: group by domain category
+    showTop?: boolean;      // -top: show top contributors
     help: boolean;
   } {
     const options: any = { help: false };
@@ -4080,7 +4189,7 @@ WIKI CONTENT:${wikiContext}`,
       return options;
     }
 
-    // Empty args is fine - will show recent links across all groups
+    // Empty args is fine - will show weekly digest (new default)
     if (!args || args.trim() === '') {
       return options;
     }
@@ -4091,6 +4200,30 @@ WIKI CONTENT:${wikiContext}`,
     if (remaining.match(/-git\b/i)) {
       options.showGit = true;
       remaining = remaining.replace(/-git\b/i, '');
+    }
+
+    // Parse -all (show raw list, old default behavior)
+    if (remaining.match(/-all\b/i)) {
+      options.showAll = true;
+      remaining = remaining.replace(/-all\b/i, '');
+    }
+
+    // Parse -trending (show links shared multiple times)
+    if (remaining.match(/-trending\b/i) || remaining.match(/-hot\b/i)) {
+      options.showTrending = true;
+      remaining = remaining.replace(/-trending\b/i, '').replace(/-hot\b/i, '');
+    }
+
+    // Parse -topics (group by domain category)
+    if (remaining.match(/-topics\b/i) || remaining.match(/-topic\b/i)) {
+      options.showTopics = true;
+      remaining = remaining.replace(/-topics?\b/i, '');
+    }
+
+    // Parse -top (show top contributors)
+    if (remaining.match(/-top\b/i) || remaining.match(/-leaders?\b/i)) {
+      options.showTop = true;
+      remaining = remaining.replace(/-top\b/i, '').replace(/-leaders?\b/i, '');
     }
 
     // Parse -c (current group only)
@@ -4310,6 +4443,337 @@ WIKI CONTENT:${wikiContext}`,
   }
 
   /**
+   * !links (default) - Weekly digest view
+   * Shows high-value summary: stats, trending links, active groups, top contributors
+   */
+  private async handleLinksDigest(options: any, context: CommandContext): Promise<string> {
+    if (!this.dbClient) {
+      return this.formatForSignal('❌ Database not available');
+    }
+
+    try {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 7);
+      const cutoffISO = cutoff.toISOString();
+
+      // Get weekly stats
+      const statsResult = await this.dbClient.query(`
+        SELECT
+          COUNT(*) as total_links,
+          COUNT(DISTINCT group_id) as total_groups,
+          COUNT(DISTINCT posted_by_name) FILTER (WHERE posted_by_name != 'Unknown') as total_contributors,
+          SUM(post_count) as total_shares
+        FROM news_links
+        WHERE first_posted_at >= $1
+      `, [cutoffISO]);
+
+      const stats = statsResult.results[0] || { total_links: 0, total_groups: 0, total_contributors: 0, total_shares: 0 };
+
+      // Get trending links (shared multiple times or most recent popular)
+      const trendingResult = await this.dbClient.query(`
+        SELECT url, domain, title, post_count, forum_url
+        FROM news_links
+        WHERE first_posted_at >= $1 AND post_count > 1
+        ORDER BY post_count DESC, last_posted_at DESC
+        LIMIT 3
+      `, [cutoffISO]);
+
+      // Get most active groups
+      const groupsResult = await this.dbClient.query(`
+        SELECT COALESCE(g.name, 'Unknown') as group_name, COUNT(*) as link_count
+        FROM news_links n
+        LEFT JOIN signal_groups g ON n.group_id = g.id
+        WHERE n.first_posted_at >= $1
+        GROUP BY g.name
+        ORDER BY link_count DESC
+        LIMIT 5
+      `, [cutoffISO]);
+
+      // Get top contributors
+      const contributorsResult = await this.dbClient.query(`
+        SELECT posted_by_name, COUNT(*) as shares
+        FROM news_links
+        WHERE first_posted_at >= $1 AND posted_by_name != 'Unknown'
+        GROUP BY posted_by_name
+        ORDER BY shares DESC
+        LIMIT 5
+      `, [cutoffISO]);
+
+      // Get top domains
+      const domainsResult = await this.dbClient.query(`
+        SELECT domain, COUNT(*) as count
+        FROM news_links
+        WHERE first_posted_at >= $1
+        GROUP BY domain
+        ORDER BY count DESC
+        LIMIT 5
+      `, [cutoffISO]);
+
+      // Build response
+      let response = `📰 Weekly Link Digest\n`;
+      response += `━━━━━━━━━━━━━━━━━━━━\n`;
+      response += `${stats.total_links} links • ${stats.total_groups} groups • ${stats.total_contributors} contributors\n\n`;
+
+      // Trending links section
+      if (trendingResult.results.length > 0) {
+        response += `🔥 Trending\n`;
+        for (const link of trendingResult.results) {
+          const title = link.title ? this.truncate(link.title, 40) : link.domain;
+          response += `• ${title} (${link.post_count}x)\n`;
+          if (link.forum_url) {
+            response += `  ${link.forum_url}\n`;
+          }
+        }
+        response += '\n';
+      }
+
+      // Active groups section
+      if (groupsResult.results.length > 0) {
+        response += `📁 Most Active Groups\n`;
+        for (const group of groupsResult.results.slice(0, 3)) {
+          response += `• ${group.group_name}: ${group.link_count} links\n`;
+        }
+        response += '\n';
+      }
+
+      // Top contributors section
+      if (contributorsResult.results.length > 0) {
+        response += `👤 Top Contributors\n`;
+        const contribs = contributorsResult.results.slice(0, 3).map(c =>
+          `${c.posted_by_name}(${c.shares})`
+        ).join(' • ');
+        response += `${contribs}\n\n`;
+      }
+
+      // Top domains section
+      if (domainsResult.results.length > 0) {
+        response += `🌐 Popular Sources\n`;
+        const domains = domainsResult.results.slice(0, 4).map(d =>
+          `${d.domain}(${d.count})`
+        ).join(' • ');
+        response += `${domains}\n\n`;
+      }
+
+      response += `💡 More: -all -trending -topics -top`;
+
+      return this.formatForSignal(response);
+    } catch (error) {
+      console.error('Error in handleLinksDigest:', error);
+      return this.formatForSignal('❌ Error generating digest');
+    }
+  }
+
+  /**
+   * !links -trending - Show links shared multiple times or popular
+   */
+  private async handleLinksTrending(options: any, context: CommandContext): Promise<string> {
+    if (!this.dbClient) {
+      return this.formatForSignal('❌ Database not available');
+    }
+
+    try {
+      const cutoff = options.timePeriod
+        ? this.calculateTimeCutoff(options.timePeriod)
+        : (() => { const d = new Date(); d.setDate(d.getDate() - 30); return d; })();
+
+      const result = await this.dbClient.query(`
+        SELECT n.url, n.domain, n.title, n.summary, n.forum_url, n.post_count,
+               n.first_posted_at, n.posted_by_name,
+               COALESCE(g.name, 'Unknown') as group_name
+        FROM news_links n
+        LEFT JOIN signal_groups g ON n.group_id = g.id
+        WHERE n.first_posted_at >= $1 AND n.post_count >= 2
+        ORDER BY n.post_count DESC, n.last_posted_at DESC
+        LIMIT 15
+      `, [cutoff?.toISOString() || new Date(0).toISOString()]);
+
+      if (result.results.length === 0) {
+        return this.formatForSignal('📭 No trending links found (shared 2+ times)');
+      }
+
+      let response = `🔥 Trending Links (${result.results.length})\n`;
+      response += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+      for (const link of result.results) {
+        const title = link.title ? this.truncate(link.title, 45) : link.domain;
+        const date = new Date(link.first_posted_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+        response += `📌 ${title}\n`;
+        response += `   Shared ${link.post_count}x • ${date} • ${link.group_name}\n`;
+        if (link.forum_url) {
+          response += `   ${link.forum_url}\n`;
+        } else if (link.url) {
+          response += `   ${link.url}\n`;
+        }
+        response += '\n';
+      }
+
+      return this.formatForSignal(response);
+    } catch (error) {
+      console.error('Error in handleLinksTrending:', error);
+      return this.formatForSignal('❌ Error fetching trending links');
+    }
+  }
+
+  /**
+   * !links -topics - Group links by domain category
+   */
+  private async handleLinksTopics(options: any, context: CommandContext): Promise<string> {
+    if (!this.dbClient) {
+      return this.formatForSignal('❌ Database not available');
+    }
+
+    try {
+      const cutoff = options.timePeriod
+        ? this.calculateTimeCutoff(options.timePeriod)
+        : (() => { const d = new Date(); d.setDate(d.getDate() - 7); return d; })();
+
+      const result = await this.dbClient.query(`
+        SELECT domain, url, title, forum_url, post_count
+        FROM news_links
+        WHERE first_posted_at >= $1
+        ORDER BY domain, post_count DESC, last_posted_at DESC
+      `, [cutoff?.toISOString() || new Date(0).toISOString()]);
+
+      if (result.results.length === 0) {
+        return this.formatForSignal('📭 No links found');
+      }
+
+      // Categorize domains
+      const categories: Record<string, { name: string; emoji: string; domains: string[] }> = {
+        news: { name: 'News', emoji: '📰', domains: ['cbs', 'nbc', 'cnn', 'reuters', 'ap', 'bbc', 'nytimes', 'washingtonpost', 'wsj', 'guardian', 'politico', 'axios'] },
+        tech: { name: 'Tech', emoji: '💻', domains: ['arstechnica', 'techcrunch', 'wired', 'theverge', 'hackernews', 'github', 'gitlab', 'stackoverflow'] },
+        research: { name: 'Research', emoji: '🔬', domains: ['arxiv', 'nature', 'science', 'nih.gov', 'academic', 'scholar', 'researchgate', 'pubmed'] },
+        wiki: { name: 'Reference', emoji: '📚', domains: ['wikipedia', 'wikimedia', 'irregularpedia'] },
+        defense: { name: 'Defense', emoji: '🛡️', domains: ['defense', 'military', 'army', 'navy', 'airforce', 'janes', 'breakingdefense', 'defenseone'] },
+        gov: { name: 'Government', emoji: '🏛️', domains: ['.gov', '.mil', 'whitehouse', 'congress'] },
+      };
+
+      // Group links by category
+      const grouped: Record<string, any[]> = { other: [] };
+      for (const cat of Object.keys(categories)) {
+        grouped[cat] = [];
+      }
+
+      for (const link of result.results) {
+        let found = false;
+        const domain = link.domain?.toLowerCase() || '';
+
+        for (const [catKey, catDef] of Object.entries(categories)) {
+          if (catDef.domains.some(d => domain.includes(d))) {
+            grouped[catKey].push(link);
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          grouped.other.push(link);
+        }
+      }
+
+      // Build response
+      let response = `📊 Links by Topic\n`;
+      response += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+      for (const [catKey, catDef] of Object.entries(categories)) {
+        const links = grouped[catKey];
+        if (links.length === 0) continue;
+
+        response += `${catDef.emoji} ${catDef.name} (${links.length})\n`;
+        for (const link of links.slice(0, 3)) {
+          const title = link.title ? this.truncate(link.title, 40) : link.domain;
+          const shares = link.post_count > 1 ? ` (${link.post_count}x)` : '';
+          response += `• ${title}${shares}\n`;
+        }
+        if (links.length > 3) {
+          response += `  ... +${links.length - 3} more\n`;
+        }
+        response += '\n';
+      }
+
+      // Other category
+      if (grouped.other.length > 0) {
+        response += `🔗 Other (${grouped.other.length})\n`;
+        for (const link of grouped.other.slice(0, 3)) {
+          const title = link.title ? this.truncate(link.title, 40) : link.domain;
+          response += `• ${title}\n`;
+        }
+        if (grouped.other.length > 3) {
+          response += `  ... +${grouped.other.length - 3} more\n`;
+        }
+      }
+
+      return this.formatForSignal(response);
+    } catch (error) {
+      console.error('Error in handleLinksTopics:', error);
+      return this.formatForSignal('❌ Error grouping by topics');
+    }
+  }
+
+  /**
+   * !links -top - Show top contributors leaderboard
+   */
+  private async handleLinksTop(options: any, context: CommandContext): Promise<string> {
+    if (!this.dbClient) {
+      return this.formatForSignal('❌ Database not available');
+    }
+
+    try {
+      const cutoff = options.timePeriod
+        ? this.calculateTimeCutoff(options.timePeriod)
+        : (() => { const d = new Date(); d.setDate(d.getDate() - 7); return d; })();
+
+      // Get top contributors with their best shared link
+      const result = await this.dbClient.query(`
+        WITH contributor_stats AS (
+          SELECT
+            posted_by_name,
+            COUNT(*) as total_shares,
+            COUNT(DISTINCT domain) as unique_domains,
+            COUNT(DISTINCT group_id) as groups_contributed_to
+          FROM news_links
+          WHERE first_posted_at >= $1 AND posted_by_name != 'Unknown'
+          GROUP BY posted_by_name
+          ORDER BY total_shares DESC
+          LIMIT 10
+        )
+        SELECT
+          cs.*,
+          (SELECT title FROM news_links nl WHERE nl.posted_by_name = cs.posted_by_name AND nl.first_posted_at >= $1 ORDER BY nl.post_count DESC, nl.last_posted_at DESC LIMIT 1) as best_share
+        FROM contributor_stats cs
+      `, [cutoff?.toISOString() || new Date(0).toISOString()]);
+
+      if (result.results.length === 0) {
+        return this.formatForSignal('📭 No contributor data found');
+      }
+
+      let response = `👤 Top Contributors (7 days)\n`;
+      response += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+      const medals = ['🥇', '🥈', '🥉'];
+
+      for (let i = 0; i < result.results.length; i++) {
+        const contrib = result.results[i];
+        const medal = i < 3 ? medals[i] : `${i + 1}.`;
+
+        response += `${medal} ${contrib.posted_by_name}\n`;
+        response += `   ${contrib.total_shares} links • ${contrib.unique_domains} sources • ${contrib.groups_contributed_to} groups\n`;
+        if (contrib.best_share) {
+          response += `   Best: "${this.truncate(contrib.best_share, 35)}"\n`;
+        }
+        response += '\n';
+      }
+
+      response += `💡 Share links to climb the leaderboard!`;
+
+      return this.formatForSignal(response);
+    } catch (error) {
+      console.error('Error in handleLinksTop:', error);
+      return this.formatForSignal('❌ Error fetching leaderboard');
+    }
+  }
+
+  /**
    * Format number compactly (1K, 1.5M, etc.)
    */
   private formatCompactNumber(num: number): string {
@@ -4361,26 +4825,26 @@ WIKI CONTENT:${wikiContext}`,
    */
   private getLinksHelp(): string {
     return this.formatForSignal(
-      '📰 !links - Browse Shared Links\n\n' +
-      'Shows recent news articles or git repositories.\n\n' +
-      'Usage: !links [options] [search]\n\n' +
-      'Mode:\n' +
-      '  (default)   News articles\n' +
-      '  -git        Git repositories (GitHub/GitLab)\n\n' +
-      'URL Options (news only):\n' +
-      '  -f          Show forum discussion URL\n' +
-      '  -a          Show archive.org URL\n\n' +
+      '📰 !links - Community Link Digest\n\n' +
+      'Views:\n' +
+      '  (default)   Weekly digest summary\n' +
+      '  -all        Full list of recent links\n' +
+      '  -trending   Links shared 2+ times\n' +
+      '  -topics     Group by category\n' +
+      '  -top        Contributor leaderboard\n' +
+      '  -git        Git repositories\n\n' +
       'Filters:\n' +
       '  -c          This group only\n' +
-      '  -t <time>   Time period (24h, 7d, 1w)\n' +
-      '  -d <domain> Filter by domain (news)\n' +
-      '  -n <count>  Results (max 30)\n\n' +
+      '  -t <time>   Time period (24h, 7d, 30d)\n' +
+      '  -d <domain> Filter by domain\n' +
+      '  -f          Show forum URLs\n\n' +
       'Examples:\n' +
-      '  !links           Recent news\n' +
-      '  !links -git      Recent repos\n' +
-      '  !links -git rust Search repos\n' +
-      '  !links -t 7d     News last 7 days\n' +
-      '  !links ukraine   Search news'
+      '  !links           Weekly digest\n' +
+      '  !links -trending Hot links\n' +
+      '  !links -topics   By category\n' +
+      '  !links -top      Leaderboard\n' +
+      '  !links -all      All recent\n' +
+      '  !links ukraine   Search'
     );
   }
 
@@ -4425,6 +4889,15 @@ WIKI CONTENT:${wikiContext}`,
     const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
     if (!isUserAdmin) {
       return '❌ Admin-only command';
+    }
+
+    // Security: Admin commands must be run in a group chat for visibility/audit
+    if (!context.groupId) {
+      return this.formatForSignal(
+        '🔒 Security Notice\n\n' +
+        'Admin commands must be used in a group chat, not in DMs.\n\n' +
+        'This ensures admin actions are visible to the community.'
+      );
     }
 
     // Determine user identifier: either from mention OR from quoted message author
@@ -4705,6 +5178,15 @@ WIKI CONTENT:${wikiContext}`,
       return '❌ Admin-only command';
     }
 
+    // Security: Admin commands must be run in a group chat for visibility/audit
+    if (!context.groupId) {
+      return this.formatForSignal(
+        '🔒 Security Notice\n\n' +
+        'Admin commands must be used in a group chat, not in DMs.\n\n' +
+        'This ensures admin actions are visible to the community.'
+      );
+    }
+
     if (!context.mentions || context.mentions.length === 0) {
       return '❌ Please mention a user\n\nUsage:\n  !remove @user         - Preview groups\n  !remove @user confirm - Execute removal';
     }
@@ -4851,6 +5333,25 @@ WIKI CONTENT:${wikiContext}`,
         // Build result for this user
         if (removedFrom.length > 0) {
           allResults.push(`✅ ${userDisplayName}: Removed from ${removedFrom.length} group(s)`);
+
+          // Log to user_removals audit table
+          try {
+            await this.dbClient.logUserRemoval({
+              userUuid: userIdentifier,
+              userName: userDisplayName,
+              removalReason: 'manual_admin',
+              removalType: 'manual',
+              removedByUuid: context.sourceUuid || context.sourceNumber,
+              removedByName: context.sourceName,
+              groupsRemovedFrom: userGroups
+                .filter(g => removedFrom.includes(g.name))
+                .map(g => ({ id: g.groupId, name: g.name })),
+              notes: `Manual removal via !remove command. Reason: Safety number verification failure.`,
+            });
+            console.log(`📝 Logged removal of ${userDisplayName} to audit table`);
+          } catch (logError) {
+            console.error('Failed to log removal to audit table:', logError);
+          }
         }
         if (failedRemovals.length > 0) {
           allResults.push(`⚠️ ${userDisplayName}: Failed for ${failedRemovals.length} group(s)`);
@@ -4892,6 +5393,442 @@ WIKI CONTENT:${wikiContext}`,
     ];
 
     return this.formatForSignal(response.join('\n'));
+  }
+
+  /**
+   * !sn @user - Manually trigger safety number verification for a user
+   *
+   * Admin command to place a user into the safety number verification flow.
+   * This is useful when:
+   * - A user's safety number changed but wasn't auto-detected
+   * - Admin wants to re-verify an existing member
+   * - User needs to be moved to Entry/INDOC for verification
+   *
+   * Usage:
+   *   !sn @user - Trigger safety number verification for the mentioned user
+   */
+  private async handleSafetyNumberVerify(args: string, context: CommandContext): Promise<string> {
+    // 1. Admin check
+    const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
+    if (!isUserAdmin) {
+      return '❌ Admin-only command';
+    }
+
+    // Security: Admin commands must be run in a group chat for visibility/audit
+    if (!context.groupId) {
+      return this.formatForSignal(
+        '🔒 Security Notice\n\n' +
+        'Admin commands must be used in a group chat, not in DMs.\n\n' +
+        'This ensures admin actions are visible to the community.'
+      );
+    }
+
+    // 2. Must have a mention
+    if (!context.mentions || context.mentions.length === 0) {
+      return this.formatForSignal(
+        '❌ Please mention a user\n\n' +
+        'Usage: !sn @user\n\n' +
+        'This will:\n' +
+        '1. Add the user to Entry/INDOC group\n' +
+        '2. Create a verification request\n' +
+        '3. Send them the verification prompt\n' +
+        '4. Notify admins in Actions chat'
+      );
+    }
+
+    // 3. Only process the first mention
+    const mention = context.mentions[0];
+    const userIdentifier = mention.uuid || mention.number;
+
+    if (!userIdentifier) {
+      return '❌ Could not resolve the mentioned user';
+    }
+
+    // Get user display name - try multiple sources
+    let userDisplayName = 'Unknown User';
+    let userPhone: string | undefined;
+
+    // Source 1: Database lookup
+    if (this.dbClient) {
+      try {
+        const result = await this.dbClient.query(
+          'SELECT display_name, profile_name, first_name, last_name, phone_number FROM signal_members WHERE uuid = $1 OR phone_number = $1 LIMIT 1',
+          [userIdentifier]
+        );
+        if (result.results && result.results.length > 0) {
+          const row = result.results[0];
+          const foundName = row.display_name || row.profile_name ||
+                           (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name);
+          if (foundName) {
+            userDisplayName = foundName;
+          }
+          userPhone = row.phone_number;
+        }
+      } catch (error) {
+        console.error('Error looking up user for !sn:', error);
+      }
+    }
+
+    // Source 2: Signal group member cache (fallback if DB has no name)
+    if (userDisplayName === 'Unknown User' && this.bot) {
+      try {
+        const memberNames = await this.bot.getMemberNamesFromGroups();
+        const cachedName = memberNames.get(userIdentifier);
+        if (cachedName) {
+          userDisplayName = cachedName;
+          console.log(`🔐 [!SN] Got display name from group cache: ${cachedName}`);
+        }
+      } catch (error) {
+        console.error('Error looking up user from group cache:', error);
+      }
+    }
+
+    try {
+      // 4. Check if there's already a pending verification for this user
+      const existingRequest = await this.dbClient.query(
+        `SELECT id, status, expires_at FROM verification_requests
+         WHERE user_uuid = $1 AND status IN ('pending_intro', 'pending_vouch')
+         ORDER BY created_at DESC LIMIT 1`,
+        [userIdentifier]
+      );
+
+      if (existingRequest.results && existingRequest.results.length > 0) {
+        const existing = existingRequest.results[0];
+        const expiresAt = new Date(existing.expires_at);
+        return this.formatForSignal(
+          `⚠️ Verification Already Pending\n\n` +
+          `${userDisplayName} already has a pending verification request.\n\n` +
+          `Status: ${existing.status}\n` +
+          `Expires: ${expiresAt.toLocaleString('en-US', { timeZone: 'America/New_York' })} ET\n\n` +
+          `Use !pending to see all pending verifications.`
+        );
+      }
+
+      // 5. Get all groups the user is currently in
+      const allGroups = await this.bot?.getGroups() || [];
+      const userGroups: Array<{ id: string; name: string }> = [];
+
+      for (const group of allGroups) {
+        if (!group.members || !Array.isArray(group.members)) continue;
+
+        const isMember = group.members.some((m: any) => {
+          const memberId = typeof m === 'string' ? m : (m?.uuid || m?.number);
+          return memberId === userIdentifier;
+        });
+
+        if (isMember && group.id) {
+          userGroups.push({ id: group.id, name: group.name || 'Unknown' });
+        }
+      }
+
+      // 6. Get Entry/INDOC group ID from environment or config
+      const entryIndocGroupId = process.env.ENTRY_INDOC_GROUP_ID || 'PjJCT6d4nrF0/BZOs39ECX/lZkcHPbi65JU8B6kgw6s=';
+      const actionsGroupId = process.env.ACTIONS_GROUP_ID || '+By7SYBOPGExcE2PuBeAGdujLLaYTxG9yseTVA/d4dI=';
+
+      // 7. Send notification in current group FIRST (mentioning the user)
+      // This notifies the group that the user's safety number changed
+      const mentionText = `@${userDisplayName}`;
+      const currentGroupNotification =
+        `⚠️ ${mentionText} It shows that your safety number has changed. ` +
+        `For the privacy and security of all members, we've added you to the verification chat to confirm your identity.`;
+
+      // Find mention position dynamically (emoji length can vary)
+      const mentionStart = currentGroupNotification.indexOf(mentionText);
+
+      try {
+        await this.bot?.sendMessage({
+          groupId: context.groupId,
+          message: currentGroupNotification,
+          mentions: [{
+            start: mentionStart,
+            length: mentionText.length,
+            uuid: userIdentifier,
+          }],
+        });
+        console.log(`🔐 [!SN] Sent safety number notification in current group for ${userDisplayName}`);
+      } catch (notifyError) {
+        console.error(`🔐 [!SN] Failed to send notification in current group:`, notifyError);
+        // Continue anyway - the main verification flow is more important
+      }
+
+      // 8. Add user to Entry/INDOC group (if not already there)
+      const isInEntryIndoc = userGroups.some(g => g.id === entryIndocGroupId);
+      if (!isInEntryIndoc) {
+        try {
+          await this.bot?.updateGroup({
+            groupId: entryIndocGroupId,
+            member: [userIdentifier],
+          });
+          console.log(`🔐 [!SN] Added ${userDisplayName} to Entry/INDOC group`);
+        } catch (groupError) {
+          console.error(`🔐 [!SN] Failed to add user to Entry/INDOC:`, groupError);
+          // Continue - they might already be in the group
+        }
+      }
+
+      // 9. Create verification request in database
+      const verificationResult = await this.dbClient.createVerificationRequest({
+        userUuid: userIdentifier,
+        userName: userDisplayName,
+        userPhone: userPhone,
+        entryGroupId: entryIndocGroupId,
+        requestedByUuid: context.sourceUuid || context.sourceNumber || 'admin',
+        requestedByName: context.sourceName || 'Admin',
+        expiresInHours: 24,
+        requestType: 'safety_number_change',
+        originalSafetyNumber: `Manual verification triggered by ${context.sourceName || 'admin'} via !sn command`,
+      });
+
+      const expiryTime = new Date(verificationResult.expiresAt);
+      const expiryFormatted = expiryTime.toLocaleString('en-US', {
+        timeZone: 'America/New_York',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+
+      // 10. Save groups user was in at time of triggering
+      if (userGroups.length > 0) {
+        await this.dbClient.updateVerificationGroupsMemberOf(verificationResult.id, userGroups);
+      }
+
+      // 11. Send verification message to Entry/INDOC
+      const verificationMessage =
+        `🔐 Safety Number Verification Required\n\n` +
+        `${userDisplayName}, an admin has requested you verify your identity.\n\n` +
+        `This may be because:\n` +
+        `• Your safety number recently changed\n` +
+        `• Routine security verification\n` +
+        `• Account re-verification requested\n\n` +
+        `Please verify yourself:\n\n` +
+        `**IrregularChat Username** (sso.irregularchat.com)\n\n` +
+        `--- OR ---\n\n` +
+        `1. NAME\n` +
+        `2. ORGANIZATION\n` +
+        `3. Who invited you (@mention them in this chat)\n` +
+        `4. EMAIL\n\n` +
+        `⏰ You have 24 hours to respond.\n` +
+        `Expires: ${expiryFormatted} ET\n\n` +
+        `** If you don't reply in 24 hours, you will be automatically removed from all community chats.`;
+
+      await this.bot?.sendMessage({
+        groupId: entryIndocGroupId,
+        message: verificationMessage,
+      });
+
+      console.log(`🔐 [!SN] Sent verification message to Entry/INDOC for ${userDisplayName}`);
+
+      // 12. Notify admins in Actions chat
+      const groupsList = userGroups.length > 0
+        ? userGroups.map(g => `  • ${g.name}`).join('\n')
+        : '  (no groups found)';
+
+      const adminNotification =
+        `🔐 Manual Safety Number Verification\n\n` +
+        `User: ${userDisplayName}\n` +
+        `Triggered by: ${context.sourceName || 'Admin'}\n` +
+        `Status: Added to Entry/INDOC for verification\n` +
+        `Expires: ${expiryFormatted} ET\n\n` +
+        `📋 Member of ${userGroups.length} group(s):\n` +
+        `${groupsList}\n\n` +
+        `The user has 24 hours to verify. If they don't respond, they will be automatically removed from all groups.`;
+
+      await this.bot?.sendMessage({
+        groupId: actionsGroupId,
+        message: adminNotification,
+      });
+
+      // Mark admin as notified
+      await this.dbClient.markAdminNotified(verificationResult.id);
+
+      console.log(`🔐 [!SN] Safety number verification initiated for ${userDisplayName} by ${context.sourceName}`);
+
+      return this.formatForSignal(
+        `✅ Safety Number Verification Initiated\n\n` +
+        `User: ${userDisplayName}\n` +
+        `Status: Added to Entry/INDOC\n` +
+        `Expires: ${expiryFormatted} ET\n\n` +
+        `📋 In ${userGroups.length} group(s)\n\n` +
+        `The user has been sent verification instructions and has 24 hours to respond.\n\n` +
+        `Use !pending to monitor progress.`
+      );
+
+    } catch (error) {
+      console.error('🔐 [!SN] Error in safety number verification:', error);
+
+      // Send detailed error to Bot Development room (for debugging)
+      const botDevGroupId = process.env.BOT_DEV_GROUP_ID || '6PP/i0JBlXpAe+dkxvH64ZKmOQoeaukKtsPUQU5wQTg=';
+      const errorDetails = error instanceof Error ? error.message : String(error);
+      try {
+        await this.bot?.sendMessage({
+          groupId: botDevGroupId,
+          message: `⚠️ !sn Error\n\nUser: ${userDisplayName}\nTriggered by: ${context.sourceName}\n\nError: ${errorDetails}`,
+        });
+      } catch {
+        // Ignore if we can't send to bot dev group
+      }
+
+      // Return clean message to user
+      return '❌ Verification failed. Please try again or contact an admin.';
+    }
+  }
+
+  /**
+   * !sngtg @user - Mark a user's safety number change as verified (good to go)
+   *
+   * Use this when a user's safety number changed but they've already verified
+   * their identity through direct message or in-person conversation.
+   *
+   * This command:
+   * 1. Sends a notification in the current group acknowledging the verification
+   * 2. Records the verification in the audit log
+   * 3. Does NOT add them to Entry/INDOC or kick off the full verification flow
+   *
+   * Usage: !sngtg @user
+   */
+  private async handleSafetyNumberGoodToGo(args: string, context: CommandContext): Promise<string> {
+    // 1. Admin check
+    const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
+    if (!isUserAdmin) {
+      return '❌ Admin-only command';
+    }
+
+    // Security: Admin commands must be run in a group chat for visibility/audit
+    if (!context.groupId) {
+      return this.formatForSignal(
+        '🔒 Security Notice\n\n' +
+        'Admin commands must be used in a group chat, not in DMs.\n\n' +
+        'This ensures admin actions are visible to the community.'
+      );
+    }
+
+    // 2. Must have a mention
+    if (!context.mentions || context.mentions.length === 0) {
+      return this.formatForSignal(
+        '❌ Please mention a user\n\n' +
+        'Usage: !sngtg @user\n\n' +
+        'Use this when a user\'s safety number changed but they\'ve\n' +
+        'already verified their identity via DM or in-person.\n\n' +
+        'This acknowledges the verification without the full process.'
+      );
+    }
+
+    // 3. Only process the first mention
+    const mention = context.mentions[0];
+    const userIdentifier = mention.uuid || mention.number;
+
+    if (!userIdentifier) {
+      return '❌ Could not resolve the mentioned user';
+    }
+
+    // Get user display name - try multiple sources
+    let userDisplayName = 'Unknown User';
+    let userPhone: string | undefined;
+
+    // Source 1: Database lookup
+    if (this.dbClient) {
+      try {
+        const result = await this.dbClient.query(
+          'SELECT display_name, profile_name, first_name, last_name, phone_number FROM signal_members WHERE uuid = $1 OR phone_number = $1 LIMIT 1',
+          [userIdentifier]
+        );
+        if (result.results && result.results.length > 0) {
+          const row = result.results[0];
+          const foundName = row.display_name || row.profile_name ||
+                           (row.first_name && row.last_name ? `${row.first_name} ${row.last_name}` : row.first_name);
+          if (foundName) {
+            userDisplayName = foundName;
+          }
+          userPhone = row.phone_number;
+        }
+      } catch (error) {
+        console.error('Error looking up user for !sngtg:', error);
+      }
+    }
+
+    // Source 2: Signal group member cache (fallback if DB has no name)
+    if (userDisplayName === 'Unknown User' && this.bot) {
+      try {
+        const memberNames = await this.bot.getMemberNamesFromGroups();
+        const cachedName = memberNames.get(userIdentifier);
+        if (cachedName) {
+          userDisplayName = cachedName;
+          console.log(`🔐 [!SNGTG] Got display name from group cache: ${cachedName}`);
+        }
+      } catch (error) {
+        console.error('Error looking up user from group cache:', error);
+      }
+    }
+
+    try {
+      // 4. Send notification in current group (mentioning the user)
+      const mentionText = `@${userDisplayName}`;
+      const currentGroupNotification =
+        `✅ ${mentionText} Your safety number has been verified. ` +
+        `Thank you for confirming your identity. You're good to go!`;
+
+      // Find mention position dynamically
+      const mentionStart = currentGroupNotification.indexOf(mentionText);
+
+      await this.bot?.sendMessage({
+        groupId: context.groupId,
+        message: currentGroupNotification,
+        mentions: [{
+          start: mentionStart,
+          length: mentionText.length,
+          uuid: userIdentifier,
+        }],
+      });
+
+      console.log(`🔐 [!SNGTG] Sent verification confirmation for ${userDisplayName}`);
+
+      // 5. Record in audit log (if user_removals table has been extended for this)
+      // For now, just log it
+      console.log(`🔐 [!SNGTG] Safety number verified via DM/in-person for ${userDisplayName} (${userIdentifier}) by ${context.sourceName}`);
+
+      // 6. Notify admins in Actions chat
+      const actionsGroupId = process.env.ACTIONS_GROUP_ID || '+By7SYBOPGExcE2PuBeAGdujLLaYTxG9yseTVA/d4dI=';
+
+      const adminNotification =
+        `✅ Safety Number Verified (Manual)\n\n` +
+        `User: ${userDisplayName}\n` +
+        `Verified by: ${context.sourceName || 'Admin'}\n` +
+        `Method: DM/In-person verification\n\n` +
+        `No action required - user identity confirmed.`;
+
+      await this.bot?.sendMessage({
+        groupId: actionsGroupId,
+        message: adminNotification,
+      });
+
+      return this.formatForSignal(
+        `✅ Safety Number Verified\n\n` +
+        `User: ${userDisplayName}\n` +
+        `Verified by: ${context.sourceName || 'Admin'}\n` +
+        `Method: DM/In-person\n\n` +
+        `The user has been notified they're good to go.`
+      );
+
+    } catch (error) {
+      console.error('🔐 [!SNGTG] Error:', error);
+
+      // Send detailed error to Bot Development room (for debugging)
+      const botDevGroupId = process.env.BOT_DEV_GROUP_ID || '6PP/i0JBlXpAe+dkxvH64ZKmOQoeaukKtsPUQU5wQTg=';
+      const errorDetails = error instanceof Error ? error.message : String(error);
+      try {
+        await this.bot?.sendMessage({
+          groupId: botDevGroupId,
+          message: `⚠️ !sngtg Error\n\nUser: ${userDisplayName}\nTriggered by: ${context.sourceName}\n\nError: ${errorDetails}`,
+        });
+      } catch {
+        // Ignore if we can't send to bot dev group
+      }
+
+      // Return clean message to user
+      return '❌ Verification failed. Please try again or contact an admin.';
+    }
   }
 
   /**
@@ -5733,7 +6670,7 @@ WIKI CONTENT:${wikiContext}`,
   }
 
   /**
-   * !pending - Show pending requests
+   * !pending - Show all pending verification requests (new members + safety number changes)
    */
   private async handlePending(context: CommandContext): Promise<string> {
     const isUserAdmin = await this.isAdmin(context.sourceUuid || context.sourceNumber);
@@ -5741,12 +6678,88 @@ WIKI CONTENT:${wikiContext}`,
       return '❌ Admin-only command';
     }
 
-    // TODO: Implement actual pending user tracking
-    return this.formatForSignal(
-      '📋 Pending User Requests\n\n' +
-      'No pending requests at this time.\n\n' +
-      '🚧 Full implementation coming soon'
-    );
+    try {
+      // Get all pending verification requests (both types)
+      const result = await this.dbClient.query(`
+        SELECT * FROM verification_requests
+        WHERE status IN ('pending_intro', 'pending_vouch')
+        ORDER BY request_type, created_at DESC
+      `, []);
+
+      const requests = result.results || [];
+
+      if (requests.length === 0) {
+        return '✅ No pending verification requests';
+      }
+
+      const lines = [
+        `📋 Pending Verification Requests (${requests.length})`,
+        '',
+      ];
+
+      // Separate by type
+      const newMembers = requests.filter((r: any) => r.request_type === 'new_member' || !r.request_type);
+      const safetyNumbers = requests.filter((r: any) => r.request_type === 'safety_number_change');
+
+      if (newMembers.length > 0) {
+        lines.push(`👤 New Member Requests (${newMembers.length}):`);
+        lines.push('');
+        for (const req of newMembers) {
+          const expiresAt = new Date(req.expires_at);
+          const now = new Date();
+          const hoursRemaining = Math.max(0, Math.round((expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60)));
+          const expiryFormatted = expiresAt.toLocaleString('en-US', {
+            timeZone: 'America/New_York',
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true
+          });
+
+          lines.push(`  • ${req.user_name || 'Unknown'}`);
+          lines.push(`    Status: ${req.status}`);
+          lines.push(`    Expires: ${expiryFormatted} ET (${hoursRemaining}h)`);
+          if (req.voucher_name) {
+            lines.push(`    Voucher: ${req.voucher_name}`);
+          }
+          lines.push('');
+        }
+      }
+
+      if (safetyNumbers.length > 0) {
+        lines.push(`🔐 Safety Number Changes (${safetyNumbers.length}):`);
+        lines.push('');
+        for (const req of safetyNumbers) {
+          const expiresAt = new Date(req.expires_at);
+          const now = new Date();
+          const hoursRemaining = Math.max(0, Math.round((expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60)));
+          const expiryFormatted = expiresAt.toLocaleString('en-US', {
+            timeZone: 'America/New_York',
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true
+          });
+
+          lines.push(`  • ${req.user_name || 'Unknown'}`);
+          lines.push(`    Status: ${req.status}`);
+          lines.push(`    Expires: ${expiryFormatted} ET (${hoursRemaining}h)`);
+          lines.push(`    ⚠️ Auto-remove if not verified`);
+          lines.push('');
+        }
+      }
+
+      lines.push('━━━━━━━━━━━━━━━━━━━━');
+      lines.push('💡 Use !gtg @user to approve new members');
+      lines.push('💡 Safety number users auto-removed after 24h');
+
+      return this.formatForSignal(lines.join('\n'));
+    } catch (error) {
+      console.error('Error getting pending requests:', error);
+      return `❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
   }
 
   /**

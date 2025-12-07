@@ -1040,6 +1040,8 @@ export class PostgresClient {
     requestedByUuid?: string;
     requestedByName?: string;
     expiresInHours?: number;
+    requestType?: 'new_member' | 'safety_number_change';
+    originalSafetyNumber?: string;
   }): Promise<{ id: number; expiresAt: Date }> {
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + (data.expiresInHours || 24));
@@ -1047,8 +1049,9 @@ export class PostgresClient {
     const result = await this.pool.query(`
       INSERT INTO verification_requests (
         user_uuid, user_name, user_phone, entry_group_id,
-        requested_by_uuid, requested_by_name, status, expires_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, 'pending_intro', $7)
+        requested_by_uuid, requested_by_name, status, expires_at,
+        request_type, original_safety_number
+      ) VALUES ($1, $2, $3, $4, $5, $6, 'pending_intro', $7, $8, $9)
       RETURNING id, expires_at
     `, [
       data.userUuid,
@@ -1057,13 +1060,155 @@ export class PostgresClient {
       data.entryGroupId,
       data.requestedByUuid || null,
       data.requestedByName || null,
-      expiresAt
+      expiresAt,
+      data.requestType || 'new_member',
+      data.originalSafetyNumber || null
     ]);
 
     return {
       id: result.rows[0].id,
       expiresAt: result.rows[0].expires_at
     };
+  }
+
+  /**
+   * Get expired safety number verification requests that need auto-removal
+   */
+  async getExpiredSafetyNumberVerifications(): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM verification_requests
+      WHERE request_type = 'safety_number_change'
+        AND status IN ('pending_intro', 'pending_vouch')
+        AND expires_at <= NOW()
+      ORDER BY expires_at ASC
+    `);
+
+    return result.rows;
+  }
+
+  /**
+   * Get all pending safety number verifications (for admin view)
+   */
+  async getPendingSafetyNumberVerifications(): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM verification_requests
+      WHERE request_type = 'safety_number_change'
+        AND status IN ('pending_intro', 'pending_vouch')
+      ORDER BY created_at DESC
+    `);
+
+    return result.rows;
+  }
+
+  /**
+   * Mark a verification request as auto-removed and store the groups removed from
+   */
+  async markVerificationAutoRemoved(
+    requestId: number,
+    groupsRemovedFrom: Array<{ id: string; name: string }>
+  ): Promise<void> {
+    await this.pool.query(`
+      UPDATE verification_requests
+      SET status = 'removed',
+          auto_removed = TRUE,
+          completed_at = NOW(),
+          groups_removed_from = $2
+      WHERE id = $1
+    `, [requestId, JSON.stringify(groupsRemovedFrom)]);
+  }
+
+  /**
+   * Update admin notification timestamp
+   */
+  async markAdminNotified(requestId: number): Promise<void> {
+    await this.pool.query(`
+      UPDATE verification_requests
+      SET admin_notified_at = NOW()
+      WHERE id = $1
+    `, [requestId]);
+  }
+
+  /**
+   * Update the groups_member_of field for a verification request
+   * Called when safety number change is detected to track which groups user was in
+   */
+  async updateVerificationGroupsMemberOf(
+    requestId: number,
+    groups: Array<{ id: string; name: string }>
+  ): Promise<void> {
+    await this.pool.query(`
+      UPDATE verification_requests
+      SET groups_member_of = $2
+      WHERE id = $1
+    `, [requestId, JSON.stringify(groups)]);
+  }
+
+  /**
+   * Log a user removal to the audit table
+   */
+  async logUserRemoval(data: {
+    userUuid: string;
+    userName?: string;
+    userPhone?: string;
+    removalReason: string;  // 'safety_number_change', 'manual_admin', 'inactive', 'banned', etc.
+    removalType: 'auto' | 'manual';
+    removedByUuid?: string;
+    removedByName?: string;
+    groupsRemovedFrom?: Array<{ id: string; name: string }>;
+    groupsAtDetection?: Array<{ id: string; name: string }>;
+    verificationRequestId?: number;
+    notes?: string;
+  }): Promise<number> {
+    const result = await this.pool.query(`
+      INSERT INTO user_removals (
+        user_uuid, user_name, user_phone,
+        removal_reason, removal_type,
+        removed_by_uuid, removed_by_name,
+        groups_removed_from, groups_at_detection,
+        verification_request_id, notes
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING id
+    `, [
+      data.userUuid,
+      data.userName || null,
+      data.userPhone || null,
+      data.removalReason,
+      data.removalType,
+      data.removedByUuid || null,
+      data.removedByName || null,
+      data.groupsRemovedFrom ? JSON.stringify(data.groupsRemovedFrom) : null,
+      data.groupsAtDetection ? JSON.stringify(data.groupsAtDetection) : null,
+      data.verificationRequestId || null,
+      data.notes || null
+    ]);
+
+    return result.rows[0].id;
+  }
+
+  /**
+   * Get removal history for a user
+   */
+  async getUserRemovalHistory(userUuid: string): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM user_removals
+      WHERE user_uuid = $1
+      ORDER BY created_at DESC
+    `, [userUuid]);
+
+    return result.rows;
+  }
+
+  /**
+   * Get recent removals (for admin view)
+   */
+  async getRecentRemovals(limit: number = 20): Promise<any[]> {
+    const result = await this.pool.query(`
+      SELECT * FROM user_removals
+      ORDER BY created_at DESC
+      LIMIT $1
+    `, [limit]);
+
+    return result.rows;
   }
 
   /**

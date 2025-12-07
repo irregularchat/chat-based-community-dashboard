@@ -26,6 +26,7 @@ import { PostgresClient } from '../db/postgres-client.js';
 import { postNewsArticleToDiscourse, getDiscourseConfig } from '../utils/discourse-poster.js';
 import { detectGitRepoUrls, fetchRepoMetadata, formatRepoForSignalWithSummary, ParsedRepoUrl, RepoMetadata } from '../utils/git-repo-detector.js';
 import { organizeFile, getDirectoryForGroup, FileOrganizeResult } from '../utils/file-organizer.js';
+import { selectMemeForEvent, markEventMemeUsed, getEventMemeFilePath, MemeEventType, selectMemeForMessage, markMemeUsed, getMemeFilePath } from '../utils/meme-reactions.js';
 import OpenAI from 'openai';
 
 /**
@@ -93,6 +94,18 @@ export interface SignalMessage {
         groupId?: string;
         type?: string;
       };
+      // GroupV2 update info (for member changes)
+      groupV2?: {
+        id?: string;
+        groupId?: string;
+        revision?: number;
+        type?: string;  // "UPDATE", "DELIVER", etc.
+        // Member change info
+        addedMembers?: Array<{ uuid?: string; number?: string; }>;
+        removedMembers?: Array<{ uuid?: string; number?: string; }>;
+        newMembers?: string[];  // UUIDs of new members
+        deletedMembers?: string[];  // UUIDs of deleted members
+      };
       mentions?: any[];
       attachments?: any[];
       quote?: {
@@ -141,6 +154,23 @@ export interface SignalMessage {
       timestamp?: number;
       groupId?: string;
     };
+    // Sync messages (can contain group membership updates)
+    syncMessage?: {
+      sentMessage?: {
+        groupInfo?: {
+          groupId?: string;
+          type?: string;
+        };
+        groupV2?: {
+          id?: string;
+          groupId?: string;
+          revision?: number;
+          type?: string;
+          addedMembers?: Array<{ uuid?: string; number?: string; }>;
+          removedMembers?: Array<{ uuid?: string; number?: string; }>;
+        };
+      };
+    };
   };
 }
 
@@ -185,6 +215,16 @@ export class SignalBot extends EventEmitter {
   // Verification request timeout checking (every 30 minutes)
   private verificationCheckInterval: NodeJS.Timeout | null = null;
   private readonly VERIFICATION_CHECK_INTERVAL = 1800000; // 30 minutes in milliseconds
+
+  // Safety number verification auto-removal check (every 15 minutes)
+  private safetyNumberCheckInterval: NodeJS.Timeout | null = null;
+  private readonly SAFETY_NUMBER_CHECK_INTERVAL = 900000; // 15 minutes in milliseconds
+
+  // Entry/INDOC group ID for safety number verification
+  private readonly ENTRY_INDOC_GROUP_ID = 'PjJCT6d4nrF0/BZOs39ECX/lZkcHPbi65JU8B6kgw6s=';
+
+  // Actions chat group ID for admin notifications
+  private readonly ACTIONS_CHAT_GROUP_ID = 'an0pin2q61hkx4UycDQ0nXZ9w29sAdS7Pgb2SDqGMwc=';
 
   // Emoji reactions handler
   private emojiReactionHandler: EmojiReactionHandler;
@@ -259,6 +299,14 @@ export class SignalBot extends EventEmitter {
     }, this.VERIFICATION_CHECK_INTERVAL);
     console.log('📋 Verification timeout check interval started (every 30 minutes)');
 
+    // Set up periodic safety number verification check (every 15 minutes)
+    this.safetyNumberCheckInterval = setInterval(() => {
+      this.processExpiredSafetyNumberVerifications().catch(err => {
+        console.error('Error processing expired safety number verifications:', err);
+      });
+    }, this.SAFETY_NUMBER_CHECK_INTERVAL);
+    console.log('🔐 Safety number verification check interval started (every 15 minutes)');
+
     this.isRunningFlag = true;
     this.startTime = Date.now();
 
@@ -292,6 +340,12 @@ export class SignalBot extends EventEmitter {
     if (this.verificationCheckInterval) {
       clearInterval(this.verificationCheckInterval);
       this.verificationCheckInterval = null;
+    }
+
+    // Clear safety number check interval
+    if (this.safetyNumberCheckInterval) {
+      clearInterval(this.safetyNumberCheckInterval);
+      this.safetyNumberCheckInterval = null;
     }
 
     // Disconnect RPC client
@@ -454,7 +508,23 @@ export class SignalBot extends EventEmitter {
         // Handle specific exception types
         if (exceptionType === 'UntrustedIdentityException') {
           console.warn('   💡 This means a contact changed their safety number');
-          console.warn('   💡 Messages from this contact will be skipped until trust is re-established');
+          console.warn('   💡 Starting automated safety number verification process...');
+
+          // Extract the affected user identifier from the exception
+          const affectedIdentifier = exception.identifier ||
+                                    exception.address ||
+                                    exception.recipient ||
+                                    exception.name;
+
+          if (affectedIdentifier) {
+            // Handle the safety number change asynchronously
+            this.handleSafetyNumberChange(affectedIdentifier, exception.message).catch(err => {
+              console.error('Error handling safety number change:', err);
+            });
+          } else {
+            console.warn('   ⚠️ Could not extract user identifier from UntrustedIdentityException');
+            console.warn('   Exception data:', JSON.stringify(exception));
+          }
         } else if (exceptionType === 'ProtocolNoSessionException') {
           console.warn('   💡 This is a missing session key for group messages');
           console.warn('   💡 This usually resolves itself as new messages arrive');
@@ -561,6 +631,9 @@ export class SignalBot extends EventEmitter {
         }
         // Don't return - reactions can also have other purposes
       }
+
+      // Handle group membership events (joins/leaves) for event-based memes
+      await this.handleGroupMembershipEvent(envelope);
 
       console.log('🔍 [ENVELOPE] envelope keys:', Object.keys(envelope));
 
@@ -919,7 +992,9 @@ Reply to this DM to continue the conversation.`;
       }
 
       // Check for news URLs (after security checks pass)
-      if (sourceNumber) {
+      // Skip if this is the bot's own message to avoid infinite loops
+      const isBotMessage = sourceNumber === this.config.phoneNumber;
+      if (sourceNumber && !isBotMessage) {
         console.log('🔵 [DEBUG] Checking for news URLs...');
         await this.checkForNewsUrls(messageText, {
           sourceNumber,
@@ -927,10 +1002,12 @@ Reply to this DM to continue the conversation.`;
           groupId,
           timestamp
         });
+      } else if (isBotMessage) {
+        console.log('🔵 [DEBUG] Skipping news URL check for bot\'s own message');
       }
 
       // Check for social media URLs (Instagram, TikTok, etc.)
-      if (sourceNumber) {
+      if (sourceNumber && !isBotMessage) {
         console.log('🔵 [DEBUG] Checking for social media URLs...');
         await this.checkForSocialMediaUrls(messageText, {
           sourceNumber,
@@ -941,7 +1018,7 @@ Reply to this DM to continue the conversation.`;
       }
 
       // Check for git repository URLs (GitHub, GitLab, etc.)
-      if (sourceNumber) {
+      if (sourceNumber && !isBotMessage) {
         console.log('🔵 [DEBUG] Checking for git repo URLs...');
         await this.checkForGitRepoUrls(messageText, {
           sourceNumber,
@@ -949,6 +1026,12 @@ Reply to this DM to continue the conversation.`;
           groupId,
           timestamp
         });
+      }
+
+      // Check for text-triggered memes (only in groups, not from bot)
+      if (groupId && !isBotMessage && messageText) {
+        console.log('🔵 [DEBUG] Checking for meme triggers...');
+        await this.checkForMemeReaction(messageText, groupId);
       }
 
       console.log('🔵 [DEBUG] Emitting message event...');
@@ -975,6 +1058,517 @@ Reply to this DM to continue the conversation.`;
           messagePreview: message.envelope?.dataMessage?.message?.substring(0, 100),
         });
       }
+    }
+  }
+
+  /**
+   * Handle group membership events (joins/leaves) and trigger event-based memes
+   */
+  private async handleGroupMembershipEvent(envelope: SignalMessage['envelope']): Promise<void> {
+    try {
+      const dataMessage = envelope.dataMessage;
+      const groupV2 = dataMessage?.groupV2;
+      const groupInfo = dataMessage?.groupInfo;
+      const syncGroupV2 = envelope.syncMessage?.sentMessage?.groupV2;
+
+      // Get group ID from various possible locations
+      const groupId = groupV2?.groupId || groupV2?.id || groupInfo?.groupId || syncGroupV2?.groupId || syncGroupV2?.id;
+
+      if (!groupId) {
+        return; // Not a group message
+      }
+
+      // Check for member changes in groupV2 or syncMessage
+      const addedMembers = groupV2?.addedMembers || groupV2?.newMembers || syncGroupV2?.addedMembers || [];
+      const removedMembers = groupV2?.removedMembers || groupV2?.deletedMembers || syncGroupV2?.removedMembers || [];
+
+      // Also check groupInfo.type for "UPDATE" which might indicate a membership change
+      const isGroupUpdate = groupInfo?.type === 'UPDATE' || groupV2?.type === 'UPDATE';
+
+      // Log for debugging
+      if (isGroupUpdate || addedMembers.length > 0 || removedMembers.length > 0) {
+        console.log(`🎭 [GROUP_EVENT] Group update detected in ${groupId}`);
+        console.log(`🎭 [GROUP_EVENT] Added members: ${JSON.stringify(addedMembers)}`);
+        console.log(`🎭 [GROUP_EVENT] Removed members: ${JSON.stringify(removedMembers)}`);
+        console.log(`🎭 [GROUP_EVENT] isGroupUpdate: ${isGroupUpdate}`);
+      }
+
+      // Look up group name from database for targeted memes
+      let groupName: string | undefined;
+      try {
+        const groupData = await this.dbClient.getGroupById(groupId);
+        groupName = groupData?.name;
+      } catch (err) {
+        // Group might not be in DB yet
+      }
+
+      // Handle member joins/leaves
+      // Signal CLI doesn't expose addedMembers/removedMembers in JSON, but sends UPDATE type
+      // We detect join vs leave by checking if the source user is still in the group
+      const messageText = envelope.dataMessage?.message;
+      const hasAddedMembers = addedMembers.length > 0;
+      const hasRemovedMembers = removedMembers.length > 0;
+      const isMembershipUpdate = isGroupUpdate && !messageText && !hasAddedMembers && !hasRemovedMembers;
+      const sourceUuid = envelope.sourceUuid;
+
+      if (hasAddedMembers) {
+        // Explicit addedMembers from signal-cli (if available)
+        console.log(`🎭 [GROUP_EVENT] Processing ${addedMembers.length} member join(s) in ${groupName || groupId} (via addedMembers)`);
+        const eventMeme = selectMemeForEvent('member_join', groupId, groupName);
+        if (eventMeme) {
+          console.log(`🎭 [GROUP_EVENT] Sending join meme: ${eventMeme.id}`);
+          await this.sendEventMeme(eventMeme, groupId);
+          markEventMemeUsed(eventMeme.id, groupId);
+        }
+      } else if (hasRemovedMembers) {
+        // Explicit removedMembers from signal-cli (if available)
+        console.log(`🎭 [GROUP_EVENT] Processing ${removedMembers.length} member leave(s) in ${groupName || groupId} (via removedMembers)`);
+        const eventMeme = selectMemeForEvent('member_leave', groupId, groupName);
+        if (eventMeme) {
+          console.log(`🎭 [GROUP_EVENT] Sending leave meme: ${eventMeme.id}`);
+          await this.sendEventMeme(eventMeme, groupId);
+          markEventMemeUsed(eventMeme.id, groupId);
+        }
+      } else if (isMembershipUpdate && sourceUuid) {
+        // UPDATE type without explicit member data - detect join vs leave
+        // by checking if the source user is still in the group
+        console.log(`🎭 [GROUP_EVENT] Detecting join vs leave for ${sourceUuid} in ${groupName || groupId}`);
+
+        try {
+          // Get current group members to check if source is still a member
+          const groupDetails = await this.rpcClient?.getGroup(groupId);
+          const members = groupDetails?.members || [];
+          const isMember = members.some((m: any) =>
+            m.uuid === sourceUuid || m === sourceUuid
+          );
+
+          if (isMember) {
+            // Source is still a member = they just joined
+            console.log(`🎭 [GROUP_EVENT] ${sourceUuid} is now a member - treating as JOIN`);
+            const eventMeme = selectMemeForEvent('member_join', groupId, groupName);
+            if (eventMeme) {
+              console.log(`🎭 [GROUP_EVENT] Sending join meme: ${eventMeme.id}`);
+              await this.sendEventMeme(eventMeme, groupId);
+              markEventMemeUsed(eventMeme.id, groupId);
+            }
+          } else {
+            // Source is not a member = they just left
+            console.log(`🎭 [GROUP_EVENT] ${sourceUuid} is NOT a member - treating as LEAVE`);
+            const eventMeme = selectMemeForEvent('member_leave', groupId, groupName);
+            if (eventMeme) {
+              console.log(`🎭 [GROUP_EVENT] Sending leave meme: ${eventMeme.id}`);
+              await this.sendEventMeme(eventMeme, groupId);
+              markEventMemeUsed(eventMeme.id, groupId);
+            }
+          }
+        } catch (err) {
+          // If we can't determine, default to join (most common case)
+          console.log(`🎭 [GROUP_EVENT] Could not determine join vs leave, defaulting to JOIN`);
+          const eventMeme = selectMemeForEvent('member_join', groupId, groupName);
+          if (eventMeme) {
+            console.log(`🎭 [GROUP_EVENT] Sending join meme: ${eventMeme.id}`);
+            await this.sendEventMeme(eventMeme, groupId);
+            markEventMemeUsed(eventMeme.id, groupId);
+          }
+        }
+      }
+
+    } catch (error) {
+      console.error('🎭 [GROUP_EVENT] Error handling group membership event:', error);
+    }
+  }
+
+  /**
+   * Send an event-based meme to a group
+   */
+  private async sendEventMeme(meme: { id: string; filename: string; }, groupId: string): Promise<void> {
+    const fs = await import('fs/promises');
+    const memePath = getEventMemeFilePath(meme as any);
+
+    try {
+      // Verify file exists
+      await fs.access(memePath);
+
+      // Send the meme using sendMessage with groupId and attachment
+      await this.rpcClient?.sendMessage({
+        groupId,
+        message: '',  // No text, just the meme
+        attachment: [memePath],  // attachment can be array
+      });
+
+      console.log(`🎭 [EVENT_MEME] Sent ${meme.id} to group ${groupId}`);
+    } catch (error) {
+      console.error(`🎭 [EVENT_MEME] Failed to send ${meme.id}:`, error);
+    }
+  }
+
+  /**
+   * Check message for text-triggered meme reactions
+   * Sends a meme GIF when trigger words are detected (with probability and cooldown)
+   */
+  private async checkForMemeReaction(messageText: string, groupId: string): Promise<void> {
+    try {
+      const meme = selectMemeForMessage(messageText, groupId);
+
+      if (!meme) {
+        // No meme selected (no match, cooldown, or probability failed)
+        return;
+      }
+
+      console.log(`🎭 [TEXT_MEME] Matched trigger in "${messageText.substring(0, 50)}..." - selected: ${meme.id}`);
+
+      const fs = await import('fs/promises');
+      const memePath = getMemeFilePath(meme);
+
+      // Verify file exists
+      try {
+        await fs.access(memePath);
+      } catch {
+        console.error(`🎭 [TEXT_MEME] File not found: ${memePath}`);
+        return;
+      }
+
+      // Send the meme
+      await this.rpcClient?.sendMessage({
+        groupId,
+        message: '',  // No text, just the meme
+        attachment: [memePath],
+      });
+
+      // Mark as used (updates cooldown)
+      markMemeUsed(meme.id, groupId);
+      console.log(`🎭 [TEXT_MEME] Sent ${meme.id} to group ${groupId}`);
+
+    } catch (error) {
+      console.error('🎭 [TEXT_MEME] Error checking for meme reaction:', error);
+    }
+  }
+
+  /**
+   * Handle safety number change - automated verification flow
+   *
+   * When a contact's safety number changes:
+   * 1. Auto-trust the new identity (allows messages to flow)
+   * 2. Add user to Entry/INDOC group
+   * 3. Create verification request in database (24h expiry)
+   * 4. Send verification message to Entry/INDOC
+   * 5. Notify admins in Actions chat
+   */
+  private async handleSafetyNumberChange(userIdentifier: string, exceptionMessage?: string): Promise<void> {
+    console.log(`🔐 [SAFETY_NUMBER] Starting verification process for ${userIdentifier}`);
+
+    try {
+      // 1. Auto-trust the new identity so we can communicate with them
+      try {
+        await this.rpcClient?.trustIdentity({
+          recipient: userIdentifier,
+          trustAllKnownKeys: true,
+        });
+        console.log(`🔐 [SAFETY_NUMBER] Trusted new identity for ${userIdentifier}`);
+      } catch (trustError) {
+        console.error(`🔐 [SAFETY_NUMBER] Failed to auto-trust ${userIdentifier}:`, trustError);
+        // Continue anyway - the user might still be able to respond
+      }
+
+      // 2. Get user info from database for display name
+      let userDisplayName = 'Unknown User';
+      let userPhone: string | undefined;
+      try {
+        const result = await this.dbClient.query(
+          'SELECT display_name, profile_name, first_name, phone_number FROM signal_members WHERE uuid = $1 OR phone_number = $1 LIMIT 1',
+          [userIdentifier]
+        );
+        if (result.results && result.results.length > 0) {
+          const row = result.results[0];
+          userDisplayName = row.display_name || row.profile_name || row.first_name || 'Unknown User';
+          userPhone = row.phone_number;
+        }
+      } catch (dbError) {
+        console.error('Error looking up user info:', dbError);
+      }
+
+      // 3. Check if user already has an active verification request
+      const existingRequest = await this.dbClient.hasActiveVerificationRequest(
+        userIdentifier,
+        this.ENTRY_INDOC_GROUP_ID
+      );
+
+      if (existingRequest) {
+        console.log(`🔐 [SAFETY_NUMBER] ${userDisplayName} already has active verification request`);
+        return;
+      }
+
+      // 4. Capture ALL groups the user is currently a member of (BEFORE any changes)
+      const allGroups = await this.getGroups();
+      const userGroupsAtDetection: Array<{ id: string; name: string }> = [];
+
+      for (const group of allGroups) {
+        if (!group.members || !Array.isArray(group.members)) continue;
+
+        const isMember = group.members.some((m: any) => {
+          const memberId = typeof m === 'string' ? m : (m?.uuid || m?.number);
+          return memberId === userIdentifier;
+        });
+
+        if (isMember && group.id) {
+          userGroupsAtDetection.push({
+            id: group.id,
+            name: group.name || 'Unknown'
+          });
+        }
+      }
+
+      console.log(`🔐 [SAFETY_NUMBER] User ${userDisplayName} is in ${userGroupsAtDetection.length} groups at detection`);
+
+      // 5. Add user to Entry/INDOC group
+      try {
+        await this.rpcClient?.updateGroup({
+          groupId: this.ENTRY_INDOC_GROUP_ID,
+          member: [userIdentifier],
+        });
+        console.log(`🔐 [SAFETY_NUMBER] Added ${userDisplayName} to Entry/INDOC group`);
+      } catch (groupError) {
+        console.error(`🔐 [SAFETY_NUMBER] Failed to add user to Entry/INDOC:`, groupError);
+        // They might already be in the group - continue
+      }
+
+      // 6. Create verification request in database
+      const verificationResult = await this.dbClient.createVerificationRequest({
+        userUuid: userIdentifier,
+        userName: userDisplayName,
+        userPhone: userPhone,
+        entryGroupId: this.ENTRY_INDOC_GROUP_ID,
+        requestedByUuid: 'bot-auto-safety-number',
+        requestedByName: 'Bot (Safety Number Change)',
+        expiresInHours: 24,
+        requestType: 'safety_number_change',
+        originalSafetyNumber: exceptionMessage,
+      });
+
+      const expiryTime = new Date(verificationResult.expiresAt);
+      const expiryFormatted = expiryTime.toLocaleString('en-US', {
+        timeZone: 'America/New_York',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+
+      console.log(`🔐 [SAFETY_NUMBER] Created verification request for ${userDisplayName}, expires: ${expiryFormatted} ET`);
+
+      // 6a. Save the groups the user was in at detection time
+      if (userGroupsAtDetection.length > 0) {
+        await this.dbClient.updateVerificationGroupsMemberOf(verificationResult.id, userGroupsAtDetection);
+        console.log(`🔐 [SAFETY_NUMBER] Saved ${userGroupsAtDetection.length} groups to verification request`);
+      }
+
+      // 7. Send verification message to Entry/INDOC
+      const verificationMessage =
+        `🔐 Safety Number Change Detected\n\n` +
+        `${userDisplayName}, your Signal safety number has changed. This happens when you:\n` +
+        `• Reinstalled Signal\n` +
+        `• Switched devices\n` +
+        `• Reset your phone\n\n` +
+        `For community security, please verify yourself:\n\n` +
+        `**IrregularChat Username** (sso.irregularchat.com)\n\n` +
+        `--- OR ---\n\n` +
+        `1. NAME\n` +
+        `2. ORGANIZATION\n` +
+        `3. Who invited you (@mention them in this chat)\n` +
+        `4. EMAIL\n\n` +
+        `⏰ You have 24 hours to respond.\n` +
+        `Expires: ${expiryFormatted} ET\n\n` +
+        `** If you don't reply in 24 hours, you will be automatically removed from all community chats.`;
+
+      await this.rpcClient?.sendMessage({
+        groupId: this.ENTRY_INDOC_GROUP_ID,
+        message: verificationMessage,
+      });
+
+      console.log(`🔐 [SAFETY_NUMBER] Sent verification message to Entry/INDOC`);
+
+      // 8. Notify admins in Actions chat (include groups list)
+      const groupsList = userGroupsAtDetection.length > 0
+        ? userGroupsAtDetection.map(g => `  • ${g.name}`).join('\n')
+        : '  (no groups found)';
+
+      const adminNotification =
+        `⚠️ Safety Number Change Alert\n\n` +
+        `User: ${userDisplayName}\n` +
+        `Identifier: ${userIdentifier}\n` +
+        `Status: Added to Entry/INDOC for verification\n` +
+        `Expires: ${expiryFormatted} ET\n\n` +
+        `📋 Member of ${userGroupsAtDetection.length} group(s):\n` +
+        `${groupsList}\n\n` +
+        `The user has 24 hours to verify. If they don't respond, they will be automatically removed from all groups.`;
+
+      await this.rpcClient?.sendMessage({
+        groupId: this.ACTIONS_CHAT_GROUP_ID,
+        message: adminNotification,
+      });
+
+      // Mark admin as notified
+      await this.dbClient.markAdminNotified(verificationResult.id);
+
+      console.log(`🔐 [SAFETY_NUMBER] Notified admins in Actions chat`);
+      console.log(`🔐 [SAFETY_NUMBER] Safety number verification process complete for ${userDisplayName}`);
+
+    } catch (error) {
+      console.error(`🔐 [SAFETY_NUMBER] Error in safety number change handler:`, error);
+    }
+  }
+
+  /**
+   * Process expired safety number verifications - auto-remove users
+   *
+   * Called periodically (every 15 minutes) to check for expired
+   * safety number verification requests and auto-remove users
+   * who failed to verify within 24 hours.
+   */
+  private async processExpiredSafetyNumberVerifications(): Promise<void> {
+    console.log('🔐 [SAFETY_NUMBER] Checking for expired safety number verifications...');
+
+    try {
+      const expiredRequests = await this.dbClient.getExpiredSafetyNumberVerifications();
+
+      if (expiredRequests.length === 0) {
+        console.log('🔐 [SAFETY_NUMBER] No expired safety number verifications found');
+        return;
+      }
+
+      console.log(`🔐 [SAFETY_NUMBER] Found ${expiredRequests.length} expired verifications to process`);
+
+      for (const request of expiredRequests) {
+        const userIdentifier = request.user_uuid;
+        const userDisplayName = request.user_name || 'Unknown User';
+
+        console.log(`🔐 [SAFETY_NUMBER] Processing expired verification for ${userDisplayName}`);
+
+        try {
+          // Get all groups the user is in
+          const allGroups = await this.getGroups();
+          const userGroups: Array<{ id: string; name: string }> = [];
+          const removedFrom: Array<{ id: string; name: string }> = [];
+          const failedRemovals: Array<{ id: string; name: string; reason: string }> = [];
+
+          // Find groups where this user is a member
+          for (const group of allGroups) {
+            if (!group.members || !Array.isArray(group.members)) continue;
+
+            const isMember = group.members.some((m: any) => {
+              const memberId = typeof m === 'string' ? m : (m?.uuid || m?.number);
+              return memberId === userIdentifier;
+            });
+
+            if (isMember && group.id) {
+              userGroups.push({ id: group.id, name: group.name || 'Unknown' });
+            }
+          }
+
+          if (userGroups.length === 0) {
+            console.log(`🔐 [SAFETY_NUMBER] ${userDisplayName} not found in any groups`);
+            await this.dbClient.markVerificationAutoRemoved(request.id, []);
+            continue;
+          }
+
+          // Removal message (same as !remove command)
+          const removalMessage =
+            `⚠️ ${userDisplayName} is being removed for not verifying themselves after their safety number changed.\n\n` +
+            `This is done to maintain the integrity of the community. This could mean the number was assigned to a different person or their SIM was put into a different device.\n\n` +
+            `They are welcome to request to join anytime but will need to be verified by knowing someone in the community and providing their name and organization.`;
+
+          // Remove from each group
+          for (const group of userGroups) {
+            try {
+              // Check if bot is admin in this group
+              const groupDetails = await this.rpcClient?.getGroup(group.id);
+              const botUuid = this.config.phoneNumber; // Bot's identifier
+              const isAdmin = groupDetails?.admins?.includes(botUuid);
+
+              if (!isAdmin) {
+                failedRemovals.push({ ...group, reason: 'bot not admin' });
+                continue;
+              }
+
+              // Send removal notice to the group
+              await this.rpcClient?.sendMessage({
+                groupId: group.id,
+                message: removalMessage,
+              });
+
+              // Small delay to ensure message is sent before removal
+              await new Promise(resolve => setTimeout(resolve, 500));
+
+              // Remove the user
+              await this.rpcClient?.updateGroup({
+                groupId: group.id,
+                removeMember: [userIdentifier],
+              });
+
+              removedFrom.push(group);
+              console.log(`🔐 [SAFETY_NUMBER] Removed ${userDisplayName} from ${group.name}`);
+
+            } catch (removeError) {
+              console.error(`🔐 [SAFETY_NUMBER] Failed to remove from ${group.name}:`, removeError);
+              failedRemovals.push({ ...group, reason: String(removeError) });
+            }
+          }
+
+          // Update database record
+          await this.dbClient.markVerificationAutoRemoved(request.id, removedFrom);
+
+          // Parse groups_member_of from the request (groups at detection time)
+          let groupsAtDetection: Array<{ id: string; name: string }> = [];
+          if (request.groups_member_of) {
+            try {
+              groupsAtDetection = typeof request.groups_member_of === 'string'
+                ? JSON.parse(request.groups_member_of)
+                : request.groups_member_of;
+            } catch (e) {
+              console.error('Error parsing groups_member_of:', e);
+            }
+          }
+
+          // Log to user_removals audit table
+          await this.dbClient.logUserRemoval({
+            userUuid: userIdentifier,
+            userName: userDisplayName,
+            userPhone: request.user_phone,
+            removalReason: 'safety_number_change',
+            removalType: 'auto',
+            groupsRemovedFrom: removedFrom,
+            groupsAtDetection: groupsAtDetection,
+            verificationRequestId: request.id,
+            notes: `Auto-removed after 24h expiry. Failed to verify after safety number change.`,
+          });
+
+          console.log(`🔐 [SAFETY_NUMBER] Logged removal to audit table`);
+
+          // Notify admins of the auto-removal
+          const adminSummary =
+            `🗑️ Auto-Removal Complete\n\n` +
+            `User: ${userDisplayName}\n` +
+            `Reason: Failed to verify after safety number change (24h expired)\n\n` +
+            `Removed from ${removedFrom.length} group(s):\n` +
+            removedFrom.map((g, i) => `${i + 1}. ${g.name}`).join('\n') +
+            (failedRemovals.length > 0 ? `\n\n⚠️ Failed to remove from ${failedRemovals.length} group(s):\n` +
+              failedRemovals.map((g, i) => `${i + 1}. ${g.name} (${g.reason})`).join('\n') : '');
+
+          await this.rpcClient?.sendMessage({
+            groupId: this.ACTIONS_CHAT_GROUP_ID,
+            message: adminSummary,
+          });
+
+          console.log(`🔐 [SAFETY_NUMBER] Auto-removal complete for ${userDisplayName}`);
+
+        } catch (processError) {
+          console.error(`🔐 [SAFETY_NUMBER] Error processing ${userDisplayName}:`, processError);
+        }
+      }
+
+    } catch (error) {
+      console.error('🔐 [SAFETY_NUMBER] Error in processExpiredSafetyNumberVerifications:', error);
     }
   }
 
@@ -2338,6 +2932,24 @@ Your file has been flagged but NOT automatically deleted. Please take action.`;
                   message,
                 });
               }
+            } else if (discourseResult.scrapingFailed) {
+              // Scraping failed - send multiple bypass and archive links
+              console.log(`⚠️  Scraping failed for ${url} - sending bypass/archive links instead`);
+              const encodedUrl = encodeURIComponent(url);
+
+              const message = `⚠️ Couldn't extract article content for summary\n\n` +
+                `🔓 Bypass Paywalls:\n` +
+                `• 12ft: ${bypassUrl}\n` +
+                `• Archive.ph: https://archive.ph/${url}\n\n` +
+                `📚 Save to Archive:\n` +
+                `• Archive.is: https://archive.is/?run=1&url=${encodedUrl}\n` +
+                `• Wayback: https://web.archive.org/save/${url}`;
+
+              await this.sendMessage({
+                recipient: context.groupId ? undefined : context.sourceNumber,
+                groupId: context.groupId,
+                message,
+              });
             } else {
               console.error('❌ Failed to post to Discourse:', discourseResult.error);
               // If Discourse fails, still send bypass link

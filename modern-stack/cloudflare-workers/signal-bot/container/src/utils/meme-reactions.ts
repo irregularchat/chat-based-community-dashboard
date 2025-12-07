@@ -26,6 +26,25 @@ export interface MemeDefinition {
 }
 
 /**
+ * Event types that can trigger memes
+ */
+export type MemeEventType = 'member_join' | 'member_leave';
+
+/**
+ * Event-based meme definition (triggered by group events, not text)
+ */
+export interface EventMemeDefinition {
+  id: string;
+  filename: string;
+  description: string;
+  eventType: MemeEventType;
+  targetGroupIds?: string[];  // Optional: only trigger in specific groups (by ID)
+  targetGroupNames?: string[]; // Optional: only trigger in groups matching these names (substring match)
+  probability: number;
+  cooldownMinutes: number;
+}
+
+/**
  * Community meme library
  */
 export const MEME_LIBRARY: MemeDefinition[] = [
@@ -60,7 +79,7 @@ export const MEME_LIBRARY: MemeDefinition[] = [
     id: 'gasp',
     filename: 'gasp.gif',
     description: 'Dramatic gasp reaction',
-    triggers: ['gasp', 'omg', 'oh my god', 'shocking', 'no way', 'what the', 'wtf', 'holy'],
+    triggers: ['gasp', 'omg', 'oh my god', 'shocking', 'no way', 'holy'],
     context: ['surprise', 'shock'],
     probability: 0.35,
     cooldownMinutes: 30,
@@ -100,6 +119,65 @@ export const MEME_LIBRARY: MemeDefinition[] = [
     context: ['random', 'potato'],
     probability: 0.7,  // Higher chance for potato - it's a community thing
     cooldownMinutes: 20,
+  },
+  {
+    id: 'arthur_fist',
+    filename: 'arthur_fist.gif',
+    description: 'Arthur clenched fist meme',
+    triggers: ['barracks', 'barrack'],
+    context: ['frustration', 'anger'],
+    probability: 0.6,
+    cooldownMinutes: 30,
+  },
+  {
+    id: 'confused',
+    filename: 'confused.gif',
+    description: 'Confused math lady meme',
+    triggers: ['confused', 'confusing', 'makes no sense', "don't understand", 'what does that mean'],
+    context: ['confusion'],
+    probability: 0.35,
+    cooldownMinutes: 30,
+  },
+  {
+    id: 'wtf_reaction',
+    filename: 'wtf.gif',
+    description: 'WTF reaction face',
+    triggers: ['wtf', 'what the fuck', 'what the hell', 'wth'],
+    context: ['shock', 'disbelief'],
+    probability: 0.4,
+    cooldownMinutes: 30,
+  },
+  {
+    id: 'washington_leave',
+    filename: 'washington_leave.gif',
+    description: 'SNL George Washington dramatically leaving',
+    triggers: ['im out', "i'm out", 'leaving', 'peace out', 'bye everyone', 'later losers'],
+    context: ['departure', 'exit'],
+    probability: 0.5,
+    cooldownMinutes: 45,
+  },
+];
+
+/**
+ * Event-based meme library (triggered by group events like joins/leaves)
+ */
+export const EVENT_MEME_LIBRARY: EventMemeDefinition[] = [
+  {
+    id: 'washington_leave_event',
+    filename: 'washington_leave.gif',
+    description: 'SNL George Washington dramatically leaving - triggered when someone leaves',
+    eventType: 'member_leave',
+    probability: 0.6,
+    cooldownMinutes: 30,
+  },
+  {
+    id: 'meme_or_die',
+    filename: 'meme_or_die.gif',
+    description: 'Meme or die welcome meme for Off Topic Guild',
+    eventType: 'member_join',
+    targetGroupNames: ['Off Topic'],  // Matches "IR: Off Topic Guild"
+    probability: 0.8,  // High probability - it's a welcome meme
+    cooldownMinutes: 5, // Short cooldown so multiple people joining get welcomed
   },
 ];
 
@@ -251,4 +329,90 @@ export function getMemeStats(): {
     available: MEME_LIBRARY.length - onCooldown.length,
     onCooldown,
   };
+}
+
+/**
+ * Check if an event meme is on cooldown
+ */
+function isEventMemeOnCooldown(meme: EventMemeDefinition): boolean {
+  const lastUsed = memeLastUsed.get(meme.id);
+  if (!lastUsed) return false;
+
+  const cooldownMs = meme.cooldownMinutes * 60 * 1000;
+  return Date.now() - lastUsed < cooldownMs;
+}
+
+/**
+ * Select an event-based meme for a group event
+ * Returns null if no meme should be sent (cooldown, probability, no match, etc.)
+ */
+export function selectMemeForEvent(
+  eventType: MemeEventType,
+  groupId: string,
+  groupName?: string
+): EventMemeDefinition | null {
+  // Check group cooldown
+  if (groupOnCooldown(groupId)) {
+    console.log(`🎭 [EVENT_MEME] Group ${groupId} on cooldown, skipping event meme`);
+    return null;
+  }
+
+  // Find matching event memes
+  const matches = EVENT_MEME_LIBRARY.filter(meme => {
+    // Must match event type
+    if (meme.eventType !== eventType) return false;
+
+    // Check if on cooldown
+    if (isEventMemeOnCooldown(meme)) return false;
+
+    // Check group targeting
+    if (meme.targetGroupIds && meme.targetGroupIds.length > 0) {
+      if (!meme.targetGroupIds.includes(groupId)) return false;
+    }
+
+    if (meme.targetGroupNames && meme.targetGroupNames.length > 0 && groupName) {
+      const lowerGroupName = groupName.toLowerCase();
+      const matchesName = meme.targetGroupNames.some(targetName =>
+        lowerGroupName.includes(targetName.toLowerCase())
+      );
+      if (!matchesName) return false;
+    }
+
+    return true;
+  });
+
+  if (matches.length === 0) {
+    console.log(`🎭 [EVENT_MEME] No matching memes for event ${eventType} in group ${groupName || groupId}`);
+    return null;
+  }
+
+  // Sort by probability (higher = more likely)
+  matches.sort((a, b) => b.probability - a.probability);
+
+  // Try each meme with its probability
+  for (const meme of matches) {
+    if (Math.random() < meme.probability) {
+      console.log(`🎭 [EVENT_MEME] Selected ${meme.id} for ${eventType} event in ${groupName || groupId}`);
+      return meme;
+    }
+  }
+
+  console.log(`🎭 [EVENT_MEME] Probability check failed for all ${matches.length} matching memes`);
+  return null;
+}
+
+/**
+ * Mark an event meme as used (updates cooldown tracking)
+ */
+export function markEventMemeUsed(memeId: string, groupId: string): void {
+  const now = Date.now();
+  memeLastUsed.set(memeId, now);
+  groupLastMeme.set(groupId, now);
+}
+
+/**
+ * Get file path for an event meme
+ */
+export function getEventMemeFilePath(meme: EventMemeDefinition): string {
+  return path.join(MEMES_DIR, meme.filename);
 }

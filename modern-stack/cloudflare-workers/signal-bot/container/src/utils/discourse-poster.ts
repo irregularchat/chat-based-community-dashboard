@@ -189,6 +189,7 @@ export interface PostNewsArticleResult {
   topicId?: number;
   error?: string;
   isDuplicate?: boolean;
+  scrapingFailed?: boolean;  // True if content couldn't be extracted
   title?: string;    // Article title (for new posts)
   summary?: string;  // AI-generated summary (for new posts)
   existingPost?: {
@@ -309,12 +310,19 @@ export async function postNewsArticleToDiscourse(
     const scraped = await scrapeArticle(url);
     const articleTitle = scraped.title || `News Article`;
 
-    // Step 3: Generate AI summary
+    // Step 3: Generate AI summary - but ONLY if we got content
     let summary = scraped.excerpt || '';
     if (scraped.content && scraped.content.length > 100) {
       summary = await generateSummary(scraped.content, scraped.title);
-    } else if (!summary) {
-      summary = 'Article content could not be extracted for summarization.';
+    } else if (!summary || summary.length < 50) {
+      // Scraping failed - don't create a Discourse post!
+      console.log(`⚠️  Scraping failed for ${url} - no content extracted, skipping Discourse post`);
+      return {
+        success: false,
+        scrapingFailed: true,
+        title: articleTitle,
+        error: 'Article content could not be extracted for summarization.',
+      };
     }
 
     // Step 4: Build Discourse post content

@@ -655,12 +655,13 @@ class NativeSignalBotService extends EventEmitter {
       { name: 'report', description: 'Report user behavior', handler: this.handleReport.bind(this) },
       { name: 'cases', description: 'List active moderation cases (admin)', handler: this.handleCases.bind(this), adminOnly: true },
       
-      // Admin/System Plugin Commands (6)
+      // Admin/System Plugin Commands (7)
       { name: 'reload', description: 'Reload plugin (admin)', handler: this.handleReload.bind(this), adminOnly: true },
       { name: 'logs', description: 'View system logs (admin)', handler: this.handleLogs.bind(this), adminOnly: true },
       { name: 'backup', description: 'Create data backup (admin)', handler: this.handleBackup.bind(this), adminOnly: true },
       { name: 'maintenance', description: 'Toggle maintenance mode (admin)', handler: this.handleMaintenance.bind(this), adminOnly: true },
       { name: 'bypass', description: 'Authentication bypass', handler: this.handleBypass.bind(this) },
+      { name: 'senddm', description: 'Send a direct message to a user (admin)', handler: this.handleSendDm.bind(this), adminOnly: true },
       
       // Analytics Commands (7) - Admin Only
       { name: 'stats', description: 'Bot usage statistics', handler: this.handleStats.bind(this), adminOnly: true },
@@ -8892,6 +8893,36 @@ Are you sure this is what you wanted to post?
     }
     
     return '❌ Usage: !watchdomain [add <domain> <country>|remove <domain>|list]';
+  }
+  // Helper function to send direct message for testing/admin purposes
+  async handleSendDm(context) {
+    const { args } = context;
+
+    if (args.length < 2) {
+        return '❌ Usage: !senddm <user_uuid_or_phone> <message>';
+    }
+
+    const recipientIdentifier = args[0];
+    const messageText = args.slice(1).join(' ');
+
+    // Basic validation for recipientIdentifier (UUID or phone number)
+    const isUuid = recipientIdentifier.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    const isPhoneNumber = recipientIdentifier.startsWith('+') && recipientIdentifier.length > 5;
+
+    if (!isUuid && !isPhoneNumber) {
+        return '❌ Invalid recipient. Please provide a valid UUID or phone number (e.g., +12345678900).';
+    }
+    if (messageText.length === 0) {
+        return '❌ Message cannot be empty.';
+    }
+
+    try {
+        await this.sendDirectMessage(recipientIdentifier, messageText);
+        return `✅ Message sent to ${recipientIdentifier}.`;
+    } catch (error) {
+        console.error(`❌ Failed to send DM to ${recipientIdentifier}:`, error);
+        return `❌ Failed to send message: ${error.message}`;
+    }
   }
 }
 

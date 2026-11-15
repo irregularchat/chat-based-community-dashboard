@@ -22,6 +22,7 @@ NC='\033[0m' # No Color
 # Script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
+export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-04eac09ae835290383903273f68c79b0}"
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║  Signal CLI Bot - Cloudflare Container Deployment     ║${NC}"
